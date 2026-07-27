@@ -155,12 +155,32 @@ def _resolve_obj(obj, env: dict):
 
 
 def _extract_value(body, path: str):
+    """按 JSONPath-lite 从响应体取值，支持点号 + 数组下标：
+    data.token / data.isolation_rules[0].id / data.items[0] / data[0].name / [0].id
+    """
     val = body
-    for key in path.split("."):
-        if isinstance(val, dict):
-            val = val.get(key)
-        else:
+    for seg in path.split("."):
+        if val is None:
             return None
+        m = re.match(r'^([^\[\]]*)((?:\[\d+\])*)$', seg)
+        if not m:
+            # 段里含无法解析的字符，退化为整段当作字典 key
+            if isinstance(val, dict):
+                val = val.get(seg)
+                continue
+            return None
+        key, idx_part = m.group(1), m.group(2)
+        if key:
+            if isinstance(val, dict):
+                val = val.get(key)
+            else:
+                return None
+        for idx in re.findall(r'\[(\d+)\]', idx_part):
+            i = int(idx)
+            if isinstance(val, list) and 0 <= i < len(val):
+                val = val[i]
+            else:
+                return None
     return val
 
 
