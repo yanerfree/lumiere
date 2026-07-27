@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table } from 'antd'
 import {
@@ -30,6 +30,61 @@ function prettyJson(s) {
   if (s == null) return ''
   const str = String(s)
   try { return JSON.stringify(JSON.parse(str), null, 2) } catch { return str }
+}
+
+// 智能识别：从一堆抓包里挑出「编排一个接口测试场景」真正需要的接口。
+// 规则(已用真实 stoa 抓包验证)：
+//  1) 写操作(POST/PUT/DELETE/PATCH)= 场景核心操作，必选；
+//  2) 噪音 GET(后台轮询/页面初始化/列表分页刷新)= 必不选；
+//  3) 依赖回溯：某个 GET 若与「同一来源页、且时间在其之前」的写操作共享同一个 UUID
+//     (该 GET 的响应里出现了写操作 URL/请求体里用到的 ID)→ 判为该写操作的数据依赖，选。
+// 返回 { indices: 推荐勾选的下标, reasons: 每条的 {tag,pick} 说明 }。
+const _API_NOISE = [
+  /\/auth\/sso\/status/, /\/analytics\/health/, /\/notifications\//,
+  /\/todos\/stats/, /\/auth\/me(\b|$|\?)/, /\/favorites\/check/,
+  /\/sync-status/, /\/oplogs/, /\/versions(\b|$|\?)/, /\/unread-count/,
+]
+const _UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+const _isWrite = m => ['POST', 'PUT', 'DELETE', 'PATCH'].includes(String(m || '').toUpperCase())
+function analyzeApiRequests(requests) {
+  const list = Array.isArray(requests) ? requests : []
+  const pathOf = r => String(r.path || r.url || '').replace(/^https?:\/\/[^/]+/, '')
+  const refOf = r => { const h = r.requestHeaders || {}; return h.Referer || h.referer || '' }
+  const timeOf = r => { const t = Date.parse(r.startedDateTime || r.starteddatetime || ''); return Number.isNaN(t) ? 0 : t }
+  const idsIn = s => { const m = String(s || '').match(_UUID_RE) || []; return new Set(m.map(x => x.toLowerCase())) }
+
+  const reasons = list.map(() => ({ tag: 'other', pick: false }))
+
+  // 1) 写操作 / 噪音
+  list.forEach((r, i) => {
+    if (_isWrite(r.method)) { reasons[i] = { tag: 'write', pick: true }; return }
+    const p = pathOf(r)
+    if (_API_NOISE.some(re => re.test(p))) { reasons[i] = { tag: 'noise', pick: false }; return }
+    // 纯分页列表 GET(?page= / ?page_size=)且路径不指向具体资源 → 列表刷新噪音
+    if (/[?&]page(_size)?=/.test(p) && !/\/[0-9a-f-]{20,}(\/|$|\?)/.test(p)) { reasons[i] = { tag: 'noise', pick: false }; return }
+  })
+
+  // 2) 依赖回溯
+  list.forEach((r, i) => {
+    if (reasons[i].pick || reasons[i].tag === 'noise' || _isWrite(r.method)) return
+    const respIds = idsIn(r.responseBody)
+    if (!respIds.size) return
+    const gRef = refOf(r), gT = timeOf(r)
+    const isDep = list.some(w => {
+      if (!_isWrite(w.method) || refOf(w) !== gRef || timeOf(w) < gT) return false
+      const wIds = idsIn(`${w.url || ''} ${w.requestBody || ''}`)
+      for (const id of wIds) if (respIds.has(id)) return true
+      return false
+    })
+    if (isDep) reasons[i] = { tag: 'dependency', pick: true }
+  })
+
+  return { indices: list.map((_, i) => i).filter(i => reasons[i].pick), reasons }
+}
+const _API_REASON_BADGE = {
+  write: { label: '写操作', color: '#0ea5a0', bg: '#e0f7f6' },
+  dependency: { label: '依赖', color: '#7c5cbf', bg: 'rgba(124,92,191,0.1)' },
+  noise: { label: '噪音', color: '#c9cdd4', bg: 'transparent' },
 }
 const scenarioStatusMap = {
   draft: { label: '草稿', color: '#86909c', bg: 'rgba(0,0,0,0.02)' },
@@ -396,6 +451,8 @@ function ScenarioEditor({
   const [apiArranging, setApiArranging] = useState(false)
   const [expandedApi, setExpandedApi] = useState(null)  // 接口视图展开查看请求/响应详情的行索引
   const [debugHistory, setDebugHistory] = useState([])
+  // 智能识别：从抓包里算出「编排一个场景」推荐勾选哪些接口 + 每条理由（写操作/依赖/噪音）
+  const apiAnalysis = useMemo(() => analyzeApiRequests(debugResult?.captured_requests || []), [debugResult?.captured_requests])
   const scriptEditorRef = useRef(null)
 
   const loadDebugHistory = async () => {
@@ -874,10 +931,17 @@ function ScenarioEditor({
                 <div style={{ padding: '8px 0' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                     <span style={{ fontSize: 12, color: '#86909c' }}>
-                      勾选需要的接口，编排为接口测试场景
+                      勾选需要的接口，编排为接口测试场景（可先点「智能识别」自动挑出核心接口再微调）
                       {selectedApis.length > 0 && <span style={{ color: '#7c5cbf', fontWeight: 600 }}> · 已选 {selectedApis.length} 个</span>}
                     </span>
                     <Space size={8}>
+                      {apiAnalysis.indices.length > 0 && (
+                        <Tooltip title="按「写操作 + 依赖回溯」自动挑出编排一个场景真正需要的接口，勾选后可再人工微调">
+                          <Button size="small" onClick={() => setSelectedApis(apiAnalysis.indices)}>
+                            🎯 智能识别（{apiAnalysis.indices.length}）
+                          </Button>
+                        </Tooltip>
+                      )}
                       {selectedApis.length > 0 && (
                         <Button size="small" onClick={() => setSelectedApis([])}>取消选择</Button>
                       )}
@@ -967,6 +1031,17 @@ function ScenarioEditor({
                         </span>
                         <Tag color={r.method === 'GET' ? 'blue' : r.method === 'POST' ? 'green' : r.method === 'PUT' ? 'orange' : r.method === 'DELETE' ? 'red' : 'default'}
                           style={{ width: 50, textAlign: 'center', margin: 0, fontSize: 11 }}>{r.method}</Tag>
+                        {(() => {
+                          const rn = apiAnalysis.reasons[i]
+                          const badge = rn && _API_REASON_BADGE[rn.tag]
+                          if (!badge) return null
+                          return (
+                            <span title={rn.tag === 'write' ? '写操作，场景核心，已推荐' : rn.tag === 'dependency' ? '被写操作依赖（提供了其用到的 ID），已推荐' : '后台轮询/列表刷新等噪音，未推荐'}
+                              style={{ marginLeft: 6, padding: '0 6px', height: 18, lineHeight: '18px', borderRadius: 9, fontSize: 10, fontWeight: 600, color: badge.color, background: badge.bg, border: rn.tag === 'noise' ? '1px solid rgba(0,0,0,0.06)' : 'none', whiteSpace: 'nowrap' }}>
+                              {badge.label}
+                            </span>
+                          )
+                        })()}
                         <div style={{ flex: 1, marginLeft: 8, minWidth: 0 }}>
                           <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {(r.path || r.url || '').replace(/^https?:\/\/[^/]+/, '')}
