@@ -44,7 +44,7 @@ async def generate_api_test(
             await session.flush()
         folder_id = folder.id
 
-    ai_config = await resolve_ai_config(project_id, session)
+    ai_config = await resolve_ai_config(project_id, session, capability="api-test-generate")
     if not ai_config:
         return {"error": "AI 服务未配置"}
 
@@ -128,13 +128,27 @@ async def get_api_test_scenario(
 async def run_api_test(
     session: AsyncSession,
     scenario_ids: str,
+    env_id: str | None = None,
 ) -> dict:
-    """执行接口测试场景（同步执行，返回结果汇总）"""
+    """执行接口测试场景（同步执行，返回结果汇总）。
+
+    env_id：可选但**强烈建议**——传了才会把该环境的变量（BASE_URL/账号/token 等）
+    注入执行环境，${BASE_URL}/${ADMIN_USERNAME} 这类引用才能解析。不传则只有场景自带
+    env_variables + 场景变量 + 运行时内置，编排场景多半会因缺 BASE_URL 而失败。"""
     from app.services.api_test_runner import run_batch
+
+    base_env: dict = {}
+    if env_id:
+        from app.services import environment_service
+        try:
+            merged = await environment_service.get_merged_variables(session, uuid.UUID(env_id))
+            base_env = {item["key"]: item["value"] for item in merged}
+        except Exception:
+            pass
 
     ids = [uuid.UUID(sid.strip()) for sid in scenario_ids.split(",")]
     results = []
-    async for event in run_batch(ids, session):
+    async for event in run_batch(ids, session, base_env=base_env):
         if event.type == "step_result":
             results.append({
                 "step": event.data.get("stepName"),

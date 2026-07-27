@@ -291,7 +291,9 @@ async def run_single_step(
         except Exception:
             resp_body = {"_text": resp.text[:2000]}
 
-        assertion_results = _check_assertions(step.assertions or [], resp.status_code, resp_body)
+        # 断言里的 ${var} 也要解析（如 data.name == ${svcName}），与 url/headers/body 口径一致
+        resolved_assertions = _resolve_obj(step.assertions or [], env)
+        assertion_results = _check_assertions(resolved_assertions, resp.status_code, resp_body)
         all_pass = all(a["passed"] for a in assertion_results) if assertion_results else True
 
         if step.variables_extract and resp_body:

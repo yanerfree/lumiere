@@ -5,6 +5,8 @@ kind:
   - random     → value_template + -{runId}-{rand}（每次执行唯一、可追溯本脚本造的数据；
                  用连字符分隔而非下划线——服务名/slug/DNS 名等多数只允许 [a-z0-9-]，下划线常被拒）
   - global_ref → 从全局数据查（Epic1 提供项目级全局数据；此前先从传入 global_lookup 例如环境变量取）
+  - template   → 部分固定+部分随机：value_template 里字面字符原样保留，内嵌 {{$fn}} 生成器
+                 token 执行期展开（见 data_generators.expand_template），对标 apifox 数据生成器
 
 UI(process.env.SV_x) 与接口(os.environ['SV_x']) 执行器读同一份，做到共用。
 """
@@ -39,6 +41,9 @@ async def resolve_scenario_variables(
             val = f"{v.value_template}-{rid}-{secrets.token_hex(2)}"
         elif v.kind == "global_ref":
             val = gl.get(v.value_template, "")
+        elif v.kind == "template":
+            from app.services.data_generators import expand_template
+            val = expand_template(v.value_template or "", rid)
         else:  # literal
             val = v.value_template
         out[f"SV_{v.name}"] = str(val)

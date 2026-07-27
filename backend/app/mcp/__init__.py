@@ -4,11 +4,38 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync
 
 mcp = FastMCP(
     name="testBench",
     instructions="""testBench 测试管理平台 MCP Server。
+
+═══════════════════════════════════════════════════════════
+【先看这里·选对工具，别搞混】
+═══════════════════════════════════════════════════════════
+
+① 生成「步骤用例」（功能用例）走哪条路？
+   · 手上只有需求文档，要批量产出        → tb_create_scenario_task + tb_confirm_and_generate（AI 流水线，多阶段质量管控）
+   · 已在被测系统里活体验证过，要回写成果 → tb_create_case（一条条显式建）
+
+② 「接口测试」有两种，不是一回事，别混：
+   · 【接口测试模块·单接口】tb_generate_api_test
+       —— 只有接口文档、无法活体验证时，给一个/少数接口，AI 造一组正向/参数/边界/安全场景。
+          写入 api_test_scenarios，用 source_api_ids 关联接口，**没有 source_case_id**。
+   · 【用例·编排的接口场景】tb_sync_orchestrated_scenario
+       —— 你**亲手活体验证过**的多步 E2E 接口链（登录→造→断言→清理），显式写回，
+          用 source_case_id 绑定某功能用例、**共享该用例的场景变量**。
+
+③ 活体验证后「回推同步」= 步骤用例 + 编排接口场景 + 场景变量。通道：
+   tb_get_sync_spec（先对齐口径）→ tb_list_global_data（看可引用项）→
+   tb_create_case（步骤用例）+ tb_upsert_scenario_variables（场景变量）+ tb_sync_orchestrated_scenario（接口场景）
+   → tb_run_api_test（执行验证）。
+
+④ 变量纪律（回推时必须遵守，硬约束）：脚本里**不允许写死数据变量**。任何取值只能来自
+   ①场景变量 ${名字}/${SV_名字}  ②项目级全局引用（${BASE_URL}/账号/token，见 tb_list_global_data）
+   ③步骤间提取物（上一步 variables_extract）。tb_sync_orchestrated_scenario 会硬拦截悬空 ${x}。
+
+═══════════════════════════════════════════════════════════
 
 当用户要求生成测试用例时，必须按以下流程执行：
 
@@ -181,7 +208,7 @@ _register(
 _register(
     api_tests.generate_api_test,
     name="tb_generate_api_test",
-    description="根据接口定义 AI 生成接口测试场景。参数: branch_id(分支UUID), api_info(接口定义文本，含method/url/参数/响应), folder_name(可选，目标文件夹名)",
+    description="【接口测试模块·单接口】给一个/少数接口定义，AI 生成一组测试场景（正向/参数校验/边界/安全），写入 api_test_scenarios（source_api_ids 关联接口，无 source_case_id）。用于只有接口文档、无法活体验证时。⚠ 与『用例·编排的接口场景』(tb_sync_orchestrated_scenario) 不是一回事。参数: branch_id(分支UUID), api_info(接口定义文本，含method/url/参数/响应), folder_name(可选，目标文件夹名)",
 )
 
 _register(
@@ -199,7 +226,7 @@ _register(
 _register(
     api_tests.run_api_test,
     name="tb_run_api_test",
-    description="执行接口测试场景并返回结果汇总。参数: scenario_ids(逗号分隔的场景UUID列表)",
+    description="执行接口测试场景并返回结果汇总。参数: scenario_ids(逗号分隔的场景UUID列表), env_id(可选但强烈建议：传了才注入该环境的 BASE_URL/账号/token，${BASE_URL} 这类引用才能解析)",
 )
 
 
@@ -264,13 +291,13 @@ _register(
 _register(
     ui_scripts.run_ui_script,
     name="tb_run_ui_script",
-    description="执行用例的 Playwright UI 测试脚本，返回通过/失败结果。失败时自动截图。参数: case_id(用例UUID), env_id(环境UUID，必须包含 BASE_URL)",
+    description="执行**单条**用例的 Playwright UI 脚本（聚焦调试用），返回通过/失败，失败自动截图。参数: case_id(用例UUID), env_id(环境UUID，必须包含 BASE_URL)",
 )
 
 _register(
     ui_scripts.run_ui_scripts_batch,
     name="tb_run_ui_scripts_batch",
-    description="批量执行多个用例的 UI 脚本（不依赖 AI，逐个跑真实 Playwright），返回通过/失败聚合。用于回归/减少人工。参数: case_ids(逗号分隔的用例UUID列表), env_id(环境UUID，含 BASE_URL)",
+    description="**批量**执行多条用例的 UI 脚本（回归用，AI-free 逐个跑真实 Playwright），返回聚合通过率。参数: case_ids(逗号分隔的用例UUID列表), env_id(环境UUID，含 BASE_URL)",
 )
 
 _register(
@@ -286,4 +313,37 @@ _register(
     documents.get_doc_spec,
     name="tb_get_doc_spec",
     description="获取文档生成规范：操作流程 + 格式模板 + 写作规则。外部 Claude Code 用它按平台模板、实操被测系统、截图贴图生成操作/演示/验收文档。参数: doc_type(manual操作手册/demo演示文档/acceptance验收文档，默认manual)",
+)
+
+
+# ── 回推同步工具（活体验证成果写回）──────────────────
+
+_register(
+    sync.get_sync_spec,
+    name="tb_get_sync_spec",
+    description="【回推第一步·先调】获取回推规范：变量三层怎么选、步骤/断言/提取物 JSON 形状、禁止写死的正反例。参数: kind(case/api_scenario/variables/all，默认all)",
+)
+
+_register(
+    sync.sync_orchestrated_scenario,
+    name="tb_sync_orchestrated_scenario",
+    description="【用例·编排的接口场景】把你**活体验证过**的多步接口链显式写回，绑定 source_case_id 并共享该用例场景变量。入库前硬拦截悬空 ${x}、软警告疑似写死。⚠ 与 tb_generate_api_test（单接口AI造）不是一回事。参数: project_id, branch_id, title, steps([{name,method,url,headers,body,assertions:[{type,operator,expected/value,field}],variables_extract:{name:jsonpath},group_name,enabled}]), source_case_id(强烈建议), folder_name(可选), priority(默认P1), description(可选)",
+)
+
+_register(
+    sync.upsert_scenario_variables,
+    name="tb_upsert_scenario_variables",
+    description="回写/更新用例的场景变量（按 name upsert，UI+接口共用）。参数: case_id, variables([{name, kind(literal整段固定/random前缀随机/global_ref引用全局键/template部分固定部分随机如svc-{{$string:6}}), value_template, var_type, description}]), project_id(可选), branch_id(可选)",
+)
+
+_register(
+    sync.list_scenario_variables,
+    name="tb_list_scenario_variables",
+    description="读取用例的所有场景变量（name/kind/value_template + 如何引用）。参数: case_id(用例UUID)",
+)
+
+_register(
+    sync.list_global_data,
+    name="tb_list_global_data",
+    description="【回推前查】汇总项目级**可引用**全局数据（全局变量+各环境变量键+自动化共享资源，凭证脱敏），帮你判断哪些走 global_ref、哪些别写死。参数: project_id(项目UUID)",
 )

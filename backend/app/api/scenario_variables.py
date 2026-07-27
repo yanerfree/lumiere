@@ -16,12 +16,12 @@ router = APIRouter(
     tags=["scenario-variables"],
 )
 
-_KINDS = ("literal", "random", "global_ref")
+_KINDS = ("literal", "random", "global_ref", "template")
 
 
 class SVCreate(BaseSchema):
     name: str
-    kind: str = "literal"          # literal | random | global_ref
+    kind: str = "literal"          # literal | random | global_ref | template
     value_template: str = ""
     var_type: str = "string"
     description: str | None = None
@@ -47,6 +47,35 @@ class SVResponse(BaseSchema):
 
 def _dump(v: ScenarioVariable) -> dict:
     return SVResponse.model_validate(v, from_attributes=True).model_dump(by_alias=True)
+
+
+class PreviewBody(BaseSchema):
+    template: str = ""
+
+
+@router.get("/generators")
+async def list_data_generators(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    case_id: uuid.UUID,
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    """apifox 式「快速插入」数据生成器目录（分类 → 生成器 token）。"""
+    from app.services.data_generators import GENERATORS
+    return {"data": GENERATORS}
+
+
+@router.post("/preview")
+async def preview_template(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    case_id: uuid.UUID,
+    body: PreviewBody,
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    """把模板展开一次做样例预览（如 svc-{{$string:6}}-{{$city}} → svc-a1b2c3-上海）。"""
+    from app.services.data_generators import expand_template
+    return {"data": {"template": body.template, "sample": expand_template(body.template or "")}}
 
 
 @router.get("")

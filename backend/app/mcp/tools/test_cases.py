@@ -67,7 +67,7 @@ async def create_case(
     branch_id: str,
     title: str,
     module: str,
-    case_type: str = "api",
+    case_type: str = "e2e",
     submodule: str | None = None,
     priority: str = "P2",
     preconditions: str | None = None,
