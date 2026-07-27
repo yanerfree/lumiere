@@ -429,6 +429,102 @@ function generateUiCode(steps, title) {
   return lines.join('\n')
 }
 
+// 「编排为接口测试」把该用例的流量写到分支级 api_test_scenarios 表(source_case_id=caseId),
+// 与用例内嵌的 apiScenario 是两套存储。这个面板按 source_case_id 把编排出来的场景拉出来展示 +
+// 直接运行 + 跳转接口测试模块,解决「编排成功但接口测试 tab 什么也没有」。
+function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnvChange, environments }) {
+  const navigate = useNavigate()
+  const [items, setItems] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [loaded, setLoaded] = useState(false)
+  const [runningId, setRunningId] = useState(null)
+  const [results, setResults] = useState({})  // id -> {passed, passCount, failCount}
+
+  const load = useCallback(async () => {
+    if (!projectId || !branchId || !caseId) return
+    setLoading(true)
+    try {
+      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests?source_case_id=${caseId}`)
+      setItems(res.data || [])
+    } catch { /* ignore */ }
+    finally { setLoading(false); setLoaded(true) }
+  }, [projectId, branchId, caseId])
+
+  // 每次该 tab 被激活时刷新(编排是在 UI tab 触发的,切回来要能看到最新结果)
+  useEffect(() => { if (active) load() }, [active, load])
+
+  const runOne = (sc) => {
+    if (!runEnv) { message.warning('请先选择执行环境（需要 BASE_URL）'); return }
+    setRunningId(sc.id)
+    setResults(prev => ({ ...prev, [sc.id]: undefined }))
+    api.stream(`/projects/${projectId}/branches/${branchId}/api-tests/run`, {
+      scenarioIds: [sc.id], envId: runEnv,
+    }, {
+      onChunk: (data) => {
+        if (data.type === 'scenario_done') {
+          setResults(prev => ({ ...prev, [sc.id]: { passed: data.passed, passCount: data.passCount, failCount: data.failCount } }))
+        }
+        if (data.type === 'run_done') setRunningId(null)
+      },
+      onDone: () => setRunningId(null),
+      onError: (msg) => { message.error(msg || '运行失败'); setRunningId(null) },
+    })
+  }
+
+  // 无编排场景时不渲染,交给下方内嵌场景编辑器的空态
+  if (loaded && items.length === 0) return null
+
+  const prioColor = { P0: '#f5222d', P1: '#fa8c16', P2: '#0ea5a0', P3: '#86909c' }
+
+  return (
+    <Card styles={{ body: { padding: '14px 16px' } }} style={{ marginBottom: 12, border: '1px solid rgba(14,165,160,0.25)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ApiOutlined style={{ color: '#0ea5a0' }} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#1d2129' }}>由本用例编排的接口场景</span>
+          <Tag color="cyan" style={{ marginLeft: 2 }}>{items.length}</Tag>
+        </div>
+        <Space size={6}>
+          <Select size="small" value={runEnv} onChange={onEnvChange} style={{ width: 170 }}
+            popupMatchSelectWidth={false} placeholder="执行环境" options={buildEnvOptions(environments)} />
+          <Button size="small" onClick={load} loading={loading}>刷新</Button>
+          <Button size="small" type="link" onClick={() => navigate(`/projects/${projectId}/api-test`)}>接口测试模块 →</Button>
+        </Space>
+      </div>
+      {loading && !items.length ? (
+        <div style={{ textAlign: 'center', padding: '16px 0' }}><Spin size="small" /></div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {items.map(sc => {
+            const r = results[sc.id]
+            const isRunning = runningId === sc.id
+            return (
+              <div key={sc.id} style={{
+                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
+                borderRadius: 8, background: 'rgba(14,165,160,0.04)', border: '1px solid rgba(0,0,0,0.04)',
+              }}>
+                <Tag color={prioColor[sc.priority] || 'default'} style={{ margin: 0, minWidth: 30, textAlign: 'center' }}>{sc.priority || '-'}</Tag>
+                <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c', minWidth: 66 }}>{sc.code || ''}</span>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sc.title}</span>
+                {isRunning && <Spin size="small" />}
+                {!isRunning && r && (
+                  <Tag color={r.passed ? 'success' : 'error'} style={{ margin: 0 }}>
+                    {r.passed ? '通过' : '失败'} {r.passCount ?? 0}/{(r.passCount ?? 0) + (r.failCount ?? 0)}
+                  </Tag>
+                )}
+                <Button size="small" type="primary" ghost icon={<PlayCircleOutlined />}
+                  loading={isRunning} disabled={!!runningId && !isRunning}
+                  style={{ color: '#0ea5a0', borderColor: '#0ea5a0' }}
+                  onClick={() => runOne(sc)}>运行</Button>
+              </div>
+            )
+          })}
+        </div>
+      )}
+    </Card>
+  )
+}
+
 function ScenarioEditor({
   scenario, setScenario, scenarioStatus, setScenarioStatus,
   isTemplate, setIsTemplate, type, accentColor,
@@ -832,7 +928,7 @@ function ScenarioEditor({
         {/* 三视图切换 */}
         <Tabs size="small" defaultActiveKey="steps" style={{ marginBottom: 0 }}
           items={[
-            { key: 'steps', label: '步骤视图', children: (
+            { key: 'steps', label: `执行轨迹${(liveSteps.length || debugResult?.steps?.length) ? ` (${liveSteps.length > 0 ? liveSteps.length : debugResult.steps.length})` : ''}`, children: (
               <div style={{ padding: '12px 0' }}>
                 {(debugResult?.steps || liveSteps || []).length > 0 ? (() => {
                   const allSteps = liveSteps.length > 0 ? liveSteps : (debugResult?.steps || [])
@@ -843,6 +939,11 @@ function ScenarioEditor({
                   const shownSteps = showNoiseSteps ? allSteps : allSteps.filter(s => !isNoise(s))
                   return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                    <div style={{ padding: '6px 12px', marginBottom: 6, fontSize: 12, color: '#86909c', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: 'rgba(124,92,191,0.04)', borderRadius: 6 }}>
+                      <Tag color="purple" style={{ margin: 0 }}>本次执行轨迹 · {allSteps.length} 步</Tag>
+                      <span>脚本逻辑 {scenario?.steps?.length || 0} 步</span>
+                      <span style={{ color: '#c9cdd4' }}>Tab 角标是「脚本逻辑步骤」；此处是「实际执行轨迹」（含探索动作），两者不同属正常</span>
+                    </div>
                     {hiddenCount > 0 && (
                       <div style={{ padding: '4px 12px', marginBottom: 4, fontSize: 12, color: '#86909c' }}>
                         显示 {shownSteps.length} 个关键步骤
@@ -971,7 +1072,7 @@ function ScenarioEditor({
                             if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
                             const reader = resp.body.getReader()
                             const decoder = new TextDecoder()
-                            let buf = '', createdCount = 0, errMsg = null, finished = false
+                            let buf = '', createdCount = 0, errMsg = null, finished = false, extractedVars = []
                             const hide = message.loading(`正在编排 ${selected.length} 个接口为测试场景（AI 生成中，请稍候）...`, 0)
                             try {
                               while (true) {
@@ -982,7 +1083,8 @@ function ScenarioEditor({
                                   if (!line.startsWith('data:')) continue
                                   try {
                                     const ev = JSON.parse(line.slice(5))
-                                    if (ev.type === 'done') { createdCount = (ev.scenarioIds || []).length || createdCount; finished = true }
+                                    if (ev.type === 'variables_extracted') { extractedVars = ev.names || extractedVars }
+                                    else if (ev.type === 'done') { createdCount = (ev.scenarioIds || []).length || createdCount; extractedVars = ev.extractedVariables || extractedVars; finished = true }
                                     else if (ev.type === 'error') errMsg = ev.message || '生成失败'
                                   } catch {}
                                 }
@@ -990,7 +1092,11 @@ function ScenarioEditor({
                               }
                             } finally { hide() }
                             if (errMsg && !finished) { message.error(`编排失败：${errMsg}`) }
-                            else { message.success(`已编排为 ${createdCount || selected.length} 个接口测试场景，见「接口测试」`); setSelectedApis([]) }
+                            else {
+                              const varTip = extractedVars.length ? `，并自动提取 ${extractedVars.length} 个场景变量（${extractedVars.slice(0, 3).join('、')}${extractedVars.length > 3 ? '…' : ''}，UI/接口共用，见「场景变量」）` : ''
+                              message.success(`已编排为 ${createdCount || selected.length} 个接口测试场景，见「接口测试」${varTip}`)
+                              setSelectedApis([])
+                            }
                           } catch (e) {
                             message.error(e?.message || '编排失败')
                           } finally {
@@ -1845,7 +1951,7 @@ export default function CaseDetail() {
                 {hasApi && <span>({apiScenario?.steps?.length || 0}步 · {(scenarioStatusMap[apiScenarioStatus] || {}).label || '草稿'})</span>}
               </span>
             </Tooltip>
-            <Tooltip title={hasUi ? `UI 场景 · ${(scenarioStatusMap[uiScenarioStatus] || {}).label || '草稿'}${isUiTemplate ? ' · 模板' : ''}` : '暂无 UI 测试场景，点击 UI 测试 Tab 创建'}>
+            <Tooltip title={hasUi ? `UI 场景 · ${(scenarioStatusMap[uiScenarioStatus] || {}).label || '草稿'}${isUiTemplate ? ' · 模板' : ''} · 括号内为脚本逻辑步骤数（≠ 实际执行轨迹步数）` : '暂无 UI 测试场景，点击 UI 测试 Tab 创建'}>
               <span style={{
                 display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 8px',
                 borderRadius: 12, fontSize: 11, fontWeight: 500,
@@ -1918,20 +2024,27 @@ export default function CaseDetail() {
             )},
 
             { key: 'api', label: <span><ApiOutlined style={{ marginRight: 4, color: hasApi ? '#0ea5a0' : undefined }} />接口测试{hasApi && <span style={{ fontSize: 11, color: '#0ea5a0', marginLeft: 4 }}>({apiScenario?.steps?.length || 0}步)</span>}</span>, children: (
-              <ScenarioEditor
-                scenario={apiScenario} setScenario={setApiScenario}
-                scenarioStatus={apiScenarioStatus} setScenarioStatus={setApiScenarioStatus}
-                isTemplate={isApiTemplate} setIsTemplate={setIsApiTemplate}
-                type="api" accentColor="#0ea5a0"
-                onImportTemplate={() => { setTemplateModalType('api'); setTemplateModalOpen(true) }}
-                manualSteps={steps} caseTitle={title}
-                projectId={projectId} branchId={branchId} caseId={caseId}
-                environments={environments} runEnv={runEnv} onEnvChange={setRunEnv}
-                onScriptSaved={() => setHasActiveScript(true)}
-              />
+              <>
+                <LinkedApiScenarios
+                  projectId={projectId} branchId={branchId} caseId={caseId}
+                  active={activeTab === 'api'}
+                  environments={environments} runEnv={runEnv} onEnvChange={setRunEnv}
+                />
+                <ScenarioEditor
+                  scenario={apiScenario} setScenario={setApiScenario}
+                  scenarioStatus={apiScenarioStatus} setScenarioStatus={setApiScenarioStatus}
+                  isTemplate={isApiTemplate} setIsTemplate={setIsApiTemplate}
+                  type="api" accentColor="#0ea5a0"
+                  onImportTemplate={() => { setTemplateModalType('api'); setTemplateModalOpen(true) }}
+                  manualSteps={steps} caseTitle={title}
+                  projectId={projectId} branchId={branchId} caseId={caseId}
+                  environments={environments} runEnv={runEnv} onEnvChange={setRunEnv}
+                  onScriptSaved={() => setHasActiveScript(true)}
+                />
+              </>
             )},
 
-            { key: 'ui', label: <span><DesktopOutlined style={{ marginRight: 4, color: hasUi ? '#7c5cbf' : undefined }} />UI 测试{hasUi && <span style={{ fontSize: 11, color: '#7c5cbf', marginLeft: 4 }}>({(uiScenario?.steps?.length || uiScenario?.lastResults?.length || 0)}步)</span>}</span>, children: (
+            { key: 'ui', label: <span><DesktopOutlined style={{ marginRight: 4, color: hasUi ? '#7c5cbf' : undefined }} />UI 测试{hasUi && <Tooltip title="脚本逻辑步骤数（源自手动步骤）。实际执行步数见「执行轨迹」，两者通常不同"><span style={{ fontSize: 11, color: '#7c5cbf', marginLeft: 4, borderBottom: '1px dotted #7c5cbf' }}>({(uiScenario?.steps?.length || uiScenario?.lastResults?.length || 0)}步)</span></Tooltip>}</span>, children: (
               <ScenarioEditor
                 scenario={uiScenario} setScenario={setUiScenario}
                 scenarioStatus={uiScenarioStatus} setScenarioStatus={setUiScenarioStatus}

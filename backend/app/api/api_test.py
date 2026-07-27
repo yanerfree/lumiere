@@ -38,6 +38,7 @@ def _scenario_to_dict(s: ApiTestScenario, steps: list[ApiTestStep] | None = None
         "source": s.source,
         "preSteps": s.pre_steps,
         "folderId": str(s.folder_id) if s.folder_id else None,
+        "sourceCaseId": str(s.source_case_id) if s.source_case_id else None,
         "sourceApiIds": s.source_api_ids,
         "envVariables": s.env_variables,
         "createdAt": s.created_at.isoformat() if s.created_at else None,
@@ -74,6 +75,7 @@ async def list_scenarios(
     branch_id: uuid.UUID,
     status: str | None = Query(None),
     folder_id: str | None = Query(None),
+    source_case_id: str | None = Query(None),
     search: str | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(0, ge=0),
@@ -88,6 +90,8 @@ async def list_scenarios(
         q = q.where(ApiTestScenario.status == status)
     if folder_id:
         q = q.where(ApiTestScenario.folder_id == uuid.UUID(folder_id))
+    if source_case_id:
+        q = q.where(ApiTestScenario.source_case_id == uuid.UUID(source_case_id))
     if search:
         kw = f"%{search}%"
         q = q.where(

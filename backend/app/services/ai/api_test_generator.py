@@ -263,10 +263,141 @@ async def generate_api_test(
         "summary": f"创建 {len(created_ids)} 个场景",
     })
 
+    # 自动抽取用例级场景变量（UI / 接口测试共用一份）——仅当来源用例存在时回写。
+    # 解决「场景变量没有被自动提取保存」：把编排流量里引用的既有资源 ID、以及步骤里
+    # 悬空的 ${VAR} 引用，沉淀成用例场景变量，后续生成会自动 ${引用} 复用同一份。
+    extracted_names: list[str] = []
+    if case_id and parsed:
+        try:
+            from app.models.scenario_variable import ScenarioVariable
+            case_uuid = case_id if isinstance(case_id, uuid.UUID) else uuid.UUID(str(case_id))
+            reserved = set((env_variables or {}).keys()) | {
+                "BASE_URL", "ADMIN_USER", "ADMIN_PASS", "AUTH_TOKEN",
+            }
+            existing_names = {
+                r.name for r in (await session.execute(
+                    select(ScenarioVariable).where(ScenarioVariable.case_id == case_uuid)
+                )).scalars().all()
+            }
+            candidates = _extract_case_variables(parsed, reserved)
+            for name, info in candidates.items():
+                if name in existing_names:
+                    continue
+                session.add(ScenarioVariable(
+                    case_id=case_uuid, name=name, kind=info["kind"],
+                    value_template=info["value"], var_type="string",
+                    description=info["desc"],
+                ))
+                extracted_names.append(name)
+            if extracted_names:
+                await session.commit()
+        except Exception as e:
+            logger.warning("自动抽取场景变量失败 case_id=%s: %s", case_id, e)
+        if extracted_names:
+            yield GenEvent(type="variables_extracted", data={
+                "count": len(extracted_names),
+                "names": extracted_names,
+            })
+
     yield GenEvent(type="done", data={
         "scenarioIds": created_ids,
         "totalScenarios": len(created_ids),
+        "extractedVariables": extracted_names,
     })
+
+
+_UUID_RE = re.compile(r'^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$')
+_VAR_REF_RE = re.compile(r'\$\{(\w+)\}')
+# 运行时/系统内建变量：由执行引擎注入，不建场景变量
+_RUNTIME_VARS = {"TIMESTAMP", "RANDOM_8", "RANDOM", "RANDOM_STR", "RUN_ID", "UUID", "NOW", "DATE"}
+
+
+def _is_uuid(v) -> bool:
+    return isinstance(v, str) and bool(_UUID_RE.match(v.strip()))
+
+
+def _extract_case_variables(scenarios: list[dict], reserved: set[str]) -> dict[str, dict]:
+    """从生成的场景步骤里自动抽取「用例级场景变量」(UI/接口共用一份)：
+
+      1) 请求体里 *_id / *_ids 字段的真实 UUID 值 → literal 变量(存真实值,直接可复用)；
+      2) 步骤里引用了 ${VAR}，但既不是环境变量、也不是步骤链提取、也不是运行时内建的
+         「悬空引用」→ 建占位 literal 变量(空值 + ⚠ 描述,提示补真实值)。
+
+    步骤链中间值(variables_extract 产物)、环境全局、TIMESTAMP/RANDOM 等运行时变量不在此列。
+    返回 {变量名: {value, kind, desc}}。
+    """
+    # 步骤链提取名：「上一步提取→下一步用」的中间值,不提成场景变量
+    chain_names: set[str] = set()
+    for sc in scenarios:
+        for step in sc.get("steps", []):
+            ve = step.get("variables_extract") or {}
+            if isinstance(ve, dict):
+                chain_names.update(ve.keys())
+    exclude = {n.upper() for n in reserved} | {n.upper() for n in chain_names} | _RUNTIME_VARS
+
+    found: dict[str, dict] = {}
+
+    def visit_body(node):
+        if isinstance(node, dict):
+            for k, val in node.items():
+                kl = str(k).lower()
+                if kl.endswith("_id") and _is_uuid(val):
+                    found.setdefault(k.upper(), {
+                        "value": val.strip(), "kind": "literal",
+                        "desc": f"自动提取自编排流量：字段 {k}",
+                    })
+                elif kl.endswith("_ids") and isinstance(val, list):
+                    uuids = [x for x in val if _is_uuid(x)]
+                    if uuids:
+                        note = "" if len(uuids) == 1 else f"（数组共 {len(uuids)} 个，取第一个）"
+                        found.setdefault(k[:-1].upper(), {  # *_ids -> *_ID
+                            "value": uuids[0].strip(), "kind": "literal",
+                            "desc": f"自动提取自编排流量：字段 {k}{note}",
+                        })
+                        for x in val:
+                            visit_body(x)
+                else:
+                    visit_body(val)
+        elif isinstance(node, list):
+            for x in node:
+                visit_body(x)
+
+    refs: set[str] = set()
+
+    def collect_refs(node):
+        if isinstance(node, str):
+            refs.update(_VAR_REF_RE.findall(node))
+        elif isinstance(node, dict):
+            for v in node.values():
+                collect_refs(v)
+        elif isinstance(node, list):
+            for v in node:
+                collect_refs(v)
+
+    for sc in scenarios:
+        for step in sc.get("steps", []):
+            body = step.get("body")
+            if isinstance(body, str):
+                try:
+                    body = json.loads(body)
+                except Exception:
+                    body = step.get("body")
+            visit_body(body)
+            collect_refs(step.get("url"))
+            collect_refs(step.get("headers"))
+            collect_refs(body)
+
+    # 悬空引用 → 占位变量(空值,提示补真实值)
+    for name in sorted(refs):
+        nu = name.upper()
+        if nu in exclude or nu in found:
+            continue
+        found[name] = {
+            "value": "", "kind": "literal",
+            "desc": "⚠ 步骤引用了该变量但未定义，请填写真实值（UI/接口测试共用一份）",
+        }
+
+    return found
 
 
 def _parse_scenarios(content: str) -> list[dict]:
