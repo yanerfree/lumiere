@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react'
 import {
   Button, Space, Input, Select, Tag, Radio, Popconfirm, Tooltip, Badge, Pagination,
-  Empty, Typography, InputNumber, Switch, Modal, message
+  Empty, Typography, InputNumber, Switch, Modal, Alert, message
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, PlayCircleOutlined, PauseCircleOutlined,
   ReloadOutlined, ClearOutlined, CopyOutlined, CloudServerOutlined, AppstoreOutlined,
-  SendOutlined, ThunderboltOutlined
+  SendOutlined, ThunderboltOutlined,
+  LockOutlined, LockFilled, UnlockOutlined, HolderOutlined
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -34,6 +35,7 @@ export default function UdpMockPanel() {
   const [testHex, setTestHex] = useState(false)
   const [testResult, setTestResult] = useState(null)
   const [testing, setTesting] = useState(false)
+  const [dragIdx, setDragIdx] = useState(null)
   const pollRef = useRef(null)
 
   useEffect(() => {
@@ -157,6 +159,34 @@ export default function UdpMockPanel() {
     } catch {}
   }
 
+  const handleToggleLock = async () => {
+    if (!form) return
+    try {
+      const r = await api.patch(`/protocol-mock/udp/handlers/${form.id}/lock`)
+      const d = r.data || r
+      message.success(d.locked ? '处理器已锁定，配置只读' : '处理器已解锁')
+      setForm(f => ({ ...f, locked: d.locked }))
+      setOriginalForm(f => ({ ...f, locked: d.locked }))
+      await fetchHandlers()
+    } catch {}
+  }
+
+  const handleDropHandler = async (targetIdx) => {
+    const from = dragIdx
+    setDragIdx(null)
+    if (from === null || from === targetIdx) return
+    const next = [...handlers]
+    const [moved] = next.splice(from, 1)
+    next.splice(targetIdx, 0, moved)
+    setHandlers(next)
+    try {
+      await api.put('/protocol-mock/udp/handlers/reorder', { items: next.map((r, i) => ({ id: r.id, sortOrder: i })) })
+      await fetchHandlers()
+    } catch { await fetchHandlers() }
+  }
+
+  const locked = !!form?.locked
+
   const handleToggleService = async () => {
     try {
       if (serviceStatus.running) {
@@ -200,28 +230,53 @@ export default function UdpMockPanel() {
           padding: '10px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
         }}>
-          <Input
-            value={form.name}
-            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-            variant="borderless"
-            style={{ fontSize: 15, fontWeight: 600, width: 220, padding: '0 4px' }}
-            placeholder="Handler 名称"
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+            <Input
+              value={form.name}
+              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              variant="borderless"
+              style={{ fontSize: 15, fontWeight: 600, width: 200, padding: '0 4px' }}
+              placeholder="Handler 名称"
+              disabled={locked}
+            />
+            {locked && <Tag color="orange" icon={<LockFilled />} style={{ borderRadius: 8 }}>已锁定</Tag>}
+          </div>
           <Space size={8}>
-            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSave} loading={saving} disabled={!isDirty}>保存</Button>
+            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSave} loading={saving} disabled={!isDirty || locked}>保存</Button>
             <Switch
               checked={form.enabled}
               onChange={v => handleToggle(form.id, v)}
               checkedChildren="启用" unCheckedChildren="禁用" size="small"
+              disabled={locked}
             />
-            <Popconfirm title="确认删除？" onConfirm={() => handleDelete(form.id)}>
-              <Button icon={<DeleteOutlined />} size="small" danger />
-            </Popconfirm>
+            <Button
+              icon={locked ? <UnlockOutlined /> : <LockOutlined />}
+              size="small"
+              type={locked ? 'primary' : 'default'}
+              ghost={locked}
+              onClick={handleToggleLock}
+            >{locked ? '解锁' : '锁定'}</Button>
+            {locked ? (
+              <Tooltip title="锁定状态不可删除">
+                <Button icon={<DeleteOutlined />} size="small" danger disabled />
+              </Tooltip>
+            ) : (
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(form.id)}>
+                <Button icon={<DeleteOutlined />} size="small" danger />
+              </Popconfirm>
+            )}
           </Space>
         </div>
 
         {/* Scrollable config */}
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
+          {locked && (
+            <Alert
+              type="warning" showIcon icon={<LockFilled />}
+              message="此处理器已锁定，配置为只读。点击右上角「解锁」后才能编辑。"
+              style={{ marginBottom: 14, borderRadius: 12 }}
+            />
+          )}
           {/* Match mode */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
@@ -230,6 +285,7 @@ export default function UdpMockPanel() {
                 value={form.matchMode || 'exact'}
                 onChange={e => setForm(f => ({ ...f, matchMode: e.target.value }))}
                 size="small"
+                disabled={locked}
               >
                 <Radio value="exact">精确</Radio>
                 <Radio value="hex">Hex</Radio>
@@ -239,7 +295,7 @@ export default function UdpMockPanel() {
             <div style={{ minWidth: 80 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={form.delayMs ?? 0} onChange={v => setForm(f => ({ ...f, delayMs: v }))}
-                min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" />
+                min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" disabled={locked} />
             </div>
           </div>
 
@@ -252,6 +308,7 @@ export default function UdpMockPanel() {
               rows={3}
               style={{ fontFamily: MONO, fontSize: 12 }}
               placeholder={form.matchMode === 'hex' ? '十六进制匹配，如 48454C4C4F' : form.matchMode === 'regex' ? '正则表达式，如 ^PING' : '精确匹配内容'}
+              disabled={locked}
             />
           </div>
 
@@ -262,6 +319,7 @@ export default function UdpMockPanel() {
               value={form.responseMode || 'echo'}
               onChange={e => setForm(f => ({ ...f, responseMode: e.target.value }))}
               buttonStyle="solid" size="small"
+              disabled={locked}
             >
               <Radio.Button value="echo">Echo</Radio.Button>
               <Radio.Button value="fixed">固定响应</Radio.Button>
@@ -278,6 +336,7 @@ export default function UdpMockPanel() {
                   checked={form.responseHex || false}
                   onChange={v => setForm(f => ({ ...f, responseHex: v }))}
                   checkedChildren="Hex" unCheckedChildren="Text" size="small"
+                  disabled={locked}
                 />
               </div>
               <TextArea
@@ -286,6 +345,7 @@ export default function UdpMockPanel() {
                 rows={5}
                 style={{ fontFamily: MONO, fontSize: 12 }}
                 placeholder={form.responseHex ? '十六进制响应数据，如 504F4E47' : '文本响应数据'}
+                disabled={locked}
               />
             </div>
           )}
@@ -620,16 +680,28 @@ export default function UdpMockPanel() {
             </Space>
           </div>
           <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px' }}>
-            {handlers.map(h => {
+            {handlers.map((h, i) => {
               const sel = selectedId === h.id
+              const isDragging = dragIdx === i
               return (
-                <div key={h.id} onClick={() => selectHandler(h)} style={{
-                  padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
-                  background: sel ? `rgba(24,144,255,0.06)` : 'transparent',
-                  borderLeft: `3px solid ${sel ? ACCENT : h.enabled ? '#0ea5a0' : 'rgba(0,0,0,0.1)'}`,
-                  transition: 'all .15s',
-                }}>
+                <div key={h.id} onClick={() => selectHandler(h)}
+                  draggable
+                  onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; setDragIdx(i) }}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderTop = `2px solid ${ACCENT}` }}
+                  onDragLeave={e => { e.currentTarget.style.borderTop = '2px solid transparent' }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid transparent'; handleDropHandler(i) }}
+                  onDragEnd={() => setDragIdx(null)}
+                  style={{
+                    padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
+                    background: sel ? `rgba(24,144,255,0.06)` : 'transparent',
+                    borderLeft: `3px solid ${sel ? ACCENT : h.enabled ? '#0ea5a0' : 'rgba(0,0,0,0.1)'}`,
+                    borderTop: '2px solid transparent',
+                    transition: 'background .15s', position: 'relative', opacity: isDragging ? 0.4 : 1,
+                  }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Tooltip title="拖动调整顺序">
+                      <HolderOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 12, color: '#bfbfbf', cursor: 'grab' }} />
+                    </Tooltip>
                     <Tag color="blue" style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 6px', borderRadius: 8 }}>
                       {(h.matchMode || 'exact').toUpperCase()}
                     </Tag>
@@ -638,15 +710,26 @@ export default function UdpMockPanel() {
                       fontWeight: sel ? 500 : 400,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>{h.name}</span>
+                    {h.locked && <Tooltip title="已锁定，不可编辑"><LockFilled style={{ fontSize: 11, color: '#fa8c16' }} /></Tooltip>}
+                    {h.locked ? (
+                      <Tooltip title="锁定状态不可删除"><DeleteOutlined style={{ fontSize: 11, color: '#e8e8e8', cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} /></Tooltip>
+                    ) : (
+                      <Popconfirm title="确认删除？" onConfirm={(e) => { e?.stopPropagation?.(); handleDelete(h.id) }}>
+                        <DeleteOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: '#bfbfbf', cursor: 'pointer' }} />
+                      </Popconfirm>
+                    )}
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
                     <span style={{
                       fontSize: 11, fontFamily: MONO, color: '#595959',
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160,
                     }}>{h.matchPattern || '(empty)'}</span>
-                    <Tag color={h.responseMode === 'echo' ? 'cyan' : h.responseMode === 'fixed' ? 'blue' : 'purple'} style={{
-                      margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', borderRadius: 8,
-                    }}>{h.responseMode || 'echo'}</Tag>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {!h.enabled && <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', borderRadius: 6, color: '#bfbfbf', borderColor: '#d9d9d9', background: 'transparent' }}>禁用</Tag>}
+                      <Tag color={h.responseMode === 'echo' ? 'cyan' : h.responseMode === 'fixed' ? 'blue' : 'purple'} style={{
+                        margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', borderRadius: 8,
+                      }}>{h.responseMode || 'echo'}</Tag>
+                    </div>
                   </div>
                 </div>
               )

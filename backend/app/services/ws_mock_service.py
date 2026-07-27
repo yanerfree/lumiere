@@ -60,6 +60,16 @@ async def toggle_endpoint(session: AsyncSession, endpoint_id: uuid.UUID) -> WsMo
     return endpoint
 
 
+async def toggle_lock_endpoint(session: AsyncSession, endpoint_id: uuid.UUID) -> WsMockEndpoint | None:
+    endpoint = await session.get(WsMockEndpoint, endpoint_id)
+    if not endpoint:
+        return None
+    endpoint.locked = not endpoint.locked
+    await session.flush()
+    await session.refresh(endpoint)
+    return endpoint
+
+
 async def reorder_endpoints(session: AsyncSession, items: list[dict]) -> None:
     for item in items:
         await session.execute(

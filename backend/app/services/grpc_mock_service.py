@@ -60,6 +60,16 @@ async def toggle_service(session: AsyncSession, service_id: uuid.UUID) -> GrpcMo
     return service
 
 
+async def toggle_lock_service(session: AsyncSession, service_id: uuid.UUID) -> GrpcMockService | None:
+    service = await session.get(GrpcMockService, service_id)
+    if not service:
+        return None
+    service.locked = not service.locked
+    await session.flush()
+    await session.refresh(service)
+    return service
+
+
 async def reorder_services(session: AsyncSession, items: list[dict]) -> None:
     for item in items:
         await session.execute(

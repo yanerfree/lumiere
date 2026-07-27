@@ -28,6 +28,7 @@ class WsEndpointUpdate(BaseSchema):
     name: str | None = None
     path: str | None = None
     enabled: bool | None = None
+    locked: bool | None = None
     response_mode: str | None = None
     fixed_response: str | None = Field(default=None)
     custom_config: dict | None = Field(default=None)
@@ -42,6 +43,7 @@ class WsEndpointResponse(BaseSchema):
     name: str
     path: str
     enabled: bool
+    locked: bool
     sort_order: int
     response_mode: str
     fixed_response: str | None
@@ -88,6 +90,7 @@ class TcpHandlerCreate(BaseSchema):
 class TcpHandlerUpdate(BaseSchema):
     name: str | None = None
     enabled: bool | None = None
+    locked: bool | None = None
     match_mode: str | None = None
     match_pattern: str | None = None
     response_mode: str | None = None
@@ -100,6 +103,7 @@ class TcpHandlerResponse(BaseSchema):
     id: uuid.UUID
     name: str
     enabled: bool
+    locked: bool
     sort_order: int
     match_mode: str
     match_pattern: str
@@ -143,6 +147,7 @@ class UdpHandlerCreate(BaseSchema):
 class UdpHandlerUpdate(BaseSchema):
     name: str | None = None
     enabled: bool | None = None
+    locked: bool | None = None
     match_mode: str | None = None
     match_pattern: str | None = None
     response_mode: str | None = None
@@ -155,6 +160,7 @@ class UdpHandlerResponse(BaseSchema):
     id: uuid.UUID
     name: str
     enabled: bool
+    locked: bool
     sort_order: int
     match_mode: str
     match_pattern: str
@@ -204,6 +210,7 @@ class GrpcServiceUpdate(BaseSchema):
     method_name: str | None = None
     method_type: str | None = None
     enabled: bool | None = None
+    locked: bool | None = None
     request_sample: str | None = Field(default=None)
     response_body: str | None = None
     stream_items: list | None = Field(default=None)
@@ -219,6 +226,7 @@ class GrpcServiceResponse(BaseSchema):
     method_name: str
     method_type: str
     enabled: bool
+    locked: bool
     sort_order: int
     request_sample: str | None
     response_body: str
@@ -264,3 +272,16 @@ class ProtocolServiceStatus(BaseSchema):
 class ProtocolServiceConfig(BaseSchema):
     port: int | None = None
     reflection_version: str | None = None  # gRPC 专用
+
+
+# ═══════════════════════════════════════════════
+#  Reorder (shared by ws / tcp / udp / grpc)
+# ═══════════════════════════════════════════════
+
+class ProtocolReorderItem(BaseSchema):
+    id: uuid.UUID
+    sort_order: int
+
+
+class ProtocolReorderRequest(BaseSchema):
+    items: list[ProtocolReorderItem]

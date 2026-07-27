@@ -60,6 +60,16 @@ async def toggle_handler(session: AsyncSession, handler_id: uuid.UUID) -> UdpMoc
     return handler
 
 
+async def toggle_lock_handler(session: AsyncSession, handler_id: uuid.UUID) -> UdpMockHandler | None:
+    handler = await session.get(UdpMockHandler, handler_id)
+    if not handler:
+        return None
+    handler.locked = not handler.locked
+    await session.flush()
+    await session.refresh(handler)
+    return handler
+
+
 async def reorder_handlers(session: AsyncSession, items: list[dict]) -> None:
     for item in items:
         await session.execute(

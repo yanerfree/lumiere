@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react'
 import {
   Button, Space, Input, Select, Tag, Radio, Popconfirm, Tooltip, Badge, Pagination,
-  Empty, InputNumber, Switch, Modal, message
+  Empty, InputNumber, Switch, Modal, Alert, message
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, PlayCircleOutlined, PauseCircleOutlined,
   ReloadOutlined, ClearOutlined, CopyOutlined, CloudServerOutlined, AppstoreOutlined,
-  SendOutlined, ThunderboltOutlined
+  SendOutlined, ThunderboltOutlined,
+  LockOutlined, LockFilled, UnlockOutlined, HolderOutlined
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -45,6 +46,7 @@ export default function WsMockPanel() {
   const [testMessage, setTestMessage] = useState('Hello WebSocket')
   const [testResult, setTestResult] = useState(null)
   const [testing, setTesting] = useState(false)
+  const [dragIdx, setDragIdx] = useState(null)
   const pollRef = useRef(null)
 
   useEffect(() => {
@@ -170,6 +172,32 @@ export default function WsMockPanel() {
     } catch {}
   }
 
+  const handleToggleLock = async () => {
+    if (!form) return
+    try {
+      const r = await api.patch(`/protocol-mock/ws/endpoints/${form.id}/lock`)
+      const d = r.data || r
+      message.success(d.locked ? '端点已锁定，配置只读' : '端点已解锁')
+      setForm(f => ({ ...f, locked: d.locked }))
+      setOriginalForm(f => ({ ...f, locked: d.locked }))
+      await fetchEndpoints()
+    } catch {}
+  }
+
+  const handleDropEndpoint = async (targetIdx) => {
+    const from = dragIdx
+    setDragIdx(null)
+    if (from === null || from === targetIdx) return
+    const next = [...endpoints]
+    const [moved] = next.splice(from, 1)
+    next.splice(targetIdx, 0, moved)
+    setEndpoints(next)
+    try {
+      await api.put('/protocol-mock/ws/endpoints/reorder', { items: next.map((r, i) => ({ id: r.id, sortOrder: i })) })
+      await fetchEndpoints()
+    } catch { await fetchEndpoints() }
+  }
+
   const handleToggleService = async () => {
     try {
       if (serviceStatus.running) {
@@ -198,6 +226,7 @@ export default function WsMockPanel() {
   }
 
   const responseModeValue = form?.responseMode || 'echo'
+  const locked = !!form?.locked
 
   /* ─── Config Tab ─── */
   const renderConfigTab = () => {
@@ -215,28 +244,53 @@ export default function WsMockPanel() {
           padding: '10px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
         }}>
-          <Input
-            value={form.name}
-            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-            variant="borderless"
-            style={{ fontSize: 15, fontWeight: 600, width: 220, padding: '0 4px' }}
-            placeholder="端点名称"
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+            <Input
+              value={form.name}
+              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              variant="borderless"
+              style={{ fontSize: 15, fontWeight: 600, width: 200, padding: '0 4px' }}
+              placeholder="端点名称"
+              disabled={locked}
+            />
+            {locked && <Tag color="orange" icon={<LockFilled />} style={{ borderRadius: 8 }}>已锁定</Tag>}
+          </div>
           <Space size={8}>
-            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSave} loading={saving} disabled={!isDirty}>保存</Button>
+            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSave} loading={saving} disabled={!isDirty || locked}>保存</Button>
             <Switch
               checked={form.enabled}
               onChange={(v) => handleToggle(form.id, v)}
               checkedChildren="启用" unCheckedChildren="禁用" size="small"
+              disabled={locked}
             />
-            <Popconfirm title="确认删除？" onConfirm={() => handleDelete(form.id)}>
-              <Button icon={<DeleteOutlined />} size="small" danger />
-            </Popconfirm>
+            <Button
+              icon={locked ? <UnlockOutlined /> : <LockOutlined />}
+              size="small"
+              type={locked ? 'primary' : 'default'}
+              ghost={locked}
+              onClick={handleToggleLock}
+            >{locked ? '解锁' : '锁定'}</Button>
+            {locked ? (
+              <Tooltip title="锁定状态不可删除">
+                <Button icon={<DeleteOutlined />} size="small" danger disabled />
+              </Tooltip>
+            ) : (
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(form.id)}>
+                <Button icon={<DeleteOutlined />} size="small" danger />
+              </Popconfirm>
+            )}
           </Space>
         </div>
 
         {/* Scrollable config */}
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
+          {locked && (
+            <Alert
+              type="warning" showIcon icon={<LockFilled />}
+              message="此端点已锁定，配置为只读。点击右上角「解锁」后才能编辑。"
+              style={{ marginBottom: 14, borderRadius: 12 }}
+            />
+          )}
           {/* Path */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>路径</div>
@@ -245,6 +299,7 @@ export default function WsMockPanel() {
               onChange={e => setForm(f => ({ ...f, path: e.target.value }))}
               style={{ fontFamily: MONO, fontSize: 13, borderRadius: 12 }}
               placeholder="/ws"
+              disabled={locked}
             />
           </div>
 
@@ -256,6 +311,7 @@ export default function WsMockPanel() {
                 value={responseModeValue}
                 onChange={e => setForm(f => ({ ...f, responseMode: e.target.value }))}
                 buttonStyle="solid" size="small"
+                disabled={locked}
               >
                 <Radio.Button value="echo">Echo</Radio.Button>
                 <Radio.Button value="fixed">Fixed</Radio.Button>
@@ -266,11 +322,11 @@ export default function WsMockPanel() {
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={form.delayMs ?? 0} onChange={v => setForm(f => ({ ...f, delayMs: v }))}
-                min={0} step={100} size="small" style={{ width: 90 }} placeholder="0" />
+                min={0} step={100} size="small" style={{ width: 90 }} placeholder="0" disabled={locked} />
             </div>
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>支持二进制</div>
-              <Switch checked={form.supportBinary || false} onChange={v => setForm(f => ({ ...f, supportBinary: v }))} size="small" />
+              <Switch checked={form.supportBinary || false} onChange={v => setForm(f => ({ ...f, supportBinary: v }))} size="small" disabled={locked} />
             </div>
           </div>
 
@@ -289,6 +345,7 @@ export default function WsMockPanel() {
                 onChange={e => setForm(f => ({ ...f, fixedResponse: e.target.value }))}
                 style={{ fontFamily: MONO, fontSize: 12, minHeight: 160, borderRadius: 12 }}
                 placeholder='收到任何消息时返回此固定内容'
+                disabled={locked}
               />
             </div>
           )}
@@ -304,6 +361,7 @@ export default function WsMockPanel() {
                 onChange={e => setForm(f => ({ ...f, customConfig: e.target.value }))}
                 style={{ fontFamily: MONO, fontSize: 12, minHeight: 200, borderRadius: 12 }}
                 placeholder={'[\n  {"match": "hello", "response": "world"},\n  {"match": "ping", "response": "pong"}\n]'}
+                disabled={locked}
               />
             </div>
           )}
@@ -313,12 +371,12 @@ export default function WsMockPanel() {
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>错误码</div>
                 <InputNumber value={form.errorCode ?? 1000} onChange={v => setForm(f => ({ ...f, errorCode: v }))}
-                  min={1000} max={4999} size="small" style={{ width: 100 }} />
+                  min={1000} max={4999} size="small" style={{ width: 100 }} disabled={locked} />
               </div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>错误原因</div>
                 <Input value={form.errorReason || ''} onChange={e => setForm(f => ({ ...f, errorReason: e.target.value }))}
-                  placeholder="Connection closed" style={{ fontSize: 13 }} />
+                  placeholder="Connection closed" style={{ fontSize: 13 }} disabled={locked} />
               </div>
             </div>
           )}
@@ -636,20 +694,33 @@ export default function WsMockPanel() {
             </Space>
           </div>
           <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px' }}>
-            {endpoints.map(ep => {
+            {endpoints.map((ep, i) => {
               const sel = selectedId === ep.id
+              const isDragging = dragIdx === i
               return (
-                <div key={ep.id} onClick={() => selectEndpoint(ep)} style={{
-                  padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
-                  background: sel ? 'rgba(82,196,26,0.06)' : 'transparent',
-                  borderLeft: `3px solid ${sel ? ACCENT : ep.enabled ? ACCENT : 'rgba(0,0,0,0.1)'}`,
-                  transition: 'all .15s', position: 'relative',
-                }}>
+                <div key={ep.id} onClick={() => selectEndpoint(ep)}
+                  draggable
+                  onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; setDragIdx(i) }}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid #52c41a' }}
+                  onDragLeave={e => { e.currentTarget.style.borderTop = '2px solid transparent' }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid transparent'; handleDropEndpoint(i) }}
+                  onDragEnd={() => setDragIdx(null)}
+                  style={{
+                    padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
+                    background: sel ? 'rgba(82,196,26,0.06)' : 'transparent',
+                    borderLeft: `3px solid ${sel ? ACCENT : ep.enabled ? ACCENT : 'rgba(0,0,0,0.1)'}`,
+                    borderTop: '2px solid transparent',
+                    transition: 'background .15s', position: 'relative', opacity: isDragging ? 0.4 : 1,
+                  }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Tooltip title="拖动调整顺序">
+                      <HolderOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 12, color: '#bfbfbf', cursor: 'grab' }} />
+                    </Tooltip>
                     <span style={{
                       flex: 1, fontSize: 11, fontFamily: MONO,
                       color: '#595959', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>{ep.path}</span>
+                    {ep.locked && <Tooltip title="已锁定，不可编辑"><LockFilled style={{ fontSize: 11, color: '#fa8c16' }} /></Tooltip>}
                     <Tag color={MODE_COLOR[ep.responseMode] || 'default'} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', borderRadius: 6 }}>
                       {MODE_LABEL[ep.responseMode] || ep.responseMode}
                     </Tag>
@@ -658,9 +729,13 @@ export default function WsMockPanel() {
                     <span style={{ fontSize: 12, color: sel ? '#262626' : '#8c8c8c', fontWeight: sel ? 500 : 400 }}>{ep.name}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {!ep.enabled && <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', borderRadius: 6, color: '#bfbfbf', borderColor: '#d9d9d9', background: 'transparent' }}>禁用</Tag>}
-                      <Popconfirm title="确认删除？" onConfirm={(e) => { e?.stopPropagation?.(); handleDelete(ep.id) }}>
-                        <DeleteOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: '#bfbfbf', cursor: 'pointer' }} />
-                      </Popconfirm>
+                      {ep.locked ? (
+                        <Tooltip title="锁定状态不可删除"><DeleteOutlined style={{ fontSize: 11, color: '#e8e8e8', cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} /></Tooltip>
+                      ) : (
+                        <Popconfirm title="确认删除？" onConfirm={(e) => { e?.stopPropagation?.(); handleDelete(ep.id) }}>
+                          <DeleteOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: '#bfbfbf', cursor: 'pointer' }} />
+                        </Popconfirm>
+                      )}
                     </div>
                   </div>
                 </div>

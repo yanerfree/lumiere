@@ -19,6 +19,7 @@ class WsMockEndpoint(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     path: Mapped[str] = mapped_column(String(500), nullable=False, default="/ws")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     response_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="echo")
@@ -61,6 +62,7 @@ class TcpMockHandler(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     match_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="exact")
@@ -100,6 +102,7 @@ class UdpMockHandler(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     match_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="exact")
@@ -142,6 +145,7 @@ class GrpcMockService(Base):
     method_name: Mapped[str] = mapped_column(String(200), nullable=False)
     method_type: Mapped[str] = mapped_column(String(20), nullable=False, default="unary")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     request_sample: Mapped[str | None] = mapped_column(Text, nullable=True)

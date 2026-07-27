@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react'
 import {
   Button, Space, Input, Select, Tag, Radio, Popconfirm, Tooltip, Badge, Pagination,
-  Empty, InputNumber, Switch, Modal, message
+  Empty, InputNumber, Switch, Modal, Alert, message
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, PlayCircleOutlined, PauseCircleOutlined,
   ReloadOutlined, ClearOutlined, CopyOutlined, CloudServerOutlined, AppstoreOutlined,
-  SendOutlined, ThunderboltOutlined
+  SendOutlined, ThunderboltOutlined,
+  LockOutlined, LockFilled, UnlockOutlined, HolderOutlined
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -48,6 +49,7 @@ export default function TcpMockPanel() {
   const [testHex, setTestHex] = useState(false)
   const [testResult, setTestResult] = useState(null)
   const [testing, setTesting] = useState(false)
+  const [dragIdx, setDragIdx] = useState(null)
   const pollRef = useRef(null)
 
   useEffect(() => {
@@ -173,6 +175,32 @@ export default function TcpMockPanel() {
     } catch {}
   }
 
+  const handleToggleLock = async () => {
+    if (!form) return
+    try {
+      const r = await api.patch(`/protocol-mock/tcp/handlers/${form.id}/lock`)
+      const d = r.data || r
+      message.success(d.locked ? '处理器已锁定，配置只读' : '处理器已解锁')
+      setForm(f => ({ ...f, locked: d.locked }))
+      setOriginalForm(f => ({ ...f, locked: d.locked }))
+      await fetchHandlers()
+    } catch {}
+  }
+
+  const handleDropHandler = async (targetIdx) => {
+    const from = dragIdx
+    setDragIdx(null)
+    if (from === null || from === targetIdx) return
+    const next = [...handlers]
+    const [moved] = next.splice(from, 1)
+    next.splice(targetIdx, 0, moved)
+    setHandlers(next)
+    try {
+      await api.put('/protocol-mock/tcp/handlers/reorder', { items: next.map((r, i) => ({ id: r.id, sortOrder: i })) })
+      await fetchHandlers()
+    } catch { await fetchHandlers() }
+  }
+
   const handleToggleService = async () => {
     try {
       if (serviceStatus.running) {
@@ -201,6 +229,7 @@ export default function TcpMockPanel() {
   }
 
   const responseModeValue = form?.responseMode || 'echo'
+  const locked = !!form?.locked
 
   /* ─── Config Tab ─── */
   const renderConfigTab = () => {
@@ -218,28 +247,53 @@ export default function TcpMockPanel() {
           padding: '10px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
         }}>
-          <Input
-            value={form.name}
-            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-            variant="borderless"
-            style={{ fontSize: 15, fontWeight: 600, width: 220, padding: '0 4px' }}
-            placeholder="处理器名称"
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+            <Input
+              value={form.name}
+              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              variant="borderless"
+              style={{ fontSize: 15, fontWeight: 600, width: 200, padding: '0 4px' }}
+              placeholder="处理器名称"
+              disabled={locked}
+            />
+            {locked && <Tag color="orange" icon={<LockFilled />} style={{ borderRadius: 8 }}>已锁定</Tag>}
+          </div>
           <Space size={8}>
-            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSave} loading={saving} disabled={!isDirty}>保存</Button>
+            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSave} loading={saving} disabled={!isDirty || locked}>保存</Button>
             <Switch
               checked={form.enabled}
               onChange={(v) => handleToggle(form.id, v)}
               checkedChildren="启用" unCheckedChildren="禁用" size="small"
+              disabled={locked}
             />
-            <Popconfirm title="确认删除？" onConfirm={() => handleDelete(form.id)}>
-              <Button icon={<DeleteOutlined />} size="small" danger />
-            </Popconfirm>
+            <Button
+              icon={locked ? <UnlockOutlined /> : <LockOutlined />}
+              size="small"
+              type={locked ? 'primary' : 'default'}
+              ghost={locked}
+              onClick={handleToggleLock}
+            >{locked ? '解锁' : '锁定'}</Button>
+            {locked ? (
+              <Tooltip title="锁定状态不可删除">
+                <Button icon={<DeleteOutlined />} size="small" danger disabled />
+              </Tooltip>
+            ) : (
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(form.id)}>
+                <Button icon={<DeleteOutlined />} size="small" danger />
+              </Popconfirm>
+            )}
           </Space>
         </div>
 
         {/* Scrollable config */}
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
+          {locked && (
+            <Alert
+              type="warning" showIcon icon={<LockFilled />}
+              message="此处理器已锁定，配置为只读。点击右上角「解锁」后才能编辑。"
+              style={{ marginBottom: 14, borderRadius: 12 }}
+            />
+          )}
           {/* Match mode + pattern */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>匹配模式</div>
@@ -247,6 +301,7 @@ export default function TcpMockPanel() {
               value={form.matchMode || 'exact'}
               onChange={e => setForm(f => ({ ...f, matchMode: e.target.value }))}
               buttonStyle="solid" size="small"
+              disabled={locked}
             >
               <Radio.Button value="exact">Exact</Radio.Button>
               <Radio.Button value="hex">Hex</Radio.Button>
@@ -266,6 +321,7 @@ export default function TcpMockPanel() {
               onChange={e => setForm(f => ({ ...f, matchPattern: e.target.value }))}
               style={{ fontFamily: MONO, fontSize: 12, minHeight: 80, borderRadius: 12 }}
               placeholder={form.matchMode === 'hex' ? 'FF FE 00 01' : form.matchMode === 'regex' ? '^HELLO.*' : '输入匹配内容'}
+              disabled={locked}
             />
           </div>
 
@@ -277,6 +333,7 @@ export default function TcpMockPanel() {
                 value={responseModeValue}
                 onChange={e => setForm(f => ({ ...f, responseMode: e.target.value }))}
                 buttonStyle="solid" size="small"
+                disabled={locked}
               >
                 <Radio.Button value="echo">Echo</Radio.Button>
                 <Radio.Button value="fixed">Fixed</Radio.Button>
@@ -287,7 +344,7 @@ export default function TcpMockPanel() {
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={form.delayMs ?? 0} onChange={v => setForm(f => ({ ...f, delayMs: v }))}
-                min={0} step={100} size="small" style={{ width: 90 }} placeholder="0" />
+                min={0} step={100} size="small" style={{ width: 90 }} placeholder="0" disabled={locked} />
             </div>
           </div>
 
@@ -310,7 +367,7 @@ export default function TcpMockPanel() {
                 <span style={{ fontSize: 12, color: '#8c8c8c' }}>响应数据</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                   <span style={{ fontSize: 11, color: '#bfbfbf' }}>Hex 编码</span>
-                  <Switch checked={form.responseHex || false} onChange={v => setForm(f => ({ ...f, responseHex: v }))} size="small" />
+                  <Switch checked={form.responseHex || false} onChange={v => setForm(f => ({ ...f, responseHex: v }))} size="small" disabled={locked} />
                 </div>
               </div>
               <TextArea
@@ -318,6 +375,7 @@ export default function TcpMockPanel() {
                 onChange={e => setForm(f => ({ ...f, responseData: e.target.value }))}
                 style={{ fontFamily: MONO, fontSize: 12, minHeight: 160, borderRadius: 12 }}
                 placeholder={form.responseHex ? 'FF FE 00 01 48 45 4C 4C 4F' : '输入响应数据内容'}
+                disabled={locked}
               />
             </div>
           )}
@@ -662,20 +720,37 @@ export default function TcpMockPanel() {
             </Space>
           </div>
           <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px' }}>
-            {handlers.map(h => {
+            {handlers.map((h, i) => {
               const sel = selectedId === h.id
+              const isDragging = dragIdx === i
               return (
-                <div key={h.id} onClick={() => selectHandler(h)} style={{
-                  padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
-                  background: sel ? 'rgba(250,140,22,0.06)' : 'transparent',
-                  borderLeft: `3px solid ${sel ? ACCENT : h.enabled ? ACCENT : 'rgba(0,0,0,0.1)'}`,
-                  transition: 'all .15s', position: 'relative',
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div key={h.id} onClick={() => selectHandler(h)}
+                  draggable
+                  onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; setDragIdx(i) }}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderTop = `2px solid ${ACCENT}` }}
+                  onDragLeave={e => { e.currentTarget.style.borderTop = '2px solid transparent' }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid transparent'; handleDropHandler(i) }}
+                  onDragEnd={() => setDragIdx(null)}
+                  style={{
+                    padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
+                    background: sel ? 'rgba(250,140,22,0.06)' : 'transparent',
+                    borderLeft: `3px solid ${sel ? ACCENT : h.enabled ? ACCENT : 'rgba(0,0,0,0.1)'}`,
+                    borderTop: '2px solid transparent',
+                    transition: 'background .15s', position: 'relative', opacity: isDragging ? 0.4 : 1,
+                  }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+                    <Tooltip title="拖动调整顺序">
+                      <HolderOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 12, color: '#bfbfbf', cursor: 'grab' }} />
+                    </Tooltip>
                     <span style={{ fontSize: 12, color: sel ? '#262626' : '#595959', fontWeight: sel ? 500 : 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{h.name}</span>
-                    <Popconfirm title="确认删除？" onConfirm={(e) => { e?.stopPropagation?.(); handleDelete(h.id) }}>
-                      <DeleteOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: '#bfbfbf', cursor: 'pointer' }} />
-                    </Popconfirm>
+                    {h.locked && <Tooltip title="已锁定，不可编辑"><LockFilled style={{ fontSize: 11, color: '#fa8c16' }} /></Tooltip>}
+                    {h.locked ? (
+                      <Tooltip title="锁定状态不可删除"><DeleteOutlined style={{ fontSize: 11, color: '#e8e8e8', cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} /></Tooltip>
+                    ) : (
+                      <Popconfirm title="确认删除？" onConfirm={(e) => { e?.stopPropagation?.(); handleDelete(h.id) }}>
+                        <DeleteOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: '#bfbfbf', cursor: 'pointer' }} />
+                      </Popconfirm>
+                    )}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
                     <Tag color={MATCH_MODE_COLOR[h.matchMode] || 'default'} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', borderRadius: 6 }}>

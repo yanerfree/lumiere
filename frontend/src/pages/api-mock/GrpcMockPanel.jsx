@@ -1,12 +1,13 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react'
 import {
   Button, Space, Input, Select, Tag, Radio, Popconfirm, Tooltip, Badge, Pagination,
-  Empty, Typography, InputNumber, Switch, Modal, message
+  Empty, Typography, InputNumber, Switch, Modal, Alert, message
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, PlayCircleOutlined, PauseCircleOutlined,
   ReloadOutlined, ClearOutlined, CopyOutlined, CloudServerOutlined, AppstoreOutlined,
-  SendOutlined, ThunderboltOutlined
+  SendOutlined, ThunderboltOutlined,
+  LockOutlined, LockFilled, UnlockOutlined, HolderOutlined
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -50,6 +51,7 @@ export default function GrpcMockPanel() {
   const [testBody, setTestBody] = useState('')
   const [testResult, setTestResult] = useState(null)
   const [testing, setTesting] = useState(false)
+  const [dragIdx, setDragIdx] = useState(null)
 
   useEffect(() => {
     fetchServices()
@@ -191,6 +193,34 @@ export default function GrpcMockPanel() {
     } catch {}
   }
 
+  const handleToggleLock = async () => {
+    if (!form) return
+    try {
+      const r = await api.patch(`/protocol-mock/grpc/services/${form.id}/lock`)
+      const d = r.data || r
+      message.success(d.locked ? '服务已锁定，配置只读' : '服务已解锁')
+      setForm(f => ({ ...f, locked: d.locked }))
+      setOriginalForm(f => ({ ...f, locked: d.locked }))
+      await fetchServices()
+    } catch {}
+  }
+
+  const handleDropService = async (targetIdx) => {
+    const from = dragIdx
+    setDragIdx(null)
+    if (from === null || from === targetIdx) return
+    const next = [...services]
+    const [moved] = next.splice(from, 1)
+    next.splice(targetIdx, 0, moved)
+    setServices(next)
+    try {
+      await api.put('/protocol-mock/grpc/services/reorder', { items: next.map((r, i) => ({ id: r.id, sortOrder: i })) })
+      await fetchServices()
+    } catch { await fetchServices() }
+  }
+
+  const locked = !!form?.locked
+
   const handleToggleService = async () => {
     try {
       if (serviceStatus.running) {
@@ -239,39 +269,58 @@ export default function GrpcMockPanel() {
           padding: '10px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
         }}>
-          <Input
-            value={form.name}
-            onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-            variant="borderless"
-            style={{ fontSize: 15, fontWeight: 600, width: 220, padding: '0 4px' }}
-            placeholder="Service 名称"
-          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+            <Input
+              value={form.name}
+              onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              variant="borderless"
+              disabled={locked}
+              style={{ fontSize: 15, fontWeight: 600, width: 220, padding: '0 4px' }}
+              placeholder="Service 名称"
+            />
+            {locked && <Tag color="orange" icon={<LockFilled />} style={{ borderRadius: 8 }}>已锁定</Tag>}
+          </div>
           <Space size={8}>
-            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSave} loading={saving} disabled={!isDirty}>保存</Button>
+            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSave} loading={saving} disabled={!isDirty || locked}>保存</Button>
             <Switch
               checked={form.enabled}
               onChange={v => handleToggle(form.id, v)}
+              disabled={locked}
               checkedChildren="启用" unCheckedChildren="禁用" size="small"
             />
-            <Popconfirm title="确认删除？" onConfirm={() => handleDelete(form.id)}>
-              <Button icon={<DeleteOutlined />} size="small" danger />
-            </Popconfirm>
+            <Button
+              icon={locked ? <UnlockOutlined /> : <LockOutlined />}
+              size="small"
+              type={locked ? 'primary' : 'default'}
+              ghost={locked}
+              onClick={handleToggleLock}
+            >{locked ? '解锁' : '锁定'}</Button>
+            {locked ? (
+              <Tooltip title="已锁定，无法删除">
+                <Button icon={<DeleteOutlined />} size="small" danger disabled />
+              </Tooltip>
+            ) : (
+              <Popconfirm title="确认删除？" onConfirm={() => handleDelete(form.id)}>
+                <Button icon={<DeleteOutlined />} size="small" danger />
+              </Popconfirm>
+            )}
           </Space>
         </div>
 
         {/* Scrollable config */}
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
+          {locked && <Alert type="warning" showIcon icon={<LockFilled />} message="此服务已锁定，配置为只读。点击右上角「解锁」后才能编辑。" style={{ marginBottom: 14, borderRadius: 12 }} />}
           {/* Service name + Method name */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Service 名称</div>
               <Input value={form.serviceName} onChange={e => setForm(f => ({ ...f, serviceName: e.target.value }))}
-                placeholder="helloworld.Greeter" style={{ fontFamily: MONO, fontSize: 12 }} />
+                placeholder="helloworld.Greeter" disabled={locked} style={{ fontFamily: MONO, fontSize: 12 }} />
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Method 名称</div>
               <Input value={form.methodName} onChange={e => setForm(f => ({ ...f, methodName: e.target.value }))}
-                placeholder="SayHello" style={{ fontFamily: MONO, fontSize: 12 }} />
+                placeholder="SayHello" disabled={locked} style={{ fontFamily: MONO, fontSize: 12 }} />
             </div>
           </div>
 
@@ -282,6 +331,7 @@ export default function GrpcMockPanel() {
               <Radio.Group
                 value={form.methodType || 'unary'}
                 onChange={e => setForm(f => ({ ...f, methodType: e.target.value }))}
+                disabled={locked}
                 size="small"
               >
                 <Radio value="unary">Unary</Radio>
@@ -291,12 +341,12 @@ export default function GrpcMockPanel() {
             <div style={{ minWidth: 80 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={form.delayMs ?? 0} onChange={v => setForm(f => ({ ...f, delayMs: v }))}
-                min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" />
+                min={0} step={100} size="small" disabled={locked} style={{ width: 80 }} placeholder="0" />
             </div>
             <div style={{ minWidth: 180 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Status Code</div>
               <Select value={form.statusCode ?? 0} onChange={v => setForm(f => ({ ...f, statusCode: v }))}
-                size="small" style={{ width: 180 }} options={GRPC_CODES} />
+                size="small" disabled={locked} style={{ width: 180 }} options={GRPC_CODES} />
             </div>
           </div>
 
@@ -305,7 +355,7 @@ export default function GrpcMockPanel() {
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Status Message</div>
               <Input value={form.statusMessage} onChange={e => setForm(f => ({ ...f, statusMessage: e.target.value }))}
-                placeholder="错误描述信息" />
+                placeholder="错误描述信息" disabled={locked} />
             </div>
           )}
 
@@ -316,6 +366,7 @@ export default function GrpcMockPanel() {
               value={form.requestSample}
               onChange={e => setForm(f => ({ ...f, requestSample: e.target.value }))}
               rows={3}
+              disabled={locked}
               style={{ fontFamily: MONO, fontSize: 12 }}
               placeholder='{"name": "world"}'
             />
@@ -328,6 +379,7 @@ export default function GrpcMockPanel() {
               value={form.responseBody}
               onChange={e => setForm(f => ({ ...f, responseBody: e.target.value }))}
               rows={5}
+              disabled={locked}
               style={{ fontFamily: MONO, fontSize: 12 }}
               placeholder='{"message": "Hello, world!"}'
             />
@@ -341,6 +393,7 @@ export default function GrpcMockPanel() {
                 value={form.streamItems}
                 onChange={e => setForm(f => ({ ...f, streamItems: e.target.value }))}
                 rows={5}
+                disabled={locked}
                 style={{ fontFamily: MONO, fontSize: 12 }}
                 placeholder={'[\n  {"message": "chunk 1"},\n  {"message": "chunk 2"},\n  {"message": "chunk 3"}\n]'}
               />
@@ -738,26 +791,45 @@ export default function GrpcMockPanel() {
             </Space>
           </div>
           <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px' }}>
-            {services.map(s => {
+            {services.map((s, i) => {
               const sel = selectedId === s.id
+              const isDragging = dragIdx === i
               return (
-                <div key={s.id} onClick={() => selectService(s)} style={{
-                  padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
-                  background: sel ? 'rgba(124,92,191,0.06)' : 'transparent',
-                  borderLeft: `3px solid ${sel ? ACCENT : s.enabled ? '#0ea5a0' : 'rgba(0,0,0,0.1)'}`,
-                  transition: 'all .15s',
-                }}>
+                <div
+                  key={s.id}
+                  onClick={() => selectService(s)}
+                  draggable
+                  onDragStart={() => setDragIdx(i)}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderTop = `2px solid ${ACCENT}` }}
+                  onDragLeave={e => { e.currentTarget.style.borderTop = '2px solid transparent' }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid transparent'; handleDropService(i) }}
+                  onDragEnd={() => setDragIdx(null)}
+                  style={{
+                    padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
+                    background: sel ? 'rgba(124,92,191,0.06)' : 'transparent',
+                    borderLeft: `3px solid ${sel ? ACCENT : s.enabled ? '#0ea5a0' : 'rgba(0,0,0,0.1)'}`,
+                    borderTop: '2px solid transparent',
+                    opacity: isDragging ? 0.4 : 1,
+                    transition: 'background .15s, opacity .15s',
+                  }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Tooltip title="拖动调整顺序">
+                      <HolderOutlined
+                        onClick={e => e.stopPropagation()}
+                        style={{ color: '#bfbfbf', cursor: 'grab', fontSize: 12 }}
+                      />
+                    </Tooltip>
                     <span style={{
                       flex: 1, fontSize: 12, color: sel ? '#262626' : '#8c8c8c',
                       fontWeight: sel ? 500 : 400,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>{s.name}</span>
+                    {s.locked && <LockFilled style={{ color: '#faad14', fontSize: 12 }} />}
                     <Tag color={METHOD_TYPE_COLOR[s.methodType] || 'default'} style={{
                       margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', borderRadius: 8,
                     }}>{METHOD_TYPE_LABEL[s.methodType] || s.methodType || 'unary'}</Tag>
                   </div>
-                  <div style={{ marginTop: 4 }}>
+                  <div style={{ marginTop: 4, paddingLeft: 18 }}>
                     <span style={{
                       fontSize: 11, fontFamily: MONO, color: '#595959',
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',

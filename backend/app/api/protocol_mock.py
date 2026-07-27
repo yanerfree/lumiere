@@ -17,7 +17,7 @@ from app.schemas.protocol_mock import (
     TcpHandlerCreate, TcpHandlerUpdate, TcpHandlerResponse, TcpLogResponse,
     UdpHandlerCreate, UdpHandlerUpdate, UdpHandlerResponse, UdpLogResponse,
     GrpcServiceCreate, GrpcServiceUpdate, GrpcServiceResponse, GrpcLogResponse,
-    ProtocolServiceStatus, ProtocolServiceConfig,
+    ProtocolServiceStatus, ProtocolServiceConfig, ProtocolReorderRequest,
 )
 from app.services import ws_mock_service as ws_svc
 from app.services import tcp_mock_service as tcp_svc
@@ -53,11 +53,29 @@ async def ws_create_endpoint(body: WsEndpointCreate, session: AsyncSession = Dep
     return WsEndpointResponse.model_validate(row, from_attributes=True)
 
 
-@router.put("/ws/endpoints/{endpoint_id}", response_model=WsEndpointResponse)
-async def ws_update_endpoint(endpoint_id: uuid.UUID, body: WsEndpointUpdate, session: AsyncSession = Depends(get_db)):
-    row = await ws_svc.update_endpoint(session, endpoint_id, body)
+@router.put("/ws/endpoints/reorder")
+async def ws_reorder_endpoints(body: ProtocolReorderRequest, session: AsyncSession = Depends(get_db)):
+    # 必须声明在 /ws/endpoints/{endpoint_id} 之前，否则 "reorder" 会被当作 endpoint_id 解析
+    await ws_svc.reorder_endpoints(session, [item.model_dump() for item in body.items])
+    return {"ok": True}
+
+
+@router.patch("/ws/endpoints/{endpoint_id}/lock", response_model=WsEndpointResponse)
+async def ws_lock_endpoint(endpoint_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
+    row = await ws_svc.toggle_lock_endpoint(session, endpoint_id)
     if not row:
         return JSONResponse({"error": "Endpoint not found"}, status_code=404)
+    return WsEndpointResponse.model_validate(row, from_attributes=True)
+
+
+@router.put("/ws/endpoints/{endpoint_id}", response_model=WsEndpointResponse)
+async def ws_update_endpoint(endpoint_id: uuid.UUID, body: WsEndpointUpdate, session: AsyncSession = Depends(get_db)):
+    existing = await ws_svc.get_endpoint(session, endpoint_id)
+    if not existing:
+        return JSONResponse({"error": "Endpoint not found"}, status_code=404)
+    if existing.locked:
+        return JSONResponse({"error": "端点已锁定，请先解锁后再编辑"}, status_code=423)
+    row = await ws_svc.update_endpoint(session, endpoint_id, body)
     return WsEndpointResponse.model_validate(row, from_attributes=True)
 
 
@@ -66,15 +84,20 @@ async def ws_delete_endpoint(endpoint_id: uuid.UUID, session: AsyncSession = Dep
     row = await ws_svc.get_endpoint(session, endpoint_id)
     if not row:
         return JSONResponse({"error": "Endpoint not found"}, status_code=404)
+    if row.locked:
+        return JSONResponse({"error": "端点已锁定，请先解锁后再删除"}, status_code=423)
     await ws_svc.delete_endpoint(session, endpoint_id)
     return {"ok": True}
 
 
 @router.patch("/ws/endpoints/{endpoint_id}/toggle", response_model=WsEndpointResponse)
 async def ws_toggle_endpoint(endpoint_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
-    row = await ws_svc.toggle_endpoint(session, endpoint_id)
-    if not row:
+    existing = await ws_svc.get_endpoint(session, endpoint_id)
+    if not existing:
         return JSONResponse({"error": "Endpoint not found"}, status_code=404)
+    if existing.locked:
+        return JSONResponse({"error": "端点已锁定，请先解锁后再操作"}, status_code=423)
+    row = await ws_svc.toggle_endpoint(session, endpoint_id)
     return WsEndpointResponse.model_validate(row, from_attributes=True)
 
 
@@ -160,11 +183,29 @@ async def tcp_create_handler(body: TcpHandlerCreate, session: AsyncSession = Dep
     return TcpHandlerResponse.model_validate(row, from_attributes=True)
 
 
-@router.put("/tcp/handlers/{handler_id}", response_model=TcpHandlerResponse)
-async def tcp_update_handler(handler_id: uuid.UUID, body: TcpHandlerUpdate, session: AsyncSession = Depends(get_db)):
-    row = await tcp_svc.update_handler(session, handler_id, body)
+@router.put("/tcp/handlers/reorder")
+async def tcp_reorder_handlers(body: ProtocolReorderRequest, session: AsyncSession = Depends(get_db)):
+    # 必须声明在 /tcp/handlers/{handler_id} 之前
+    await tcp_svc.reorder_handlers(session, [item.model_dump() for item in body.items])
+    return {"ok": True}
+
+
+@router.patch("/tcp/handlers/{handler_id}/lock", response_model=TcpHandlerResponse)
+async def tcp_lock_handler(handler_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
+    row = await tcp_svc.toggle_lock_handler(session, handler_id)
     if not row:
         return JSONResponse({"error": "Handler not found"}, status_code=404)
+    return TcpHandlerResponse.model_validate(row, from_attributes=True)
+
+
+@router.put("/tcp/handlers/{handler_id}", response_model=TcpHandlerResponse)
+async def tcp_update_handler(handler_id: uuid.UUID, body: TcpHandlerUpdate, session: AsyncSession = Depends(get_db)):
+    existing = await tcp_svc.get_handler(session, handler_id)
+    if not existing:
+        return JSONResponse({"error": "Handler not found"}, status_code=404)
+    if existing.locked:
+        return JSONResponse({"error": "处理器已锁定，请先解锁后再编辑"}, status_code=423)
+    row = await tcp_svc.update_handler(session, handler_id, body)
     return TcpHandlerResponse.model_validate(row, from_attributes=True)
 
 
@@ -173,15 +214,20 @@ async def tcp_delete_handler(handler_id: uuid.UUID, session: AsyncSession = Depe
     row = await tcp_svc.get_handler(session, handler_id)
     if not row:
         return JSONResponse({"error": "Handler not found"}, status_code=404)
+    if row.locked:
+        return JSONResponse({"error": "处理器已锁定，请先解锁后再删除"}, status_code=423)
     await tcp_svc.delete_handler(session, handler_id)
     return {"ok": True}
 
 
 @router.patch("/tcp/handlers/{handler_id}/toggle", response_model=TcpHandlerResponse)
 async def tcp_toggle_handler(handler_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
-    row = await tcp_svc.toggle_handler(session, handler_id)
-    if not row:
+    existing = await tcp_svc.get_handler(session, handler_id)
+    if not existing:
         return JSONResponse({"error": "Handler not found"}, status_code=404)
+    if existing.locked:
+        return JSONResponse({"error": "处理器已锁定，请先解锁后再操作"}, status_code=423)
+    row = await tcp_svc.toggle_handler(session, handler_id)
     return TcpHandlerResponse.model_validate(row, from_attributes=True)
 
 
@@ -267,11 +313,29 @@ async def udp_create_handler(body: UdpHandlerCreate, session: AsyncSession = Dep
     return UdpHandlerResponse.model_validate(row, from_attributes=True)
 
 
-@router.put("/udp/handlers/{handler_id}", response_model=UdpHandlerResponse)
-async def udp_update_handler(handler_id: uuid.UUID, body: UdpHandlerUpdate, session: AsyncSession = Depends(get_db)):
-    row = await udp_svc.update_handler(session, handler_id, body)
+@router.put("/udp/handlers/reorder")
+async def udp_reorder_handlers(body: ProtocolReorderRequest, session: AsyncSession = Depends(get_db)):
+    # 必须声明在 /udp/handlers/{handler_id} 之前
+    await udp_svc.reorder_handlers(session, [item.model_dump() for item in body.items])
+    return {"ok": True}
+
+
+@router.patch("/udp/handlers/{handler_id}/lock", response_model=UdpHandlerResponse)
+async def udp_lock_handler(handler_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
+    row = await udp_svc.toggle_lock_handler(session, handler_id)
     if not row:
         return JSONResponse({"error": "Handler not found"}, status_code=404)
+    return UdpHandlerResponse.model_validate(row, from_attributes=True)
+
+
+@router.put("/udp/handlers/{handler_id}", response_model=UdpHandlerResponse)
+async def udp_update_handler(handler_id: uuid.UUID, body: UdpHandlerUpdate, session: AsyncSession = Depends(get_db)):
+    existing = await udp_svc.get_handler(session, handler_id)
+    if not existing:
+        return JSONResponse({"error": "Handler not found"}, status_code=404)
+    if existing.locked:
+        return JSONResponse({"error": "处理器已锁定，请先解锁后再编辑"}, status_code=423)
+    row = await udp_svc.update_handler(session, handler_id, body)
     return UdpHandlerResponse.model_validate(row, from_attributes=True)
 
 
@@ -280,15 +344,20 @@ async def udp_delete_handler(handler_id: uuid.UUID, session: AsyncSession = Depe
     row = await udp_svc.get_handler(session, handler_id)
     if not row:
         return JSONResponse({"error": "Handler not found"}, status_code=404)
+    if row.locked:
+        return JSONResponse({"error": "处理器已锁定，请先解锁后再删除"}, status_code=423)
     await udp_svc.delete_handler(session, handler_id)
     return {"ok": True}
 
 
 @router.patch("/udp/handlers/{handler_id}/toggle", response_model=UdpHandlerResponse)
 async def udp_toggle_handler(handler_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
-    row = await udp_svc.toggle_handler(session, handler_id)
-    if not row:
+    existing = await udp_svc.get_handler(session, handler_id)
+    if not existing:
         return JSONResponse({"error": "Handler not found"}, status_code=404)
+    if existing.locked:
+        return JSONResponse({"error": "处理器已锁定，请先解锁后再操作"}, status_code=423)
+    row = await udp_svc.toggle_handler(session, handler_id)
     return UdpHandlerResponse.model_validate(row, from_attributes=True)
 
 
@@ -374,11 +443,29 @@ async def grpc_create_service(body: GrpcServiceCreate, session: AsyncSession = D
     return GrpcServiceResponse.model_validate(row, from_attributes=True)
 
 
-@router.put("/grpc/services/{service_id}", response_model=GrpcServiceResponse)
-async def grpc_update_service(service_id: uuid.UUID, body: GrpcServiceUpdate, session: AsyncSession = Depends(get_db)):
-    row = await grpc_svc.update_service(session, service_id, body)
+@router.put("/grpc/services/reorder")
+async def grpc_reorder_services(body: ProtocolReorderRequest, session: AsyncSession = Depends(get_db)):
+    # 必须声明在 /grpc/services/{service_id} 之前
+    await grpc_svc.reorder_services(session, [item.model_dump() for item in body.items])
+    return {"ok": True}
+
+
+@router.patch("/grpc/services/{service_id}/lock", response_model=GrpcServiceResponse)
+async def grpc_lock_service(service_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
+    row = await grpc_svc.toggle_lock_service(session, service_id)
     if not row:
         return JSONResponse({"error": "Service not found"}, status_code=404)
+    return GrpcServiceResponse.model_validate(row, from_attributes=True)
+
+
+@router.put("/grpc/services/{service_id}", response_model=GrpcServiceResponse)
+async def grpc_update_service(service_id: uuid.UUID, body: GrpcServiceUpdate, session: AsyncSession = Depends(get_db)):
+    existing = await grpc_svc.get_service(session, service_id)
+    if not existing:
+        return JSONResponse({"error": "Service not found"}, status_code=404)
+    if existing.locked:
+        return JSONResponse({"error": "服务已锁定，请先解锁后再编辑"}, status_code=423)
+    row = await grpc_svc.update_service(session, service_id, body)
     await grpc_mock_server.refresh_reflection()
     return GrpcServiceResponse.model_validate(row, from_attributes=True)
 
@@ -388,6 +475,8 @@ async def grpc_delete_service(service_id: uuid.UUID, session: AsyncSession = Dep
     row = await grpc_svc.get_service(session, service_id)
     if not row:
         return JSONResponse({"error": "Service not found"}, status_code=404)
+    if row.locked:
+        return JSONResponse({"error": "服务已锁定，请先解锁后再删除"}, status_code=423)
     await grpc_svc.delete_service(session, service_id)
     await grpc_mock_server.refresh_reflection()
     return {"ok": True}
@@ -395,9 +484,12 @@ async def grpc_delete_service(service_id: uuid.UUID, session: AsyncSession = Dep
 
 @router.patch("/grpc/services/{service_id}/toggle", response_model=GrpcServiceResponse)
 async def grpc_toggle_service(service_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
-    row = await grpc_svc.toggle_service(session, service_id)
-    if not row:
+    existing = await grpc_svc.get_service(session, service_id)
+    if not existing:
         return JSONResponse({"error": "Service not found"}, status_code=404)
+    if existing.locked:
+        return JSONResponse({"error": "服务已锁定，请先解锁后再操作"}, status_code=423)
+    row = await grpc_svc.toggle_service(session, service_id)
     await grpc_mock_server.refresh_reflection()
     return GrpcServiceResponse.model_validate(row, from_attributes=True)
 
