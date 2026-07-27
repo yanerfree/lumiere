@@ -41,7 +41,7 @@ async def run_case_generate(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    ai_config = await resolve_ai_config(project_id, session)
+    ai_config = await resolve_ai_config(project_id, session, capability="tb-case-generate")
     if not ai_config:
         raise AppError(
             code="AI_NOT_CONFIGURED",
@@ -88,7 +88,7 @@ async def run_quality_review(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    ai_config = await resolve_ai_config(project_id, session)
+    ai_config = await resolve_ai_config(project_id, session, capability="tb-quality-review")
     if not ai_config:
         raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
 
@@ -130,7 +130,7 @@ async def run_diagnose(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    ai_config = await resolve_ai_config(project_id, session)
+    ai_config = await resolve_ai_config(project_id, session, capability="tb-diagnose")
     if not ai_config:
         raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
 

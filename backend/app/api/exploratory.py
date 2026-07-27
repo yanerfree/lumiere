@@ -210,7 +210,7 @@ async def generate_charter(
     if not exp:
         raise NotFoundError(code="NOT_FOUND", message="会话不存在")
 
-    ai_config = await resolve_ai_config(project_id, session)
+    ai_config = await resolve_ai_config(project_id, session, capability="exploratory-charter")
     if not ai_config:
         raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
 

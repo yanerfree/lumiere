@@ -910,7 +910,7 @@ async def generate_api_tests(
     from app.services.ai_config_resolver import resolve_ai_config
     from app.core.exceptions import AppError
 
-    ai_config = await resolve_ai_config(project_id, session)
+    ai_config = await resolve_ai_config(project_id, session, capability="api-test-generate")
     if not ai_config:
         raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
 
@@ -975,7 +975,7 @@ async def ai_optimize(
     from app.services.ai.api_test_optimizer import analyze_optimization
     from app.core.exceptions import AppError
 
-    ai_config = await resolve_ai_config(project_id, session)
+    ai_config = await resolve_ai_config(project_id, session, capability="api-test-optimize")
     if not ai_config:
         raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
 

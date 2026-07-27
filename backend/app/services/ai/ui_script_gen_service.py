@@ -51,6 +51,9 @@ async def generate_ui_script_stream(
     stream_agent = _get_agent_stream()
     context_block, verify_env = await _build_gen_context(session, case, env_id, env_vars, fixture_name)
     extra_kwargs = {"context_block": context_block, "verify_env": verify_env} if _is_cli_engine() else {}
+    ui_model = await _resolve_ui_model(session, case)
+    if ui_model:
+        extra_kwargs["model_name"] = ui_model
 
     # 引擎偶发不产脚本（旧引擎不吐 tool_call / CLI 未输出脚本块）→ 整体重试
     MAX_GEN_ATTEMPTS = 3
@@ -125,6 +128,8 @@ async def generate_ui_script_stream(
                 }
                 await save_session.commit()
 
+            await _harvest_i18n_safe(case.id, script_content)
+
             yield _sse("done", {
                 "status": "passed" if all_passed else "failed",
                 "all_passed": all_passed,
@@ -157,6 +162,9 @@ async def generate_ui_script(
     stream_agent = _get_agent_stream()
     context_block, verify_env = await _build_gen_context(session, case, env_id, env_vars, fixture_name)
     extra_kwargs = {"context_block": context_block, "verify_env": verify_env} if _is_cli_engine() else {}
+    ui_model = await _resolve_ui_model(session, case)
+    if ui_model:
+        extra_kwargs["model_name"] = ui_model
 
     # 引擎偶发不产脚本 → 整体重试
     MAX_GEN_ATTEMPTS = 3
@@ -189,6 +197,8 @@ async def generate_ui_script(
 
     script = await _save_script(session, case, script_content, all_passed)
     await session.commit()
+
+    await _harvest_i18n_safe(case.id, script_content)
 
     return {
         "script_id": str(script.id),
@@ -287,6 +297,31 @@ async def _save_script(session: AsyncSession, case: Case, content: str, all_pass
     )
 
 
+async def _harvest_i18n_safe(case_id, content: str):
+    """生成脚本后把 UI 文案增量采集进项目级 i18n 词典（为二期脚本国际化打底座）。
+
+    用独立 session、全程 try/except 降级：采集失败绝不影响脚本保存。
+    """
+    try:
+        from app.deps.db import async_session_factory
+        from app.models.project import Branch
+        from app.services.i18n_harvest_service import harvest_from_script
+        cid = case_id if isinstance(case_id, uuid.UUID) else uuid.UUID(str(case_id))
+        async with async_session_factory() as s:
+            case = await s.get(Case, cid)
+            if not case or not case.branch_id:
+                return
+            branch = await s.get(Branch, case.branch_id)
+            if not branch:
+                return
+            added = await harvest_from_script(s, branch.project_id, content)
+            await s.commit()
+            if added:
+                logger.info("i18n 采集：新增 %d 条 UI 文案 (case=%s)", added, cid)
+    except Exception:
+        logger.warning("i18n 文案采集失败（已忽略，不影响脚本保存）", exc_info=True)
+
+
 def _detect_fixture(preconditions: str) -> str:
     text = preconditions.lower()
     if any(kw in text for kw in ["租户", "tenant", "已授权"]):
@@ -326,6 +361,20 @@ async def _build_gen_context(session, case, env_id, env_vars, fixture_name):
 def _is_cli_engine() -> bool:
     from app.config import settings
     return (settings.ui_agent_engine or "cli").lower() == "cli"
+
+
+async def _resolve_ui_model(session: AsyncSession, case: Case) -> str | None:
+    """按 ui_script 能力档位解析 UI 脚本生成模型(取不到则 None,agent 回退 .env)。"""
+    try:
+        from app.models.project import Branch
+        from app.services.ai_config_resolver import resolve_ai_config
+        branch = await session.get(Branch, case.branch_id)
+        project_id = branch.project_id if branch else None
+        cfg = await resolve_ai_config(project_id, session, capability="ui-script")
+        return cfg.model if cfg else None
+    except Exception:
+        logger.warning("resolve ui-script model failed", exc_info=True)
+        return None
 
 
 

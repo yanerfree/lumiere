@@ -104,7 +104,7 @@ async def generate_document(
     from app.mcp.tools import test_cases, api_endpoints
     from app.core.exceptions import AppError
 
-    ai_config = await resolve_ai_config(project_id, session)
+    ai_config = await resolve_ai_config(project_id, session, capability="doc-generate")
     if not ai_config:
         raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
 
@@ -215,7 +215,7 @@ async def generate_with_screenshots(
     from app.services.ai_config_resolver import resolve_ai_config
     from app.core.exceptions import AppError
 
-    ai_config = await resolve_ai_config(project_id, session)
+    ai_config = await resolve_ai_config(project_id, session, capability="doc-generate-screenshots")
     if not ai_config:
         raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
 
@@ -362,7 +362,7 @@ async def optimize_document(
     if not doc or doc.project_id != project_id:
         raise NotFoundError(code="NOT_FOUND", message="文档不存在")
 
-    ai_config = await resolve_ai_config(project_id, session)
+    ai_config = await resolve_ai_config(project_id, session, capability="doc-optimize")
     if not ai_config:
         raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
 

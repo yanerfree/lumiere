@@ -34,6 +34,9 @@ from app.models.load_test import (  # noqa: F401 — 压力测试
     LoadTestScenario, LoadTestStep, LoadTestRun,
 )
 from app.models.refresh_token import RefreshToken  # noqa: F401 — 登录 refresh token
+from app.models.ai_provider_config import (  # noqa: F401 — AI 配置 + 能力档位 + 全局设置
+    AIProviderConfig, ProjectAIConfig, AICapabilityBinding, AIGlobalSettings,
+)
 
 config = context.config
 if config.config_file_name is not None:

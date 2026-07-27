@@ -25,7 +25,7 @@ async def run_extraction(task_id: uuid.UUID, project_id: uuid.UUID):
             if not task or task.status != "extracting":
                 return
 
-            config = await resolve_ai_config(project_id, session)
+            config = await resolve_ai_config(project_id, session, capability="scenario-gen")
             if not config:
                 await pipeline.transition(session, task, "failed", error_message="AI 配置未找到，请先在项目设置中配置 AI 服务")
                 await session.commit()
@@ -87,7 +87,7 @@ async def run_modeling(task_id: uuid.UUID, project_id: uuid.UUID):
             if not task or task.status != "model_ready":
                 return
 
-            config = await resolve_ai_config(project_id, session)
+            config = await resolve_ai_config(project_id, session, capability="scenario-gen")
             if not config:
                 await pipeline.transition(session, task, "failed", error_message="AI 配置未找到")
                 await session.commit()
@@ -129,7 +129,7 @@ async def run_expansion(task_id: uuid.UUID, project_id: uuid.UUID):
             if not task or task.status != "generating":
                 return
 
-            config = await resolve_ai_config(project_id, session)
+            config = await resolve_ai_config(project_id, session, capability="scenario-gen")
             if not config:
                 await pipeline.transition(session, task, "failed", error_message="AI 配置未找到")
                 await session.commit()

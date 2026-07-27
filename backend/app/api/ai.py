@@ -33,8 +33,8 @@ router = APIRouter(
 config_router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 
-async def _get_ai_config(project_id: uuid.UUID, session: AsyncSession):
-    config = await resolve_ai_config(project_id, session)
+async def _get_ai_config(project_id: uuid.UUID, session: AsyncSession, capability: str = "text"):
+    config = await resolve_ai_config(project_id, session, capability=capability)
     if not config:
         raise AppError(
             code="AI_NOT_CONFIGURED",
@@ -76,7 +76,7 @@ async def generate_cases(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    config = await _get_ai_config(project_id, session)
+    config = await _get_ai_config(project_id, session, capability="tb-case-generate")
 
     from app.services.ai.case_gen_service import build_case_gen_messages
     messages = build_case_gen_messages(
@@ -122,7 +122,7 @@ async def generate_script(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    config = await _get_ai_config(project_id, session)
+    config = await _get_ai_config(project_id, session, capability="pytest-script")
 
     from app.services.ai.script_gen_service import build_script_gen_messages
     messages = await build_script_gen_messages(
