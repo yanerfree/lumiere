@@ -191,6 +191,19 @@ async def generate_api_test(
     created_ids = []
     auto_folders: dict[str, uuid.UUID] = {}
 
+    # 去写死：入库前把步骤 body 里 *_id/*_ids 的真实 UUID 回写成 ${VAR} 引用，
+    # 真实值沉淀为 literal 场景变量（仅当有来源用例、能存场景变量时）。
+    reserved_vars = set((env_variables or {}).keys()) | {
+        "BASE_URL", "LOGIN_URL", "ADMIN_USERNAME", "ADMIN_PASSWORD",
+        "TENANT_USERNAME", "TENANT_PASSWORD", "ADMIN_USER", "ADMIN_PASS", "AUTH_TOKEN",
+    }
+    preassigned_vars: dict[str, dict] = {}
+    if case_id:
+        try:
+            preassigned_vars = _dehardcode_uuid_bodies(parsed, reserved_vars)
+        except Exception as e:
+            logger.warning("回写 UUID 变量为引用失败: %s", e)
+
     for sc in parsed:
         sc_folder_id = folder_id
         if not sc_folder_id:
@@ -271,15 +284,17 @@ async def generate_api_test(
         try:
             from app.models.scenario_variable import ScenarioVariable
             case_uuid = case_id if isinstance(case_id, uuid.UUID) else uuid.UUID(str(case_id))
-            reserved = set((env_variables or {}).keys()) | {
-                "BASE_URL", "ADMIN_USER", "ADMIN_PASS", "AUTH_TOKEN",
-            }
             existing_names = {
                 r.name for r in (await session.execute(
                     select(ScenarioVariable).where(ScenarioVariable.case_id == case_uuid)
                 )).scalars().all()
             }
-            candidates = _extract_case_variables(parsed, reserved)
+            # 已回写为引用的 UUID 变量(真实值) + 其余步骤里的悬空引用/未回写字面量。
+            # reserved 并入 preassigned 名，避免被当成悬空引用又建一个空占位。
+            candidates = {
+                **preassigned_vars,
+                **_extract_case_variables(parsed, reserved_vars | set(preassigned_vars)),
+            }
             for name, info in candidates.items():
                 if name in existing_names:
                     continue
@@ -397,6 +412,65 @@ def _extract_case_variables(scenarios: list[dict], reserved: set[str]) -> dict[s
             "desc": "⚠ 步骤引用了该变量但未定义，请填写真实值（UI/接口测试共用一份）",
         }
 
+    return found
+
+
+def _dehardcode_uuid_bodies(scenarios: list[dict], reserved: set[str]) -> dict[str, dict]:
+    """去写死：把步骤 body 里 *_id / *_ids 字段的真实 UUID 字面量**回写成 `${VAR}` 引用**，
+    并返回 {变量名: {value, kind, desc}}（literal，存真实值）。
+
+    这样脚本里不出现写死的资源 ID：字面量换成变量引用，真实值沉淀为 literal 场景变量，
+    运行时由场景变量解析回真实值发送。就地修改 scenarios 里各 step 的 body。
+      - `xxx_id`: 单个 UUID → 变量名 `XXX_ID`；
+      - `xxx_ids`: 仅当数组里**恰好一个** UUID 时才回写（多个不合并，避免语义错乱）。
+    """
+    reserved_u = {n.upper() for n in reserved}
+    found: dict[str, dict] = {}
+
+    def rewrite(node):
+        if isinstance(node, dict):
+            for k, val in list(node.items()):
+                kl = str(k).lower()
+                if kl.endswith("_id") and _is_uuid(val):
+                    name = k.upper()
+                    if name not in reserved_u:
+                        found.setdefault(name, {
+                            "value": val.strip(), "kind": "literal",
+                            "desc": f"自动提取自编排流量：字段 {k}（已回写为变量引用，去写死）",
+                        })
+                        node[k] = f"${{{name}}}"
+                elif kl.endswith("_ids") and isinstance(val, list):
+                    uuids = [x for x in val if _is_uuid(x)]
+                    name = k[:-1].upper()  # *_ids -> *_ID
+                    if len(uuids) == 1 and name not in reserved_u:
+                        found.setdefault(name, {
+                            "value": uuids[0].strip(), "kind": "literal",
+                            "desc": f"自动提取自编排流量：字段 {k}（已回写为变量引用，去写死）",
+                        })
+                        node[k] = [f"${{{name}}}" if _is_uuid(x) else x for x in val]
+                    else:
+                        for x in val:
+                            rewrite(x)
+                else:
+                    rewrite(val)
+        elif isinstance(node, list):
+            for x in node:
+                rewrite(x)
+
+    for sc in scenarios:
+        for step in sc.get("steps", []):
+            body = step.get("body")
+            is_str = isinstance(body, str)
+            parsed_body = body
+            if is_str:
+                try:
+                    parsed_body = json.loads(body)
+                except Exception:
+                    continue
+            if not isinstance(parsed_body, (dict, list)):
+                continue
+            rewrite(parsed_body)
+            step["body"] = json.dumps(parsed_body, ensure_ascii=False) if is_str else parsed_body
     return found
 
 
