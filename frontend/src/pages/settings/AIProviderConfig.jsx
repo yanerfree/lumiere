@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Button, Table, Modal, Form, Input, Select, InputNumber, Switch,
-  message, Tag, Space, Card, Popconfirm, Tooltip, Spin, Badge, Typography,
+  message, Tag, Space, Card, Popconfirm, Tooltip, Spin, Badge, Typography, AutoComplete,
 } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, CheckCircleOutlined,
@@ -9,6 +9,7 @@ import {
   ApiOutlined, EyeOutlined, EyeInvisibleOutlined, LoadingOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
+import AICapabilityBindings from './AICapabilityBindings'
 
 const { Text, Paragraph } = Typography
 
@@ -26,6 +27,7 @@ export default function AIProviderConfig() {
   const [editingId, setEditingId] = useState(null)
   const [testingId, setTestingId] = useState(null)
   const [showSecret, setShowSecret] = useState({})
+  const [modelOptions, setModelOptions] = useState([])
   const [form] = Form.useForm()
 
   const fetchConfigs = useCallback(async () => {
@@ -43,7 +45,20 @@ export default function AIProviderConfig() {
     } catch { /* */ }
   }, [])
 
-  useEffect(() => { fetchConfigs(); fetchProjects() }, [fetchConfigs, fetchProjects])
+  const fetchModels = useCallback(async () => {
+    try {
+      const res = await api.get('/ai-capabilities/models')
+      const list = (res.data?.models || []).map(m =>
+        typeof m === 'string' ? { id: m, displayName: m } : m
+      )
+      setModelOptions(list.map(m => ({
+        value: m.id,
+        label: m.displayName && m.displayName !== m.id ? `${m.displayName} · ${m.id}` : m.id,
+      })))
+    } catch { /* */ }
+  }, [])
+
+  useEffect(() => { fetchConfigs(); fetchProjects(); fetchModels() }, [fetchConfigs, fetchProjects, fetchModels])
 
   const openCreate = () => {
     setEditingId(null)
@@ -285,6 +300,8 @@ export default function AIProviderConfig() {
         size="middle"
       />
 
+      <AICapabilityBindings />
+
       <Modal
         title={editingId ? '编辑 AI 服务配置' : '新增 AI 服务配置'}
         open={modalOpen}
@@ -323,8 +340,13 @@ export default function AIProviderConfig() {
             <Input.Password placeholder={editingId ? '留空则不修改' : 'gw-...'} />
           </Form.Item>
 
-          <Form.Item name="model" label="模型名称" rules={[{ required: true, message: '请输入模型' }]}>
-            <Input placeholder="claude-haiku-4-5-20251001" />
+          <Form.Item name="model" label="模型名称" rules={[{ required: true, message: '请选择模型' }]}>
+            <AutoComplete
+              options={modelOptions}
+              filterOption={(input, option) =>
+                (option?.value || '').toLowerCase().includes(input.toLowerCase())}
+              placeholder="选择或输入模型名（如 claude-haiku-4-5-20251001）"
+            />
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
