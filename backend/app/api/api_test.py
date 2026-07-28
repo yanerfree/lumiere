@@ -926,7 +926,7 @@ async def generate_api_tests(
     if body.env_variables:
         env_vars.update(body.env_variables)
 
-    from app.services.ai.api_test_generator import generate_api_test
+    from app.services.ai.api_scenario_gen_service import generate_api_test
 
     async def event_stream():
         try:

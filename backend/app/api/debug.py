@@ -76,7 +76,9 @@ async def debug_send(req: SendRequest):
 
     t0 = time.perf_counter()
     try:
-        async with httpx.AsyncClient(follow_redirects=True) as client:
+        # verify=False: 允许自签/内网证书(与其它执行器一致)
+        # http2=True: 兼容仅支持 HTTP/2 的网关(ALPN 自动协商,普通 HTTP/1.1 目标不受影响)
+        async with httpx.AsyncClient(follow_redirects=True, verify=False, http2=True) as client:
             resp = await client.request(method, req.url, **kwargs)
         duration = round((time.perf_counter() - t0) * 1000)
 
@@ -102,5 +104,9 @@ async def debug_send(req: SendRequest):
         return {"data": {"status_code": 0, "status_text": "连接失败", "headers": [], "body": str(e), "duration_ms": 0, "size": 0}}
     except httpx.TimeoutException:
         return {"data": {"status_code": 0, "status_text": "请求超时", "headers": [], "body": "请求超时（30s）", "duration_ms": 30000, "size": 0}}
+    except httpx.ProtocolError as e:
+        return {"data": {"status_code": 0, "status_text": "协议不匹配", "headers": [],
+                         "body": f"目标未返回合法的 HTTP 响应，可能是非 HTTP 服务或协议不兼容：{e}",
+                         "duration_ms": 0, "size": 0}}
     except Exception as e:
         return {"data": {"status_code": 0, "status_text": "错误", "headers": [], "body": str(e), "duration_ms": 0, "size": 0}}

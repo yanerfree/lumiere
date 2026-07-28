@@ -21,7 +21,7 @@ async def generate_api_test(
     api_info 应包含完整的接口定义（method, url, 参数约束, 响应格式等）。
     folder_name 可选，指定生成到哪个文件夹（不存在则自动创建）。"""
     from app.services.ai_config_resolver import resolve_ai_config
-    from app.services.ai.api_test_generator import generate_api_test as _generate
+    from app.services.ai.api_scenario_gen_service import generate_api_test as _generate
 
     bid = uuid.UUID(branch_id)
     scenario = await session.execute(select(ApiTestScenario).where(ApiTestScenario.branch_id == bid).limit(1))
