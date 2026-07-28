@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import {
   Button, Space, Input, Select, Tag, Radio, Popconfirm, Empty,
-  InputNumber, message, Card, Modal, Collapse,
+  InputNumber, message, Card, Modal, Collapse, Tabs,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, PlayCircleOutlined,
   PauseCircleOutlined, ThunderboltOutlined, HistoryOutlined,
-  CaretRightOutlined, CloseOutlined,
+  CaretRightOutlined, CloseOutlined, ExportOutlined, CopyOutlined, DownloadOutlined,
 } from '@ant-design/icons'
 import { api, getValidToken } from '../../utils/request'
 
@@ -37,6 +37,7 @@ export default function LoadTest() {
   /* — scenarios — */
   const [scenarios, setScenarios] = useState([])
   const [selectedId, setSelectedId] = useState(null)
+  const [k6, setK6] = useState({ open: false, loading: false, filename: '', script: '', guide: '' })
   const [form, setForm] = useState({ ...emptyScenario })
   const [mode, setMode] = useState('iterations')
   const [dirty, setDirty] = useState(false)
@@ -519,6 +520,75 @@ export default function LoadTest() {
     )
   }
 
+  const exportK6 = async () => {
+    if (!selectedId) { message.warning('请先选择场景'); return }
+    setK6({ open: true, loading: true, filename: '', script: '', guide: '' })
+    try {
+      const d = await api.get(`/load-test/scenarios/${selectedId}/k6-script`)
+      setK6({ open: true, loading: false, filename: d.filename || 'scenario.js', script: d.script || '', guide: d.deployGuide || '' })
+    } catch (e) {
+      setK6({ open: false, loading: false, filename: '', script: '', guide: '' })
+      message.error(`生成 k6 脚本失败: ${e?.response?.data?.error || e.message || '未知错误'}`)
+    }
+  }
+
+  const copyText = async (text) => {
+    try { await navigator.clipboard.writeText(text); message.success('已复制') }
+    catch { message.error('复制失败，请手动选择') }
+  }
+
+  const downloadText = (name, text) => {
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob); a.download = name; a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+  }
+
+  const renderK6Modal = () => (
+    <Modal
+      title={<span><ExportOutlined style={{ color: ACCENT, marginRight: 8 }} />导出 k6 压测脚本</span>}
+      open={k6.open}
+      onCancel={() => setK6(k => ({ ...k, open: false }))}
+      footer={null}
+      width={860}
+    >
+      {k6.loading ? (
+        <div style={{ textAlign: 'center', padding: 40, color: '#888' }}>生成中…</div>
+      ) : (
+        <Tabs
+          items={[
+            {
+              key: 'script',
+              label: '脚本 (k6 .js)',
+              children: (
+                <div>
+                  <Space style={{ marginBottom: 8 }}>
+                    <Button size="small" icon={<CopyOutlined />} onClick={() => copyText(k6.script)}>复制</Button>
+                    <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadText(k6.filename, k6.script)}>下载 {k6.filename}</Button>
+                  </Space>
+                  <pre style={{ maxHeight: 460, overflow: 'auto', background: '#1e1e1e', color: '#d4d4d4', padding: 12, borderRadius: 8, fontFamily: MONO, fontSize: 12, margin: 0 }}>{k6.script}</pre>
+                </div>
+              ),
+            },
+            {
+              key: 'guide',
+              label: '部署指引',
+              children: (
+                <div>
+                  <Space style={{ marginBottom: 8 }}>
+                    <Button size="small" icon={<CopyOutlined />} onClick={() => copyText(k6.guide)}>复制</Button>
+                    <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadText('k6-deploy-guide.md', k6.guide)}>下载 .md</Button>
+                  </Space>
+                  <pre style={{ maxHeight: 460, overflow: 'auto', background: '#fafafa', color: '#333', padding: 12, borderRadius: 8, fontFamily: MONO, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0 }}>{k6.guide}</pre>
+                </div>
+              ),
+            },
+          ]}
+        />
+      )}
+    </Modal>
+  )
+
   /* ─── Config Tab ─── */
   const renderConfigTab = () => (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: 4 }}>
@@ -599,6 +669,7 @@ export default function LoadTest() {
         >
           开始测试
         </Button>
+        <Button icon={<ExportOutlined />} onClick={exportK6} disabled={steps.length === 0}>导出 k6 脚本</Button>
       </div>
     </div>
   )
@@ -950,6 +1021,7 @@ export default function LoadTest() {
 
       {/* ─── Run Detail Modal ─── */}
       {renderDetailModal()}
+      {renderK6Modal()}
     </div>
   )
 }

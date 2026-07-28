@@ -23,6 +23,7 @@ from app.schemas.load_test import (
 )
 from app.services import load_test_service as svc
 from app.services import load_test_runner as runner
+from app.services import load_test_k6 as k6gen
 
 router = APIRouter(prefix="/api/load-test", tags=["load-test"])
 
@@ -47,6 +48,39 @@ async def get_scenario(scenario_id: uuid.UUID, session: AsyncSession = Depends(g
     if not scenario:
         return JSONResponse({"error": "Scenario not found"}, status_code=404)
     return LoadTestScenarioResponse.model_validate(scenario, from_attributes=True)
+
+
+@router.get("/scenarios/{scenario_id}/k6-script")
+async def export_k6_script(scenario_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
+    """导出 k6 压测脚本 + 部署指引（不运行，供在专用压测机上执行）。"""
+    scenario = await svc.get_scenario(session, scenario_id)
+    if not scenario:
+        return JSONResponse({"error": "Scenario not found"}, status_code=404)
+    steps = await svc.list_steps(session, scenario_id)
+    if not steps:
+        return JSONResponse({"error": "该场景还没有配置任何步骤"}, status_code=400)
+    config = {
+        "concurrent_users": scenario.concurrent_users,
+        "ramp_up_seconds": scenario.ramp_up_seconds,
+        "total_iterations": scenario.total_iterations,
+        "duration_seconds": scenario.duration_seconds,
+        "variables": scenario.variables or [],
+        "steps": [
+            {
+                "name": s.name, "method": s.method, "url": s.url, "headers": s.headers,
+                "body": s.body, "body_type": s.body_type,
+                "extractions": s.extractions, "assertions": s.assertions,
+            }
+            for s in steps
+        ],
+    }
+    safe = "".join(c if (c.isalnum() or c in "-_") else "_" for c in (scenario.name or "scenario"))[:60] or "scenario"
+    return {
+        "filename": f"{safe}.js",
+        "script": k6gen.generate_k6_script(config, scenario.name or ""),
+        "deployGuide": k6gen.generate_deploy_guide(config, scenario.name or ""),
+        "stepCount": len(steps),
+    }
 
 
 @router.put("/scenarios/{scenario_id}", response_model=LoadTestScenarioResponse)
