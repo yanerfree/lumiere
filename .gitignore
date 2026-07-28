@@ -26,3 +26,6 @@ frontend/ui-*.png
 # 测试报告
 discover_test/
 .playwright-mcp/
+
+# 后端运行时日志
+backend/.logs/

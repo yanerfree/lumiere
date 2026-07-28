@@ -37,6 +37,7 @@ from app.models.refresh_token import RefreshToken  # noqa: F401 — 登录 refre
 from app.models.ai_provider_config import (  # noqa: F401 — AI 配置 + 能力档位 + 全局设置
     AIProviderConfig, ProjectAIConfig, AICapabilityBinding, AIGlobalSettings,
 )
+from app.models.i18n_message import ProjectI18nMessage  # noqa: F401 — 项目级 i18n 词典
 
 config = context.config
 if config.config_file_name is not None:

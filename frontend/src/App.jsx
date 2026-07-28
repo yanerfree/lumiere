@@ -6,7 +6,7 @@ import {
   SettingOutlined, UserOutlined, FileSearchOutlined, ApiOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, BellOutlined, RobotOutlined,
   CloudServerOutlined, ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
-  GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined,
+  GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
 } from '@ant-design/icons'
 import { api } from './utils/request'
 import { useLang } from './utils/i18n.jsx'
@@ -35,6 +35,7 @@ import LoadTest from './pages/load-test/LoadTest'
 import AIProviderConfig from './pages/settings/AIProviderConfig'
 import ProjectAIConfig from './pages/settings/ProjectAIConfig'
 import AutomationData from './pages/settings/AutomationData'
+import I18nMessages from './pages/settings/I18nMessages'
 import AICapabilities from './pages/settings/AICapabilities'
 import SkillManage from './pages/settings/SkillManage'
 import MCPTools from './pages/settings/MCPTools'
@@ -88,6 +89,7 @@ function AppLayout() {
     { key: `/projects/${projectId}/documents`, icon: <FileTextOutlined />, label: t('menu.documents') },
     { key: `/projects/${projectId}/api-test`, icon: <ThunderboltOutlined />, label: t('menu.apiTest') },
     { key: `/projects/${projectId}/settings/automation-data`, icon: <DatabaseOutlined />, label: '自动化数据' },
+    { key: `/projects/${projectId}/settings/i18n`, icon: <TranslationOutlined />, label: '国际化词典' },
     { type: 'divider' },
     {
       key: 'ai-group',
@@ -264,6 +266,7 @@ function AppLayout() {
             <Route path="/projects/:projectId/logs" element={<AuditLogs />} />
             <Route path="/projects/:projectId/settings/ai" element={<ProjectAIConfig />} />
             <Route path="/projects/:projectId/settings/automation-data" element={<AutomationData />} />
+            <Route path="/projects/:projectId/settings/i18n" element={<I18nMessages />} />
             <Route path="/projects/:projectId/settings/ai-capabilities" element={<AICapabilities />} />
             <Route path="/projects/:projectId/settings/skills" element={<SkillManage />} />
             <Route path="/projects/:projectId/settings/mcp-tools" element={<MCPTools />} />
