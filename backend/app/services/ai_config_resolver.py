@@ -41,6 +41,40 @@ class ResolvedAIConfig:
     config_kind: str | None = None
 
 
+async def describe_effective(
+    project_id: uuid.UUID | None,
+    session: AsyncSession,
+    mask_url=None,
+) -> dict:
+    """给展示层用:某项目实际生效的 AI 配置 + 各内置档位模型。
+
+    project_id=None 表示只走全局兜底路径。管理端总览与项目 AI 配置页都调这一个函数,
+    保证两处口径一致 —— 各写一遍必然漂移(项目页曾因此把吃兜底的项目显示成"尚未配置")。
+    """
+    from app.services.ai_capabilities import BUILTIN_CATEGORIES, CATEGORY_META
+
+    models: list[dict] = []
+    first: ResolvedAIConfig | None = None
+    for cat in BUILTIN_CATEGORIES:
+        cfg = await resolve_ai_config(project_id, session, capability=cat)
+        models.append({
+            "category": cat,
+            "label": CATEGORY_META.get(cat, {}).get("label", cat),
+            "model": cfg.model if cfg else None,
+        })
+        if first is None:
+            first = cfg
+
+    return {
+        "source": first.source if first else None,
+        "configKind": first.config_kind if first else "none",
+        "connectionName": first.config_name if first else None,
+        "provider": first.provider if first else None,
+        "baseUrlMasked": mask_url(first.base_url) if (first and mask_url) else None,
+        "models": models,
+    }
+
+
 async def _resolve_model(
     session: AsyncSession,
     capability: str,

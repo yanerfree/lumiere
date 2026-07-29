@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   Card, Radio, Button, Tag, Space, message, Empty, Spin, Typography, Divider,
-  Modal, Form, Input, Select, InputNumber, Popconfirm,
+  Modal, Form, Input, Select, InputNumber, Popconfirm, Tooltip,
 } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined, StarFilled, ThunderboltOutlined,
@@ -149,6 +149,21 @@ export default function ProjectAIConfig() {
   const hasNoConfigs = systemConfigs.length === 0 && projectConfigs.length === 0
   const hasActiveConfig = !!(activeProviderConfigId || activeConfigId)
 
+  // 「实际生效」由后端 describe_effective 给出(与管理端总览、真实调用同一套逻辑)。
+  // 项目没单独选时会吃管理员的全局兜底 —— 此时 AI 功能是可用的,不能显示成"未配置/不可用"。
+  const eff = data?.effective
+  const effKind = eff?.configKind || 'none'
+  const isFallback = effKind === 'system_default' || effKind === 'env'
+  const aiUsable = effKind !== 'none'
+  const effModel = (cat) => (eff?.models || []).find(m => m.category === cat)?.model
+  const KIND_LABEL = {
+    project_selected: '本项目已选择',
+    project_custom: '本项目专属配置',
+    system_default: '全局兜底（管理员统一提供）',
+    env: '.env 兜底',
+    none: '无可用配置',
+  }
+
   return (
     <div>
       <div style={{ marginBottom: 16 }}>
@@ -166,37 +181,64 @@ export default function ProjectAIConfig() {
         <div style={{ fontSize: 13, lineHeight: 2 }}>
           <b>配置 AI 后可用的功能：</b>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px', marginTop: 4 }}>
-            <span>{hasActiveConfig ? '✅' : '❌'} <b>AI 用例生成</b> — 从接口定义自动生成多维度测试用例</span>
-            <span>{hasActiveConfig ? '✅' : '❌'} <b>AI 脚本生成</b> — 根据用例自动生成 pytest 测试脚本</span>
+            <span>{aiUsable ? '✅' : '❌'} <b>AI 用例生成</b> — 从接口定义自动生成多维度测试用例</span>
+            <span>{aiUsable ? '✅' : '❌'} <b>AI 脚本生成</b> — 根据用例自动生成 pytest 测试脚本</span>
             <span style={{ color: '#86909c' }}>{'⏳'} <b>质量评审</b> — AI 评审用例质量并打分（即将上线）</span>
             <span style={{ color: '#86909c' }}>{'⏳'} <b>失败诊断</b> — AI 分析测试失败原因（即将上线）</span>
           </div>
-          {!hasActiveConfig && (
+          {!aiUsable && (
             <div style={{ marginTop: 8, color: '#fa8c16' }}>
-              {'⚠️'} 未配置 AI 服务时，以上功能不可用。手动管理用例、执行测试、API Mock 等功能不受影响。
+              {'⚠️'} 当前无可用 AI 配置（本项目未选择，且管理员的全局兜底已关闭），以上功能不可用。
+              手动管理用例、执行测试、API Mock 等功能不受影响。
             </div>
           )}
         </div>
       </Card>
 
-      {/* 当前状态横幅 */}
-      {hasActiveConfig ? (
-        <Card size="small" style={{ borderColor: '#0ea5a0', background: 'rgba(14,165,160,0.08)', marginBottom: 16 }}>
-          <Space>
-            <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 16 }} />
-            <Text strong>当前使用：</Text>
-            <Text>{activeName || '未知'}</Text>
-            <Tag>{activeModel || ''}</Tag>
-          </Space>
-        </Card>
-      ) : (
-        <Card size="small" style={{ borderColor: '#faad14', background: 'rgba(250,173,20,0.08)', marginBottom: 16 }}>
-          <Space>
-            <span style={{ fontSize: 16 }}>&#9888;&#65039;</span>
-            <Text>尚未选择 AI 服务。请从下方选择一个系统配置，或创建项目专属配置。</Text>
-          </Space>
-        </Card>
-      )}
+      {/* 当前生效横幅 —— 一定要显示「实际在用哪个」。项目没单独选时是吃全局兜底,
+          以前这里直接报"尚未选择 / 功能不可用",与实际调用矛盾,用户看不出到底在用什么。 */}
+      <Card
+        size="small"
+        style={{
+          borderColor: aiUsable ? (isFallback ? '#faad14' : '#0ea5a0') : '#ff4d4f',
+          background: aiUsable
+            ? (isFallback ? 'rgba(250,173,20,0.08)' : 'rgba(14,165,160,0.08)')
+            : 'rgba(255,77,79,0.08)',
+          marginBottom: 16,
+        }}
+      >
+        <Space wrap size="middle">
+          {aiUsable
+            ? <CheckCircleOutlined style={{ color: isFallback ? '#faad14' : '#0ea5a0', fontSize: 16 }} />
+            : <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />}
+          <Text strong>当前生效：</Text>
+          <Tag color={isFallback ? 'orange' : (aiUsable ? 'cyan' : 'red')}>
+            {KIND_LABEL[effKind] || effKind}
+          </Tag>
+          {eff?.connectionName && (
+            <Tooltip title={`${eff.provider || '-'} · ${eff.baseUrlMasked || '-'}`}>
+              <Text>{eff.connectionName}</Text>
+            </Tooltip>
+          )}
+          {aiUsable && (
+            <Text type="secondary" style={{ fontSize: 12.5 }}>
+              文本生成 <Tag style={{ marginInlineEnd: 4 }}>{effModel('text') || '—'}</Tag>
+              UI 脚本生成 <Tag style={{ marginInlineEnd: 0 }}>{effModel('ui_script') || '—'}</Tag>
+            </Text>
+          )}
+        </Space>
+        {isFallback && (
+          <div style={{ marginTop: 6, fontSize: 12.5, color: '#86909c' }}>
+            本项目未单独选择 AI，正在使用管理员配置的全局兜底，AI 功能可正常使用。
+            如需本项目专用（不同服务商/模型），在下方选择一个系统配置或创建项目专属配置即可覆盖。
+          </div>
+        )}
+        {!aiUsable && (
+          <div style={{ marginTop: 6, fontSize: 12.5, color: '#86909c' }}>
+            本项目未选择 AI，且管理员已关闭全局兜底 → AI 功能不可用。请从下方选择或自建配置。
+          </div>
+        )}
+      </Card>
 
       {/* 系统配置区域 */}
       {systemConfigs.length > 0 && (

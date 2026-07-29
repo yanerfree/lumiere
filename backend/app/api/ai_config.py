@@ -348,8 +348,14 @@ async def get_project_ai_config(
 
     active = next((c for c in configs if c.is_active), None)
 
+    # 本项目「实际生效」的配置。项目没单独选时会吃管理员的全局兜底 —— 页面必须显示这个,
+    # 否则会把正常工作的项目显示成"尚未配置 / 功能不可用"(与管理端总览、真实调用全都矛盾)。
+    from app.services.ai_config_resolver import describe_effective
+    effective = await describe_effective(project_id, session, mask_url=_mask_url)
+
     return {
         "data": {
+            "effective": effective,
             "systemConfigs": [_serialize_config(c) for c in system_configs],
             "projectConfigs": [
                 {

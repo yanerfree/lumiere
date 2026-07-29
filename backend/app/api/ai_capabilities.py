@@ -227,7 +227,7 @@ async def get_overview(
     """
     from app.api.ai_config import _mask_url
     from app.models.project import Project
-    from app.services.ai_config_resolver import resolve_ai_config
+    from app.services.ai_config_resolver import describe_effective, resolve_ai_config
 
     st = await _get_or_create_settings(session)
     bindings = (await session.execute(select(AICapabilityBinding))).scalars().all()
@@ -281,29 +281,11 @@ async def get_overview(
     projects = (await session.execute(select(Project).order_by(Project.created_at))).scalars().all()
     rows = []
     for p in projects:
-        # models 用列表而非 {category: model} 字典:响应会过 CamelCaseResponse 中间件,
+        # 与项目 AI 配置页共用 describe_effective,口径必须一致。
+        # models 是列表而非 {category: model} 字典:响应会过 CamelCaseResponse 中间件,
         # 字典 key "ui_script" 会被悄悄改写成 "uiScript",前端按 category 取值更稳。
-        models: list[dict] = []
-        first = None
-        for cat in BUILTIN_CATEGORIES:
-            cfg = await resolve_ai_config(p.id, session, capability=cat)
-            models.append({
-                "category": cat,
-                "label": CATEGORY_META.get(cat, {}).get("label", cat),
-                "model": cfg.model if cfg else None,
-            })
-            if first is None:
-                first = cfg
-        rows.append({
-            "projectId": str(p.id),
-            "projectName": p.name,
-            "source": first.source if first else None,
-            "configKind": first.config_kind if first else "none",
-            "connectionName": first.config_name if first else None,
-            "provider": first.provider if first else None,
-            "baseUrlMasked": _mask_url(first.base_url) if first else None,
-            "models": models,
-        })
+        eff = await describe_effective(p.id, session, mask_url=_mask_url)
+        rows.append({"projectId": str(p.id), "projectName": p.name, **eff})
 
     return {
         "data": {
