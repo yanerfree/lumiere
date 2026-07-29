@@ -13,12 +13,13 @@ const { Text, Paragraph } = Typography
 // 弱模型不适合 agentic UI 脚本生成 → 给红色警告
 const isWeakForAgentic = (model) => /haiku/i.test(model || '')
 
-export default function AICapabilityBindings() {
+export default function AICapabilityBindings({ overview, onOverviewReload }) {
   const [loading, setLoading] = useState(false)
   const [data, setData] = useState(null)          // {fallbackEnabled, bindings, registry, categoryMeta, builtinCategories}
   const [models, setModels] = useState([])         // [{id, displayName}]
   const [modelSource, setModelSource] = useState('')
   const [savingId, setSavingId] = useState(null)
+  const [switchingConn, setSwitchingConn] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
   const [form] = Form.useForm()
 
@@ -54,7 +55,18 @@ export default function AICapabilityBindings() {
       await api.put('/ai-capabilities/settings', { fallback_enabled: checked })
       setData(d => ({ ...d, fallbackEnabled: checked }))
       message.success(checked ? '已开启全局默认兜底' : '已关闭:未单独配置的项目将无法使用 AI')
+      onOverviewReload?.()   // 兜底开关影响所有吃兜底的项目 → 刷新总览
     } catch { /* */ }
+  }
+
+  // 切换兜底连接 = 把某个配置设为「系统默认」(后端会自动清掉其它配置的默认标记)
+  const switchFallbackConn = async (configId) => {
+    setSwitchingConn(true)
+    try {
+      await api.put(`/ai-providers/${configId}`, { is_system_default: true })
+      message.success('兜底连接已切换')
+      onOverviewReload?.()
+    } catch { /* */ } finally { setSwitchingConn(false) }
   }
 
   const saveModel = async (binding, model) => {
@@ -64,6 +76,7 @@ export default function AICapabilityBindings() {
       await api.put(`/ai-capabilities/bindings/${binding.id}`, { model })
       message.success(`「${binding.label}」模型已更新为 ${model}`)
       fetchAll()
+      onOverviewReload?.()   // 档位模型变了 → 总览里的生效模型跟着变
     } catch { /* */ } finally { setSavingId(null) }
   }
 
@@ -72,6 +85,7 @@ export default function AICapabilityBindings() {
       await api.del(`/ai-capabilities/bindings/${binding.id}`)
       message.success('已删除档位')
       fetchAll()
+      onOverviewReload?.()
     } catch { /* */ }
   }
 
@@ -87,6 +101,7 @@ export default function AICapabilityBindings() {
       message.success('自定义档位已创建')
       setAddOpen(false)
       fetchAll()
+      onOverviewReload?.()
     } catch { /* */ }
   }
 
@@ -138,6 +153,59 @@ export default function AICapabilityBindings() {
             : '兜底已关闭：没有单独配置 AI 的项目调用 AI 会直接报「未配置」。'
         }
       />
+
+      {/* 兜底链:开关开着到底会用哪个连接、哪个模型,不让用户猜 */}
+      {overview?.fallback && (
+        <div
+          style={{
+            marginBottom: 14, padding: '10px 14px', borderRadius: 8,
+            background: fallbackEnabled ? 'rgba(22,119,255,0.04)' : 'rgba(0,0,0,0.03)',
+            border: '1px solid rgba(22,119,255,0.12)',
+            opacity: fallbackEnabled ? 1 : 0.55,
+          }}
+        >
+          <Space wrap size="middle" style={{ marginBottom: 6 }}>
+            <Text strong style={{ fontSize: 13 }}>兜底连接：</Text>
+            <Select
+              size="small"
+              style={{ minWidth: 240 }}
+              value={overview.fallback.connection?.id}
+              placeholder={overview.fallback.usingEnv ? '.env 兜底（未设系统默认配置）' : '未设置'}
+              disabled={!fallbackEnabled || switchingConn}
+              loading={switchingConn}
+              onChange={switchFallbackConn}
+              options={(overview.candidates || []).map(c => ({
+                value: c.id,
+                label: `${c.name} · ${c.model}`,
+              }))}
+            />
+            {overview.fallback.connection && !overview.fallback.connection.status && <Tag>未测试</Tag>}
+            {overview.fallback.connection?.status === 'ok' && <Tag color="cyan">连接正常</Tag>}
+            {overview.fallback.connection?.status && overview.fallback.connection.status !== 'ok' && (
+              <Tag color="error" icon={<WarningOutlined />}>
+                连接异常{overview.fallback.connection.statusMessage ? `：${overview.fallback.connection.statusMessage}` : ''}
+              </Tag>
+            )}
+            {!overview.fallback.connection && overview.fallback.usingEnv && (
+              <Tag color="orange">
+                正在用 .env 兜底（{overview.fallback.envModel || '未设模型'}），建议指定一个系统默认配置
+              </Tag>
+            )}
+            {!overview.fallback.connection && !overview.fallback.usingEnv && (
+              <Tag color="error" icon={<WarningOutlined />}>无可用兜底：未设系统默认且 .env 未启用</Tag>
+            )}
+          </Space>
+          <div style={{ fontSize: 12.5 }}>
+            <Text type="secondary">实际生效：</Text>
+            {(overview.fallback.resolved || []).map((r, i) => (
+              <span key={r.category}>
+                {i > 0 && <Text type="secondary"> · </Text>}
+                {r.label} → {r.model ? <Tag style={{ marginInlineEnd: 0 }}>{r.model}</Tag> : <Text type="secondary">—</Text>}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
         {bindings.map(b => {

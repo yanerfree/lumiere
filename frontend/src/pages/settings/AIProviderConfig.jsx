@@ -9,6 +9,7 @@ import {
   ApiOutlined, EyeOutlined, EyeInvisibleOutlined, LoadingOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
+import AIProjectOverview from './AIProjectOverview'
 import AICapabilityBindings from './AICapabilityBindings'
 
 const { Text, Paragraph } = Typography
@@ -28,6 +29,8 @@ export default function AIProviderConfig() {
   const [testingId, setTestingId] = useState(null)
   const [showSecret, setShowSecret] = useState({})
   const [modelOptions, setModelOptions] = useState([])
+  const [overview, setOverview] = useState(null)
+  const [overviewLoading, setOverviewLoading] = useState(false)
   const [form] = Form.useForm()
 
   const fetchConfigs = useCallback(async () => {
@@ -45,6 +48,15 @@ export default function AIProviderConfig() {
     } catch { /* */ }
   }, [])
 
+  // 兜底链 + 项目总览共用这一份数据（子组件不再各自请求）
+  const fetchOverview = useCallback(async () => {
+    setOverviewLoading(true)
+    try {
+      const res = await api.get('/ai-capabilities/overview')
+      setOverview(res.data)
+    } catch { /* */ } finally { setOverviewLoading(false) }
+  }, [])
+
   const fetchModels = useCallback(async () => {
     try {
       const res = await api.get('/ai-capabilities/models')
@@ -58,7 +70,7 @@ export default function AIProviderConfig() {
     } catch { /* */ }
   }, [])
 
-  useEffect(() => { fetchConfigs(); fetchProjects(); fetchModels() }, [fetchConfigs, fetchProjects, fetchModels])
+  useEffect(() => { fetchConfigs(); fetchProjects(); fetchModels(); fetchOverview() }, [fetchConfigs, fetchProjects, fetchModels, fetchOverview])
 
   const openCreate = () => {
     setEditingId(null)
@@ -300,7 +312,9 @@ export default function AIProviderConfig() {
         size="middle"
       />
 
-      <AICapabilityBindings />
+      <AICapabilityBindings overview={overview} onOverviewReload={() => { fetchOverview(); fetchConfigs() }} />
+
+      <AIProjectOverview overview={overview} loading={overviewLoading} onReload={fetchOverview} />
 
       <Modal
         title={editingId ? '编辑 AI 服务配置' : '新增 AI 服务配置'}

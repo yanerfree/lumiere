@@ -33,6 +33,12 @@ class ResolvedAIConfig:
     max_tokens: int
     timeout_seconds: int
     source: str  # "project" | "system" | "env"
+    # 「这份配置是谁」——给管理端总览做展示用，避免页面自己重写一遍优先级导致与实际调用漂移。
+    # config_kind: project_selected(项目选了系统配置) | project_custom(项目自建)
+    #            | system_default(全局兜底) | env(.env 兜底)
+    config_id: str | None = None
+    config_name: str | None = None
+    config_kind: str | None = None
 
 
 async def _resolve_model(
@@ -95,6 +101,9 @@ async def resolve_ai_config(
                     max_tokens=system_cfg.max_tokens,
                     timeout_seconds=system_cfg.timeout_seconds,
                     source="project",
+                    config_id=str(system_cfg.id),
+                    config_name=system_cfg.name,
+                    config_kind="project_selected",
                 )
 
         if project_cfg and project_cfg.base_url:
@@ -109,6 +118,9 @@ async def resolve_ai_config(
                 max_tokens=project_cfg.max_tokens or 4096,
                 timeout_seconds=project_cfg.timeout_seconds or 120,
                 source="project",
+                config_id=str(project_cfg.id),
+                config_name=project_cfg.name or "项目自建",
+                config_kind="project_custom",
             )
 
     # ── 以下为「全局默认」路径:受全局开关控制 ──
@@ -137,6 +149,9 @@ async def resolve_ai_config(
             max_tokens=system_default.max_tokens,
             timeout_seconds=system_default.timeout_seconds,
             source="system",
+            config_id=str(system_default.id),
+            config_name=system_default.name,
+            config_kind="system_default",
         )
 
     # 3. .env fallback（向后兼容,同样受全局开关控制）
@@ -152,6 +167,8 @@ async def resolve_ai_config(
             max_tokens=settings.ai_max_tokens,
             timeout_seconds=settings.ai_timeout_seconds,
             source="env",
+            config_name=".env",
+            config_kind="env",
         )
 
     return None

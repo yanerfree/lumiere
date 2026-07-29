@@ -213,6 +213,110 @@ async def delete_binding(
     return {"data": {"deleted": True}}
 
 
+# ── 使用总览:兜底链 + 每个项目实际生效的 AI ─────────────
+
+@router.get("/overview")
+async def get_overview(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """管理端「谁在用哪个 AI」总览。
+
+    每一格都取自 resolve_ai_config() 的真实返回，**不在这里重写优先级逻辑**——
+    否则页面显示会和实际调用漂移，比不显示更糟。只回名称/模型/脱敏 URL，不回密钥。
+    """
+    from app.api.ai_config import _mask_url
+    from app.models.project import Project
+    from app.services.ai_config_resolver import resolve_ai_config
+
+    st = await _get_or_create_settings(session)
+    bindings = (await session.execute(select(AICapabilityBinding))).scalars().all()
+
+    # ① 兜底链：project_id=None 正好只走全局兜底路径
+    resolved_fallback = []
+    for cat in BUILTIN_CATEGORIES:
+        cfg = await resolve_ai_config(None, session, capability=cat)
+        resolved_fallback.append({
+            "category": cat,
+            "label": CATEGORY_META.get(cat, {}).get("label", cat),
+            "model": cfg.model if cfg else None,
+        })
+
+    sysdef = (await session.execute(
+        select(AIProviderConfig).where(
+            AIProviderConfig.is_system_default == True,  # noqa: E712
+            AIProviderConfig.is_enabled == True,  # noqa: E712
+        )
+    )).scalar_one_or_none()
+
+    fallback = {
+        "enabled": st.fallback_enabled,
+        "connection": {
+            "id": str(sysdef.id),
+            "name": sysdef.name,
+            "provider": sysdef.provider,
+            "baseUrlMasked": _mask_url(sysdef.base_url),
+            "isEnabled": sysdef.is_enabled,
+            "status": sysdef.status,
+            "statusMessage": sysdef.status_message,
+        } if sysdef else None,
+        # 没有系统默认配置时，兜底会落到 .env（且 AI_ENABLED 得为真）
+        "usingEnv": sysdef is None and bool(settings.ai_enabled and settings.ai_base_url),
+        "envModel": settings.ai_model if sysdef is None else None,
+        "envBaseUrlMasked": _mask_url(settings.ai_base_url) if (sysdef is None and settings.ai_base_url) else None,
+        "resolved": resolved_fallback,
+    }
+
+    # ② 兜底连接下拉的候选项(只列启用的)
+    candidates = [
+        {"id": str(c.id), "name": c.name, "model": c.model,
+         "provider": c.provider, "isSystemDefault": c.is_system_default}
+        for c in (await session.execute(
+            select(AIProviderConfig).where(AIProviderConfig.is_enabled == True)  # noqa: E712
+            .order_by(AIProviderConfig.is_system_default.desc(), AIProviderConfig.created_at)
+        )).scalars().all()
+    ]
+
+    # ③ 每个项目一行
+    projects = (await session.execute(select(Project).order_by(Project.created_at))).scalars().all()
+    rows = []
+    for p in projects:
+        # models 用列表而非 {category: model} 字典:响应会过 CamelCaseResponse 中间件,
+        # 字典 key "ui_script" 会被悄悄改写成 "uiScript",前端按 category 取值更稳。
+        models: list[dict] = []
+        first = None
+        for cat in BUILTIN_CATEGORIES:
+            cfg = await resolve_ai_config(p.id, session, capability=cat)
+            models.append({
+                "category": cat,
+                "label": CATEGORY_META.get(cat, {}).get("label", cat),
+                "model": cfg.model if cfg else None,
+            })
+            if first is None:
+                first = cfg
+        rows.append({
+            "projectId": str(p.id),
+            "projectName": p.name,
+            "source": first.source if first else None,
+            "configKind": first.config_kind if first else "none",
+            "connectionName": first.config_name if first else None,
+            "provider": first.provider if first else None,
+            "baseUrlMasked": _mask_url(first.base_url) if first else None,
+            "models": models,
+        })
+
+    return {
+        "data": {
+            "fallback": fallback,
+            "candidates": candidates,
+            "projects": rows,
+            # 自定义档位按 module_keys 覆盖，不在总览两列里展开 → 给个数量提示，
+            # 免得用户以为这张表已经涵盖全部映射
+            "customBindingCount": sum(1 for b in bindings if not b.is_builtin),
+        }
+    }
+
+
 # ── 模型下拉:代理网关 /models ─────────────────────────
 
 @router.get("/models")
