@@ -1,0 +1,23 @@
+# testBench — 给接手者 / AI 助手的必读约定
+
+## 硬规则
+
+- **后端必须跑 8756 端口**（`uvicorn app.main:app --port 8756`）。跑在别的端口前端会全 502，看起来像整个服务挂了，实际只是端口不对。
+- **AI 模型 ID 只能填裸 ID**（`claude-sonnet-5`、`claude-opus-5`）。CLI 的长上下文后缀写法 `claude-opus-5[1m]` 打到接口会 404 —— 见下方文档的「红线」一节。
+- **不要删 `app/services/ai/llm_client.py` 里的 429 两层处理**（退避重试 + 降级 CLI 通道）。文本主路此前零重试，一个 429 会打死整条场景生成；原因和验证方法都写在文档里。
+- 换 AI 模型**不需要改代码**：走「AI 服务配置 → AI 能力→模型」页面即可（下拉是动态拉网关的）。
+
+## 文档入口
+
+| 主题 | 文档 |
+|---|---|
+| AI 网关真面目、429 限流怎么绕、新模型怎么维护、模型选型实测数据、长驻服务依赖 | [docs/ai-gateway-and-models.md](docs/ai-gateway-and-models.md) |
+| AI 测试生成用法 | [docs/ai-test-generation-guide.md](docs/ai-test-generation-guide.md) |
+| AI 质量改进计划 | [docs/ai-quality-improvement-plan.md](docs/ai-quality-improvement-plan.md) |
+
+## 长驻服务
+
+UI 脚本生成和限流降级依赖两个常驻进程，用 `deploy/start-ai-services.sh` 启动（幂等）：
+
+- **claude-proxy :38210** — 429 降级通道。挂了则限流只能靠重试。
+- **playwright-mcp :38931** — UI 脚本生成的浏览器通道。host 只认 `localhost`。

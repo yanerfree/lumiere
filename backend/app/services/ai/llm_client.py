@@ -7,6 +7,8 @@
    SDK 直连 429，CLI 路径 rc=0 正常返回）。
 不要把这两层删掉换成"让调用方自己重试"——llm_structured 对 LLMError 是直接抛不重试的，
 一个 429 会把整条场景建模/用例展开打死。
+
+背景/实测数据/验证方法见 docs/ai-gateway-and-models.md。
 """
 from __future__ import annotations
 
