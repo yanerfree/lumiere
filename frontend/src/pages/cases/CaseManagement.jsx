@@ -677,6 +677,21 @@ export default function CaseManagement() {
                   }
                   setCreateCaseOpen(true)
                 }}>新建用例</Button>
+                {statusFilter === 'deleted' && total > 0 && (
+                  <Popconfirm
+                    title="清空回收站"
+                    description={`将彻底删除全部 ${total} 条已删除用例，不可恢复。关联的脚本、场景变量会一并清理；历史测试报告保留但解除关联。`}
+                    okText="确认清空" okButtonProps={{ danger: true }} cancelText="取消"
+                    onConfirm={async () => {
+                      try {
+                        const r = await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/empty-trash`)
+                        message.success(`已彻底删除 ${r.data?.succeeded ?? 0} 条`)
+                        setSelectedRowKeys([]); fetchCases()
+                      } catch (e) { message.error(e?.message || '清空失败') }
+                    }}>
+                    <Button danger size="small" icon={<DeleteOutlined />}>清空回收站 ({total})</Button>
+                  </Popconfirm>
+                )}
               </Space>
             </div>
             {selectedRowKeys.length > 0 && (

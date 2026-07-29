@@ -288,5 +288,7 @@ app.include_router(toolbox_router)
 app.include_router(http_client_router)
 app.include_router(mcp_keys_router)
 
-# --- MCP Server 挂载 ---
-app.mount("/mcp", _mcp_app)
+# --- MCP Server ---
+# 只在独立端口（MCP_PORT，默认 18800）暴露，见 _start_standalone_mcp_server()。
+# 曾经这里还 mount 过一份到主端口做向后兼容，但两处挂的是同一个 _mcp_app、
+# 纯冗余，且导致产品内地址口径不一（页面写 18800、别处写 8756）。统一到 18800。

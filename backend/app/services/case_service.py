@@ -1,12 +1,14 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, delete as sa_delete, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.core.audit import audit_log
 from app.models.case import Case
+from app.models.plan import PlanCase
+from app.models.report import TestReportScenario
 from app.schemas.case import CreateCaseRequest, UpdateCaseRequest
 from app.services.import_service import _get_or_create_folder, _next_case_code
 
@@ -287,6 +289,26 @@ async def delete_case(session: AsyncSession, case_id: uuid.UUID) -> None:
     await session.flush()
 
 
+async def _detach_blocking_refs(session: AsyncSession, case_ids: list[uuid.UUID]) -> None:
+    """解开两处**没有** ON DELETE 级联的外键，否则彻底删除会撞 ForeignKeyViolation。
+
+    引用 cases 的 11 个外键里，其余 9 个（scripts / script_runs / scenario_variables /
+    healing_archives / case_file_events / case_gen_events / generation_items×2 /
+    api_test_scenarios.source_case_id）在 DB 层已是 CASCADE 或 SET NULL，交给数据库处理。
+      - plan_cases：NOT NULL + NO ACTION，只能删（用例没了，计划成员关系无意义）
+      - test_report_scenarios：可空 + NO ACTION，解绑而非删除——该表冗余存了
+        case_code/scenario_name/status/duration_ms/error_summary，解绑不丢历史报告
+    """
+    if not case_ids:
+        return
+    await session.execute(sa_delete(PlanCase).where(PlanCase.case_id.in_(case_ids)))
+    await session.execute(
+        sa_update(TestReportScenario)
+        .where(TestReportScenario.case_id.in_(case_ids))
+        .values(case_id=None)
+    )
+
+
 async def hard_delete_case(session: AsyncSession, case_id: uuid.UUID) -> None:
     """彻底删除已软删除的用例。"""
     result = await session.execute(
@@ -295,6 +317,7 @@ async def hard_delete_case(session: AsyncSession, case_id: uuid.UUID) -> None:
     case = result.scalar_one_or_none()
     if case is None:
         raise NotFoundError(code="CASE_NOT_FOUND", message="用例不存在或未处于已删除状态")
+    await _detach_blocking_refs(session, [case_id])
     await session.delete(case)
     await session.flush()
 
@@ -304,6 +327,7 @@ async def batch_hard_delete(session: AsyncSession, case_ids: list[uuid.UUID]) ->
     succeeded = 0
     failed = 0
     errors = []
+    deletable = []
     for cid in case_ids:
         result = await session.execute(
             select(Case).where(Case.id == cid, Case.deleted_at.is_not(None))
@@ -313,10 +337,34 @@ async def batch_hard_delete(session: AsyncSession, case_ids: list[uuid.UUID]) ->
             failed += 1
             errors.append(f"{cid}: 用例不存在或未处于已删除状态")
             continue
+        deletable.append((cid, case))
+
+    # 先统一解引用，再逐条删除——避免删到一半撞外键导致整批回滚
+    await _detach_blocking_refs(session, [cid for cid, _ in deletable])
+    for _, case in deletable:
         await session.delete(case)
         succeeded += 1
     await session.flush()
     return {"succeeded": succeeded, "failed": failed, "errors": errors}
+
+
+async def empty_trash(session: AsyncSession, branch_id: uuid.UUID) -> dict:
+    """清空该分支回收站——彻底删除全部已软删除的用例。
+
+    回收站可能积上百条、跨多页，逐条勾选不现实，故提供一键清空。
+    """
+    result = await session.execute(
+        select(Case).where(Case.branch_id == branch_id, Case.deleted_at.is_not(None))
+    )
+    cases = list(result.scalars().all())
+    if not cases:
+        return {"succeeded": 0, "failed": 0, "errors": []}
+
+    await _detach_blocking_refs(session, [c.id for c in cases])
+    for case in cases:
+        await session.delete(case)
+    await session.flush()
+    return {"succeeded": len(cases), "failed": 0, "errors": []}
 
 
 async def copy_cases_from_branch(

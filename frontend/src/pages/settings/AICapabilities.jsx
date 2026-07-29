@@ -37,7 +37,7 @@ const PHASES = [
         icon: <ApiOutlined />,
         status: 'done',
         what: '暴露平台数据的标准 MCP 协议接口，供 AI 工具读写',
-        where: `MCP 地址: http://${window.location.hostname}:8756/mcp/`,
+        where: `MCP 地址: http://${window.location.hostname}:18800/mcp/`,
         output: '8 个工具：用例 CRUD、API 接口查询、环境变量',
       },
       {
@@ -206,7 +206,7 @@ export default function AICapabilities() {
 
       <Card size="small" style={{ marginBottom: 12, background: 'rgba(0,0,0,0.02)' }}>
         <div style={{ fontSize: 13, lineHeight: 2 }}>
-          <b>MCP Server 地址：</b><Text code>{`http://${window.location.hostname}:8756/mcp/`}</Text>
+          <b>MCP Server 地址：</b><Text code>{`http://${window.location.hostname}:18800/mcp/`}</Text>
           <br/>
           <b>用途：</b>AI Skill 执行时通过这些工具读取项目数据并写入生成结果。Claude Code 等外部 MCP 客户端也可连接使用。
         </div>

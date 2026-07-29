@@ -406,6 +406,26 @@ async def batch_cases(
     return {"data": result}
 
 
+@router.post("/empty-trash")
+async def empty_trash(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """清空回收站——彻底删除该分支全部已软删除的用例。
+
+    单独开路由而不复用 /batch：BatchCaseRequest.case_ids 有 min_length=1 校验，
+    清空回收站不需要传 ID，放宽该校验会削弱其它 action 的保护。
+    """
+    result = await case_service.empty_trash(session, branch_id)
+    await write_audit_log(
+        session, action="empty_trash", target_type="case",
+        changes={"count": result["succeeded"]},
+    )
+    return {"data": result}
+
+
 @router.delete("/{case_id}")
 async def delete_case(
     project_id: uuid.UUID,

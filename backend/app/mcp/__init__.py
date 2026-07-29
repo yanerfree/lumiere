@@ -35,6 +35,18 @@ mcp = FastMCP(
    ①场景变量 ${名字}/${SV_名字}  ②项目级全局引用（${BASE_URL}/账号/token，见 tb_list_global_data）
    ③步骤间提取物（上一步 variables_extract）。tb_sync_orchestrated_scenario 会硬拦截悬空 ${x}。
 
+⑤ 【默认先活体验证，别凭文档编】只要能连上被测系统（有可访问的环境地址和账号），
+   就**必须真的把接口调一遍**把流程跑通——拿到真实响应结构、真实字段名、真实状态码，
+   再据此回推。不要读完接口文档就直接生成。
+   · tb_generate_api_test 仅限**确实拿不到可访问环境**时使用，它是让平台 AI 凭文档造，
+     质量明显更差。不能因为省事就走它。
+   · 判断依据是"能不能连上"，不是"手上有没有文档"。有文档但环境也能连 → 仍然要活体验证。
+
+⑥ 【动库之前先报方案，等用户确认】调用任何写库工具（tb_create_case /
+   tb_sync_orchestrated_scenario / tb_upsert_scenario_variables / tb_create_api_node /
+   tb_create_scenario_task）之前，先用一段话向用户说明：准备建几条、分别是什么、
+   用哪些工具、怎么验证。**得到确认再执行**。宁可多问一句，也别批量写错再回头清理。
+
 ═══════════════════════════════════════════════════════════
 
 当用户要求生成测试用例时，必须按以下流程执行：
@@ -102,8 +114,21 @@ mcp = FastMCP(
 )
 
 
+# 工具目录 —— 前端「MCP 工具中心」和 Key 级工具档位都从这里取，
+# 避免再出现"前端硬编码 20 条、后端实际注册 32 条"的漂移。
+TOOL_CATALOG: list[dict] = []
+
+_current_category = "其它"
+
+
+def _section(category: str):
+    """标记后续 _register 调用所属分类（本模块自上而下线性执行一次）。"""
+    global _current_category
+    _current_category = category
+
+
 def _register(func, name: str, description: str):
-    """注册一个 MCP 工具，直接查真实 DB。"""
+    """注册一个 MCP 工具，直接查真实 DB。同时登记进 TOOL_CATALOG。"""
     import functools
     import inspect
 
@@ -122,10 +147,18 @@ def _register(func, name: str, description: str):
     new_params = [p for p in sig.parameters.values() if p.name != "session"]
     wrapper.__signature__ = sig.replace(parameters=new_params)
 
+    TOOL_CATALOG.append({
+        "name": name,
+        "description": description,
+        "category": _current_category,
+        "params": ", ".join(p.name for p in new_params) or "无",
+    })
     mcp.tool(name=name)(wrapper)
 
 
 # ── 测试用例工具 ─────────────────────────────────
+
+_section("用例")
 
 _register(
     test_cases.list_cases,
@@ -154,6 +187,8 @@ _register(
 
 # ── API 接口工具 ──────────────────────────────────
 
+_section("API 接口")
+
 _register(
     api_endpoints.list_api_tree,
     name="tb_list_api_tree",
@@ -175,6 +210,8 @@ _register(
 
 # ── 环境变量工具 ──────────────────────────────────
 
+_section("环境变量")
+
 _register(
     environments.list_environments,
     name="tb_list_environments",
@@ -190,6 +227,8 @@ _register(
 
 # ── 测试报告工具 ──────────────────────────────────
 
+_section("测试报告")
+
 _register(
     test_reports.get_report_summary,
     name="tb_get_report_summary",
@@ -204,6 +243,8 @@ _register(
 
 
 # ── 接口测试工具 ──────────────────────────────────
+
+_section("接口测试")
 
 _register(
     api_tests.generate_api_test,
@@ -231,6 +272,8 @@ _register(
 
 
 # ── 功能场景测试工具 ──────────────────────────────
+
+_section("功能场景生成")
 
 _register(
     scenario_gen.create_scenario_task,
@@ -261,6 +304,8 @@ _register(
 
 # ── 项目与分支查询工具 ──────────────────────────────
 
+_section("项目与分支")
+
 _register(
     projects.list_projects,
     name="tb_list_projects",
@@ -281,6 +326,8 @@ _register(
 
 
 # ── UI 脚本工具 ──────────────────────────────────
+
+_section("UI 脚本")
 
 _register(
     ui_scripts.generate_ui_script,
@@ -309,6 +356,8 @@ _register(
 
 # ── 文档生成规范工具 ──────────────────────────────
 
+_section("文档生成")
+
 _register(
     documents.get_doc_spec,
     name="tb_get_doc_spec",
@@ -317,6 +366,9 @@ _register(
 
 
 # ── 回推同步工具（活体验证成果写回）──────────────────
+
+_section("回推同步")
+
 
 _register(
     sync.get_sync_spec,
@@ -347,3 +399,10 @@ _register(
     name="tb_list_global_data",
     description="【回推前查】汇总项目级**可引用**全局数据（全局变量+各环境变量键+自动化共享资源，凭证脱敏），帮你判断哪些走 global_ref、哪些别写死。参数: project_id(项目UUID)",
 )
+
+
+# ── 工具范围硬约束 ────────────────────────────────
+# 按 API Key 过滤 tools/list 并拦截越权 tools/call。必须在全部 _register 之后注册。
+from app.mcp.middleware import ToolScopeMiddleware  # noqa: E402
+
+mcp.add_middleware(ToolScopeMiddleware())

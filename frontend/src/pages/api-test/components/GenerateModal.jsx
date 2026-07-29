@@ -21,7 +21,7 @@ export default function GenerateModal({
     children: n.children?.length > 0 ? buildParentSelect(n.children) : undefined,
   }))
 
-  const mcpUrl = `http://${window.location.hostname}:8756/mcp/`
+  const mcpUrl = `http://${window.location.hostname}:18800/mcp/`
   const mcpConfig = JSON.stringify({
     mcpServers: {
       testbench: {

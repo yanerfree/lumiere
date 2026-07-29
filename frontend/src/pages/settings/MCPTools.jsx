@@ -1,59 +1,143 @@
-import { useState, useEffect } from 'react'
-import { Card, Tag, Space, Typography, Table, Button, message, Input, Modal, Popconfirm, Tabs, Badge } from 'antd'
+import { useState, useEffect, useMemo } from 'react'
+import { Card, Tag, Space, Typography, Table, Button, message, Input, Modal, Popconfirm, Tabs, Badge, Radio, Checkbox, Tooltip, Alert } from 'antd'
 import {
   ApiOutlined, CopyOutlined, ThunderboltOutlined,
   KeyOutlined, PlusOutlined, DeleteOutlined, CheckCircleOutlined,
-  RobotOutlined, LinkOutlined,
+  RobotOutlined, LinkOutlined, SettingOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
 
 const { Text } = Typography
 
-const MCP_TOOLS = [
-  { name: 'tb_create_scenario_task', description: '从需求文档自动生成手工测试用例', category: 'AI 生成', params: 'project_id, branch_id, title, content_markdown' },
-  { name: 'tb_get_scenario_task', description: '查询生成任务状态与进度', category: 'AI 生成', params: 'task_id' },
-  { name: 'tb_query_coverage_matrix', description: '查询需求覆盖矩阵', category: 'AI 生成', params: 'task_id, branch_id' },
-  { name: 'tb_get_generation_stats', description: '查询生成质量统计', category: 'AI 生成', params: 'branch_id' },
-  { name: 'tb_list_projects', description: '列出所有项目', category: '项目', params: '无' },
-  { name: 'tb_list_branches', description: '列出项目分支', category: '项目', params: 'project_id' },
-  { name: 'tb_list_cases', description: '列出测试用例', category: '用例', params: 'branch_id, keyword, ...' },
-  { name: 'tb_get_case', description: '获取用例详情', category: '用例', params: 'case_id' },
-  { name: 'tb_create_case', description: '创建测试用例', category: '用例', params: 'branch_id, title, steps, ...' },
-  { name: 'tb_get_folder_tree', description: '获取用例文件夹树', category: '用例', params: 'branch_id' },
-  { name: 'tb_list_api_tree', description: '获取 API 接口树', category: 'API', params: 'project_id' },
-  { name: 'tb_get_api_node', description: '获取接口详情', category: 'API', params: 'node_id' },
-  { name: 'tb_list_environments', description: '列出测试环境', category: '环境', params: '无' },
-  { name: 'tb_get_merged_variables', description: '获取环境变量', category: '环境', params: 'env_id' },
-  { name: 'tb_generate_api_test', description: '从接口生成测试场景', category: '接口测试', params: 'branch_id, api_info' },
-  { name: 'tb_list_api_tests', description: '列出接口测试场景', category: '接口测试', params: 'branch_id' },
-  { name: 'tb_get_api_test', description: '获取场景详情', category: '接口测试', params: 'scenario_id' },
-  { name: 'tb_run_api_test', description: '执行接口测试', category: '接口测试', params: 'scenario_ids' },
-  { name: 'tb_get_report_summary', description: '获取报告摘要', category: '报告', params: 'plan_id' },
-  { name: 'tb_get_failed_scenarios', description: '获取失败用例', category: '报告', params: 'plan_id' },
-]
+const CAT_COLORS = {
+  '用例': 'blue', 'API 接口': 'cyan', '环境变量': 'orange', '测试报告': 'purple',
+  '接口测试': 'geekblue', '功能场景生成': 'magenta', '项目与分支': 'green',
+  'UI 脚本': 'volcano', '文档生成': 'gold', '回推同步': 'red',
+}
 
-const CAT_COLORS = { 'AI 生成': 'magenta', '项目': 'geekblue', '用例': 'blue', 'API': 'cyan', '环境': 'orange', '接口测试': 'cyan', '报告': 'purple' }
+/**
+ * 预设档位 —— 只是勾选的快捷方式，落库存的仍是展开后的显式工具列表，
+ * 这样语义可审计，也不会因为日后改了档位定义导致已有 Key 的范围悄悄变化。
+ */
+const PROFILES = {
+  live: {
+    label: '活体验证回推',
+    hint: '在被测系统里真跑一遍再回写成果。刻意排除 tb_generate_api_test（凭文档造，与活体验证冲突）',
+    tools: [
+      'tb_list_projects', 'tb_list_branches', 'tb_list_cases', 'tb_get_case', 'tb_get_folder_tree',
+      'tb_create_case', 'tb_list_api_tree', 'tb_get_api_node', 'tb_list_environments',
+      'tb_get_merged_variables', 'tb_get_sync_spec', 'tb_list_global_data',
+      'tb_upsert_scenario_variables', 'tb_list_scenario_variables',
+      'tb_sync_orchestrated_scenario', 'tb_list_api_tests', 'tb_get_api_test', 'tb_run_api_test',
+    ],
+  },
+  docgen: {
+    label: '文档批量生成',
+    hint: '从需求文档批量产出用例的 AI 流水线',
+    tools: [
+      'tb_list_projects', 'tb_list_branches', 'tb_list_cases',
+      'tb_create_scenario_task', 'tb_confirm_and_generate', 'tb_get_scenario_task',
+      'tb_query_coverage_matrix', 'tb_get_generation_stats',
+    ],
+  },
+  all: { label: '全量（不限制）', hint: '开放所有工具，适合调试', tools: null },
+}
 
 const cardStyle = { borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)', boxShadow: 'none' }
 const sectionTitle = { fontSize: 14, fontWeight: 600, color: '#2e3138', marginBottom: 4 }
 
+/** 按分类勾选工具，分类头可整组全选/取消。 */
+function ToolPicker({ tools, byCategory, value, onChange }) {
+  const toggle = (name, on) =>
+    onChange(on ? [...value, name] : value.filter(n => n !== name))
+  const toggleCat = (items, on) => {
+    const names = items.map(t => t.name)
+    onChange(on ? [...new Set([...value, ...names])] : value.filter(n => !names.includes(n)))
+  }
+  return (
+    <div style={{ marginTop: 12, maxHeight: 300, overflowY: 'auto', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 10, padding: 12 }}>
+      <div style={{ fontSize: 12, color: '#8c919e', marginBottom: 8 }}>
+        已选 <b style={{ color: '#0ea5a0' }}>{value.length}</b> / {tools.length}
+      </div>
+      {byCategory.map(([cat, items]) => {
+        const names = items.map(t => t.name)
+        const checkedCount = names.filter(n => value.includes(n)).length
+        return (
+          <div key={cat} style={{ marginBottom: 10 }}>
+            <Checkbox
+              checked={checkedCount === names.length}
+              indeterminate={checkedCount > 0 && checkedCount < names.length}
+              onChange={e => toggleCat(items, e.target.checked)}
+            >
+              <Tag color={CAT_COLORS[cat]} style={{ fontSize: 11 }}>{cat}</Tag>
+            </Checkbox>
+            <div style={{ marginLeft: 24, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {items.map(t => (
+                <Checkbox key={t.name} checked={value.includes(t.name)}
+                  onChange={e => toggle(t.name, e.target.checked)}>
+                  <Text code style={{ fontSize: 11 }}>{t.name}</Text>
+                </Checkbox>
+              ))}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function MCPTools() {
   const mcpUrl = `http://${window.location.hostname}:18800/mcp/`
   const [apiKeys, setApiKeys] = useState([])
+  const [tools, setTools] = useState([])
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [newKeyName, setNewKeyName] = useState('')
   const [newKeyResult, setNewKeyResult] = useState(null)
   const [creating, setCreating] = useState(false)
+  const [profile, setProfile] = useState('live')
+  const [picked, setPicked] = useState(PROFILES.live.tools)
+  const [scopeEditing, setScopeEditing] = useState(null)   // 正在编辑范围的 Key
 
-  useEffect(() => { fetchKeys() }, [])
+  useEffect(() => { fetchKeys(); fetchTools() }, [])
   const fetchKeys = async () => { try { setApiKeys((await api.get('/mcp-keys')).data || []) } catch {} }
+  // 工具目录来自后端注册表，不再前端硬编码（曾经写死 20 条、后端实际 32 条）
+  const fetchTools = async () => { try { setTools((await api.get('/mcp-keys/tools')).data || []) } catch {} }
+
+  const byCategory = useMemo(() => {
+    const m = new Map()
+    tools.forEach(t => { if (!m.has(t.category)) m.set(t.category, []); m.get(t.category).push(t) })
+    return [...m.entries()]
+  }, [tools])
+
+  const applyProfile = (key) => {
+    setProfile(key)
+    // custom 不在 PROFILES 里：沿用当前勾选（从档位切过去时正好作为起点）
+    if (key !== 'custom') setPicked(PROFILES[key].tools)
+    else if (picked === null) setPicked(tools.map(t => t.name))
+  }
+
   const createKey = async () => {
     setCreating(true)
-    try { setNewKeyResult((await api.post('/mcp-keys', { name: newKeyName || 'default' })).data); setNewKeyName(''); fetchKeys() }
+    try {
+      const body = { name: newKeyName || 'default' }
+      if (picked) body.allowedTools = picked
+      setNewKeyResult((await api.post('/mcp-keys', body)).data)
+      setNewKeyName(''); fetchKeys()
+    }
     catch (e) { message.error(e.message || '创建失败') } finally { setCreating(false) }
   }
   const revokeKey = async (id) => { try { await api.delete(`/mcp-keys/${id}`); message.success('已吊销'); fetchKeys() } catch { message.error('吊销失败') } }
+
+  const saveScope = async () => {
+    const { id, tools: sel } = scopeEditing
+    try {
+      await api.patch(`/mcp-keys/${id}`, sel === null ? { resetTools: true } : { allowedTools: sel })
+      message.success('工具范围已更新')
+      setScopeEditing(null); fetchKeys()
+    } catch (e) { message.error(e.message || '更新失败') }
+  }
+
   const copy = (text) => copyToClipboard(text).then(() => message.success('已复制'))
 
   const onlineCount = apiKeys.filter(k => k.lastUsedAt && Date.now() - new Date(k.lastUsedAt).getTime() < 30 * 60 * 1000).length
@@ -82,7 +166,7 @@ export default function MCPTools() {
             <Button size="small" icon={<CopyOutlined />} onClick={() => copy(mcpUrl)}>复制地址</Button>
             <Space split={<span style={{ color: '#e0e0e3' }}>|</span>}>
               <Text type="secondary" style={{ fontSize: 12 }}>{onlineCount}/{apiKeys.length} 在线</Text>
-              <Text type="secondary" style={{ fontSize: 12 }}>{MCP_TOOLS.length} 个工具</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>{tools.length} 个工具</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>StreamableHTTP</Text>
             </Space>
           </Space>
@@ -127,15 +211,28 @@ export default function MCPTools() {
                                 <Text code style={{ fontSize: 11, color: '#8c919e' }}>{k.prefix}...</Text>
                                 {isOnline && <Tag color="cyan" style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>在线</Tag>}
                                 {!isOnline && isRecent && <Tag color="warning" style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>最近活跃</Tag>}
+                                <Tooltip title={k.allowedTools
+                                  ? `已限定 ${k.allowedTools.length} 个工具，范围外的工具该连接看不到也调不了`
+                                  : '未限制，可使用全部工具'}>
+                                  <Tag color={k.allowedTools ? 'processing' : 'default'} style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>
+                                    {k.allowedTools ? `${k.allowedTools.length}/${tools.length} 工具` : '全部工具'}
+                                  </Tag>
+                                </Tooltip>
                               </div>
                               <Text type="secondary" style={{ fontSize: 12 }}>
                                 {lastUsed ? `最近调用 ${lastUsed.toLocaleString('zh-CN')}` : '尚未使用'}
                               </Text>
                             </div>
                           </div>
-                          <Popconfirm title="吊销后该连接立即失效" onConfirm={() => revokeKey(k.id)} okText="吊销" cancelText="取消" okButtonProps={{ danger: true }}>
-                            <Button size="small" danger type="text" icon={<DeleteOutlined />}>吊销</Button>
-                          </Popconfirm>
+                          <Space size={4}>
+                            <Button size="small" type="text" icon={<SettingOutlined />}
+                              onClick={() => setScopeEditing({ id: k.id, name: k.name, tools: k.allowedTools ?? null })}>
+                              工具范围
+                            </Button>
+                            <Popconfirm title="吊销后该连接立即失效" onConfirm={() => revokeKey(k.id)} okText="吊销" cancelText="取消" okButtonProps={{ danger: true }}>
+                              <Button size="small" danger type="text" icon={<DeleteOutlined />}>吊销</Button>
+                            </Popconfirm>
+                          </Space>
                         </div>
                       </Card>
                     )
@@ -153,9 +250,9 @@ export default function MCPTools() {
         },
         {
           key: 'tools',
-          label: <span><ThunderboltOutlined /> 工具列表 ({MCP_TOOLS.length})</span>,
+          label: <span><ThunderboltOutlined /> 工具列表 ({tools.length})</span>,
           children: (
-            <Table rowKey="name" dataSource={MCP_TOOLS} pagination={false} size="small"
+            <Table rowKey="name" dataSource={tools} pagination={false} size="small"
               columns={[
                 { title: '工具', dataIndex: 'name', width: 220, render: n => <Text code style={{ fontSize: 11 }}>{n}</Text> },
                 { title: '分类', dataIndex: 'category', width: 80, render: c => <Tag color={CAT_COLORS[c]} style={{ fontSize: 11 }}>{c}</Tag> },
@@ -220,7 +317,7 @@ export default function MCPTools() {
       ]} />
 
       {/* 创建 Key 弹窗 */}
-      <Modal title="创建连接" open={createModalOpen} onCancel={() => setCreateModalOpen(false)} width={460}
+      <Modal title="创建连接" open={createModalOpen} onCancel={() => setCreateModalOpen(false)} width={560}
         footer={newKeyResult ? [
           <Button key="close" type="primary" onClick={() => setCreateModalOpen(false)}>我已保存，关闭</Button>
         ] : [
@@ -232,7 +329,30 @@ export default function MCPTools() {
             <Text type="secondary" style={{ fontSize: 13, display: 'block', marginBottom: 16 }}>
               给这个连接取个名字，方便识别是谁的 Claude Code。
             </Text>
-            <Input placeholder="如：小李的开发机、CI 流水线" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} onPressEnter={createKey} size="large" />
+            <Input placeholder="如：小李的开发机、CI 流水线" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} size="large" />
+
+            <div style={{ ...sectionTitle, marginTop: 20 }}>工具范围</div>
+            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
+              限定这个连接能用哪些工具。范围外的工具 Claude Code <b>看不到也调不了</b>，
+              避免它在几十个工具里挑错。
+            </Text>
+            <Radio.Group value={profile} onChange={e => applyProfile(e.target.value)}
+              style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {Object.entries(PROFILES).map(([k, p]) => (
+                <Radio key={k} value={k}>
+                  <span style={{ fontSize: 13 }}>{p.label}</span>
+                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
+                    {p.tools ? `${p.tools.length} 个` : `${tools.length} 个`} · {p.hint}
+                  </Text>
+                </Radio>
+              ))}
+              <Radio value="custom"><span style={{ fontSize: 13 }}>自定义</span></Radio>
+            </Radio.Group>
+
+            {profile === 'custom' && (
+              <ToolPicker tools={tools} byCategory={byCategory}
+                value={picked || []} onChange={setPicked} />
+            )}
           </div>
         ) : (
           <div>
@@ -244,6 +364,45 @@ export default function MCPTools() {
             <Card size="small" style={cardStyle}>
               <Text code copyable style={{ fontSize: 13, wordBreak: 'break-all' }}>{newKeyResult.key}</Text>
             </Card>
+            {newKeyResult.allowedTools && (
+              <Alert style={{ marginTop: 12 }} type="info" showIcon
+                message={`该连接已限定 ${newKeyResult.allowedTools.length} 个工具`}
+                description="范围外的工具不会出现在它的工具列表里，直接调用也会被拒绝。" />
+            )}
+          </div>
+        )}
+      </Modal>
+
+      {/* 编辑已有 Key 的工具范围 */}
+      <Modal title={`工具范围 · ${scopeEditing?.name || ''}`} open={!!scopeEditing} width={560}
+        onCancel={() => setScopeEditing(null)} onOk={saveScope} okText="保存">
+        {scopeEditing && (
+          <div>
+            <Radio.Group
+              value={scopeEditing.tools === null ? 'all' : 'custom'}
+              onChange={e => setScopeEditing(s => ({
+                ...s, tools: e.target.value === 'all' ? null : (PROFILES.live.tools),
+              }))}
+              style={{ display: 'flex', gap: 16, marginBottom: 12 }}
+            >
+              <Radio value="all">不限制（全部工具）</Radio>
+              <Radio value="custom">限定范围</Radio>
+            </Radio.Group>
+
+            {scopeEditing.tools !== null && (
+              <>
+                <Space wrap size={6} style={{ marginBottom: 4 }}>
+                  <Text type="secondary" style={{ fontSize: 12 }}>快速套用：</Text>
+                  {Object.entries(PROFILES).filter(([, p]) => p.tools).map(([k, p]) => (
+                    <Button key={k} size="small"
+                      onClick={() => setScopeEditing(s => ({ ...s, tools: p.tools }))}>{p.label}</Button>
+                  ))}
+                </Space>
+                <ToolPicker tools={tools} byCategory={byCategory}
+                  value={scopeEditing.tools}
+                  onChange={v => setScopeEditing(s => ({ ...s, tools: v }))} />
+              </>
+            )}
           </div>
         )}
       </Modal>
