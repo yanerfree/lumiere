@@ -20,6 +20,8 @@ export default function AICapabilityBindings({ overview, onOverviewReload }) {
   const [modelSource, setModelSource] = useState('')
   const [savingId, setSavingId] = useState(null)
   const [switchingConn, setSwitchingConn] = useState(false)
+  const [draft, setDraft] = useState({})           // {bindingId: 正在输入的模型文本}
+  const clearDraft = (id) => setDraft(d => { const n = { ...d }; delete n[id]; return n })
   const [addOpen, setAddOpen] = useState(false)
   const [form] = Form.useForm()
 
@@ -241,12 +243,20 @@ export default function AICapabilityBindings({ overview, onOverviewReload }) {
                 <AutoComplete
                   style={{ width: '100%', marginTop: 4 }}
                   options={modelOptions}
-                  value={b.model}
+                  // draft = 正在编辑的文本。之前只给受控 value 没给 onChange,键盘输入会被
+                  // 受控值立刻覆盖回去 → 框子根本改不动,且下拉过滤词恒等于当前模型全名、
+                  // 只能筛出它自己。必须有 onChange 才能清空重输。
+                  value={draft[b.id] ?? b.model}
                   disabled={savingId === b.id}
-                  onSelect={(val) => saveModel(b, val)}
-                  onBlur={(e) => saveModel(b, e.target?.value)}
+                  onChange={(val) => setDraft(d => ({ ...d, [b.id]: val }))}
+                  onSelect={(val) => { clearDraft(b.id); saveModel(b, val) }}
+                  onBlur={(e) => {
+                    const val = (e.target?.value || '').trim()
+                    clearDraft(b.id)          // 失焦即回到受控值,避免留下没保存的半截文本
+                    if (val) saveModel(b, val)
+                  }}
                   filterOption={(input, option) =>
-                    (option?.value || '').toLowerCase().includes(input.toLowerCase())}
+                    (option?.value || '').toLowerCase().includes((input || '').toLowerCase())}
                   placeholder="选择或输入模型名"
                 />
               </div>
