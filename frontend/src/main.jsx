@@ -1,11 +1,18 @@
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { ConfigProvider } from 'antd'
-import zhCN from 'antd/locale/zh_CN'
-import enUS from 'antd/locale/en_US'
+import zhCNRaw from 'antd/locale/zh_CN'
+import enUSRaw from 'antd/locale/en_US'
 import App from './App.jsx'
 import { LangProvider, useLang } from './utils/i18n.jsx'
 import './styles/global.css'
+
+// antd/locale/* 是 CJS 转发（module.exports = require('../lib/locale/xx')），
+// 而 lib 下是 Babel 输出的 exports.default，打包后 default import 拿到的是
+// { default: {...} } 这层壳，而不是语言包本身。直接传给 ConfigProvider 会
+// 静默退回英文（分页显示 "/ page"、Popconfirm 显示 OK/Cancel）。这里手动解包。
+const zhCN = zhCNRaw?.default ?? zhCNRaw
+const enUS = enUSRaw?.default ?? enUSRaw
 
 const theme = {
   token: {
