@@ -30,9 +30,11 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/ai-capabilities", tags=["ai-capabilities"])
 
-# 拉不到网关 /models 时的兜底清单(常见公司网关模型)
+# 拉不到网关 /models 时的兜底清单(公司网关实际在供的模型,新→旧)
+# 注意:只放裸模型 ID。CLI 侧的长上下文后缀写法(如 claude-opus-5[1m])在接口路径会 404,不要收进来。
 _PRESET_MODELS = [
-    "claude-sonnet-5", "claude-opus-4-8", "claude-opus-4-6",
+    "claude-opus-5", "claude-sonnet-5", "claude-fable-5",
+    "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
     "claude-sonnet-4-6", "claude-haiku-4-5-20251001",
 ]
 

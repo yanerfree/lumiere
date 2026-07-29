@@ -164,7 +164,7 @@ async def stream_mcp_agent(
         yield SSEEvent("status", {"content": f"已连接，加载了 {len(tools)} 个工具"})
 
         # 构建 LLM — UI 生成专用强模型（ai_ui_model），回退 ai_model
-        _model = model_name or settings.ai_ui_model or settings.ai_model
+        _model = model_name or settings.ai_ui_model or settings.ai_model or "claude-sonnet-5"
         model = ChatOpenAI(
             model=_model,
             api_key=settings.ai_auth_token or settings.ai_api_key or "none",

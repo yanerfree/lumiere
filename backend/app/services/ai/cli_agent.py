@@ -258,7 +258,7 @@ async def stream_cli_agent(
     """CLI 引擎主流程：探索+生成 → verify → 失败 resume 自愈（≤3 轮）。"""
     from app.services.ai.verify_tool import _run_playwright_verify
 
-    model = model_name or settings.ai_ui_model or settings.ai_model or "claude-sonnet-4-6"
+    model = model_name or settings.ai_ui_model or settings.ai_model or "claude-sonnet-5"
     mcp_cfg = _mcp_config_file()
     artifacts_dir = tempfile.mkdtemp(prefix="tb-cli-ui-")
     skill = _load_skill()

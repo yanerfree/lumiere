@@ -144,8 +144,8 @@ class MockServerManager:
                 "glm-4v-plus", "glm-4v",
             ],
             "anthropic": [
-                "claude-sonnet-4-6", "claude-opus-4-6",
-                "claude-3.5-sonnet", "claude-3.5-haiku",
+                "claude-opus-5", "claude-sonnet-5", "claude-fable-5",
+                "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001",
             ],
             "moonshot": [
                 "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",
