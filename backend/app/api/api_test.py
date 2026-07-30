@@ -435,6 +435,9 @@ class CreateScenarioRequest(BaseSchema):
     priority: str = Field(default="P1")
     folder_id: str | None = None
     description: str | None = None
+    # 从用例详情里手动新建时带上，这样它和 CC 同步过来的场景是同一份数据、
+    # 出现在同一个列表里（否则用例里建的又变成游离场景）
+    source_case_id: str | None = None
 
 
 @router.post("")
@@ -469,6 +472,7 @@ async def create_scenario(
         status="draft",
         folder_id=uuid.UUID(body.folder_id) if body.folder_id else None,
         description=body.description,
+        source_case_id=uuid.UUID(body.source_case_id) if body.source_case_id else None,
         created_by=current_user.id,
     )
     session.add(scenario)

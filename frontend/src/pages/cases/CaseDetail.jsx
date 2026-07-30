@@ -12,11 +12,10 @@ import {
 import { api, getValidToken } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
 import { useEnv, buildEnvOptions } from '../../utils/env'
-import StepList from '../api-test/components/StepList'
-import StepEditor from '../api-test/components/StepEditor'
 import ScriptEditor from '../../components/ScriptEditor'
 import ScenarioVariables from '../../components/ScenarioVariables'
 import ApiStepList, { generateApiCodeFromSteps } from '../../components/ApiStepList'
+import { scenarioToNodes, nodeToStepPatch } from './apiStepAdapter'
 
 const priorityColors = { P0: '#fff', P1: '#fff', P2: '#fff', P3: '#fff' }
 const priorityBg = { P0: '#e8453c', P1: '#ff7d00', P2: '#4e8af0', P3: 'rgba(0,0,0,0.08)' }
@@ -443,8 +442,6 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
   const [results, setResults] = useState({})  // id -> {passed, passCount, failCount}
   const [expandedId, setExpandedId] = useState(null)   // 展开编辑的场景
   const [detail, setDetail] = useState({})             // id -> 场景详情(含 steps)
-  const [selectedStepId, setSelectedStepId] = useState(null)
-  const [stepRunning, setStepRunning] = useState(false)
 
   // 只读写 source_case_id=本用例 的场景；用例内嵌的 cases.api_scenario 是另一份数据，
   // 由下方 ScenarioEditor 负责，两边不能混。
@@ -461,35 +458,33 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
   const toggleExpand = async (sc) => {
     if (expandedId === sc.id) { setExpandedId(null); return }
     setExpandedId(sc.id)
-    setSelectedStepId(null)
-    const d = detail[sc.id] || await loadDetail(sc.id)
-    if (d?.steps?.length) setSelectedStepId(d.steps[0].id)
+    // 步骤选中态由 ApiStepList 自己管，这里只负责把数据拉回来
+    if (!detail[sc.id]) await loadDetail(sc.id)
   }
 
-  const saveStep = async (sid, stepId, updates) => {
+  // 编辑器整体回调：把节点数组落回 api_test_steps。
+  // 新增/删除/改内容都从这一个入口走，避免和旧的三个分散入口不一致。
+  const saveNodes = async (sid, d, nodes) => {
+    const prev = d.steps || []
     try {
-      await api.put(`${base}/${sid}/steps/${stepId}`, updates)
+      // 1) 改动已有步骤
+      for (const n of nodes) {
+        if (!n.id) continue
+        await api.put(`${base}/${sid}/steps/${n.id}`, nodeToStepPatch(n))
+      }
+      // 2) 新增的（编辑器给的新节点没有 id）
+      for (const n of nodes) {
+        if (n.id) continue
+        await api.post(`${base}/${sid}/steps`, nodeToStepPatch(n))
+      }
+      // 3) 被删掉的
+      const keep = new Set(nodes.filter(n => n.id).map(n => n.id))
+      for (const st of prev) {
+        if (!keep.has(st.id)) await api.delete(`${base}/${sid}/steps/${st.id}`)
+      }
       await loadDetail(sid)
+      load()
     } catch (e) { message.error(e?.message || '保存失败') }
-  }
-
-  const removeStep = async (sid, stepId) => {
-    try {
-      await api.delete(`${base}/${sid}/steps/${stepId}`)
-      const d = await loadDetail(sid)
-      setSelectedStepId(d?.steps?.[0]?.id || null)
-    } catch (e) { message.error(e?.message || '删除失败') }
-  }
-
-  // 单步调试走后端引擎（会校断言、落 last_response），和接口测试模块同一条路径
-  const runStep = async (sid, stepId) => {
-    if (!runEnv) { message.warning('请先选择执行环境（需要 BASE_URL）'); return }
-    setStepRunning(true)
-    try {
-      await api.post(`${base}/${sid}/run-step/${stepId}`, { envId: runEnv })
-      await loadDetail(sid)
-    } catch (e) { message.error(e?.message || '运行失败') }
-    finally { setStepRunning(false) }
   }
 
   const load = useCallback(async () => {
@@ -542,6 +537,17 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
           <Select size="small" value={runEnv} onChange={onEnvChange} style={{ width: 170 }}
             popupMatchSelectWidth={false} placeholder="执行环境" options={buildEnvOptions(environments)} />
           <Button size="small" onClick={load} loading={loading}>刷新</Button>
+          <Button size="small" type="primary" ghost icon={<PlusOutlined />}
+            style={{ color: '#0ea5a0', borderColor: '#0ea5a0' }}
+            onClick={async () => {
+              // 手动新建也落到 api_test_scenarios，和同步过来的是同一份数据
+              try {
+                const res = await api.post(base, { title: `${'接口场景'}-${(items.length || 0) + 1}`, priority: 'P2', sourceCaseId: caseId })
+                await load()
+                const nid = res.data?.id
+                if (nid) { setExpandedId(nid); await loadDetail(nid) }
+              } catch (e) { message.error(e?.message || '创建失败') }
+            }}>新建场景</Button>
           <Button size="small" type="link" onClick={() => navigate(`/projects/${projectId}/api-test`)}>接口测试模块 →</Button>
         </Space>
       </div>
@@ -554,7 +560,6 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
             const isRunning = runningId === sc.id
             const isOpen = expandedId === sc.id
             const d = detail[sc.id]
-            const selectedStep = (d?.steps || []).find(s2 => s2.id === selectedStepId)
             return (
               <div key={sc.id} style={{
                 borderRadius: 8, background: 'rgba(14,165,160,0.04)', border: '1px solid rgba(0,0,0,0.04)',
@@ -579,49 +584,18 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
                 </div>
 
                 {isOpen && (
-                  <div style={{ borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+                  <div style={{ borderTop: '1px solid rgba(0,0,0,0.06)', background: '#fff' }}>
                     {!d ? (
                       <div style={{ textAlign: 'center', padding: '20px 0' }}><Spin size="small" /></div>
                     ) : (
-                      // 直接复用接口测试模块的两个组件：左侧一个个请求，右侧
-                      // Body/Headers/断言/变量提取/响应 + 单步运行。不再自己写简版列表。
-                      <div style={{ display: 'flex', minHeight: 360, background: '#fff' }}>
-                        <div style={{ width: 280, flexShrink: 0, borderRight: '1px solid rgba(0,0,0,0.06)', overflowY: 'auto', maxHeight: 520 }}>
-                          <StepList
-                            scenario={d}
-                            selectedStepId={selectedStepId}
-                            readonly={d.status !== 'draft'}
-                            onSelectStep={setSelectedStepId}
-                            onAddStep={async () => {
-                              await api.post(`${base}/${sc.id}/steps`, { name: '新步骤', method: 'GET', url: '${BASE_URL}/' })
-                              const nd = await loadDetail(sc.id)
-                              setSelectedStepId(nd?.steps?.slice(-1)[0]?.id || null)
-                            }}
-                            onReorderSteps={async (stepIds) => {
-                              await api.put(`${base}/${sc.id}/steps/reorder`, { stepIds })
-                              await loadDetail(sc.id)
-                            }}
-                          />
-                        </div>
-                        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', maxHeight: 520 }}>
-                          {selectedStep ? (
-                            <StepEditor
-                              step={selectedStep}
-                              running={stepRunning}
-                              readonly={d.status !== 'draft'}
-                              onSaveStep={(stepId, updates) => saveStep(sc.id, stepId, updates)}
-                              onRemoveStep={(stepId) => removeStep(sc.id, stepId)}
-                              onRunStep={(stepId) => runStep(sc.id, stepId)}
-                              onStepChange={(next) => setDetail(prev => ({
-                                ...prev,
-                                [sc.id]: { ...prev[sc.id], steps: (prev[sc.id]?.steps || []).map(s => s.id === next.id ? next : s) },
-                              }))}
-                            />
-                          ) : (
-                            <div style={{ padding: 24, color: '#c9cdd4', fontSize: 13 }}>左侧选择一个请求</div>
-                          )}
-                        </div>
-                      </div>
+                      // 用手动那套 apifox 式编辑器渲染。同步来的和手动建的是同一份数据
+                      // （都在 api_test_scenarios），所以界面也必须是同一个。
+                      <ApiStepList
+                        steps={scenarioToNodes(d.steps)}
+                        environments={environments}
+                        runEnv={runEnv}
+                        onChange={(nodes) => saveNodes(sc.id, d, nodes)}
+                      />
                     )}
                   </div>
                 )}
@@ -2149,18 +2123,22 @@ export default function CaseDetail() {
                   environments={environments} runEnv={runEnv} onEnvChange={setRunEnv}
                   onCountChange={setLinkedApiCount}
                 />
-                <ScenarioEditor
-                  scenario={apiScenario} setScenario={setApiScenario}
-                  scenarioStatus={apiScenarioStatus} setScenarioStatus={setApiScenarioStatus}
-                  isTemplate={isApiTemplate} setIsTemplate={setIsApiTemplate}
-                  type="api" accentColor="#0ea5a0"
-                  onImportTemplate={() => { setTemplateModalType('api'); setTemplateModalOpen(true) }}
-                  manualSteps={steps} caseTitle={title}
-                  projectId={projectId} branchId={branchId} caseId={caseId}
-                  environments={environments} runEnv={runEnv} onEnvChange={setRunEnv}
-                  onScriptSaved={() => setHasActiveScript(true)}
-                  linkedCount={linkedApiCount}
-                />
+                {/* 内嵌场景(cases.api_scenario)是历史遗留的第二份存储。新建一律走上面的
+                    统一入口，这里只在该用例确实还有旧数据时显示，避免它们看不见也删不掉。 */}
+                {hasApi && (
+                  <ScenarioEditor
+                    scenario={apiScenario} setScenario={setApiScenario}
+                    scenarioStatus={apiScenarioStatus} setScenarioStatus={setApiScenarioStatus}
+                    isTemplate={isApiTemplate} setIsTemplate={setIsApiTemplate}
+                    type="api" accentColor="#0ea5a0"
+                    onImportTemplate={() => { setTemplateModalType('api'); setTemplateModalOpen(true) }}
+                    manualSteps={steps} caseTitle={title}
+                    projectId={projectId} branchId={branchId} caseId={caseId}
+                    environments={environments} runEnv={runEnv} onEnvChange={setRunEnv}
+                    onScriptSaved={() => setHasActiveScript(true)}
+                    linkedCount={linkedApiCount}
+                  />
+                )}
               </>
             )},
 
