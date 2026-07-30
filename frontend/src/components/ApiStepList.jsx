@@ -1055,11 +1055,20 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
   const mc = methodColors[method] || methodColors.GET
   const up = (f, v) => onChange({ ...step, [f]: v })
 
+  // URL 是否自带 base。除 http(s) 和 {{BASE_URL}} 外，**必须认 ${BASE_URL}**：
+  // 后端步骤插值和 CC 回推用的都是 ${...} 语法。漏认会导致左侧再贴一个环境前缀，
+  // 发送时拼成 http://host${BASE_URL}/xxx 的双份 base。
   const urlHasOwnBase = (url) => {
     if (!url) return false
     const lower = url.toLowerCase()
-    return lower.startsWith('http://') || lower.startsWith('https://') || url.startsWith('{{BASE_URL}}') || url.startsWith('{{base_url}}')
+    return lower.startsWith('http://') || lower.startsWith('https://')
+      || /^\{\{\s*base_url\s*\}\}/i.test(url) || /^\$\{\s*BASE_URL\s*\}/i.test(url)
   }
+
+  // 把两种写法的 BASE_URL 占位符都换成所选环境的实际地址
+  const subBase = (url, base) => (url || '')
+    .replace(/\{\{\s*base_url\s*\}\}/gi, base)
+    .replace(/\$\{\s*BASE_URL\s*\}/gi, base)
 
   const paramCount = (step.params || []).filter(p => p.key && p.enabled !== false).length
   const headerCount = (step.headers || []).filter(h => h.key && h.enabled !== false).length
@@ -1088,7 +1097,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
     const base = baseUrl || ''
     const path = step.url || ''
     const hasOwnBase = urlHasOwnBase(path)
-    const fullPath = hasOwnBase ? path.replace(/\{\{BASE_URL\}\}/gi, base) : base + path
+    const fullPath = hasOwnBase ? subBase(path, base) : base + path
     const enabledParams = (step.params || []).filter(p => p.key && p.enabled !== false)
     const qs = enabledParams.map(p => `${encodeURIComponent(p.key)}=${encodeURIComponent(p.value || '')}`).join('&')
     return fullPath + (qs ? '?' + qs : '')
@@ -1100,7 +1109,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
     setActiveTab('response')
     try {
       const path = step.url || ''
-      const fullUrl = urlHasOwnBase(path) ? path.replace(/\{\{BASE_URL\}\}/gi, baseUrl || '') : (baseUrl || '') + path
+      const fullUrl = urlHasOwnBase(path) ? subBase(path, baseUrl || '') : (baseUrl || '') + path
       const res = await api.post('/debug/send', {
         method: step.method || 'GET',
         url: fullUrl,
@@ -1571,7 +1580,9 @@ function genStepsCode(steps, indent = '    ') {
     lines.push(`${indent}# Step ${s.seq}: ${s.action || s.method + ' ' + s.url}`)
     const preOps = getOps(s, 'preOperations')
     const method = (s.method || 'GET').toLowerCase()
-    let url = resolveVars((s.url || '/').replace(/^\{\{BASE_URL\}\}/gi, ''))
+    // 两种 BASE_URL 写法都要剥掉：httpx client 已经带了 base_url，
+    // 留着会生成 client.get("${BASE_URL}/api/..") 这种双份 base
+    let url = resolveVars((s.url || '/').replace(/^\{\{\s*base_url\s*\}\}/gi, '').replace(/^\$\{\s*BASE_URL\s*\}/gi, ''))
     const hasBodySetter = preOps.some(op => op.type === 'bodySetter')
     const stepHeaders = (s.headers || []).filter(h => h.key && h.enabled !== false)
     if (stepHeaders.length) {

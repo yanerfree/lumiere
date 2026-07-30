@@ -16,6 +16,7 @@ import ScriptEditor from '../../components/ScriptEditor'
 import ScenarioVariables from '../../components/ScenarioVariables'
 import ApiStepList, { generateApiCodeFromSteps } from '../../components/ApiStepList'
 import { scenarioToNodes, nodeToStepPatch } from './apiStepAdapter'
+import RunResultPanel from '../api-test/components/RunResultPanel'
 
 const priorityColors = { P0: '#fff', P1: '#fff', P2: '#fff', P3: '#fff' }
 const priorityBg = { P0: '#e8453c', P1: '#ff7d00', P2: '#4e8af0', P3: 'rgba(0,0,0,0.08)' }
@@ -440,6 +441,9 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   const [running, setRunning] = useState(false)
   const [result, setResult] = useState(null)
   const [creating, setCreating] = useState(false)
+  const [stepResults, setStepResults] = useState([])   // 逐步执行详情
+  const [showPanel, setShowPanel] = useState(false)
+  const [reportId, setReportId] = useState(null)
 
   const base = `/projects/${projectId}/branches/${branchId}/api-tests`
 
@@ -493,13 +497,16 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   const run = () => {
     if (!scenario) return
     if (!runEnv) { message.warning('请先选择执行环境（需要 BASE_URL）'); return }
-    setRunning(true); setResult(null)
+    setRunning(true); setResult(null); setStepResults([]); setReportId(null); setShowPanel(true)
     api.stream(`${base}/run`, { scenarioIds: [scenario.id], envId: runEnv }, {
       onChunk: (data) => {
+        // 逐步推进：只显示汇总的话，失败了也不知道是哪一步、为什么
+        if (data.type === 'step_result') setStepResults(prev => [...prev, data])
         if (data.type === 'scenario_done') setResult({ passed: data.passed, passCount: data.passCount, failCount: data.failCount })
+        if (data.type === 'report_created') setReportId(data.reportId)
         if (data.type === 'run_done') setRunning(false)
       },
-      onDone: () => { setRunning(false); load() },
+      onDone: () => { setRunning(false); load() },   // 重新拉回 lastResponse，面板里才能看请求/响应
       onError: (msg) => { message.error(msg || '运行失败'); setRunning(false) },
     })
   }
@@ -513,8 +520,9 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           {scenario && <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c' }}>{scenario.code}</span>}
           {scenario && <span style={{ fontSize: 12, color: '#86909c' }}>{(scenario.steps || []).length} 个请求</span>}
           {result && (
-            <Tag color={result.passed ? 'success' : 'error'} style={{ margin: 0 }}>
-              {result.passed ? '通过' : '失败'} {result.passCount ?? 0}/{(result.passCount ?? 0) + (result.failCount ?? 0)}
+            <Tag color={result.passed ? 'success' : 'error'} style={{ margin: 0, cursor: 'pointer' }}
+              onClick={() => setShowPanel(true)}>
+              {result.passed ? '通过' : '失败'} {result.passCount ?? 0}/{(result.passCount ?? 0) + (result.failCount ?? 0)} · 看详情
             </Tag>
           )}
         </div>
@@ -542,6 +550,18 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           environments={environments}
           runEnv={runEnv}
           onChange={saveNodes}
+        />
+      )}
+
+      {showPanel && (stepResults.length > 0 || running) && (
+        <RunResultPanel
+          results={stepResults}
+          scenario={scenario}
+          running={running}
+          reportId={reportId}
+          projectId={projectId}
+          envName={(environments.find(e => e.id === runEnv) || {}).name}
+          onClose={() => setShowPanel(false)}
         />
       )}
     </Card>
