@@ -138,6 +138,28 @@ def _mask_authorization(headers: dict) -> dict:
     return masked
 
 
+_SECRET_FIELD_RE = re.compile(r"(password|passwd|pwd|secret|token|api_?key|credential)", re.I)
+
+
+def _mask_secrets(obj):
+    """请求体持久化前脱敏密码类字段。
+
+    Authorization 头早就脱敏了，但请求体里的 password 一直是明文落进
+    last_response、在运行结果面板里直接可见（登录步骤尤其明显）。同样该遮。
+    """
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if isinstance(k, str) and _SECRET_FIELD_RE.search(k) and isinstance(v, str) and v:
+                out[k] = "******"
+            else:
+                out[k] = _mask_secrets(v)
+        return out
+    if isinstance(obj, list):
+        return [_mask_secrets(v) for v in obj]
+    return obj
+
+
 def _resolve_variables(text, env: dict) -> str:
     if not isinstance(text, str):
         return text
@@ -292,7 +314,7 @@ async def run_single_step(
                 "③是否该在用例「场景变量」里定义。"
             ),
             request_data={"method": step.method, "url": url,
-                          "headers": _mask_authorization(headers), "body": body},
+                          "headers": _mask_authorization(headers), "body": _mask_secrets(body)},
         )
 
     if "Authorization" not in headers:
@@ -308,7 +330,7 @@ async def run_single_step(
     request_data = {
         "method": step.method, "url": url,
         "headers": _mask_authorization(headers),
-        "body": body,
+        "body": _mask_secrets(body),
     }
 
     start = time.time()
