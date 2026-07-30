@@ -7,7 +7,7 @@ import {
   ThunderboltOutlined, TagOutlined, AppstoreOutlined, ApiOutlined,
   FlagOutlined, WarningOutlined, CodeOutlined, CopyOutlined, FileTextOutlined,
   DesktopOutlined, CheckCircleOutlined, StarOutlined, StarFilled, ImportOutlined,
-  DatabaseOutlined,
+  DatabaseOutlined, CaretRightOutlined,
 } from '@ant-design/icons'
 import { api, getValidToken } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -439,6 +439,20 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
   const [loaded, setLoaded] = useState(false)
   const [runningId, setRunningId] = useState(null)
   const [results, setResults] = useState({})  // id -> {passed, passCount, failCount}
+  const [expandedId, setExpandedId] = useState(null)   // 展开查看步骤的场景
+  const [detail, setDetail] = useState({})             // id -> {steps:[...]}
+
+  // 展开时才拉步骤：列表接口不返回步骤，而回推的场景动辄十几步，
+  // 之前只能看到标题，想看内容得跳去接口测试模块，等于"步骤在用例里看不见"
+  const toggleExpand = async (sc) => {
+    if (expandedId === sc.id) { setExpandedId(null); return }
+    setExpandedId(sc.id)
+    if (detail[sc.id]) return
+    try {
+      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests/${sc.id}`)
+      setDetail(prev => ({ ...prev, [sc.id]: res.data || {} }))
+    } catch { message.error('加载步骤失败') }
+  }
 
   const load = useCallback(async () => {
     if (!projectId || !branchId || !caseId) return
@@ -500,24 +514,58 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
           {items.map(sc => {
             const r = results[sc.id]
             const isRunning = runningId === sc.id
+            const isOpen = expandedId === sc.id
+            const d = detail[sc.id]
             return (
               <div key={sc.id} style={{
-                display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px',
                 borderRadius: 8, background: 'rgba(14,165,160,0.04)', border: '1px solid rgba(0,0,0,0.04)',
               }}>
-                <Tag color={prioColor[sc.priority] || 'default'} style={{ margin: 0, minWidth: 30, textAlign: 'center' }}>{sc.priority || '-'}</Tag>
-                <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c', minWidth: 66 }}>{sc.code || ''}</span>
-                <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sc.title}</span>
-                {isRunning && <Spin size="small" />}
-                {!isRunning && r && (
-                  <Tag color={r.passed ? 'success' : 'error'} style={{ margin: 0 }}>
-                    {r.passed ? '通过' : '失败'} {r.passCount ?? 0}/{(r.passCount ?? 0) + (r.failCount ?? 0)}
-                  </Tag>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', cursor: 'pointer' }}
+                  onClick={() => toggleExpand(sc)}>
+                  <CaretRightOutlined rotate={isOpen ? 90 : 0} style={{ fontSize: 11, color: '#86909c' }} />
+                  <Tag color={prioColor[sc.priority] || 'default'} style={{ margin: 0, minWidth: 30, textAlign: 'center' }}>{sc.priority || '-'}</Tag>
+                  <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c', minWidth: 66 }}>{sc.code || ''}</span>
+                  <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sc.title}</span>
+                  {sc.stepCount > 0 && <Tag style={{ margin: 0, fontSize: 11 }}>{sc.stepCount} 步</Tag>}
+                  {isRunning && <Spin size="small" />}
+                  {!isRunning && r && (
+                    <Tag color={r.passed ? 'success' : 'error'} style={{ margin: 0 }}>
+                      {r.passed ? '通过' : '失败'} {r.passCount ?? 0}/{(r.passCount ?? 0) + (r.failCount ?? 0)}
+                    </Tag>
+                  )}
+                  <Button size="small" type="primary" ghost icon={<PlayCircleOutlined />}
+                    loading={isRunning} disabled={!!runningId && !isRunning}
+                    style={{ color: '#0ea5a0', borderColor: '#0ea5a0' }}
+                    onClick={(e) => { e.stopPropagation(); runOne(sc) }}>运行</Button>
+                </div>
+
+                {isOpen && (
+                  <div style={{ borderTop: '1px solid rgba(0,0,0,0.06)', padding: '8px 10px 10px 30px' }}>
+                    {!d ? <Spin size="small" /> : (d.steps || []).length === 0 ? (
+                      <span style={{ fontSize: 12, color: '#c9cdd4' }}>该场景没有步骤</span>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                        {(d.steps || []).map((st, i) => (
+                          <div key={st.id || i} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 12 }}>
+                            <span style={{ color: '#c9cdd4', minWidth: 18, textAlign: 'right' }}>{i + 1}</span>
+                            <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}
+                              color={{ GET: 'blue', POST: 'green', PUT: 'orange', DELETE: 'red' }[st.method] || 'default'}>
+                              {st.method}
+                            </Tag>
+                            <span style={{ color: '#1d2129', flexShrink: 0 }}>{st.name}</span>
+                            <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{st.url}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div style={{ marginTop: 8 }}>
+                      <Button type="link" size="small" style={{ padding: 0, fontSize: 12 }}
+                        onClick={() => navigate(`/projects/${projectId}/api-test?scenarioId=${sc.id}`)}>
+                        到接口测试模块编辑 →
+                      </Button>
+                    </div>
+                  </div>
                 )}
-                <Button size="small" type="primary" ghost icon={<PlayCircleOutlined />}
-                  loading={isRunning} disabled={!!runningId && !isRunning}
-                  style={{ color: '#0ea5a0', borderColor: '#0ea5a0' }}
-                  onClick={() => runOne(sc)}>运行</Button>
               </div>
             )
           })}

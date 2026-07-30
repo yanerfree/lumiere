@@ -106,11 +106,30 @@ async def list_scenarios(
         q = q.offset((page - 1) * size).limit(size)
         result = await session.execute(q)
         scenarios = result.scalars().all()
-        return {"data": {"items": [_scenario_to_dict(s) for s in scenarios], "total": total, "page": page, "size": size}}
+        return {"data": {"items": await _with_step_counts(session, scenarios), "total": total, "page": page, "size": size}}
 
     result = await session.execute(q)
     scenarios = result.scalars().all()
-    return {"data": [_scenario_to_dict(s) for s in scenarios]}
+    return {"data": await _with_step_counts(session, scenarios)}
+
+
+async def _with_step_counts(session: AsyncSession, scenarios: list[ApiTestScenario]) -> list[dict]:
+    """列表项补 stepCount。用例详情里的编排场景需要它——只显示标题看不出
+    这条场景有多少步，"11 步"这种信息得跳到接口测试模块才看得到。"""
+    items = [_scenario_to_dict(s) for s in scenarios]
+    if not items:
+        return items
+    from sqlalchemy import func as sa_func
+
+    rows = (await session.execute(
+        select(ApiTestStep.scenario_id, sa_func.count())
+        .where(ApiTestStep.scenario_id.in_([s.id for s in scenarios]))
+        .group_by(ApiTestStep.scenario_id)
+    )).all()
+    counts = {str(sid): n for sid, n in rows}
+    for it in items:
+        it["stepCount"] = counts.get(it["id"], 0)
+    return items
 
 
 @router.get("/stats/quality")

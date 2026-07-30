@@ -31,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_test import ApiTestScenario, ApiTestStep
 from app.models.api_test_folder import ApiTestFolder
+from app.models.case import Case
 from app.models.environment import EnvironmentVariable, GlobalVariable
 from app.models.scenario_variable import ScenarioVariable
 from app.models.user import User
@@ -371,6 +372,14 @@ async def sync_orchestrated_scenario(
             variables_extract=st.get("variables_extract"),
             enabled=st.get("enabled", True),
         ))
+
+    # 回写用例的「接口」维度状态：挂上了活体验证过的编排场景，还显示"未开始"会误导
+    # （用例列表/详情都靠这个字段判断该维度做没做）。只从 not_started 往前推一格，
+    # 不覆盖人工已设成 executable/needs_fix 等更具体的状态。
+    if scid:
+        case_obj = await session.get(Case, scid)
+        if case_obj is not None and case_obj.api_status == "not_started":
+            case_obj.api_status = "debugging"
 
     await session.commit()
     await session.refresh(scenario)
