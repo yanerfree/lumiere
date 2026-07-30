@@ -287,17 +287,16 @@ async def sync_orchestrated_scenario(
             "allowedSample": sorted(allow)[:30],
         }
 
-    # ── 幂等：同一用例 + 同一标题视为同一条场景，重推=覆盖而非再建一条 ──
-    # 活体验证常要反复调（第一版步骤不全→补几步再推），没有这层去重就会
-    # 在用例详情里堆出多条同名场景，人根本分不出哪条是最新的。
+    # ── 幂等：一个用例 = 一条接口场景。重推永远覆盖那一条，不按标题区分 ──
+    # 产品口径就是 1:1（用例详情里只呈现一条、只有一套编辑器）。若按标题去重，
+    # CC 换个标题重推就会多出一条，用例里又变成"两份"。
     existing = None
     if scid:
         existing = (await session.execute(
             select(ApiTestScenario).where(
                 ApiTestScenario.branch_id == bid,
                 ApiTestScenario.source_case_id == scid,
-                ApiTestScenario.title == title,
-            )
+            ).order_by(ApiTestScenario.created_at)
         )).scalars().first()
 
     folder_id = None
@@ -319,6 +318,7 @@ async def sync_orchestrated_scenario(
     if existing is not None:
         # 覆盖：保留原 code（外部可能已引用），换掉步骤与元信息
         scenario = existing
+        scenario.title = title          # 一个用例一条，标题以最新一次回推为准
         scenario.priority = priority
         scenario.source = "mcp"
         if folder_id:

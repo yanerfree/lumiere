@@ -431,178 +431,118 @@ function generateUiCode(steps, title) {
 }
 
 // 「编排为接口测试」把该用例的流量写到分支级 api_test_scenarios 表(source_case_id=caseId),
-// 与用例内嵌的 apiScenario 是两套存储。这个面板按 source_case_id 把编排出来的场景拉出来展示 +
-// 直接运行 + 跳转接口测试模块,解决「编排成功但接口测试 tab 什么也没有」。
-function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnvChange, environments, onCountChange }) {
-  const navigate = useNavigate()
-  const [items, setItems] = useState([])
+// 一个用例 = 一个接口场景。CC 同步来的和手动建的是同一条，用同一套 apifox 式编辑器。
+// 存储统一在 api_test_scenarios/api_test_steps（保住整链执行与测试报告），
+// 界面统一用 ApiStepList，中间靠 apiStepAdapter 做字段互转。
+function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, runEnv, onEnvChange, environments, onCountChange }) {
+  const [scenario, setScenario] = useState(null)   // 本用例唯一那条（含 steps）
   const [loading, setLoading] = useState(false)
-  const [loaded, setLoaded] = useState(false)
-  const [runningId, setRunningId] = useState(null)
-  const [results, setResults] = useState({})  // id -> {passed, passCount, failCount}
-  const [expandedId, setExpandedId] = useState(null)   // 展开编辑的场景
-  const [detail, setDetail] = useState({})             // id -> 场景详情(含 steps)
+  const [running, setRunning] = useState(false)
+  const [result, setResult] = useState(null)
+  const [creating, setCreating] = useState(false)
 
-  // 只读写 source_case_id=本用例 的场景；用例内嵌的 cases.api_scenario 是另一份数据，
-  // 由下方 ScenarioEditor 负责，两边不能混。
   const base = `/projects/${projectId}/branches/${branchId}/api-tests`
-
-  const loadDetail = async (sid) => {
-    try {
-      const res = await api.get(`${base}/${sid}`)
-      setDetail(prev => ({ ...prev, [sid]: res.data || {} }))
-      return res.data
-    } catch { message.error('加载步骤失败'); return null }
-  }
-
-  const toggleExpand = async (sc) => {
-    if (expandedId === sc.id) { setExpandedId(null); return }
-    setExpandedId(sc.id)
-    // 步骤选中态由 ApiStepList 自己管，这里只负责把数据拉回来
-    if (!detail[sc.id]) await loadDetail(sc.id)
-  }
-
-  // 编辑器整体回调：把节点数组落回 api_test_steps。
-  // 新增/删除/改内容都从这一个入口走，避免和旧的三个分散入口不一致。
-  const saveNodes = async (sid, d, nodes) => {
-    const prev = d.steps || []
-    try {
-      // 1) 改动已有步骤
-      for (const n of nodes) {
-        if (!n.id) continue
-        await api.put(`${base}/${sid}/steps/${n.id}`, nodeToStepPatch(n))
-      }
-      // 2) 新增的（编辑器给的新节点没有 id）
-      for (const n of nodes) {
-        if (n.id) continue
-        await api.post(`${base}/${sid}/steps`, nodeToStepPatch(n))
-      }
-      // 3) 被删掉的
-      const keep = new Set(nodes.filter(n => n.id).map(n => n.id))
-      for (const st of prev) {
-        if (!keep.has(st.id)) await api.delete(`${base}/${sid}/steps/${st.id}`)
-      }
-      await loadDetail(sid)
-      load()
-    } catch (e) { message.error(e?.message || '保存失败') }
-  }
 
   const load = useCallback(async () => {
     if (!projectId || !branchId || !caseId) return
     setLoading(true)
     try {
-      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests?source_case_id=${caseId}`)
+      const res = await api.get(`${base}?source_case_id=${caseId}`)
       const list = res.data || []
-      setItems(list)
-      onCountChange?.(list.length)   // 告知下方内嵌编辑器，避免它喊「暂无接口测试场景」
+      onCountChange?.(list.length)
+      if (!list.length) { setScenario(null); return }
+      // 理论上只会有一条；历史数据若有多条，取步骤最多的那条，避免丢内容
+      const head = list.length === 1 ? list[0]
+        : [...list].sort((a, b) => (b.stepCount || 0) - (a.stepCount || 0))[0]
+      const d = await api.get(`${base}/${head.id}`)
+      setScenario(d.data || null)
     } catch { /* ignore */ }
-    finally { setLoading(false); setLoaded(true) }
-  }, [projectId, branchId, caseId, onCountChange])
+    finally { setLoading(false) }
+  }, [projectId, branchId, caseId, base, onCountChange])
 
-  // 每次该 tab 被激活时刷新(编排是在 UI tab 触发的,切回来要能看到最新结果)
   useEffect(() => { if (active) load() }, [active, load])
 
-  const runOne = (sc) => {
-    if (!runEnv) { message.warning('请先选择执行环境（需要 BASE_URL）'); return }
-    setRunningId(sc.id)
-    setResults(prev => ({ ...prev, [sc.id]: undefined }))
-    api.stream(`/projects/${projectId}/branches/${branchId}/api-tests/run`, {
-      scenarioIds: [sc.id], envId: runEnv,
-    }, {
-      onChunk: (data) => {
-        if (data.type === 'scenario_done') {
-          setResults(prev => ({ ...prev, [sc.id]: { passed: data.passed, passCount: data.passCount, failCount: data.failCount } }))
-        }
-        if (data.type === 'run_done') setRunningId(null)
-      },
-      onDone: () => setRunningId(null),
-      onError: (msg) => { message.error(msg || '运行失败'); setRunningId(null) },
-    })
+  // 编辑器整体回调：节点数组落回 api_test_steps
+  const saveNodes = async (nodes) => {
+    if (!scenario) return
+    const sid = scenario.id
+    const prev = scenario.steps || []
+    try {
+      for (const n of nodes) {
+        const patch = nodeToStepPatch(n)
+        if (n.id) await api.put(`${base}/${sid}/steps/${n.id}`, patch)
+        else await api.post(`${base}/${sid}/steps`, patch)
+      }
+      const keep = new Set(nodes.filter(n => n.id).map(n => n.id))
+      for (const st of prev) {
+        if (!keep.has(st.id)) await api.delete(`${base}/${sid}/steps/${st.id}`)
+      }
+      await load()
+    } catch (e) { message.error(e?.message || '保存失败') }
   }
 
-  // 无编排场景时不渲染,交给下方内嵌场景编辑器的空态
-  if (loaded && items.length === 0) return null
+  const createOne = async () => {
+    setCreating(true)
+    try {
+      await api.post(base, { title: caseTitle ? `[接口]${caseTitle}` : '接口场景', priority: 'P2', sourceCaseId: caseId })
+      await load()
+    } catch (e) { message.error(e?.message || '创建失败') }
+    finally { setCreating(false) }
+  }
 
-  const prioColor = { P0: '#f5222d', P1: '#fa8c16', P2: '#0ea5a0', P3: '#86909c' }
+  const run = () => {
+    if (!scenario) return
+    if (!runEnv) { message.warning('请先选择执行环境（需要 BASE_URL）'); return }
+    setRunning(true); setResult(null)
+    api.stream(`${base}/run`, { scenarioIds: [scenario.id], envId: runEnv }, {
+      onChunk: (data) => {
+        if (data.type === 'scenario_done') setResult({ passed: data.passed, passCount: data.passCount, failCount: data.failCount })
+        if (data.type === 'run_done') setRunning(false)
+      },
+      onDone: () => { setRunning(false); load() },
+      onError: (msg) => { message.error(msg || '运行失败'); setRunning(false) },
+    })
+  }
 
   return (
     <Card styles={{ body: { padding: '14px 16px' } }} style={{ marginBottom: 12, border: '1px solid rgba(14,165,160,0.25)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ApiOutlined style={{ color: '#0ea5a0' }} />
-          <span style={{ fontSize: 13, fontWeight: 600, color: '#1d2129' }}>由本用例编排的接口场景</span>
-          <Tag color="cyan" style={{ marginLeft: 2 }}>{items.length}</Tag>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#1d2129' }}>接口场景</span>
+          {scenario && <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c' }}>{scenario.code}</span>}
+          {scenario && <span style={{ fontSize: 12, color: '#86909c' }}>{(scenario.steps || []).length} 个请求</span>}
+          {result && (
+            <Tag color={result.passed ? 'success' : 'error'} style={{ margin: 0 }}>
+              {result.passed ? '通过' : '失败'} {result.passCount ?? 0}/{(result.passCount ?? 0) + (result.failCount ?? 0)}
+            </Tag>
+          )}
         </div>
         <Space size={6}>
           <Select size="small" value={runEnv} onChange={onEnvChange} style={{ width: 170 }}
             popupMatchSelectWidth={false} placeholder="执行环境" options={buildEnvOptions(environments)} />
           <Button size="small" onClick={load} loading={loading}>刷新</Button>
-          <Button size="small" type="primary" ghost icon={<PlusOutlined />}
-            style={{ color: '#0ea5a0', borderColor: '#0ea5a0' }}
-            onClick={async () => {
-              // 手动新建也落到 api_test_scenarios，和同步过来的是同一份数据
-              try {
-                const res = await api.post(base, { title: `${'接口场景'}-${(items.length || 0) + 1}`, priority: 'P2', sourceCaseId: caseId })
-                await load()
-                const nid = res.data?.id
-                if (nid) { setExpandedId(nid); await loadDetail(nid) }
-              } catch (e) { message.error(e?.message || '创建失败') }
-            }}>新建场景</Button>
-          <Button size="small" type="link" onClick={() => navigate(`/projects/${projectId}/api-test`)}>接口测试模块 →</Button>
+          {scenario && (
+            <Button size="small" type="primary" ghost icon={<PlayCircleOutlined />} loading={running}
+              style={{ color: '#0ea5a0', borderColor: '#0ea5a0' }} onClick={run}>运行全部</Button>
+          )}
         </Space>
       </div>
-      {loading && !items.length ? (
-        <div style={{ textAlign: 'center', padding: '16px 0' }}><Spin size="small" /></div>
-      ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          {items.map(sc => {
-            const r = results[sc.id]
-            const isRunning = runningId === sc.id
-            const isOpen = expandedId === sc.id
-            const d = detail[sc.id]
-            return (
-              <div key={sc.id} style={{
-                borderRadius: 8, background: 'rgba(14,165,160,0.04)', border: '1px solid rgba(0,0,0,0.04)',
-              }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', cursor: 'pointer' }}
-                  onClick={() => toggleExpand(sc)}>
-                  <CaretRightOutlined rotate={isOpen ? 90 : 0} style={{ fontSize: 11, color: '#86909c' }} />
-                  <Tag color={prioColor[sc.priority] || 'default'} style={{ margin: 0, minWidth: 30, textAlign: 'center' }}>{sc.priority || '-'}</Tag>
-                  <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c', minWidth: 66 }}>{sc.code || ''}</span>
-                  <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sc.title}</span>
-                  {sc.stepCount > 0 && <Tag style={{ margin: 0, fontSize: 11 }}>{sc.stepCount} 步</Tag>}
-                  {isRunning && <Spin size="small" />}
-                  {!isRunning && r && (
-                    <Tag color={r.passed ? 'success' : 'error'} style={{ margin: 0 }}>
-                      {r.passed ? '通过' : '失败'} {r.passCount ?? 0}/{(r.passCount ?? 0) + (r.failCount ?? 0)}
-                    </Tag>
-                  )}
-                  <Button size="small" type="primary" ghost icon={<PlayCircleOutlined />}
-                    loading={isRunning} disabled={!!runningId && !isRunning}
-                    style={{ color: '#0ea5a0', borderColor: '#0ea5a0' }}
-                    onClick={(e) => { e.stopPropagation(); runOne(sc) }}>运行</Button>
-                </div>
 
-                {isOpen && (
-                  <div style={{ borderTop: '1px solid rgba(0,0,0,0.06)', background: '#fff' }}>
-                    {!d ? (
-                      <div style={{ textAlign: 'center', padding: '20px 0' }}><Spin size="small" /></div>
-                    ) : (
-                      // 用手动那套 apifox 式编辑器渲染。同步来的和手动建的是同一份数据
-                      // （都在 api_test_scenarios），所以界面也必须是同一个。
-                      <ApiStepList
-                        steps={scenarioToNodes(d.steps)}
-                        environments={environments}
-                        runEnv={runEnv}
-                        onChange={(nodes) => saveNodes(sc.id, d, nodes)}
-                      />
-                    )}
-                  </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
+      {loading && !scenario ? (
+        <div style={{ textAlign: 'center', padding: '24px 0' }}><Spin size="small" /></div>
+      ) : !scenario ? (
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="本用例还没有接口场景">
+          <Button type="primary" icon={<PlusOutlined />} loading={creating} onClick={createOne}
+            style={{ background: '#0ea5a0', borderColor: '#0ea5a0' }}>创建接口场景</Button>
+        </Empty>
+      ) : (
+        <ApiStepList
+          steps={scenarioToNodes(scenario.steps)}
+          environments={environments}
+          runEnv={runEnv}
+          onChange={saveNodes}
+        />
       )}
     </Card>
   )
@@ -2119,7 +2059,7 @@ export default function CaseDetail() {
               <>
                 <LinkedApiScenarios
                   projectId={projectId} branchId={branchId} caseId={caseId}
-                  active={activeTab === 'api'}
+                  active={activeTab === 'api'} caseTitle={title}
                   environments={environments} runEnv={runEnv} onEnvChange={setRunEnv}
                   onCountChange={setLinkedApiCount}
                 />

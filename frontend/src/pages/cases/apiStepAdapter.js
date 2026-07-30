@@ -85,7 +85,9 @@ export function nodeToStepPatch(node) {
   } else if (!body) body = null
 
   return {
-    name: node.action || '',
+    // 后端 name 有 min_length=1；编辑器新建的节点 action 是空的，这里兜个默认名，
+    // 否则一点「添加」就弹 "name: String should have at least 1 character"
+    name: (node.action || '').trim() || `请求${node.seq || ''}`.trim() || '新请求',
     method: node.method || 'GET',
     url: node.url || '',
     headers: Object.keys(headers).length ? headers : null,
