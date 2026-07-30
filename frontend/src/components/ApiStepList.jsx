@@ -1065,6 +1065,18 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
       || /^\{\{\s*base_url\s*\}\}/i.test(url) || /^\$\{\s*BASE_URL\s*\}/i.test(url)
   }
 
+  // 输入框展示用：摘掉开头的 BASE_URL 占位符，只留路径（对齐 apifox 的做法）
+  const BASE_PREFIX_RE = /^(\{\{\s*base_url\s*\}\}|\$\{\s*BASE_URL\s*\})/i
+  const rawUrl = step.url || ''
+  const isAbsolute = /^https?:\/\//i.test(rawUrl)
+  const urlPathOnly = isAbsolute ? rawUrl : rawUrl.replace(BASE_PREFIX_RE, '')
+  // 保存时补回前缀：原来有前缀就还原，绝对地址原样，其它默认加 ${BASE_URL}
+  const restoreBase = (path) => {
+    if (/^https?:\/\//i.test(path)) return path      // 用户要打别的地址
+    const m = rawUrl.match(BASE_PREFIX_RE)
+    return (m ? m[0] : '${BASE_URL}') + path
+  }
+
   // 把两种写法的 BASE_URL 占位符都换成所选环境的实际地址
   const subBase = (url, base) => (url || '')
     .replace(/\{\{\s*base_url\s*\}\}/gi, base)
@@ -1210,20 +1222,23 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
             {baseUrl && (
               // 只读的环境前置标记（不可编辑）。URL 里已写了 ${BASE_URL} 时不再拼接，
               // 只作提示——但地址仍要能看到，否则不知道这条会打到哪个环境。
-              <Tooltip title={urlHasOwnBase(step.url)
-                ? `当前环境前置 URL：${baseUrl}（URL 里的 \${BASE_URL} 执行时替换为它）`
-                : `当前环境前置 URL：${baseUrl}（将拼在下面的路径前面）`}>
+              <Tooltip title={isAbsolute
+                ? `该步骤填的是完整地址，忽略环境前置 URL（${baseUrl}）`
+                : `当前环境前置 URL：${baseUrl}（只读，随所选环境变化；要打别的地址请直接填完整 http(s) 地址）`}>
                 <span style={{ fontSize: 11, color: '#86909c', background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.08)', borderRight: 'none',
                   borderRadius: '8px 0 0 8px', padding: '3px 8px', whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis',
-                  display: 'inline-block', lineHeight: '16px', fontFamily: 'monospace', flexShrink: 0, cursor: 'default', userSelect: 'none' }}>
+                  display: 'inline-block', lineHeight: '16px', fontFamily: 'monospace', flexShrink: 0, cursor: 'default', userSelect: 'none',
+                  textDecoration: isAbsolute ? 'line-through' : 'none', opacity: isAbsolute ? 0.45 : 1 }}>
                   <GlobalOutlined style={{ marginRight: 4, fontSize: 10 }} />{baseUrl}
                 </span>
               </Tooltip>
             )}
-            <Input size="small" value={step.url || ''} style={{ fontFamily: 'monospace', fontSize: 12, borderRadius: baseUrl ? '0 4px 4px 0' : undefined }}
+            <Input size="small" value={urlPathOnly} style={{ fontFamily: 'monospace', fontSize: 12, borderRadius: baseUrl ? '0 4px 4px 0' : undefined }}
               placeholder="/api/auth/login"
               onChange={e => {
-                const v = e.target.value
+                // 输入框里只编辑路径；${BASE_URL} 前缀由 restoreBase 补回，
+                // 用户删不掉也打不错。要打到别的地址就直接填完整 http(s) URL。
+                const v = restoreBase(e.target.value)
                 if (v.includes('?')) syncParamsFromUrl(v)
                 else up('url', v)
               }}

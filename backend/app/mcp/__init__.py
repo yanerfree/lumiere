@@ -35,6 +35,21 @@ mcp = FastMCP(
    ①场景变量 ${名字}/${SV_名字}  ②项目级全局引用（${BASE_URL}/账号/token，见 tb_list_global_data）
    ③步骤间提取物（上一步 variables_extract）。tb_sync_orchestrated_scenario 会硬拦截悬空 ${x}。
 
+   ④-1 【别把环境变量镜像成场景变量】环境变量（BASE_URL/LOGIN_URL/账号密码等）执行时
+   由平台直接注入，步骤里写 ${BASE_URL} 就能用，**不需要**再建一个 kind=global_ref 的
+   同名场景变量。多建一层只是噪音，还让人以为值存在用例里。场景变量只用来放
+   「这条用例自己的数据」（如本次要创建的服务名 svcName）。
+
+   ④-2 【依赖的前置资源不能写死 UUID】编排链常依赖环境里已存在的资源
+   （上游/负载 upstreamId、隔离上下文 isolationId、被订阅的应用 appId……）。
+   把这些 UUID 存成 kind=literal 场景变量是**错的**——换环境或该资源被删就全挂，
+   而且看不出这条链依赖什么。两条正确路线，二选一：
+     · 该资源本来就该长期存在 → tb_upsert_automation_resource 登记为项目级前置数据
+       （带 exists_check 预检、create_def 缺失时补建、keep 保留），步骤里 ${资源名} 引用；
+     · 该资源属于本次测试的自建数据 → 在场景开头加步骤**自己创建**、variables_extract
+       提取 id、末尾加清理步骤删掉（自建自删，可重复跑）。
+   判断标准：这条链换到一个干净环境还能不能跑通？不能就说明前置数据没交代清楚。
+
 ⑤ 【默认先活体验证，别凭文档编】只要能连上被测系统（有可访问的环境地址和账号），
    就**必须真的把接口调一遍**把流程跑通——拿到真实响应结构、真实字段名、真实状态码，
    再据此回推。不要读完接口文档就直接生成。
@@ -399,6 +414,12 @@ _register(
     sync.list_scenario_variables,
     name="tb_list_scenario_variables",
     description="读取用例的所有场景变量（name/kind/value_template + 如何引用）。参数: case_id(用例UUID)",
+)
+
+_register(
+    sync.upsert_automation_resource,
+    name="tb_upsert_automation_resource",
+    description="【前置数据·别写死UUID】把「场景依赖但不该由场景创建」的资源(上游/负载、隔离上下文、被订阅应用等)登记为项目级自动化数据：跑前预检存在性、缺失可按定义补建、keep 长期保留。步骤里用 ${资源名} 引用，替代写死 UUID。参数: project_id, name(引用名), exists_check(必填,{method,url,match,extract}), create_def(可选,缺失时怎么建), description, keep(默认true)",
 )
 
 _register(

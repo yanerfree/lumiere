@@ -44,6 +44,13 @@ BUILTIN_VARS = {
 _KINDS = ("literal", "random", "global_ref", "template")
 
 _REF_RE = re.compile(r"\$\{(\w+)\}")             # 步骤插值语法 ${name}
+_UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
+# 这些键由环境变量直接注入，镜像成场景变量纯属多余
+_ENV_MIRROR_KEYS = {
+    "BASE_URL", "LOGIN_URL", "AUTH_TOKEN", "TOKEN",
+    "ADMIN_USERNAME", "ADMIN_PASSWORD", "TENANT_USERNAME", "TENANT_PASSWORD",
+    "ADMIN_USER", "ADMIN_PASS",
+}
 _SECRET_RE = re.compile(r"(PASSWORD|PWD|TOKEN|SECRET|KEY)", re.I)
 # 明显是结构值/枚举/路径，不该被当成「写死的业务数据」误报
 _STRUCT_ENUM = {
@@ -134,7 +141,24 @@ _SPEC_VARIABLES = """## 变量三层模型（回推纪律的基准，务必分�
 - ❌ `"name": "test-service-001"`（写死业务名——换环境/重复跑必冲突）
 - ❌ `"Authorization": "Bearer eyJhbGci..."`（写死 token）
 
-内置可直接用、不用声明：RANDOM_8、TIMESTAMP、SV_RUN_ID，以及 Authorization 由平台按登录态自动注入（无需手写 token 步骤，除非要测鉴权本身）。"""
+内置可直接用、不用声明：RANDOM_8、TIMESTAMP、SV_RUN_ID，以及 Authorization 由平台按登录态自动注入（无需手写 token 步骤，除非要测鉴权本身）。
+
+### 两个常见错误（很多人踩，务必避开）
+
+**① 别把环境变量镜像成场景变量。** BASE_URL / LOGIN_URL / 账号密码这些执行时由平台
+直接注入，步骤里写 `${BASE_URL}` 就能用，不要再建 kind=global_ref 的同名场景变量——
+纯噪音。场景变量只放「这条用例自己的数据」，比如本次要创建的服务名。
+
+**② 依赖的前置资源不能写死 UUID。** 像 upstreamId / isolationId / 被订阅的 appId
+这类"环境里已经存在的资源"，存成 `kind=literal` + 一个真实 UUID 是错的：
+换环境或资源被删就全挂，且看不出这条链依赖什么。二选一：
+
+| 情况 | 做法 |
+|---|---|
+| 该资源本该长期存在（基础数据） | `tb_upsert_automation_resource` 登记为项目级前置数据，带 exists_check（跑前预检）+ create_def（缺失时补建）+ keep=true；步骤里 `${资源名}` 引用 |
+| 该资源属于本次测试的数据 | 场景开头加步骤**自己创建** → variables_extract 提取 id → 末尾加清理步骤删掉（自建自删，可重复跑） |
+
+自检标准：**这条链换到一个干净环境还能不能跑通？** 跑不通就说明前置数据没交代清楚。"""
 
 _SPEC_API_SCENARIO = """## 用例编排的接口场景（tb_sync_orchestrated_scenario）
 
@@ -423,6 +447,7 @@ async def upsert_scenario_variables(
     variables = _loads(variables)
     if not isinstance(variables, list):
         return {"error": "variables 必须是数组"}
+    antipatterns: list[dict] = []
 
     created, updated, errors = [], [], []
     for item in variables:
@@ -437,6 +462,24 @@ async def upsert_scenario_variables(
         kind = item.get("kind") or "literal"
         if kind not in _KINDS:
             kind = "literal"
+
+        val = str(item.get("value_template") or "")
+        # 反模式①：literal + 真实 UUID —— 那是"环境里已存在的资源 id"，换环境/资源被删就全挂
+        if kind == "literal" and _UUID_RE.fullmatch(val.strip()):
+            antipatterns.append({
+                "name": name, "issue": "literal_uuid",
+                "hint": f"{name} 存的是一个真实资源 UUID。要么用 tb_upsert_automation_resource "
+                        "登记为项目级前置数据（带 exists_check/create_def），要么在场景开头"
+                        "自己创建该资源并 variables_extract 提取 id、末尾清理。",
+            })
+        # 反模式②：把环境变量镜像成场景变量 —— 步骤里直接 ${BASE_URL} 就能用
+        if kind == "global_ref" and val.strip().upper() in _ENV_MIRROR_KEYS:
+            antipatterns.append({
+                "name": name, "issue": "env_mirror",
+                "hint": f"{name} 只是环境键 {val} 的镜像。环境变量执行时由平台直接注入，"
+                        "步骤里写 ${" + val.strip() + "} 即可，这个场景变量是多余的。",
+            })
+
         existing = (await session.execute(
             select(ScenarioVariable).where(ScenarioVariable.case_id == cid, ScenarioVariable.name == name)
         )).scalar_one_or_none()
@@ -464,8 +507,11 @@ async def upsert_scenario_variables(
         "created": created,
         "updated": updated,
         "errors": errors,
+        "antipatterns": antipatterns,
         "message": f"新增 {len(created)}、更新 {len(updated)} 个场景变量"
-                   + (f"，{len(errors)} 个失败" if errors else ""),
+                   + (f"，{len(errors)} 个失败" if errors else "")
+                   + (f"。⚠ {len(antipatterns)} 处反模式（见 antipatterns，已入库但建议改）"
+                      if antipatterns else ""),
     }
 
 
@@ -547,4 +593,90 @@ async def list_global_data(session: AsyncSession, project_id: str) -> dict:
         "automationResources": resources,
         "usage": "键名可用于：场景变量 kind=global_ref(value_template=键名)，或步骤 ${键名}。"
                  "凭证类值已脱敏(***)，运行时由平台按所选环境真实注入。",
+    }
+
+
+# ─────────────────────────────────────────────────────────────
+# 5. 回推：项目级前置资源（自动化数据）
+# ─────────────────────────────────────────────────────────────
+
+async def upsert_automation_resource(
+    session: AsyncSession,
+    project_id: str,
+    name: str,
+    exists_check: Any = None,
+    create_def: Any = None,
+    description: str | None = None,
+    keep: bool = True,
+) -> dict:
+    """把「场景依赖但不该由场景创建」的前置资源登记为项目级自动化数据。
+
+    解决的问题：编排链常依赖环境里已有的资源（上游/负载、隔离上下文、被订阅的应用……）。
+    如果把它们的 UUID 写成 literal 场景变量，换环境或该资源被删就全挂，而且看不出
+    这条链到底依赖什么。登记成自动化数据后：
+      · 跑自动化前会预检其存在性（exists_check）
+      · 缺失时可按 create_def 补建（需用户确认）
+      · keep=true 表示长期保留、不被用例的自建自删逻辑清掉
+    步骤里用 ${资源名} 或场景变量 kind=global_ref 引用，不再写死 UUID。
+
+    exists_check 形如 {"method":"GET","url":"/api/v1/upstreams",
+                      "match":{"field":"name","equals":"default-upstream"},
+                      "extract":{"upstreamId":"data.items[0].id"}}
+    create_def   形如 {"method":"POST","url":"/api/v1/upstreams","body":{...}}
+    """
+    from app.models.automation_resource import AutomationResource
+
+    try:
+        pid = uuid.UUID(project_id)
+    except (ValueError, AttributeError):
+        return {"error": f"project_id 不是合法 UUID: {project_id}"}
+    if not name or not name.strip():
+        return {"error": "name 必填（步骤里用 ${name} 引用它）"}
+
+    exists_check = _loads(exists_check)
+    create_def = _loads(create_def)
+    if not exists_check:
+        return {
+            "error": "exists_check 必填——没有存在性检查就没法预检，等于又回到写死。",
+            "hint": '形如 {"method":"GET","url":"/api/v1/upstreams",'
+                    '"match":{"field":"name","equals":"default-upstream"},'
+                    '"extract":{"upstreamId":"data.items[0].id"}}',
+        }
+
+    existing = (await session.execute(
+        select(AutomationResource).where(
+            AutomationResource.project_id == pid,
+            AutomationResource.name == name.strip(),
+        )
+    )).scalars().first()
+
+    if existing:
+        existing.exists_check = exists_check
+        if create_def is not None:
+            existing.create_def = create_def
+        if description:
+            existing.description = description
+        existing.keep = keep
+        action = "updated"
+        res = existing
+    else:
+        res = AutomationResource(
+            project_id=pid, name=name.strip(),
+            exists_check=exists_check, create_def=create_def,
+            description=description, keep=keep,
+        )
+        session.add(res)
+        action = "created"
+
+    await session.commit()
+    await session.refresh(res)
+    return {
+        "status": "ok",
+        "action": action,
+        "name": res.name,
+        "keep": res.keep,
+        "hasCreateDef": res.create_def is not None,
+        "message": f"已{'更新' if action == 'updated' else '登记'}前置资源「{res.name}」。"
+                   f"步骤里用 ${{{res.name}}} 引用，别再写死 UUID。"
+                   + ("" if res.create_def else " ⚠ 未提供 create_def：缺失时只能报错，不能自动补建。"),
     }
