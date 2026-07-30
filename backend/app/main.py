@@ -23,6 +23,7 @@ from app.api.debug import router as debug_router
 from app.api.api_collections import router as api_collections_router
 from app.api.llm_mock import router as llm_mock_router
 from app.api.api_mock import router as api_mock_router
+from app.api.proxy_probe import router as proxy_probe_router
 from app.api.ai import router as ai_router, config_router as ai_config_router
 from app.api.ai_config import router as ai_provider_router, project_router as project_ai_config_router
 from app.api.ai_capabilities import router as ai_capabilities_router
@@ -185,6 +186,13 @@ async def _restore_mock_services():
     except Exception as e:
         _startup_logger.warning("API Mock 自动恢复失败: %s", e)
     try:
+        from app.services.proxy_probe_manager import proxy_probe
+        if proxy_probe._load_state():
+            _startup_logger.info("自动恢复代理观测监听器 (端口 %d)", proxy_probe.port)
+            await proxy_probe.start()
+    except Exception as e:
+        _startup_logger.warning("代理观测监听器自动恢复失败: %s", e)
+    try:
         if mcp_mock_server._load_state():
             _startup_logger.info("自动恢复 MCP Mock 服务 (端口 %d)", mcp_mock_server.port)
             await mcp_mock_server.start()
@@ -266,6 +274,7 @@ app.include_router(debug_router)
 app.include_router(api_collections_router)
 app.include_router(llm_mock_router)
 app.include_router(api_mock_router)
+app.include_router(proxy_probe_router)
 app.include_router(ai_router)
 app.include_router(ai_config_router)
 app.include_router(ai_provider_router)

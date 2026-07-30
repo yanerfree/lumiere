@@ -6,6 +6,7 @@ import {
   SettingOutlined, UserOutlined, FileSearchOutlined, ApiOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, BellOutlined, RobotOutlined,
   CloudServerOutlined, ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
+  NodeIndexOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
 } from '@ant-design/icons'
 import { api } from './utils/request'
@@ -27,6 +28,7 @@ import ChannelConfig from './pages/settings/ChannelConfig'
 import ApiManagement from './pages/apis/ApiManagement'
 import LlmMock from './pages/llm-mock/LlmMock'
 import ApiMock from './pages/api-mock/ApiMock'
+import ProxyProbe from './pages/proxy-probe/ProxyProbe'
 import McpMock from './pages/mcp-mock/McpMock'
 import OAuth2Mock from './pages/oauth2-mock/OAuth2Mock'
 import Toolbox from './pages/toolbox/Toolbox'
@@ -141,6 +143,7 @@ function AppLayout() {
         { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient') },
         { key: '/tools/load-test', icon: <ThunderboltOutlined />, label: t('menu.loadTest') },
         { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox') },
+        { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: '代理观测' },
       ],
     },
   ]
@@ -281,6 +284,7 @@ function AppLayout() {
             <Route path="/settings/logs" element={<AuditLogs />} />
             <Route path="/tools/llm-mock" element={<LlmMock />} />
             <Route path="/tools/api-mock" element={<ApiMock />} />
+            <Route path="/tools/proxy-probe" element={<ProxyProbe />} />
             <Route path="/tools/mcp-mock" element={<McpMock />} />
             <Route path="/tools/oauth2-mock" element={<OAuth2Mock />} />
             <Route path="/tools/toolbox" element={<Toolbox />} />
