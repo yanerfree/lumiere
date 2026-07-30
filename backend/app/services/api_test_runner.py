@@ -154,6 +154,27 @@ def _resolve_obj(obj, env: dict):
     return obj
 
 
+def _unresolved_refs(*objs) -> list[str]:
+    """收集解析后仍残留的 ${NAME}——即没有任何来源可解析的变量名。"""
+    names: list[str] = []
+
+    def walk(node):
+        if isinstance(node, str):
+            for n in re.findall(r'\$\{(\w+)\}', node):
+                if n not in names:
+                    names.append(n)
+        elif isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    for o in objs:
+        walk(o)
+    return names
+
+
 def _extract_value(body, path: str):
     """按 JSONPath-lite 从响应体取值，支持点号 + 数组下标：
     data.token / data.isolation_rules[0].id / data.items[0] / data[0].name / [0].id
@@ -255,6 +276,24 @@ async def run_single_step(
     url = _resolve_variables(step.url, env)
     headers = _resolve_obj(step.headers or {}, env)
     body = _resolve_obj(step.body, env)
+
+    # 变量没解析出来时 _resolve_variables 会原样留下 ${NAME}，直接发出去只会得到
+    # 一个莫名其妙的 404/422，看不出是"环境/场景变量没配"。这里发之前就拦下来说清楚。
+    unresolved = _unresolved_refs(url, headers, body)
+    if unresolved:
+        names = "、".join(f"${{{n}}}" for n in unresolved)
+        return StepResult(
+            step_id=str(step.id), step_name=step.name,
+            method=step.method, url=step.url, status="fail", duration=0,
+            error=(
+                f"变量未解析：{names}。请求未发出。\n"
+                "请检查：①所选执行环境是否配了这些键（环境管理）"
+                "②是否该由更早的步骤 variables_extract 提取（顺序对不对）"
+                "③是否该在用例「场景变量」里定义。"
+            ),
+            request_data={"method": step.method, "url": url,
+                          "headers": _mask_authorization(headers), "body": body},
+        )
 
     if "Authorization" not in headers:
         if "AUTH_TOKEN" in env:
