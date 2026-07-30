@@ -42,7 +42,13 @@ mcp = FastMCP(
      质量明显更差。不能因为省事就走它。
    · 判断依据是"能不能连上"，不是"手上有没有文档"。有文档但环境也能连 → 仍然要活体验证。
 
-⑥ 【动库之前先报方案，等用户确认】调用任何写库工具（tb_create_case /
+⑥ 【回推可以重推，但标题要稳定】tb_sync_orchestrated_scenario 按
+   (source_case_id + title) 去重：同一用例下标题相同 = 覆盖那条（步骤整体替换、code 不变），
+   标题不同 = 新建一条。所以补完步骤要重推时，**标题必须和上次完全一致**，否则会在
+   用例详情里堆出多条几乎同名的场景，人分不清哪条才是最新的。
+   返回值里的 replacedExisting 会告诉你这次是覆盖还是新建。
+
+⑦ 【动库之前先报方案，等用户确认】调用任何写库工具（tb_create_case /
    tb_sync_orchestrated_scenario / tb_upsert_scenario_variables / tb_create_api_node /
    tb_create_scenario_task）之前，先用一段话向用户说明：准备建几条、分别是什么、
    用哪些工具、怎么验证。**得到确认再执行**。宁可多问一句，也别批量写错再回头清理。

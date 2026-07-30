@@ -74,16 +74,40 @@ async def _get_or_create_folder(
     return sub_folder.id, new_modules, new_submodules
 
 
+def _module_tag(module: str) -> str:
+    """模块名 → case_code 里的模块段（大写字母数字，≤8 位）。
+
+    英文/数字直接用；含中文则取拼音首字母。都取不出来才退回 "MOD"。
+    """
+    import re
+
+    tag = (module or "").upper().replace("/", "-").replace(" ", "")
+    if re.match(r"^[A-Z0-9_-]+$", tag) and tag:
+        return tag[:8]
+
+    try:
+        from pypinyin import Style, lazy_pinyin
+
+        initials = "".join(lazy_pinyin(module, style=Style.FIRST_LETTER)).upper()
+        tag = re.sub(r"[^A-Z0-9]", "", initials)
+    except Exception:
+        tag = ""
+    if not tag:
+        tag = re.sub(r"[^A-Z0-9]", "", (module or "").upper())
+    return (tag or "MOD")[:8]
+
+
 async def _next_case_code(
     session: AsyncSession, branch_id: uuid.UUID, module: str
 ) -> str:
-    """生成下一个 case_code: TC-{MODULE}-{seq5}。module 含非 ASCII 字符时用 SVC 缩写。"""
-    import re
-    module_tag = module.upper().replace("/", "-").replace(" ", "")
-    if not re.match(r'^[A-Z0-9_-]+$', module_tag):
-        module_tag = re.sub(r'[^A-Z0-9]', '', module_tag) or "SVC"
-        if len(module_tag) > 8:
-            module_tag = module_tag[:8]
+    """生成下一个 case_code: TC-{MODULE}-{seq5}。
+
+    中文模块名取拼音首字母（订阅管理→DYGL、服务管理→FWGL）。
+    此前是把非 A-Z0-9 字符全 sub 掉，中文模块名会被清空而落到硬编码兜底 "SVC"——
+    结果所有中文模块都叫 TC-SVC-，既看不出属于哪个模块，还共用同一条编号序列
+    （订阅管理和服务管理互相抢号）。
+    """
+    module_tag = _module_tag(module)
     prefix = f"TC-{module_tag}-"
 
     # 查询当前分支下该模块的最大序号

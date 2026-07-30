@@ -24,6 +24,7 @@ import re
 import uuid
 from typing import Any
 
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import func as sa_func
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -285,17 +286,18 @@ async def sync_orchestrated_scenario(
             "allowedSample": sorted(allow)[:30],
         }
 
-    # ── 建场景（code = 分支内 AT-#### max+1；created_by 取真实 active 用户）──
-    max_code = (await session.execute(
-        select(sa_func.max(ApiTestScenario.code)).where(ApiTestScenario.branch_id == bid)
-    )).scalar()
-    next_num = 1
-    if max_code:
-        try:
-            next_num = int(max_code.split("-")[1]) + 1
-        except (IndexError, ValueError):
-            pass
-    code = f"AT-{next_num:04d}"
+    # ── 幂等：同一用例 + 同一标题视为同一条场景，重推=覆盖而非再建一条 ──
+    # 活体验证常要反复调（第一版步骤不全→补几步再推），没有这层去重就会
+    # 在用例详情里堆出多条同名场景，人根本分不出哪条是最新的。
+    existing = None
+    if scid:
+        existing = (await session.execute(
+            select(ApiTestScenario).where(
+                ApiTestScenario.branch_id == bid,
+                ApiTestScenario.source_case_id == scid,
+                ApiTestScenario.title == title,
+            )
+        )).scalars().first()
 
     folder_id = None
     if folder_name:
@@ -312,20 +314,47 @@ async def sync_orchestrated_scenario(
     if not creator:
         return {"error": "找不到可用的用户来记录 created_by（需要至少一个 active 用户）"}
 
-    scenario = ApiTestScenario(
-        project_id=pid,
-        branch_id=bid,
-        code=code,
-        title=title,
-        priority=priority,
-        source="mcp",
-        status="draft",
-        folder_id=folder_id,
-        description=description,
-        source_case_id=scid,
-        created_by=creator,
-    )
-    session.add(scenario)
+    replaced = False
+    if existing is not None:
+        # 覆盖：保留原 code（外部可能已引用），换掉步骤与元信息
+        scenario = existing
+        scenario.priority = priority
+        scenario.source = "mcp"
+        if folder_id:
+            scenario.folder_id = folder_id
+        if description:
+            scenario.description = description
+        await session.execute(
+            sa_delete(ApiTestStep).where(ApiTestStep.scenario_id == scenario.id)
+        )
+        code = scenario.code
+        replaced = True
+    else:
+        # code = 分支内 AT-#### max+1
+        max_code = (await session.execute(
+            select(sa_func.max(ApiTestScenario.code)).where(ApiTestScenario.branch_id == bid)
+        )).scalar()
+        next_num = 1
+        if max_code:
+            try:
+                next_num = int(max_code.split("-")[1]) + 1
+            except (IndexError, ValueError):
+                pass
+        code = f"AT-{next_num:04d}"
+        scenario = ApiTestScenario(
+            project_id=pid,
+            branch_id=bid,
+            code=code,
+            title=title,
+            priority=priority,
+            source="mcp",
+            status="draft",
+            folder_id=folder_id,
+            description=description,
+            source_case_id=scid,
+            created_by=creator,
+        )
+        session.add(scenario)
     await session.flush()
 
     for i, st in enumerate(norm):
@@ -355,7 +384,9 @@ async def sync_orchestrated_scenario(
         "sourceCaseId": str(scid) if scid else None,
         "scenarioVariablesLinked": scenario_var_names,
         "hardcodeWarnings": warnings,
-        "message": f"已回推场景 {code}（{len(norm)} 步）"
+        "replacedExisting": replaced,
+        "message": (f"已覆盖同名场景 {code}" if replaced else f"已新建场景 {code}")
+                   + f"（{len(norm)} 步）"
                    + (f"，⚠ {len(warnings)} 处疑似写死（仅提醒，已入库）" if warnings else "，无写死告警"),
     }
 

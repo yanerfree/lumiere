@@ -432,7 +432,7 @@ function generateUiCode(steps, title) {
 // 「编排为接口测试」把该用例的流量写到分支级 api_test_scenarios 表(source_case_id=caseId),
 // 与用例内嵌的 apiScenario 是两套存储。这个面板按 source_case_id 把编排出来的场景拉出来展示 +
 // 直接运行 + 跳转接口测试模块,解决「编排成功但接口测试 tab 什么也没有」。
-function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnvChange, environments }) {
+function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnvChange, environments, onCountChange }) {
   const navigate = useNavigate()
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(false)
@@ -445,10 +445,12 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
     setLoading(true)
     try {
       const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests?source_case_id=${caseId}`)
-      setItems(res.data || [])
+      const list = res.data || []
+      setItems(list)
+      onCountChange?.(list.length)   // 告知下方内嵌编辑器，避免它喊「暂无接口测试场景」
     } catch { /* ignore */ }
     finally { setLoading(false); setLoaded(true) }
-  }, [projectId, branchId, caseId])
+  }, [projectId, branchId, caseId, onCountChange])
 
   // 每次该 tab 被激活时刷新(编排是在 UI tab 触发的,切回来要能看到最新结果)
   useEffect(() => { if (active) load() }, [active, load])
@@ -531,7 +533,7 @@ function ScenarioEditor({
   onImportTemplate, manualSteps, caseTitle,
   projectId, branchId, caseId,
   environments, runEnv, onEnvChange,
-  onScriptSaved,
+  onScriptSaved, linkedCount = 0,
 }) {
   const extraCol = type === 'api' ? 'apiEndpoint' : 'uiTarget'
   const extraLabel = type === 'api' ? '接口端点' : '页面/元素'
@@ -795,10 +797,18 @@ function ScenarioEditor({
       ) : type !== 'api' ? (
         <Empty description="该用例没有手动测试步骤，请先在「手动测试步骤」Tab 添加步骤" image={Empty.PRESENTED_IMAGE_SIMPLE} />
       ) : (
-        <Empty description="暂无接口测试场景" image={Empty.PRESENTED_IMAGE_SIMPLE}>
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description={linkedCount > 0
+            // 上方已列出回推的编排场景，这里再说「暂无」会自相矛盾——
+            // 两者不是一回事：上面是独立的接口场景，这里是用例自带的内嵌场景
+            ? <span>上方已有 <b>{linkedCount}</b> 条由本用例编排的接口场景。<br />
+                <span style={{ fontSize: 12, color: '#86909c' }}>这里是用例自带的内嵌场景（另一份，可选），一般不用再建</span></span>
+            : '暂无接口测试场景'}
+        >
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
             <Space>
-              <Button type="primary" icon={<PlusOutlined />} onClick={() => initScenario(false)}>创建空白场景</Button>
+              <Button type={linkedCount > 0 ? 'default' : 'primary'} icon={<PlusOutlined />} onClick={() => initScenario(false)}>创建空白场景</Button>
               {manualSteps?.length > 0 && (
                 <Button icon={<CopyOutlined />} onClick={() => initScenario(true)}>从手动步骤生成</Button>
               )}
@@ -1645,6 +1655,7 @@ export default function CaseDetail() {
   const [runResult, setRunResult] = useState(null)
   const [runEnv, setRunEnv] = useEnv(projectId)
   const [hasActiveScript, setHasActiveScript] = useState(false)
+  const [linkedApiCount, setLinkedApiCount] = useState(0)   // 回推的编排接口场景条数
   const [scriptRuns, setScriptRuns] = useState([])
   const [scriptRunsLoading, setScriptRunsLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('manual')
@@ -2029,6 +2040,7 @@ export default function CaseDetail() {
                   projectId={projectId} branchId={branchId} caseId={caseId}
                   active={activeTab === 'api'}
                   environments={environments} runEnv={runEnv} onEnvChange={setRunEnv}
+                  onCountChange={setLinkedApiCount}
                 />
                 <ScenarioEditor
                   scenario={apiScenario} setScenario={setApiScenario}
@@ -2040,6 +2052,7 @@ export default function CaseDetail() {
                   projectId={projectId} branchId={branchId} caseId={caseId}
                   environments={environments} runEnv={runEnv} onEnvChange={setRunEnv}
                   onScriptSaved={() => setHasActiveScript(true)}
+                  linkedCount={linkedApiCount}
                 />
               </>
             )},
