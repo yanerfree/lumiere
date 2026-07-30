@@ -123,17 +123,48 @@ def headers_text(request_line: str, headers) -> str:
     return "\n".join(out)
 
 
-def preview_text(raw: bytes, truncated: bool) -> str:
+def hexdump(raw: bytes, limit: int = 128) -> str:
+    out = []
+    for i in range(0, min(len(raw), limit), 16):
+        chunk = raw[i:i + 16]
+        hexs = " ".join("%02x" % b for b in chunk)
+        texts = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+        out.append("%04x  %-47s  %s" % (i, hexs, texts))
+    if len(raw) > limit:
+        out.append("…（仅显示前 %d 字节，共 %d 字节）" % (limit, len(raw)))
+    return "\n".join(out)
+
+
+def describe_stream(raw: bytes, truncated: bool) -> tuple[str, str]:
     """
-    请求体/响应体预览。二进制或 TLS 加密内容不硬塞成乱码，直接说明是什么。
+    判定一段字节到底是什么，别只说「二进制或已加密」——那等于没说。
+
+    返回 (类型, 给人看的文本)。类型: empty / tls / http / text / binary
+    TLS 是可以确定判定的：TLS record 第一字节 0x16(handshake) + 第二字节 0x03(版本 3.x)。
     """
     if not raw:
-        return ""
+        return "empty", ""
+    if raw[0] == 0x16 and len(raw) >= 3 and raw[1] == 0x03:
+        ver = {0x00: "SSL 3.0", 0x01: "TLS 1.0", 0x02: "TLS 1.1",
+               0x03: "TLS 1.2", 0x04: "TLS 1.3"}.get(raw[2], "0x%02x" % raw[2])
+        return "tls", (
+            "确认是 TLS 加密流量：首字节 0x16 = TLS handshake，版本字段 0x03%02x（%s）。\n"
+            "本工具不做中间人、不解密，所以隧道里的内容看不到 —— 但「有没有经过代理」"
+            "已经由这条记录本身回答了。\n共 %d 字节%s。\n\n前若干字节（十六进制）：\n%s"
+            % (raw[2], ver, len(raw), "（预览已截断）" if truncated else "", hexdump(raw)))
+    starts = (b"GET ", b"POST ", b"PUT ", b"HEAD ", b"DELETE ", b"OPTIONS ",
+              b"PATCH ", b"CONNECT ", b"HTTP/")
+    if any(raw.startswith(s) for s in starts):
+        return "http", (raw.decode("utf-8", "replace")
+                        + ("\n…（预览已截断）" if truncated else ""))
     printable = sum(1 for b in raw[:512] if 9 <= b <= 13 or 32 <= b < 127)
-    if printable < len(raw[:512]) * 0.85:
-        return "（二进制或已加密内容，%d 字节，本工具不解密）" % len(raw)
-    text = raw.decode("utf-8", "replace")
-    return text + ("\n…（预览已截断）" if truncated else "")
+    if printable >= len(raw[:512]) * 0.85:
+        return "text", (raw.decode("utf-8", "replace")
+                        + ("\n…（预览已截断）" if truncated else ""))
+    return "binary", (
+        "不是 TLS（首字节 0x%02x，TLS 握手应为 0x16），也不像文本 —— 可能是别的二进制协议。\n"
+        "共 %d 字节%s。\n\n前若干字节（十六进制）：\n%s"
+        % (raw[0], len(raw), "（预览已截断）" if truncated else "", hexdump(raw)))
 
 
 def detect_lan_ip() -> str:
@@ -258,13 +289,15 @@ class ProxyProbeManager:
 
     # ------------------------------------------------------------------ 记录
     def _add_record(self, kind: str, target: str, user: str | None, has_auth: bool,
-                    password: str | None = None, auth_raw: str | None = None) -> dict:
+                    password: str | None = None, auth_raw: str | None = None,
+                    client: str = "") -> dict:
         self._seq += 1
         rec = {
             "id": self._seq,
             "time": time.strftime("%H:%M:%S"),
             "kind": kind,
             "target": target,
+            "client": client,       # 谁发来的（容器/机器的 ip:port）
             "user": user,
             "auth": bool(has_auth),
             # 凭证原样保留：Proxy-Authorization 头的完整值 + 解码后的用户名/密码。
@@ -273,13 +306,20 @@ class ProxyProbeManager:
             "auth_raw": auth_raw,
             "ok": None,            # None=进行中 True=成功 False=失败
             "reason": "",
-            # ---- 明细（点开抽屉才取，不进列表轮询的返回体）----
-            "raw_request": "",         # 客户端 -> 代理，原样（不做任何删改）
-            "forwarded_request": "",   # 代理 -> 上游，改写后
-            "stripped": [],            # 转发时剥掉的逐跳头
-            "response_head": "",       # 上游 -> 客户端 的状态行 + 响应头
-            "req_body": "",            # 请求体预览
-            "resp_body": "",           # 响应体预览
+            # ---- 明细：按「两跳」分开存，别把收到的和转发出去的混在一起 ----
+            # 第一跳 客户端 ⇆ 代理
+            "c2p_request": "",       # 客户端发给代理的请求（原样，不删改）
+            "c2p_req_body": "",      # 上行请求体预览
+            "p2c_response": "",      # 代理回给客户端的应答
+            "p2c_note": "",          # 这个应答是谁生成的（代理自己 / 上游原样透传）
+            # 第二跳 代理 ⇆ 上游
+            "p2u_request": "",       # 代理发给上游的请求（改写后）
+            "u2p_response": "",      # 上游回给代理的响应头
+            "u2p_resp_body": "",     # 下行响应体预览
+            "stripped": [],          # 转发时剥掉的逐跳头
+            # CONNECT 隧道专用：隧道内两个方向的字节到底是什么
+            "tunnel_up_kind": "", "tunnel_up": "",
+            "tunnel_down_kind": "", "tunnel_down": "",
         }
         self._records.append(rec)
         if len(self._records) > MAX_RECORDS:
@@ -293,8 +333,9 @@ class ProxyProbeManager:
             rec["reason"] = reason
 
     # 列表轮询每秒一次，明细字段体积大，不跟着列表回传
-    _DETAIL_KEYS = ("raw_request", "forwarded_request", "stripped",
-                    "response_head", "req_body", "resp_body")
+    _DETAIL_KEYS = ("c2p_request", "c2p_req_body", "p2c_response", "p2c_note",
+                    "p2u_request", "u2p_response", "u2p_resp_body", "stripped",
+                    "tunnel_up_kind", "tunnel_up", "tunnel_down_kind", "tunnel_down")
 
     def records_since(self, last_id: int = 0, limit: int = 200) -> list[dict]:
         """
@@ -389,8 +430,15 @@ class ProxyProbeManager:
     async def _handle_client(self, reader: asyncio.StreamReader,
                              writer: asyncio.StreamWriter) -> None:
         """错误隔离：单个连接的任何异常都不许影响其他连接或打死进程。"""
+        peer = ""
         try:
-            await self._do_handle(reader, writer)
+            info = writer.get_extra_info("peername")
+            if info:
+                peer = "%s:%s" % (info[0], info[1])
+        except Exception:
+            pass
+        try:
+            await self._do_handle(reader, writer, peer)
         except Exception as exc:  # noqa: BLE001
             try:
                 self._log("  !! 连接处理异常 — %s" % errdesc(exc))
@@ -417,7 +465,7 @@ class ProxyProbeManager:
             pass
 
     async def _do_handle(self, reader: asyncio.StreamReader,
-                         writer: asyncio.StreamWriter) -> None:
+                         writer: asyncio.StreamWriter, peer: str = "") -> None:
         # ---- 请求行 ----
         try:
             raw = await asyncio.wait_for(reader.readline(), timeout=self.idle_timeout)
@@ -431,7 +479,7 @@ class ProxyProbeManager:
         except ValueError as exc:
             why = sanitize(str(exc), 120)
             self._log("  !! 请求行无法解析 — %s" % why)
-            self._finish(self._add_record("?", "(无法解析)", None, False), False,
+            self._finish(self._add_record("?", "(无法解析)", None, False, client=peer), False,
                          "请求行无法解析 — %s" % why)
             self.errors += 1
             self._write_status(writer, 400, "Bad Request", body=b"proxy_probe: bad request line\n")
@@ -461,7 +509,7 @@ class ProxyProbeManager:
                 self._log("%s %s (%s)" % (method.upper(), sanitize(target), authinfo))
                 self._log("  !! 目标 URL 非法 — %s" % why)
                 self._finish(self._add_record(method.upper(), sanitize(target, 80),
-                                              auth_user, has_auth),
+                                              auth_user, has_auth, client=peer),
                              False, "目标 URL 非法 — %s" % why)
                 self.errors += 1
                 self._write_status(writer, 400, "Bad Request",
@@ -472,7 +520,7 @@ class ProxyProbeManager:
                 self._log("%s %s (%s) —— 非 absolute-URI，疑似直接把本工具当普通服务器访问"
                           % (method.upper(), sanitize(target), authinfo))
                 self._finish(self._add_record(method.upper(), sanitize(target, 80),
-                                              auth_user, has_auth),
+                                              auth_user, has_auth, client=peer),
                              False, "不是 absolute-URI —— 这不是代理请求，"
                                     "疑似直接把本工具当普通服务器访问了")
                 self._write_status(
@@ -491,7 +539,7 @@ class ProxyProbeManager:
             why = sanitize(str(exc), 120)
             self._log("  !! 目标地址非法 %s — %s" % (sanitize(hostport, 120), why))
             self._finish(self._add_record(method.upper(), sanitize(hostport, 80),
-                                          auth_user, has_auth),
+                                          auth_user, has_auth, client=peer),
                          False, "目标地址非法 — %s" % why)
             self.errors += 1
             self._write_status(writer, 400, "Bad Request", body=b"proxy_probe: bad target\n")
@@ -507,9 +555,9 @@ class ProxyProbeManager:
             self.with_auth_count += 1
         self.targets[target_key] = self.targets.get(target_key, 0) + 1
         rec = self._add_record(method.upper(), target_key, auth_user, has_auth,
-                               password=auth_pwd, auth_raw=raw_auth)
+                               password=auth_pwd, auth_raw=raw_auth, client=peer)
         # 原始请求（客户端 -> 代理）：原样留证，不删改
-        rec["raw_request"] = headers_text(
+        rec["c2p_request"] = headers_text(
             "%s %s %s" % (method.upper(), sanitize(target, 300), version), headers)
 
         # ---- 故障注入 ----
@@ -577,12 +625,12 @@ class ProxyProbeManager:
                 writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 await writer.drain()
                 self._finish(rec, True, "隧道已建立，双向转发中")
-                rec["response_head"] = "HTTP/1.1 200 Connection Established"
-                rec["forwarded_request"] = (
-                    "（CONNECT 隧道不改写请求：代理只回一个 200 Connection Established，\n"
-                    "之后在客户端与 %s 之间做裸 TCP 双向转发。\n"
-                    "隧道内容通常是 TLS 加密的，本工具不做中间人、不解密 —— "
-                    "只回答「有没有经过代理」。）" % target_key)
+                rec["p2c_response"] = "HTTP/1.1 200 Connection Established"
+                rec["p2c_note"] = ("这一行是代理自己生成的，不是上游发的 —— "
+                                   "CONNECT 的语义就是「隧道已打通」。")
+                rec["p2u_request"] = ("（无 HTTP 请求）CONNECT 是建隧道：代理只跟 %s 建了一条 TCP 连接，"
+                                      "没有向它发送任何 HTTP 请求头。\n"
+                                      "之后两端的字节原样对转，内容见下面「隧道内数据」。" % target_key)
             else:
                 head, stripped = self._rewrite_request(method, parts, version, headers)
                 up_writer.write(head)
@@ -591,7 +639,7 @@ class ProxyProbeManager:
                 # 转发给上游的报文原样留证：请求行是否改成了 origin-form、Proxy-* 是否剥掉了，
                 # 都能在页面上直接看到，不用靠猜
                 # 这里不用再打码：Proxy-Authorization 已经在改写时被剥掉了
-                rec["forwarded_request"] = sanitize(
+                rec["p2u_request"] = sanitize(
                     head.decode("latin-1").replace("\r\n", "\n").rstrip("\n"),
                     4000, keep_newlines=True)
                 rec["stripped"] = stripped
@@ -723,21 +771,25 @@ class ProxyProbeManager:
 
     @staticmethod
     def _fill_preview(rec: dict, up_sink: dict, down_sink: dict, is_connect: bool) -> None:
+        up_raw, down_raw = bytes(up_sink["buf"]), bytes(down_sink["buf"])
         if is_connect:
-            # 隧道内是裸 TCP（多数是 TLS）。本工具不做中间人，不解密，如实说明。
-            rec["req_body"] = preview_text(bytes(up_sink["buf"]), up_sink["cut"])
-            rec["resp_body"] = preview_text(bytes(down_sink["buf"]), down_sink["cut"])
+            # 隧道内是裸字节。到底是不是 TLS 能确定判定，别含糊说「可能加密」。
+            rec["tunnel_up_kind"], rec["tunnel_up"] = describe_stream(up_raw, up_sink["cut"])
+            rec["tunnel_down_kind"], rec["tunnel_down"] = describe_stream(down_raw, down_sink["cut"])
             return
-        rec["req_body"] = preview_text(bytes(up_sink["buf"]), up_sink["cut"])
-        raw = bytes(down_sink["buf"])
-        head, sep, body = raw.partition(b"\r\n\r\n")
+        # 转发形态：上行是请求体，下行是「状态行 + 响应头 + 响应体」
+        _, rec["c2p_req_body"] = describe_stream(up_raw, up_sink["cut"])
+        head, sep, body = down_raw.partition(b"\r\n\r\n")
         if sep:
-            rec["response_head"] = sanitize(
+            rec["u2p_response"] = sanitize(
                 head.decode("latin-1", "replace").replace("\r\n", "\n"),
                 4000, keep_newlines=True)
-            rec["resp_body"] = preview_text(body, down_sink["cut"])
+            # 代理把上游响应原样透传给客户端，所以第一跳的应答就是它
+            rec["p2c_response"] = rec["u2p_response"]
+            rec["p2c_note"] = "代理把上游响应原样透传给客户端，没有改动，所以两跳的应答一致。"
+            _, rec["u2p_resp_body"] = describe_stream(body, down_sink["cut"])
         else:
-            rec["resp_body"] = preview_text(raw, down_sink["cut"])
+            _, rec["u2p_resp_body"] = describe_stream(down_raw, down_sink["cut"])
 
 
 proxy_probe = ProxyProbeManager()

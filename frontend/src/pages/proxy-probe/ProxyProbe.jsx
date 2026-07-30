@@ -8,7 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Button, Space, Tag, Switch, Input, InputNumber, Tooltip, Typography,
-  Popconfirm, Alert, Drawer, Spin, App as AntApp
+  Popconfirm, Alert, Drawer, Spin, Tabs, App as AntApp
 } from 'antd'
 import {
   ReloadOutlined, ClearOutlined, CopyOutlined, PlayCircleOutlined,
@@ -421,7 +421,7 @@ function ProxyProbeInner() {
         )}
       </div>
 
-      {/* ---------- 明细抽屉：原始请求 / 转发请求 / 上游响应 ---------- */}
+      {/* ---------- 明细抽屉：按「两跳」分开，别把收到的和转发出去的混在一起 ---------- */}
       {/* antd v6 里 Drawer 的 width 已弃用，改用 size 预设 */}
       <Drawer open={!!detail} size="large" onClose={() => setDetail(null)}
         title={detail
@@ -433,20 +433,27 @@ function ProxyProbeInner() {
           : ''}>
         {detail && (
           <Spin spinning={detailLoading}>
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ marginBottom: 14 }}>
               {detail.ok === false
                 ? <Alert type="error" showIcon title={'失败 · ' + (detail.reason || '')} />
                 : <Alert type="success" showIcon title={'成功 · ' + (detail.reason || '')} />}
             </div>
 
-            <Block
-              title="① 原始请求" sub="客户端 → 代理，原样，未做任何删改"
-              content={detail.rawRequest}
-              empty="没抓到（可能是请求行都没解析出来）"
-              onCopy={() => copy(detail.rawRequest, '原始请求')} />
+            {/* 链路一目了然：谁 -> 代理 -> 谁 */}
+            <div style={{
+              background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 10,
+              padding: '10px 14px', marginBottom: 16, fontSize: 12, fontFamily: MONO,
+              display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+            }}>
+              <Tag color="geekblue" style={{ fontFamily: MONO }}>客户端 {detail.client || '?'}</Tag>
+              <span style={{ color: '#8c8c8c' }}>──▶</span>
+              <Tag color="purple" style={{ fontFamily: MONO }}>代理 :{status?.port}</Tag>
+              <span style={{ color: '#8c8c8c' }}>──▶</span>
+              <Tag color="green" style={{ fontFamily: MONO }}>上游 {detail.target}</Tag>
+            </div>
 
             {detail.auth && (
-              <div style={{ marginTop: -8, marginBottom: 18, fontSize: 12, lineHeight: 2 }}>
+              <div style={{ marginBottom: 16, fontSize: 12, lineHeight: 2 }}>
                 <span style={{ color: '#8c8c8c' }}>凭证解码（base64 肉眼看不出内容，这里解开给你核对）：</span>
                 <div style={{ fontFamily: MONO, marginTop: 4 }}>
                   用户名 <Tag color="blue">{detail.user ?? '(解析失败)'}</Tag>
@@ -457,45 +464,109 @@ function ProxyProbeInner() {
               </div>
             )}
 
-            <Block
-              title="② 转发给上游的请求" sub="代理 → 上游，改写后"
-              content={detail.forwardedRequest}
-              empty="没有转发（在连上游之前就被拒绝/失败了）"
-              onCopy={() => copy(detail.forwardedRequest, '转发请求')} />
+            <Tabs size="small" items={[
+              {
+                key: 'c2p',
+                label: '① 客户端 ⇆ 代理',
+                children: (
+                  <>
+                    <Block
+                      title="客户端发给代理的请求" sub="原样，未做任何删改"
+                      content={detail.c2pRequest}
+                      empty="没抓到（可能连请求行都没解析出来）"
+                      onCopy={() => copy(detail.c2pRequest, '客户端请求')} />
+                    {detail.kind !== 'CONNECT' && (
+                      <Block
+                        title="请求体" sub="最多 4KB，只旁抄不缓冲"
+                        content={detail.c2pReqBody} empty="无请求体"
+                        onCopy={() => copy(detail.c2pReqBody, '请求体')} />
+                    )}
+                    <Block
+                      title="代理回给客户端的应答" sub="这一跳客户端最终看到的东西"
+                      content={detail.p2cResponse}
+                      empty="没有回应答（被立即断开，或还没到应答那一步）"
+                      onCopy={() => copy(detail.p2cResponse, '代理应答')} />
+                    {detail.p2cNote && (
+                      <div style={{ marginTop: -10, marginBottom: 16, fontSize: 12, color: '#d4380d' }}>
+                        {detail.p2cNote}
+                      </div>
+                    )}
+                  </>
+                ),
+              },
+              {
+                key: 'p2u',
+                label: '② 代理 ⇆ 上游',
+                children: (
+                  <>
+                    <Block
+                      title="代理发给上游的请求"
+                      sub={detail.kind === 'CONNECT' ? 'CONNECT 不发 HTTP 请求' : '改写后'}
+                      content={detail.p2uRequest}
+                      empty="没有转发（在连上游之前就被拒绝/失败了）"
+                      onCopy={() => copy(detail.p2uRequest, '转发请求')} />
 
-            {detail.kind !== 'CONNECT' && (
-              <div style={{ marginTop: -8, marginBottom: 18, fontSize: 12, color: '#8c8c8c', lineHeight: 1.9 }}>
-                对比 ① 和 ② 就能确认两件事：请求行有没有从 <code>absolute-URI</code> 改写成
-                <code> origin-form</code>（不改规范上游会回 400）；逐跳头有没有剥掉。
-                {detail.stripped?.length
-                  ? <div>本次剥掉的逐跳头：{detail.stripped.map(h => (
-                      <Tag key={h} color="orange" style={{ fontFamily: MONO, marginTop: 4 }}>{h}</Tag>))}</div>
-                  : <div>本次没有需要剥的逐跳头。</div>}
-              </div>
-            )}
+                    {detail.kind !== 'CONNECT' && (
+                      <div style={{ marginTop: -10, marginBottom: 16, fontSize: 12, color: '#8c8c8c', lineHeight: 1.9 }}>
+                        跟 ① 里的请求对比就能确认两件事：请求行有没有从 <code>absolute-URI</code>
+                        改写成 <code>origin-form</code>（不改，规范上游会回 400）；逐跳头有没有剥掉。
+                        {detail.stripped?.length
+                          ? <div>本次剥掉的逐跳头：{detail.stripped.map(h => (
+                              <Tag key={h} color="orange" style={{ fontFamily: MONO, marginTop: 4 }}>{h}</Tag>))}</div>
+                          : <div>本次没有需要剥的逐跳头。</div>}
+                      </div>
+                    )}
 
-            <Block
-              title="③ 上游响应" sub="上游 → 客户端，状态行 + 响应头"
-              content={detail.responseHead}
-              empty="没抓到响应（上游没回，或连上游就失败了）"
-              onCopy={() => copy(detail.responseHead, '响应头')} />
-
-            <Block
-              title="请求体预览" sub="最多 4KB，只旁抄不缓冲"
-              content={detail.reqBody} empty="无请求体"
-              onCopy={() => copy(detail.reqBody, '请求体')} />
-
-            <Block
-              title="响应体预览" sub="最多 4KB，只旁抄不缓冲"
-              content={detail.respBody} empty="无响应体"
-              onCopy={() => copy(detail.respBody, '响应体')} />
+                    <Block
+                      title="上游回给代理的响应" sub="状态行 + 响应头"
+                      content={detail.u2pResponse}
+                      empty={detail.kind === 'CONNECT'
+                        ? 'CONNECT 只建 TCP 连接，这一跳没有 HTTP 响应'
+                        : '没抓到响应（上游没回，或连上游就失败了）'}
+                      onCopy={() => copy(detail.u2pResponse, '上游响应头')} />
+                    {detail.kind !== 'CONNECT' && (
+                      <Block
+                        title="响应体" sub="最多 4KB，只旁抄不缓冲"
+                        content={detail.u2pRespBody} empty="无响应体"
+                        onCopy={() => copy(detail.u2pRespBody, '响应体')} />
+                    )}
+                  </>
+                ),
+              },
+              ...(detail.kind === 'CONNECT' ? [{
+                key: 'tunnel',
+                label: '③ 隧道内数据' + (detail.tunnelUpKind === 'tls' ? '（TLS 加密）' : ''),
+                children: (
+                  <>
+                    <div style={{ marginBottom: 14 }}>
+                      <Alert type={detail.tunnelUpKind === 'tls' ? 'warning' : 'info'} showIcon
+                        title={
+                          detail.tunnelUpKind === 'tls'
+                            ? '隧道内是 TLS 加密流量（已确认，不是猜的）'
+                            : detail.tunnelUpKind === 'http'
+                              ? '隧道内是明文 HTTP，能直接看到内容'
+                              : '隧道内数据类型见下'}
+                        description="判定依据：TLS record 的首字节固定是 0x16（handshake）+ 版本 0x03xx。下面把原始字节的十六进制也列出来，可自行核对。" />
+                    </div>
+                    <Block
+                      title="上行（客户端 → 上游）" sub={'类型：' + (detail.tunnelUpKind || '-')}
+                      content={detail.tunnelUp} empty="没有上行数据"
+                      onCopy={() => copy(detail.tunnelUp, '上行数据')} />
+                    <Block
+                      title="下行（上游 → 客户端）" sub={'类型：' + (detail.tunnelDownKind || '-')}
+                      content={detail.tunnelDown} empty="没有下行数据"
+                      onCopy={() => copy(detail.tunnelDown, '下行数据')} />
+                  </>
+                ),
+              }] : []),
+            ]} />
           </Spin>
         )}
       </Drawer>
 
       <div style={{ marginTop: 12, fontSize: 12, color: '#8c8c8c', lineHeight: 1.9 }}>
         判读方式：<b>列表里有记录 = 走了代理；清零后操作完仍然是空的 = 没走代理。</b>
-        点任意一行可看<b>原始请求 / 转发请求 / 上游响应</b>三段报文。
+        点任意一行可看两跳报文：<b>① 客户端 ⇆ 代理</b>（别人给代理的）、<b>② 代理 ⇆ 上游</b>（代理转发出去的），CONNECT 另有 <b>③ 隧道内数据</b>。
         形态列区分链路 —— <span style={{ color: '#722ed1' }}>CONNECT</span> 是 Node.js / undici 那条，
         <span style={{ color: '#389e0d' }}>GET/POST</span> 是 Go net/http 那条。
         报文原样显示，不做删改；凭证在明细里会解码出用户名和密码，方便核对被测系统送的对不对。
