@@ -72,7 +72,8 @@ def sanitize(text: str | bytes, limit: int = 200, keep_newlines: bool = False) -
 def parse_proxy_auth(value: str | None) -> tuple[str | None, str | None]:
     """
     解析 Proxy-Authorization: Basic base64(user:pass)。
-    返回 (user, password)。**只有 user 允许落日志/页面，password 仅用于强制认证比对。**
+    返回 (user, password)。两者都会存进记录给页面显示 —— base64 肉眼看不出内容，
+    解开才能核对被测系统到底送了个什么凭证过来。
     """
     if not value:
         return None, None
@@ -112,15 +113,13 @@ def headers_text(request_line: str, headers) -> str:
     """
     把请求行 + 请求头拼成给页面看的文本。
 
-    **Proxy-Authorization 的值必须打掉**：只显示解析出来的用户名，密码绝不出现。
-    这是硬性要求，凭证可能是真实的。
+    **原样显示，不做任何删改**（含 Proxy-Authorization 的完整值）——
+    这是测试辅助工具，职责是如实呈现收到了什么；把内容改掉反而让人没法排查
+    「被测系统到底送了个什么凭证过来」。
     """
     out = [request_line]
     for k, v in headers:
-        if k.lower() == "proxy-authorization":
-            user, _ = parse_proxy_auth(v)
-            v = "Basic ****（密码已隐去，解析出 user=%s）" % (sanitize(user, 40) if user else "?")
-        out.append("%s: %s" % (sanitize(k, 80), sanitize(v, 300)))
+        out.append("%s: %s" % (sanitize(k, 80), sanitize(v, 2000)))
     return "\n".join(out)
 
 
@@ -258,19 +257,24 @@ class ProxyProbeManager:
             pass
 
     # ------------------------------------------------------------------ 记录
-    def _add_record(self, kind: str, target: str, user: str | None, has_auth: bool) -> dict:
+    def _add_record(self, kind: str, target: str, user: str | None, has_auth: bool,
+                    password: str | None = None, auth_raw: str | None = None) -> dict:
         self._seq += 1
         rec = {
             "id": self._seq,
             "time": time.strftime("%H:%M:%S"),
             "kind": kind,
             "target": target,
-            "user": user,          # 只放用户名，密码永不进这里
+            "user": user,
             "auth": bool(has_auth),
+            # 凭证原样保留：Proxy-Authorization 头的完整值 + 解码后的用户名/密码。
+            # base64 肉眼看不出内容，所以解码结果也一并给出，方便核对被测系统送的对不对。
+            "password": password,
+            "auth_raw": auth_raw,
             "ok": None,            # None=进行中 True=成功 False=失败
             "reason": "",
             # ---- 明细（点开抽屉才取，不进列表轮询的返回体）----
-            "raw_request": "",         # 客户端 -> 代理，原样（密码已打掉）
+            "raw_request": "",         # 客户端 -> 代理，原样（不做任何删改）
             "forwarded_request": "",   # 代理 -> 上游，改写后
             "stripped": [],            # 转发时剥掉的逐跳头
             "response_head": "",       # 上游 -> 客户端 的状态行 + 响应头
@@ -502,8 +506,9 @@ class ProxyProbeManager:
         if has_auth:
             self.with_auth_count += 1
         self.targets[target_key] = self.targets.get(target_key, 0) + 1
-        rec = self._add_record(method.upper(), target_key, auth_user, has_auth)
-        # 原始请求（客户端 -> 代理）：原样留证，密码已在 headers_text 里打掉
+        rec = self._add_record(method.upper(), target_key, auth_user, has_auth,
+                               password=auth_pwd, auth_raw=raw_auth)
+        # 原始请求（客户端 -> 代理）：原样留证，不删改
         rec["raw_request"] = headers_text(
             "%s %s %s" % (method.upper(), sanitize(target, 300), version), headers)
 

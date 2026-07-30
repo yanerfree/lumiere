@@ -397,7 +397,11 @@ function ProxyProbeInner() {
                     </td>
                     <td style={{ padding: '8px 12px' }}>
                       {r.auth
-                        ? <Tag color="blue" style={{ fontFamily: MONO }}>user={r.user || '?'}</Tag>
+                        ? <Tooltip title={`Proxy-Authorization: ${r.authRaw || '?'}　→　${r.user}:${r.password}`}>
+                            <Tag color="blue" style={{ fontFamily: MONO, cursor: 'help' }}>
+                              user={r.user || '?'}
+                            </Tag>
+                          </Tooltip>
                         : <Tag>no-auth</Tag>}
                     </td>
                     <td style={{ padding: '8px 12px' }}>
@@ -436,10 +440,22 @@ function ProxyProbeInner() {
             </div>
 
             <Block
-              title="① 原始请求" sub="客户端 → 代理，原样"
+              title="① 原始请求" sub="客户端 → 代理，原样，未做任何删改"
               content={detail.rawRequest}
               empty="没抓到（可能是请求行都没解析出来）"
               onCopy={() => copy(detail.rawRequest, '原始请求')} />
+
+            {detail.auth && (
+              <div style={{ marginTop: -8, marginBottom: 18, fontSize: 12, lineHeight: 2 }}>
+                <span style={{ color: '#8c8c8c' }}>凭证解码（base64 肉眼看不出内容，这里解开给你核对）：</span>
+                <div style={{ fontFamily: MONO, marginTop: 4 }}>
+                  用户名 <Tag color="blue">{detail.user ?? '(解析失败)'}</Tag>
+                  密码 <Tag color="blue">{detail.password ?? '(解析失败)'}</Tag>
+                  <Button size="small" type="link" style={{ fontSize: 12 }}
+                    onClick={() => copy(`${detail.user}:${detail.password}`, '凭证')}>复制 user:pass</Button>
+                </div>
+              </div>
+            )}
 
             <Block
               title="② 转发给上游的请求" sub="代理 → 上游，改写后"
@@ -473,10 +489,6 @@ function ProxyProbeInner() {
               title="响应体预览" sub="最多 4KB，只旁抄不缓冲"
               content={detail.respBody} empty="无响应体"
               onCopy={() => copy(detail.respBody, '响应体')} />
-
-            <Alert type="info" showIcon
-              title="密码永不记录"
-              description="Proxy-Authorization 的值在入库前就被打掉了，只保留解析出的用户名。上面看到的是打码后的内容，不是原文。" />
           </Spin>
         )}
       </Drawer>
@@ -486,7 +498,7 @@ function ProxyProbeInner() {
         点任意一行可看<b>原始请求 / 转发请求 / 上游响应</b>三段报文。
         形态列区分链路 —— <span style={{ color: '#722ed1' }}>CONNECT</span> 是 Node.js / undici 那条，
         <span style={{ color: '#389e0d' }}>GET/POST</span> 是 Go net/http 那条。
-        密码永不显示，只显示用户名。
+        报文原样显示，不做删改；凭证在明细里会解码出用户名和密码，方便核对被测系统送的对不对。
       </div>
     </div>
   )

@@ -39,14 +39,15 @@ async def main():
             "列出剥掉的逐跳头":     "Proxy-Authorization" in body and "Proxy-Connection" in body,
             "响应头可见":          "HTTP/1.1 200 OK" in body,
             "响应体预览可见":       '"object":"list"' in body,
-            "密码打码提示":        "密码已隐去" in body,
+            "凭证解码段":          "凭证解码" in body,
+            "密码原样显示":        "secret123" in body,
         }
         for k,v in checks.items():
             print(f"  {k}: {v}")
             if not v: fails.append(k)
-        leaked = "secret123" in body
-        print("  抽屉里出现密码 secret123:", leaked, "（必须 False）")
-        if leaked: fails.append("密码泄露到抽屉")
+        shown = "secret123" in body
+        print("  抽屉里显示密码 secret123:", shown, "（应为 True —— 原样显示，不做删改）")
+        if not shown: fails.append("密码没有原样显示")
         await pg.screenshot(path=f"{SHOTS}/12_detail_drawer.png", full_page=True)
         real=[e for e in errs if "favicon" not in e.lower() and "overlayInnerStyle" not in e]
         print("控制台错误:", real[:3] if real else "无")

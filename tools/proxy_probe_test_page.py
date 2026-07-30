@@ -118,12 +118,12 @@ async def main():
         html = await page.content()
         print("  记录表格出现 user=svc: %s | 记录表格出现密码 secret123: %s"
               % ("user=svc" in table_html, "secret123" in table_html))
-        print("  整页出现 secret123: %s（应为 False，密码字段不预填）" % ("secret123" in html))
+        print("  整页出现 secret123: %s（应为 False —— 这里只是确认故障注入的密码框没预填默认值，与报文明细无关）" % ("secret123" in html))
         await page.screenshot(path=f"{SHOTS}/10_two_kinds.png", full_page=True)
         if not (n_connect >= 1 and n_get >= 1 and c_color != g_color):
             fails.append("⑩ 两种形态区分")
-        if "secret123" in table_html or "secret123" in html:
-            fails.append("⑩ 密码出现在页面")
+        if "secret123" in html:
+            fails.append("⑩ 故障注入的密码框预填了默认值")
 
         # ---------- 故障注入开关 ----------
         print("\n========== 附加：页面上的故障注入开关（实时生效）==========")
