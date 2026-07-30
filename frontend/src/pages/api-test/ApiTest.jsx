@@ -128,9 +128,7 @@ export default function ApiTest() {
     if (!branchId) return
     setLoading(true)
     try {
-      // kind=single：本模块只管「单接口测试」，不显示归属某条用例的编排场景
-      // （那些在用例详情的「接口测试」Tab 里看，两边数据不混）
-      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests?kind=single`)
+      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests`)
       setScenarios(res.data || [])
     } catch { /* */ } finally { setLoading(false) }
   }, [projectId, branchId])
