@@ -12,6 +12,8 @@ import {
 import { api, getValidToken } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
 import { useEnv, buildEnvOptions } from '../../utils/env'
+import StepList from '../api-test/components/StepList'
+import StepEditor from '../api-test/components/StepEditor'
 import ScriptEditor from '../../components/ScriptEditor'
 import ScenarioVariables from '../../components/ScenarioVariables'
 import ApiStepList, { generateApiCodeFromSteps } from '../../components/ApiStepList'
@@ -439,19 +441,55 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
   const [loaded, setLoaded] = useState(false)
   const [runningId, setRunningId] = useState(null)
   const [results, setResults] = useState({})  // id -> {passed, passCount, failCount}
-  const [expandedId, setExpandedId] = useState(null)   // 展开查看步骤的场景
-  const [detail, setDetail] = useState({})             // id -> {steps:[...]}
+  const [expandedId, setExpandedId] = useState(null)   // 展开编辑的场景
+  const [detail, setDetail] = useState({})             // id -> 场景详情(含 steps)
+  const [selectedStepId, setSelectedStepId] = useState(null)
+  const [stepRunning, setStepRunning] = useState(false)
 
-  // 展开时才拉步骤：列表接口不返回步骤，而回推的场景动辄十几步，
-  // 之前只能看到标题，想看内容得跳去接口测试模块，等于"步骤在用例里看不见"
+  // 只读写 source_case_id=本用例 的场景；用例内嵌的 cases.api_scenario 是另一份数据，
+  // 由下方 ScenarioEditor 负责，两边不能混。
+  const base = `/projects/${projectId}/branches/${branchId}/api-tests`
+
+  const loadDetail = async (sid) => {
+    try {
+      const res = await api.get(`${base}/${sid}`)
+      setDetail(prev => ({ ...prev, [sid]: res.data || {} }))
+      return res.data
+    } catch { message.error('加载步骤失败'); return null }
+  }
+
   const toggleExpand = async (sc) => {
     if (expandedId === sc.id) { setExpandedId(null); return }
     setExpandedId(sc.id)
-    if (detail[sc.id]) return
+    setSelectedStepId(null)
+    const d = detail[sc.id] || await loadDetail(sc.id)
+    if (d?.steps?.length) setSelectedStepId(d.steps[0].id)
+  }
+
+  const saveStep = async (sid, stepId, updates) => {
     try {
-      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests/${sc.id}`)
-      setDetail(prev => ({ ...prev, [sc.id]: res.data || {} }))
-    } catch { message.error('加载步骤失败') }
+      await api.put(`${base}/${sid}/steps/${stepId}`, updates)
+      await loadDetail(sid)
+    } catch (e) { message.error(e?.message || '保存失败') }
+  }
+
+  const removeStep = async (sid, stepId) => {
+    try {
+      await api.delete(`${base}/${sid}/steps/${stepId}`)
+      const d = await loadDetail(sid)
+      setSelectedStepId(d?.steps?.[0]?.id || null)
+    } catch (e) { message.error(e?.message || '删除失败') }
+  }
+
+  // 单步调试走后端引擎（会校断言、落 last_response），和接口测试模块同一条路径
+  const runStep = async (sid, stepId) => {
+    if (!runEnv) { message.warning('请先选择执行环境（需要 BASE_URL）'); return }
+    setStepRunning(true)
+    try {
+      await api.post(`${base}/${sid}/run-step/${stepId}`, { envId: runEnv })
+      await loadDetail(sid)
+    } catch (e) { message.error(e?.message || '运行失败') }
+    finally { setStepRunning(false) }
   }
 
   const load = useCallback(async () => {
@@ -516,6 +554,7 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
             const isRunning = runningId === sc.id
             const isOpen = expandedId === sc.id
             const d = detail[sc.id]
+            const selectedStep = (d?.steps || []).find(s2 => s2.id === selectedStepId)
             return (
               <div key={sc.id} style={{
                 borderRadius: 8, background: 'rgba(14,165,160,0.04)', border: '1px solid rgba(0,0,0,0.04)',
@@ -540,30 +579,50 @@ function LinkedApiScenarios({ projectId, branchId, caseId, active, runEnv, onEnv
                 </div>
 
                 {isOpen && (
-                  <div style={{ borderTop: '1px solid rgba(0,0,0,0.06)', padding: '8px 10px 10px 30px' }}>
-                    {!d ? <Spin size="small" /> : (d.steps || []).length === 0 ? (
-                      <span style={{ fontSize: 12, color: '#c9cdd4' }}>该场景没有步骤</span>
+                  <div style={{ borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+                    {!d ? (
+                      <div style={{ textAlign: 'center', padding: '20px 0' }}><Spin size="small" /></div>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                        {(d.steps || []).map((st, i) => (
-                          <div key={st.id || i} style={{ display: 'flex', alignItems: 'baseline', gap: 8, fontSize: 12 }}>
-                            <span style={{ color: '#c9cdd4', minWidth: 18, textAlign: 'right' }}>{i + 1}</span>
-                            <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}
-                              color={{ GET: 'blue', POST: 'green', PUT: 'orange', DELETE: 'red' }[st.method] || 'default'}>
-                              {st.method}
-                            </Tag>
-                            <span style={{ color: '#1d2129', flexShrink: 0 }}>{st.name}</span>
-                            <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{st.url}</span>
-                          </div>
-                        ))}
+                      // 直接复用接口测试模块的两个组件：左侧一个个请求，右侧
+                      // Body/Headers/断言/变量提取/响应 + 单步运行。不再自己写简版列表。
+                      <div style={{ display: 'flex', minHeight: 360, background: '#fff' }}>
+                        <div style={{ width: 280, flexShrink: 0, borderRight: '1px solid rgba(0,0,0,0.06)', overflowY: 'auto', maxHeight: 520 }}>
+                          <StepList
+                            scenario={d}
+                            selectedStepId={selectedStepId}
+                            readonly={d.status !== 'draft'}
+                            onSelectStep={setSelectedStepId}
+                            onAddStep={async () => {
+                              await api.post(`${base}/${sc.id}/steps`, { name: '新步骤', method: 'GET', url: '${BASE_URL}/' })
+                              const nd = await loadDetail(sc.id)
+                              setSelectedStepId(nd?.steps?.slice(-1)[0]?.id || null)
+                            }}
+                            onReorderSteps={async (stepIds) => {
+                              await api.put(`${base}/${sc.id}/steps/reorder`, { stepIds })
+                              await loadDetail(sc.id)
+                            }}
+                          />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', maxHeight: 520 }}>
+                          {selectedStep ? (
+                            <StepEditor
+                              step={selectedStep}
+                              running={stepRunning}
+                              readonly={d.status !== 'draft'}
+                              onSaveStep={(stepId, updates) => saveStep(sc.id, stepId, updates)}
+                              onRemoveStep={(stepId) => removeStep(sc.id, stepId)}
+                              onRunStep={(stepId) => runStep(sc.id, stepId)}
+                              onStepChange={(next) => setDetail(prev => ({
+                                ...prev,
+                                [sc.id]: { ...prev[sc.id], steps: (prev[sc.id]?.steps || []).map(s => s.id === next.id ? next : s) },
+                              }))}
+                            />
+                          ) : (
+                            <div style={{ padding: 24, color: '#c9cdd4', fontSize: 13 }}>左侧选择一个请求</div>
+                          )}
+                        </div>
                       </div>
                     )}
-                    <div style={{ marginTop: 8 }}>
-                      <Button type="link" size="small" style={{ padding: 0, fontSize: 12 }}
-                        onClick={() => navigate(`/projects/${projectId}/api-test?scenarioId=${sc.id}`)}>
-                        到接口测试模块编辑 →
-                      </Button>
-                    </div>
                   </div>
                 )}
               </div>

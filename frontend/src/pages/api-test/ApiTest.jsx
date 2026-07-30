@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { Modal, Form, Input, TreeSelect, message, Select, Tag, Button, Tooltip, Drawer, Space } from 'antd'
 import { PlayCircleOutlined, RobotOutlined, CopyOutlined, ScissorOutlined, BranchesOutlined } from '@ant-design/icons'
 import { api } from '../../utils/request'
@@ -15,6 +15,7 @@ import GenerateModal from './components/GenerateModal'
 
 export default function ApiTest() {
   const { projectId } = useParams()
+  const [searchParams] = useSearchParams()
   const [globalBranchId] = useBranch(projectId)
   const [branchId, setBranchId] = useState(null)
   const [scenarios, setScenarios] = useState([])
@@ -92,17 +93,21 @@ export default function ApiTest() {
     // 优先使用全局分支；没有则取第一个分支
     if (globalBranchId) {
       setBranchId(globalBranchId)
-      // 切换分支时清空选中状态
-      setSelectedScenario(null)
-      setSelectedStep(null)
-      setSelectedFolderId(null)
-      setSelectedFolderIds([])
+      // 切换分支时清空选中状态。但带 ?scenarioId= 深链进来时不能清——
+      // globalBranchId 往往比深链晚一拍落定，会把刚加载的场景又冲掉。
+      if (!searchParams.get('scenarioId')) {
+        setSelectedScenario(null)
+        setSelectedStep(null)
+        setSelectedFolderId(null)
+        setSelectedFolderIds([])
+      }
       return
     }
     api.get(`/projects/${projectId}/branches`).then(res => {
       const b = (res.data || [])[0]
       if (b) setBranchId(b.id)
     }).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, globalBranchId])
 
   const fetchFolders = useCallback(async () => {
@@ -123,12 +128,15 @@ export default function ApiTest() {
     if (!branchId) return
     setLoading(true)
     try {
-      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests`)
+      // kind=single：本模块只管「单接口测试」，不显示归属某条用例的编排场景
+      // （那些在用例详情的「接口测试」Tab 里看，两边数据不混）
+      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests?kind=single`)
       setScenarios(res.data || [])
     } catch { /* */ } finally { setLoading(false) }
   }, [projectId, branchId])
 
   useEffect(() => { fetchScenarios() }, [fetchScenarios])
+
 
   const loadScenario = async (id, { keepStep = false } = {}) => {
     try {
@@ -151,6 +159,18 @@ export default function ApiTest() {
       }
     } catch { /* */ }
   }
+
+  // 支持从用例详情带 ?scenarioId= 直接定位到某条场景（否则只能到模块首页自己翻）。
+  // 必须放在 loadScenario 定义之后：依赖数组在渲染期求值，提前引用会 TDZ 报错。
+  // loadScenario 是普通函数、每次渲染都是新引用，不能进依赖数组（会每帧重跑）。
+  const jumpedRef = useRef(false)
+  useEffect(() => {
+    const sid = searchParams.get('scenarioId')
+    if (!sid || !branchId || jumpedRef.current) return
+    jumpedRef.current = true
+    loadScenario(sid)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchId, searchParams])
 
   const handleDelete = async (id) => {
     try {

@@ -76,6 +76,12 @@ async def list_scenarios(
     status: str | None = Query(None),
     folder_id: str | None = Query(None),
     source_case_id: str | None = Query(None),
+    # 场景其实有两类混在同一张表里：
+    #   single       单接口测试（source_api_ids，无 source_case_id）—— 接口测试模块的本职
+    #   orchestrated 用例编排的多步链（source_case_id）—— 归属某条用例，在用例详情里看
+    # 不拆表是因为编排链要复用同一套执行引擎（整链跑 + 出测试报告），
+    # 但列表要能分开，否则模块会被编排场景淹没。
+    kind: str | None = Query(None, description="single | orchestrated | all"),
     search: str | None = Query(None),
     page: int = Query(1, ge=1),
     size: int = Query(0, ge=0),
@@ -92,6 +98,10 @@ async def list_scenarios(
         q = q.where(ApiTestScenario.folder_id == uuid.UUID(folder_id))
     if source_case_id:
         q = q.where(ApiTestScenario.source_case_id == uuid.UUID(source_case_id))
+    if kind == "single":
+        q = q.where(ApiTestScenario.source_case_id.is_(None))
+    elif kind == "orchestrated":
+        q = q.where(ApiTestScenario.source_case_id.is_not(None))
     if search:
         kw = f"%{search}%"
         q = q.where(
