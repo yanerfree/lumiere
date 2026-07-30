@@ -1184,7 +1184,6 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
     { key: 'auth', label: 'Auth', count: hasAuth ? 1 : 0, icon: <LockOutlined style={{ fontSize: 10, marginRight: 2 }} /> },
     { key: 'pre', label: '前置操作', count: preCount },
     { key: 'post', label: '后置操作', count: postCount },
-    { key: 'code', label: '生成代码', count: 0, icon: <CodeOutlined style={{ fontSize: 10, marginRight: 2 }} /> },
     ...(response ? [{ key: 'response', label: 'Response', count: 0, highlight: true }] : []),
   ]
 
@@ -1208,11 +1207,15 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
               value: m, label: <span style={{ color: methodColors[m]?.color, fontWeight: 700 }}>{m}</span>
             }))} />
           <div style={{ flex: 1, display: 'flex', alignItems: 'center' }}>
-            {baseUrl && !urlHasOwnBase(step.url) && (
-              <Tooltip title={baseUrl}>
+            {baseUrl && (
+              // 只读的环境前置标记（不可编辑）。URL 里已写了 ${BASE_URL} 时不再拼接，
+              // 只作提示——但地址仍要能看到，否则不知道这条会打到哪个环境。
+              <Tooltip title={urlHasOwnBase(step.url)
+                ? `当前环境前置 URL：${baseUrl}（URL 里的 \${BASE_URL} 执行时替换为它）`
+                : `当前环境前置 URL：${baseUrl}（将拼在下面的路径前面）`}>
                 <span style={{ fontSize: 11, color: '#86909c', background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.08)', borderRight: 'none',
-                  borderRadius: '8px 0 0 8px', padding: '3px 8px', whiteSpace: 'nowrap', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis',
-                  display: 'inline-block', lineHeight: '16px', fontFamily: 'monospace', flexShrink: 0 }}>
+                  borderRadius: '8px 0 0 8px', padding: '3px 8px', whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis',
+                  display: 'inline-block', lineHeight: '16px', fontFamily: 'monospace', flexShrink: 0, cursor: 'default', userSelect: 'none' }}>
                   <GlobalOutlined style={{ marginRight: 4, fontSize: 10 }} />{baseUrl}
                 </span>
               </Tooltip>
@@ -1448,7 +1451,15 @@ function makeNewStep(key, seq) {
   if (key === 'wait') return { nodeType: 'wait', seq, delay: 1000, label: '' }
 }
 
-export default function ApiStepList({ steps, onChange, environments, runEnv }) {
+// nodeTypes：允许添加的节点类型。默认全开（用例内嵌场景存 JSONB，什么结构都放得下）；
+// 挂在 api_test_scenarios/api_test_steps 上时只能传 ['api'] —— 那张表没有
+// node_type/children/times 这些列，存控制流会静默退化成一个 URL 为空的 GET。
+export default function ApiStepList({ steps, onChange, environments, runEnv, nodeTypes }) {
+  const allowedAddItems = useMemo(() => {
+    if (!nodeTypes) return addMenuItems
+    const allow = new Set(nodeTypes)
+    return addMenuItems.filter(it => it.type === 'divider' ? false : allow.has(it.key))
+  }, [nodeTypes])
   const [selected, setSelected] = useState(null)
 
   const baseUrl = useMemo(() => {
@@ -1498,7 +1509,7 @@ export default function ApiStepList({ steps, onChange, environments, runEnv }) {
       <div style={{ width: 300, borderRight: '1px solid rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
         <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fafbfc' }}>
           <span style={{ fontSize: 12, color: '#1d2129', fontWeight: 600 }}>步骤 ({steps.length})</span>
-          <Dropdown menu={{ items: addMenuItems, onClick: handleAdd }} trigger={['click']}>
+          <Dropdown menu={{ items: allowedAddItems, onClick: handleAdd }} trigger={['click']}>
             <Button type="primary" size="small" icon={<PlusOutlined />} ghost>添加</Button>
           </Dropdown>
         </div>

@@ -550,6 +550,7 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           environments={environments}
           runEnv={runEnv}
           onChange={saveNodes}
+          nodeTypes={['api']}   // api_test_steps 存不下控制流节点，只放 API 请求
         />
       )}
 
