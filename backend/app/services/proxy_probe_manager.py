@@ -292,9 +292,15 @@ class ProxyProbeManager:
     _DETAIL_KEYS = ("raw_request", "forwarded_request", "stripped",
                     "response_head", "req_body", "resp_body")
 
-    def records_since(self, last_id: int) -> list[dict]:
-        return [{k: v for k, v in r.items() if k not in self._DETAIL_KEYS}
-                for r in self._records if r["id"] > last_id]
+    def records_since(self, last_id: int = 0, limit: int = 200) -> list[dict]:
+        """
+        页面每秒轮询用：默认回最新 limit 条，整体替换列表。
+        唯一键是这里的 id（不是时间戳 —— 同一秒可能有多条）。
+        """
+        items = [r for r in self._records if r["id"] > last_id]
+        if limit > 0:
+            items = items[-limit:]
+        return [{k: v for k, v in r.items() if k not in self._DETAIL_KEYS} for r in items]
 
     def record_detail(self, rec_id: int) -> dict | None:
         for r in self._records:

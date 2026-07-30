@@ -101,7 +101,9 @@ function ProxyProbeInner() {
   const [detail, setDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
-  const lastId = useRef(0)
+  const seenIds = useRef(new Set())   // 只用来判断哪些是新记录（高亮闪一下）
+  const firstLoad = useRef(true)
+  const inFlight = useRef(false)      // 轮询互斥：上一次还没回来就不再发
   const timer = useRef(null)
 
   // 代理地址取后端探测到的内网 IP，不用 window.location.hostname ——
@@ -111,27 +113,33 @@ function ProxyProbeInner() {
   const loopbackOnly = !!status && !status.lanIp
 
   const poll = useCallback(async () => {
+    // 轮询有三个触发源（定时器 / 切回标签页 / 操作后主动刷新），可能叠在一起。
+    // 加互斥 + 整体替换，双保险防止同一批记录被拼两遍。
+    if (inFlight.current) return
+    inFlight.current = true
     try {
-      const r = await api.get(`/proxy-probe/records?since=${lastId.current}`)
+      const r = await api.get('/proxy-probe/records?limit=200')
       const d = r.data || r
       setStatus(d)
       setStats(d.stats || {})
-      const fresh = d.records || []
-      if (fresh.length) {
-        lastId.current = Math.max(...fresh.map(x => x.id))
-        setRecords(prev => [...fresh].reverse().concat(prev).slice(0, 500))
-        const f = {}
-        fresh.forEach(x => { f[x.id] = true })
-        setFlash(f)
-        setTimeout(() => setFlash({}), 1600)
-      } else if (d.records) {
-        // 后端已清零（seq 归零）时，本地列表也跟着清掉，避免出现幽灵记录
-        if (d.stats && (d.stats.connectCount + d.stats.httpCount) === 0 && lastId.current > 0) {
-          lastId.current = 0
-          setRecords([])
+      // 后端按 id 升序回；页面要最新的在最上面。
+      // **整体替换，不往已有数组里追加** —— 追加会因并发轮询产生重复行。
+      const list = (d.records || []).slice().reverse()
+      setRecords(list)
+      // 新记录判定用后端给的 id，不用时间戳（同一秒可能有多条）
+      const ids = new Set(list.map(x => x.id))
+      if (firstLoad.current) {
+        firstLoad.current = false
+      } else {
+        const fresh = list.filter(x => !seenIds.current.has(x.id)).map(x => x.id)
+        if (fresh.length) {
+          setFlash(Object.fromEntries(fresh.map(id => [id, true])))
+          setTimeout(() => setFlash({}), 1600)
         }
       }
+      seenIds.current = ids
     } catch { /* 轮询失败不弹窗，避免切标签页回来一屏报错 */ }
+    finally { inFlight.current = false }
   }, [])
 
   useEffect(() => {
@@ -154,7 +162,10 @@ function ProxyProbeInner() {
   const doReset = async () => {
     try {
       await api.post('/proxy-probe/reset')
-      lastId.current = 0
+      // 只清「见过的 id」；不要重置 firstLoad ——
+      // 清零后列表本来是空的，不存在首屏全闪的问题，
+      // 重置反而会把清零后第一条记录的高亮吞掉，而那条最该被注意到。
+      seenIds.current = new Set()
       setRecords([])
       setStats({ connectCount: 0, httpCount: 0, withAuthCount: 0, errors: 0 })
       message.success('已清零，现在去被测系统触发一次请求')
@@ -373,7 +384,7 @@ function ProxyProbeInner() {
               </thead>
               <tbody>
                 {records.map(r => (
-                  <tr key={r.id} onClick={() => openDetail(r)} style={{
+                  <tr key={r.id} data-rec-id={r.id} onClick={() => openDetail(r)} style={{
                     borderTop: '1px solid #f5f5f5',
                     background: flash[r.id] ? '#fffbe6' : 'transparent',
                     transition: 'background 1.2s ease',

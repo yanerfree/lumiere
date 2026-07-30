@@ -76,13 +76,15 @@ async def reset_stats():
 
 
 @router.get("/records")
-async def get_records(since: int = 0):
+async def get_records(since: int = 0, limit: int = 200):
     """
-    页面轮询用。since 传上次拿到的最大 id，只返回增量。
-    顺带把 stats 和运行状态一起带回去，页面一次请求就够。
+    页面轮询用：默认回最新 limit 条，页面拿到后**整体替换**列表。
+
+    不做增量追加 —— 轮询可能并发（定时器 + 切回标签页 + 操作后主动刷新），
+    并发时按 since 增量会把同一批记录拼两遍。真要增量，去重键必须是记录 id。
     """
     return {
-        "records": proxy_probe.records_since(since),
+        "records": proxy_probe.records_since(since, limit),
         "stats": proxy_probe.stats(),
         **_status(),
     }
