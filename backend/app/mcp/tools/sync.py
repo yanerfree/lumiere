@@ -149,14 +149,33 @@ _SPEC_VARIABLES = """## 变量三层模型（回推纪律的基准，务必分�
 直接注入，步骤里写 `${BASE_URL}` 就能用，不要再建 kind=global_ref 的同名场景变量——
 纯噪音。场景变量只放「这条用例自己的数据」，比如本次要创建的服务名。
 
-**② 依赖的前置资源不能写死 UUID。** 像 upstreamId / isolationId / 被订阅的 appId
-这类"环境里已经存在的资源"，存成 `kind=literal` + 一个真实 UUID 是错的：
-换环境或资源被删就全挂，且看不出这条链依赖什么。二选一：
+**② 前置数据你自己造，不许写死 UUID。** 像 upstreamId / isolationId / 被订阅的 appId
+这类"链子跑起来必须先有"的资源，存成 `kind=literal` + 一个真实 UUID 是错的：
+换环境或资源被删就全挂。**造数据是你的活，别赌环境里刚好有。** 按性质二选一：
 
-| 情况 | 做法 |
-|---|---|
-| 该资源本该长期存在（基础数据） | `tb_upsert_automation_resource` 登记为项目级前置数据，带 exists_check（跑前预检）+ create_def（缺失时补建）+ keep=true；步骤里 `${资源名}` 引用 |
-| 该资源属于本次测试的数据 | 场景开头加步骤**自己创建** → variables_extract 提取 id → 末尾加清理步骤删掉（自建自删，可重复跑） |
+**路线 A · 场景自足**（优先）—— 这条用例自己的数据：本次要创建的服务、要发起的订阅等。
+场景开头加步骤真的调接口创建 → `variables_extract` 提取 id → 末尾加步骤删掉。
+自建自删，跑一百遍都干净。能自足就别依赖外部。
+
+**路线 B · 共享基础数据** —— 多条用例都要用、反复重建代价大的底座（上游/负载、
+隔离上下文、长期存在的消费方应用）。三步：
+
+1. `tb_list_global_data` 先查项目里登记过没有；
+2. **没有就你自己调接口造出来**（活体验证时顺手造），造完 **不要清理** —— 它要留给后续场景复用；
+3. 造好后（或本来就有）用 `tb_upsert_automation_resource` 登记 `exists_check`：
+   写明「怎么按名字/条件找到它 + 从响应里抽哪个字段当 id」。之后每次跑，平台会在
+   第一个步骤之前自动探一次并注入 `${资源名}`，换环境也能找到那个环境里的对应资源。
+
+⚠ `exists_check` 的 `match` 必须用**稳定标识**（name / code 这类），**不要用 id** ——
+用 id 去 match 等于换个地方写死，换环境照样匹配不上。
+
+```json
+{"method":"GET","url":"${BASE_URL}/api/v1/upstreams?page_size=100",
+ "match":{"field":"name","equals":"autotest-default-upstream"},
+ "extract":{"upstreamId":"data.items[0].id"}}
+```
+
+自检：这条链换到一个**干净环境**还能不能跑通？跑不通就是 A 没造全，或 B 漏了第 2 步。
 
 自检标准：**这条链换到一个干净环境还能不能跑通？** 跑不通就说明前置数据没交代清楚。"""
 
@@ -621,23 +640,30 @@ async def upsert_automation_resource(
     description: str | None = None,
     keep: bool = True,
 ) -> dict:
-    """把「场景依赖但不该由场景创建」的前置资源登记为项目级自动化数据。
+    """登记一条「共享基础数据」，让后续每次跑都能自动找到它并注入成变量。
 
-    解决的问题：编排链常依赖环境里已有的资源（上游/负载、隔离上下文、被订阅的应用……）。
-    如果把它们的 UUID 写成 literal 场景变量，换环境或该资源被删就全挂，而且看不出
-    这条链到底依赖什么。登记成自动化数据后：
-      · 场景开跑前（第一个步骤之前）自动按 exists_check 探测一次，把 extract 声明的键
-        注入成变量 —— 这是「全局前置」，不占步骤位、不出现在步骤列表里
-      · keep=true 表示长期保留、不被用例的自建自删逻辑清掉
-      · ⚠ create_def 目前**只登记不执行**：探不到时不会自动补建，只会让引用它的步骤
-        报「变量未解析」。所以该资源必须确实存在于目标环境；否则请改走
-        「场景内前置步骤自建 + 末尾清理」那条路。
-    步骤里用 ${资源名} 引用，不再写死 UUID。
+    用法（路线 B，共享基础数据）——**造数据是你的活，这个工具只负责登记怎么找到它**：
+      1. 先 tb_list_global_data 查项目里登记过没有；
+      2. 没有 → **你自己调接口把它造出来**（活体验证时顺手造），造完**不要清理**，
+         它要留给后续场景复用；
+      3. 造好后（或本来就有）调本工具登记 exists_check —— 写明"怎么按名字/条件找到它 +
+         从响应里抽哪个字段当 id"。之后场景开跑前（第一个步骤之前）平台会自动探一次，
+         把 extract 的键注入成 ${资源名}，换环境也能找到那个环境里的对应资源。
 
-    exists_check 形如 {"method":"GET","url":"/api/v1/upstreams",
-                      "match":{"field":"name","equals":"default-upstream"},
+    什么该走这条路：多条用例都要用、反复重建代价大的底座（上游/负载、隔离上下文、
+    长期存在的消费方应用）。**只属于本条用例的数据别用这个** —— 那种应该在场景开头
+    自建、末尾清理（路线 A），能自足就别依赖外部。
+
+    ⚠ match 必须用**稳定标识**（name/code 这类），**不要用 id** —— 用 id 去 match
+      等于换个地方写死，换环境照样匹配不上。
+    ⚠ 探不到时不会自动补建（create_def 暂只登记备查、不执行），只会让引用它的步骤报
+      「变量未解析」，并在运行结果顶部提示缺哪个。所以第 2 步不能省。
+
+    exists_check 形如 {"method":"GET","url":"${BASE_URL}/api/v1/upstreams?page_size=100",
+                      "match":{"field":"name","equals":"autotest-default-upstream"},
                       "extract":{"upstreamId":"data.items[0].id"}}
-    create_def   形如 {"method":"POST","url":"/api/v1/upstreams","body":{...}}
+    create_def   形如 {"method":"POST","url":"${BASE_URL}/api/v1/upstreams","body":{...}}
+                 （登记备查，说明这资源当初是怎么造的；平台暂不自动执行）
     """
     from app.models.automation_resource import AutomationResource
 
