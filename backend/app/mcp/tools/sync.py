@@ -270,6 +270,18 @@ async def sync_orchestrated_scenario(
     # 环境变量键（跨环境，运行时按所选环境解析）
     for k in (await session.execute(select(EnvironmentVariable.key))).scalars().all():
         allow.add(k)
+    # 项目级前置资源（自动化数据）：运行时 run_scenario 会按 exists_check 探测并把
+    # extract 声明的键注入成变量，所以这些名字是合法引用——不加进来会把
+    # ${资源名} 误判成悬空、逼着 CC 回去写死 UUID。
+    from app.models.automation_resource import AutomationResource
+
+    for res in (await session.execute(
+        select(AutomationResource).where(AutomationResource.project_id == pid)
+    )).scalars().all():
+        allow.add(res.name)
+        for var in ((res.exists_check or {}).get("extract") or {}):
+            allow.add(str(var))
+
     # 源用例的场景变量（裸名 + SV_ 前缀，与运行时注入一致）
     scenario_var_names: list[str] = []
     scid = None

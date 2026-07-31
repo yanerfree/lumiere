@@ -97,8 +97,10 @@ class TokenCache:
 
     async def _login(self, client: httpx.AsyncClient, role: str) -> str | None:
         url = self._login_url()
-        user = self._env.get(f"{role}_USER")
-        password = self._env.get(f"{role}_PASS")
+        # 环境里两种命名都见过：ADMIN_USER/ADMIN_PASS 与 ADMIN_USERNAME/ADMIN_PASSWORD。
+        # 只认前者会导致自动登录静默失效（探测前置资源、401 重试都拿不到 token）。
+        user = self._env.get(f"{role}_USER") or self._env.get(f"{role}_USERNAME")
+        password = self._env.get(f"{role}_PASS") or self._env.get(f"{role}_PASSWORD")
         if not url or not user or not password:
             return None
         try:
@@ -382,6 +384,55 @@ async def run_single_step(
         )
 
 
+async def _resolve_automation_resources(session, scenario, env: dict, token_cache=None) -> dict:
+    """把项目级前置资源（automation_resources）的 extract 值解析成变量。
+
+    这些资源是"环境里本该长期存在的基础数据"（上游/负载、隔离上下文……）。
+    以前只有存在性预检、拿不到 id，编排链只能把 UUID 写死；现在跑前探一次、
+    按 exists_check.extract 抽出 id 注入 env，步骤里就能 ${资源名} 引用。
+    """
+    from app.services import precheck_service
+
+    project_id = getattr(scenario, "project_id", None)
+    if not project_id:
+        return {}
+    base = (env.get("BASE_URL") or "").rstrip("/")
+    if not base:
+        return {}
+
+    from app.models.automation_resource import AutomationResource
+
+    resources = (await session.execute(
+        select(AutomationResource).where(AutomationResource.project_id == project_id)
+    )).scalars().all()
+    if not resources:
+        return {}
+
+    headers = {}
+    token = env.get("AUTH_TOKEN")
+    async with httpx.AsyncClient(timeout=15, verify=False) as probe_client:
+        if not token and token_cache is not None:
+            token = await token_cache.get_token(probe_client)
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    out: dict = {}
+    async with httpx.AsyncClient(timeout=15, verify=False) as client:
+        for res in resources:
+            try:
+                item = await precheck_service._check_one(client, base, headers, res)
+            except Exception:
+                continue
+            for k, v in (item.get("values") or {}).items():
+                out[k] = v
+            # 没声明 extract 时，资源名本身也可当变量用（值取匹配到的 id）
+            if res.name not in out and item.get("exists") and item.get("values"):
+                first = next(iter(item["values"].values()), None)
+                if first is not None:
+                    out.setdefault(res.name, first)
+    return out
+
+
 async def run_scenario(
     scenario: ApiTestScenario,
     steps: list[ApiTestStep],
@@ -408,6 +459,15 @@ async def run_scenario(
                 logger.warning("解析源用例场景变量失败 case_id=%s: %s", scenario.source_case_id, e)
         if token_cache is None:
             token_cache = TokenCache(env)
+
+        # 项目级前置资源（自动化数据）：跑前按 exists_check 探一遍，把 extract 声明的值
+        # 注入成变量，让步骤能写 ${资源名} 而不是写死 UUID。
+        # 探测发生在所有步骤之前，此时还没登录过，必须用 TokenCache 自己换一个 token，
+        # 否则被测系统直接 401、探不到任何东西（等于这条路白给）。
+        try:
+            env.update(await _resolve_automation_resources(session, scenario, env, token_cache))
+        except Exception as e:
+            logger.warning("解析项目级前置资源失败 scenario=%s: %s", scenario.code, e)
 
         yield RunEvent(type="scenario_start", data={
             "scenarioId": str(scenario.id),

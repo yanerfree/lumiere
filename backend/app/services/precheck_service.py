@@ -108,6 +108,20 @@ async def _check_one(client: httpx.AsyncClient, base: str, headers: dict, res: A
         data = None
     exists = _match_exists(data, chk.get("match") or {})
     item.update(exists=exists, reason=None if exists else "未匹配到目标资源")
+    # 顺带把 extract 里声明的值抽出来 —— 光判断"存在"不够，编排步骤要的是它的 id。
+    # 形如 {"extract": {"upstreamId": "data.items[0].id"}}
+    if exists:
+        # 用执行引擎那套 JSONPath-lite：_dig 只认点号，取不了 data[0].id 这种下标，
+        # 而列表取第 N 个恰恰是前置资源最常见的写法。
+        from app.services.api_test_runner import _extract_value
+
+        values = {}
+        for var, path in (chk.get("extract") or {}).items():
+            v = _extract_value(data, str(path))
+            if v is not None:
+                values[str(var)] = v
+        if values:
+            item["values"] = values
     return item
 
 
