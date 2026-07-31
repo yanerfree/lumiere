@@ -626,10 +626,13 @@ async def upsert_automation_resource(
     解决的问题：编排链常依赖环境里已有的资源（上游/负载、隔离上下文、被订阅的应用……）。
     如果把它们的 UUID 写成 literal 场景变量，换环境或该资源被删就全挂，而且看不出
     这条链到底依赖什么。登记成自动化数据后：
-      · 跑自动化前会预检其存在性（exists_check）
-      · 缺失时可按 create_def 补建（需用户确认）
+      · 场景开跑前（第一个步骤之前）自动按 exists_check 探测一次，把 extract 声明的键
+        注入成变量 —— 这是「全局前置」，不占步骤位、不出现在步骤列表里
       · keep=true 表示长期保留、不被用例的自建自删逻辑清掉
-    步骤里用 ${资源名} 或场景变量 kind=global_ref 引用，不再写死 UUID。
+      · ⚠ create_def 目前**只登记不执行**：探不到时不会自动补建，只会让引用它的步骤
+        报「变量未解析」。所以该资源必须确实存在于目标环境；否则请改走
+        「场景内前置步骤自建 + 末尾清理」那条路。
+    步骤里用 ${资源名} 引用，不再写死 UUID。
 
     exists_check 形如 {"method":"GET","url":"/api/v1/upstreams",
                       "match":{"field":"name","equals":"default-upstream"},
@@ -689,6 +692,7 @@ async def upsert_automation_resource(
         "keep": res.keep,
         "hasCreateDef": res.create_def is not None,
         "message": f"已{'更新' if action == 'updated' else '登记'}前置资源「{res.name}」。"
-                   f"步骤里用 ${{{res.name}}} 引用，别再写死 UUID。"
-                   + ("" if res.create_def else " ⚠ 未提供 create_def：缺失时只能报错，不能自动补建。"),
+                   f"场景开跑前会自动探测并注入，步骤里用 ${{{res.name}}} 引用，别再写死 UUID。"
+                   " ⚠ 探不到时不会自动补建（create_def 暂只登记不执行），"
+                   "只会让引用它的步骤报「变量未解析」——请确认该资源在目标环境确实存在。",
     }

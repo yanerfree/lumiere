@@ -44,8 +44,10 @@ mcp = FastMCP(
    （上游/负载 upstreamId、隔离上下文 isolationId、被订阅的应用 appId……）。
    把这些 UUID 存成 kind=literal 场景变量是**错的**——换环境或该资源被删就全挂，
    而且看不出这条链依赖什么。两条正确路线，二选一：
-     · 该资源本来就该长期存在 → tb_upsert_automation_resource 登记为项目级前置数据
-       （带 exists_check 预检、create_def 缺失时补建、keep 保留），步骤里 ${资源名} 引用；
+     · 该资源本来就该长期存在（目标环境里确实有）→ tb_upsert_automation_resource 登记为
+       项目级前置数据：场景开跑前自动按 exists_check 探一次、把 extract 的键注入成变量，
+       步骤里 ${资源名} 引用。这是"全局前置"，不占步骤位。
+       ⚠ 探不到不会自动补建（create_def 目前只登记不执行），所以资源必须真的存在；
      · 该资源属于本次测试的自建数据 → 在场景开头加步骤**自己创建**、variables_extract
        提取 id、末尾加清理步骤删掉（自建自删，可重复跑）。
    判断标准：这条链换到一个干净环境还能不能跑通？不能就说明前置数据没交代清楚。
