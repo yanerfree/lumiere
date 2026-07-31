@@ -281,6 +281,9 @@ async def run_batch_scenarios(
 async def list_api_test_folders(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
+    # 必须跟场景列表用同一个 kind 口径。否则目录树数的是全部、列表只显示一部分，
+    # 出现"树上写着 5 条、点进去暂无数据"这种自相矛盾。
+    kind: str | None = Query(None, description="single | orchestrated | all"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ):
@@ -289,7 +292,12 @@ async def list_api_test_folders(
     )
     all_folders = result.scalars().all()
 
-    sc_all = await session.execute(select(ApiTestScenario.folder_id).where(ApiTestScenario.branch_id == branch_id))
+    cnt_q = select(ApiTestScenario.folder_id).where(ApiTestScenario.branch_id == branch_id)
+    if kind == "single":
+        cnt_q = cnt_q.where(ApiTestScenario.source_case_id.is_(None))
+    elif kind == "orchestrated":
+        cnt_q = cnt_q.where(ApiTestScenario.source_case_id.is_not(None))
+    sc_all = await session.execute(cnt_q)
     scenario_counts = {}
     for (fid,) in sc_all:
         if fid:
@@ -547,7 +555,11 @@ class UpdateStepRequest(BaseSchema):
     method: str | None = None
     url: str | None = None
     headers: dict | None = None
-    body: dict | None = None
+    # 请求体不一定是对象：有的接口就要裸数组（如 PUT /environments/{id}/variables
+    # 收的是 [{key,value}]），也有 raw 文本。列只是 JSONB，之前限死 dict 导致
+    # MCP 能写进去、编辑器一保存就 422「body: Input should be a valid dictionary」，
+    # 连带整条场景存不了、"添加步骤"也跟着失败。
+    body: dict | list | str | None = None
     assertions: list | None = None
     variables_extract: dict | None = None
     enabled: bool | None = None

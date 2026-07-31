@@ -32,6 +32,9 @@ export default function ApiTest() {
   const saveTimerRef = useRef(null)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
+  // 默认只看本模块自己的单接口场景。用例编排链归属某条用例，在「用例详情 → 接口测试」里维护，
+  // 混在这里会把模块淹掉（用户明确要求两个页面的数据不要混）。留个开关，不做成看不见。
+  const [kindFilter, setKindFilter] = useState('single')
   const [folderModalOpen, setFolderModalOpen] = useState(false)
   const [newFolderName, setNewFolderName] = useState('')
   const [newFolderParent, setNewFolderParent] = useState(null)
@@ -113,14 +116,15 @@ export default function ApiTest() {
   const fetchFolders = useCallback(async () => {
     if (!branchId) return
     try {
-      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests/folders`)
+      // kind 必须和 fetchScenarios 一致，否则目录树的计数会和列表对不上
+      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests/folders?kind=${kindFilter}`)
       const tree = res.data || []
       setFolderTree(tree)
       if (!selectedFolderId && !selectedScenario && tree.length > 0) {
         setSelectedFolderId(tree[0].id)
       }
     } catch { /* */ }
-  }, [projectId, branchId])
+  }, [projectId, branchId, kindFilter])
 
   useEffect(() => { fetchFolders() }, [fetchFolders])
 
@@ -128,10 +132,10 @@ export default function ApiTest() {
     if (!branchId) return
     setLoading(true)
     try {
-      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests`)
+      const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests?kind=${kindFilter}`)
       setScenarios(res.data || [])
     } catch { /* */ } finally { setLoading(false) }
-  }, [projectId, branchId])
+  }, [projectId, branchId, kindFilter])
 
   useEffect(() => { fetchScenarios() }, [fetchScenarios])
 
@@ -458,6 +462,8 @@ export default function ApiTest() {
           onSearchChange={setSearchKeyword}
           statusFilter={statusFilter}
           onStatusChange={setStatusFilter}
+          kindFilter={kindFilter}
+          onKindChange={setKindFilter}
           onSelectScenario={(id) => loadScenario(id)}
           onDelete={handleDelete}
           onGenerate={() => { setGenOpen(true); form.resetFields() }}

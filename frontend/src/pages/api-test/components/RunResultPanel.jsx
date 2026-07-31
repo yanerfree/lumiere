@@ -36,8 +36,17 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
   const skipCount = results.filter(r => r.status === 'skip').length
   const totalDuration = results.reduce((s, r) => s + (r.duration || 0), 0)
 
-  const getStepDetail = (stepId) => {
-    const step = (scenario?.steps || []).find(s => s.id === stepId)
+  // 详情优先取本次运行事件自带的（后端 step_result 直接带 request/response/断言/error）。
+  // scenario.steps[].lastResponse 是打开页面时加载的那一份，跑完不刷新就是旧的甚至没有，
+  // 只靠它会让刚跑完的步骤展开显示「暂无详情数据」。
+  const getStepDetail = (r) => {
+    if (r && (r.request || r.error || r.responseBody !== undefined || r.assertions)) {
+      return {
+        request: r.request, error: r.error, body: r.responseBody,
+        assertions: r.assertions, statusCode: r.statusCode, duration: r.duration,
+      }
+    }
+    const step = (scenario?.steps || []).find(s => s.id === r?.stepId)
     return step?.lastResponse || null
   }
 
@@ -70,8 +79,15 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
       <div style={{ flex: 1, overflow: 'auto' }}>
         {results.map((r, i) => {
           const isExpanded = expandedId === r.stepId
-          const detail = isExpanded ? getStepDetail(r.stepId) : null
+          const detail = isExpanded ? getStepDetail(r) : null
           const isFail = r.status === 'fail'
+          // 失败原因直接摆在行上。请求都没发出去的那种失败（变量未解析、连不上）没有
+          // 状态码也没有耗时，不写出来这一行就完全不说话。
+          const failHint = isFail
+            ? (r.error || (r.assertions || []).filter(a => !a.passed)
+                .map(a => a.type === 'status' ? `状态码期望 ${a.operator || '=='} ${JSON.stringify(a.value)}，实际 ${r.statusCode}` : `断言未通过: ${a.type}`)
+                .join('；'))
+            : null
 
           return (
             <div key={r.stepId || i}>
@@ -113,6 +129,15 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
                 {isExpanded ? <DownOutlined style={{ fontSize: 10, color: '#c9cdd4' }} /> :
                               <RightOutlined style={{ fontSize: 10, color: '#c9cdd4' }} />}
               </div>
+
+              {failHint && !isExpanded && (
+                <div style={{
+                  padding: '4px 16px 6px 44px', fontSize: 11, color: '#e8453c',
+                  background: 'rgba(232,69,60,0.04)', borderLeft: '3px solid #e8453c',
+                  borderBottom: '1px solid rgba(0,0,0,0.03)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                }} title={failHint}>{failHint}</div>
+              )}
 
               {/* 展开详情 */}
               {isExpanded && detail && (

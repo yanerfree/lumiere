@@ -122,7 +122,10 @@ export default function FolderTree({
                     }
                   }}
                 >
-                  {editingFolderId === node.folderId ? (
+                  {/* 必须先判 editingFolderId 非空：「未分类」是伪节点，folderId 就是 null，
+                      而 editingFolderId 初值也是 null —— null===null 让它一进页面就变成
+                      一个空的重命名输入框，看着像多了个没名字的目录。 */}
+                  {editingFolderId && editingFolderId === node.folderId ? (
                     <Input ref={renameRef} size="small" value={editingName}
                       onChange={e => setEditingName(e.target.value)}
                       onBlur={commitRename}

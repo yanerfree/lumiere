@@ -13,8 +13,10 @@ const ASSERT_TYPE_IN = { status: 'status', body_field: 'jsonPath', body_contains
 const ASSERT_TYPE_OUT = { status: 'status', jsonPath: 'body_field', contains: 'body_contains', header: 'header' }
 
 // 操作符：后端 → 编辑器
-const OP_IN = { '==': 'eq', '!=': 'ne', '>': 'gt', '<': 'lt', contains: 'contains', not_contains: 'contains', not_empty: 'notEmpty', in: 'eq' }
-const OP_OUT = { eq: '==', ne: '!=', gt: '>', lt: '<', contains: 'contains', notEmpty: 'not_empty' }
+// in 必须原样保留：以前映射成 eq，往返一次就把 in [200,204] 改成 == "200,204"，
+// 步骤明明返回 200 却判失败 —— 打开编辑器保存一下就把 CC 写对的断言改坏了。
+const OP_IN = { '==': 'eq', '!=': 'ne', '>': 'gt', '<': 'lt', contains: 'contains', not_contains: 'contains', not_empty: 'notEmpty', in: 'in' }
+const OP_OUT = { eq: '==', ne: '!=', gt: '>', lt: '<', contains: 'contains', notEmpty: 'not_empty', in: 'in' }
 
 const toText = (v) => {
   if (v == null) return ''
@@ -32,7 +34,10 @@ export function stepToNode(st, i) {
       path: a.field || '',
       operator: OP_IN[a.operator] || 'eq',
       // status 用 value，body_field 用 expected —— 两种都收
-      expected: String(a.expected ?? a.value ?? ''),
+      // in 的值是数组，输入框只能放字符串 → 逗号串展示，回写时再拆回数组
+      expected: Array.isArray(a.value ?? a.expected)
+        ? (a.value ?? a.expected).join(',')
+        : String(a.expected ?? a.value ?? ''),
     })
   }
   for (const [variable, path] of Object.entries(st.variablesExtract || st.variables_extract || {})) {
@@ -71,7 +76,16 @@ export function nodeToStepPatch(node) {
     if (op.type === 'assertion') {
       const type = ASSERT_TYPE_OUT[op.assertType] || op.assertType
       const a = { type, operator: OP_OUT[op.operator] || op.operator }
-      if (type === 'status') a.value = /^\d+$/.test(op.expected || '') ? Number(op.expected) : op.expected
+      if (type === 'status') {
+        const raw = op.expected || ''
+        if (op.operator === 'in') {
+          // 拆回数组，数字保持数字类型（执行器按 int 比对状态码）
+          a.value = String(raw).split(',').map(v => v.trim()).filter(Boolean)
+            .map(v => (/^\d+$/.test(v) ? Number(v) : v))
+        } else {
+          a.value = /^\d+$/.test(raw) ? Number(raw) : raw
+        }
+      }
       else if (type === 'body_contains') a.value = op.expected
       else { a.field = op.path || ''; a.expected = op.expected }
       assertions.push(a)

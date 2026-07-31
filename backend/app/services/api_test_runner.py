@@ -513,6 +513,10 @@ async def run_scenario(
                     "request": result.request_data,
                 } if not result.error else {"error": result.error, "request": result.request_data}
 
+                # 详情随事件一起下发。以前只发状态码，前端要靠内存里那份 scenario 的
+                # lastResponse 取详情 —— 那是跑之前加载的，跑完不刷新就是空，展开只会看到
+                # 「暂无详情数据」。步骤在发请求前就挂掉（变量未解析）时更糟：statusCode
+                # 是 null、耗时 0ms、面板上一行红字什么都不说，用户只能看到"全失败"。
                 yield RunEvent(type="step_result", data={
                     "scenarioId": str(scenario.id),
                     "stepId": result.step_id,
@@ -521,6 +525,10 @@ async def run_scenario(
                     "status": result.status,
                     "statusCode": result.status_code,
                     "duration": result.duration,
+                    "error": result.error,
+                    "request": result.request_data,
+                    "responseBody": result.response_body,
+                    "assertions": result.assertions,
                 })
 
         await session.commit()

@@ -8,6 +8,7 @@ export default function ScenarioList({
   scenarios, selectedFolderIds, loading,
   searchKeyword, onSearchChange,
   statusFilter, onStatusChange,
+  kindFilter, onKindChange,
   onSelectScenario, onDelete,
   onGenerate, onCreate, onBatch,
   folderTree,
@@ -62,6 +63,21 @@ export default function ScenarioList({
             ].map(f => (
               <Button key={f.key} size="small" type={statusFilter === f.key ? 'primary' : 'default'}
                 onClick={() => onStatusChange(f.key)} style={{ borderRadius: 0, ...(f.key === 'all' ? { borderRadius: '8px 0 0 8px' } : f.key === 'deprecated' ? { borderRadius: '0 8px 8px 0' } : {}) }}>
+                {f.label}
+              </Button>
+            ))}
+          </Space>
+          {/* 归属切换：本模块管单接口，用例编排链在「用例详情 → 接口测试」里。
+              默认只看单接口，但留个口子能翻出来，不做成凭空消失。 */}
+          <Space size={0}>
+            {[
+              { key: 'single', label: '单接口' },
+              { key: 'orchestrated', label: '用例编排' },
+              { key: 'all', label: '不限' },
+            ].map(f => (
+              <Button key={f.key} size="small" type={kindFilter === f.key ? 'primary' : 'default'}
+                onClick={() => onKindChange(f.key)}
+                style={{ borderRadius: 0, ...(f.key === 'single' ? { borderRadius: '8px 0 0 8px' } : f.key === 'all' ? { borderRadius: '0 8px 8px 0' } : {}) }}>
                 {f.label}
               </Button>
             ))}
