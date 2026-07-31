@@ -11,6 +11,7 @@ exists_check 约定：
 """
 from __future__ import annotations
 
+import re
 import uuid
 from typing import Any
 
@@ -79,6 +80,10 @@ def _match_exists(data: Any, match: dict) -> bool:
 async def _check_one(client: httpx.AsyncClient, base: str, headers: dict, res: AutomationResource) -> dict:
     chk = res.exists_check or {}
     url = chk.get("url") or ""
+    # 两种写法都得认：写成路径 /api/xx，或写成 ${BASE_URL}/api/xx。
+    # 后者若不先替换，下面又会拼一次 base，变成 http://host/${BASE_URL}/api/xx。
+    if url:
+        url = re.sub(r"\$\{\s*BASE_URL\s*\}", base.rstrip("/"), url)
     if url and not url.lower().startswith("http"):
         url = f"{base}/{url.lstrip('/')}"
     method = (chk.get("method") or "GET").upper()
