@@ -417,20 +417,30 @@ async def _resolve_automation_resources(session, scenario, env: dict, token_cach
         headers["Authorization"] = f"Bearer {token}"
 
     out: dict = {}
+    report: list[dict] = []
     async with httpx.AsyncClient(timeout=15, verify=False) as client:
         for res in resources:
             try:
                 item = await precheck_service._check_one(client, base, headers, res)
-            except Exception:
+            except Exception as ex:
+                report.append({"name": res.name, "ok": False, "reason": f"探测异常: {ex}"})
                 continue
-            for k, v in (item.get("values") or {}).items():
+            vals = item.get("values") or {}
+            for k, v in vals.items():
                 out[k] = v
-            # 没声明 extract 时，资源名本身也可当变量用（值取匹配到的 id）
-            if res.name not in out and item.get("exists") and item.get("values"):
-                first = next(iter(item["values"].values()), None)
+            if res.name not in out and item.get("exists") and vals:
+                first = next(iter(vals.values()), None)
                 if first is not None:
                     out.setdefault(res.name, first)
-    return out
+            if not item.get("exists"):
+                report.append({"name": res.name, "ok": False,
+                               "reason": item.get("reason") or "未在当前环境找到"})
+            elif not vals:
+                report.append({"name": res.name, "ok": False,
+                               "reason": "资源存在，但 exists_check.extract 没抽到值（检查 JSONPath）"})
+            else:
+                report.append({"name": res.name, "ok": True, "vars": sorted(vals.keys())})
+    return out, report
 
 
 async def run_scenario(
@@ -464,8 +474,10 @@ async def run_scenario(
         # 注入成变量，让步骤能写 ${资源名} 而不是写死 UUID。
         # 探测发生在所有步骤之前，此时还没登录过，必须用 TokenCache 自己换一个 token，
         # 否则被测系统直接 401、探不到任何东西（等于这条路白给）。
+        precheck_report: list[dict] = []
         try:
-            env.update(await _resolve_automation_resources(session, scenario, env, token_cache))
+            vals, precheck_report = await _resolve_automation_resources(session, scenario, env, token_cache)
+            env.update(vals)
         except Exception as e:
             logger.warning("解析项目级前置资源失败 scenario=%s: %s", scenario.code, e)
 
@@ -474,6 +486,17 @@ async def run_scenario(
             "title": scenario.title,
             "stepCount": len(steps),
         })
+
+        # 跑前预检结论：缺哪个前置资源要当场说，别等用到它的那一步才报"变量未解析"
+        if precheck_report:
+            missing = [r for r in precheck_report if not r.get("ok")]
+            yield RunEvent(type="precheck_result", data={
+                "scenarioId": str(scenario.id),
+                "total": len(precheck_report),
+                "readyCount": len(precheck_report) - len(missing),
+                "missing": missing,
+                "resources": precheck_report,
+            })
 
         results = []
         async with httpx.AsyncClient(timeout=30, verify=False) as client:

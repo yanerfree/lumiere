@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table } from 'antd'
+import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table, Alert } from 'antd'
 import {
   ArrowLeftOutlined, PlayCircleOutlined, SaveOutlined,
   PlusOutlined, DeleteOutlined, HolderOutlined,
@@ -444,6 +444,7 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   const [stepResults, setStepResults] = useState([])   // 逐步执行详情
   const [showPanel, setShowPanel] = useState(false)
   const [reportId, setReportId] = useState(null)
+  const [precheck, setPrecheck] = useState(null)   // 跑前前置资源预检结论
 
   const base = `/projects/${projectId}/branches/${branchId}/api-tests`
 
@@ -497,10 +498,11 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   const run = () => {
     if (!scenario) return
     if (!runEnv) { message.warning('请先选择执行环境（需要 BASE_URL）'); return }
-    setRunning(true); setResult(null); setStepResults([]); setReportId(null); setShowPanel(true)
+    setRunning(true); setResult(null); setStepResults([]); setReportId(null); setPrecheck(null); setShowPanel(true)
     api.stream(`${base}/run`, { scenarioIds: [scenario.id], envId: runEnv }, {
       onChunk: (data) => {
         // 逐步推进：只显示汇总的话，失败了也不知道是哪一步、为什么
+        if (data.type === 'precheck_result') setPrecheck(data)
         if (data.type === 'step_result') setStepResults(prev => [...prev, data])
         if (data.type === 'scenario_done') setResult({ passed: data.passed, passCount: data.passCount, failCount: data.failCount })
         if (data.type === 'report_created') setReportId(data.reportId)
@@ -552,6 +554,23 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           onChange={saveNodes}
           nodeTypes={['api']}   // api_test_steps 存不下控制流节点，只放 API 请求
         />
+      )}
+
+      {showPanel && precheck?.missing?.length > 0 && (
+        // 前置资源探不到就当场说清楚，别让人对着后面一串"变量未解析"猜
+        <Alert type="warning" showIcon style={{ marginTop: 10 }}
+          message={`前置资源预检：${precheck.readyCount}/${precheck.total} 就绪，${precheck.missing.length} 个缺失`}
+          description={
+            <div style={{ fontSize: 12 }}>
+              {precheck.missing.map(m => (
+                <div key={m.name}><b>{m.name}</b> —— {m.reason}</div>
+              ))}
+              <div style={{ color: '#86909c', marginTop: 4 }}>
+                引用这些资源的步骤会报「变量未解析」。请确认它们在所选环境确实存在，
+                或改为在场景开头自建 + 末尾清理。
+              </div>
+            </div>
+          } />
       )}
 
       {showPanel && (stepResults.length > 0 || running) && (
