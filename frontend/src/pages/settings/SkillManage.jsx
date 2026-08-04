@@ -7,6 +7,7 @@ import {
   SaveOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
+import ProjectSkillSection from './ProjectSkillSection'
 
 const { Text, Paragraph } = Typography
 
@@ -125,7 +126,8 @@ export default function SkillManage() {
           Skill 管理
         </h2>
         <span style={{ fontSize: 13, color: '#86909c' }}>
-          Skill 定义 AI 的行为 — 做什么、怎么做、调用哪些工具、输出什么。每个 Skill 是一个可执行的 AI 工作流。
+          Skill 定义 AI 的行为 — 做什么、怎么做、调用哪些工具、输出什么。本页管两类：
+          上半是<b>平台 Skill</b>（后端执行、绑模型档位），下半是<b>项目 Skill</b>（Claude Code 侧执行，可上传共享给其它项目）。
         </span>
       </div>
 
@@ -225,6 +227,8 @@ export default function SkillManage() {
           </Card>
         ))}
       </div>
+
+      <ProjectSkillSection />
 
       <Drawer
         title={<Space><EditOutlined /> 编辑 Skill <Text code>{editSkill}</Text></Space>}

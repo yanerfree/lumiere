@@ -108,7 +108,7 @@ async function request(url, options = {}, _retried = false) {
 
   // 403
   if (res.status === 403) {
-    message.error('无权限执行此操作')
+    if (!options.silent) message.error('无权限执行此操作')
     return Promise.reject(new Error('无权限'))
   }
 
@@ -125,7 +125,8 @@ async function request(url, options = {}, _retried = false) {
       errMsg = fieldErrors.join('；')
     }
     errMsg = errMsg || `请求失败 (${res.status})`
-    message.error(errMsg)
+    // silent：常驻轮询用（顶栏服务状态等），失败别每隔几十秒弹一次 toast 刷屏
+    if (!options.silent) message.error(errMsg)
     return Promise.reject(new Error(errMsg))
   }
 
@@ -133,7 +134,7 @@ async function request(url, options = {}, _retried = false) {
 }
 
 export const api = {
-  get: (url) => request(url),
+  get: (url, options) => request(url, options),
   post: (url, body) => request(url, { method: 'POST', body }),
   put: (url, body) => request(url, { method: 'PUT', body }),
   patch: (url, body) => request(url, { method: 'PATCH', body }),

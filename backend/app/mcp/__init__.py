@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills
 
 mcp = FastMCP(
     name="testBench",
@@ -171,6 +171,24 @@ mcp = FastMCP(
 - 每张截图用相对路径 ![](screenshots/NN_xxx.png) 引用，紧接一行 *图：说明*
 - 操作步骤具体到按钮名称、输入内容、预期结果；禁止模糊词；禁止写死具体 URL
 - 保存为 docs/{title}.md
+
+当用户要求把本项目的 skill 传到平台 / 从平台取 skill 时：
+
+【推上去】
+- 读本地 .claude/skills/<name>/SKILL.md（有 references/ 等附属文件一起读）
+- 调 tb_push_skill(project_id, content=SKILL.md全文, files={相对路径:文本})
+- name 不传就取 frontmatter 里的 name；同名会覆盖，覆盖前自动留档可回滚
+- visibility 默认 public（其它项目可取用），只想自己用就传 project
+- 一次推多个就循环调用，**推之前把清单报给用户确认**（同 ⑦ 条纪律）
+
+【取下来】
+- tb_list_skills(project_id) 看有哪些 → tb_pull_skill(skill_id=...) 拿全文
+- 按返回的 writeTo / extraWriteTo 路径写进本地 .claude/skills/，写完告诉用户重启会话才生效
+
+【边界·别搞混】本通道存的是**客户端侧执行**的 skill —— 跑在开发者机器的
+Claude Code 里，用 Bash/Edit/Playwright 这些本地工具。平台只做存取，
+永不把它们当 prompt 执行。内置的 tb-* 是另一类（平台侧执行、绑 AI 模型档位），
+不在本通道里，也不要试图用 tb_push_skill 覆盖它们。
 """,
 )
 
@@ -465,6 +483,29 @@ _register(
     sync.list_global_data,
     name="tb_list_global_data",
     description="【回推前查】汇总项目级**可引用**全局数据（全局变量+各环境变量键+自动化共享资源，凭证脱敏），帮你判断哪些走 global_ref、哪些别写死。参数: project_id(项目UUID)",
+)
+
+
+# ── Skill 共享 ───────────────────────────────────
+
+_section("Skill 共享")
+
+_register(
+    skills.push_skill,
+    name="tb_push_skill",
+    description="【把本项目的 skill 推上平台】读你本地 .claude/skills/<name>/ 的内容，推到 testBench 存起来，默认 visibility=public 即其它项目可取用。存的是**客户端侧执行**的 skill（跑在开发者机器的 Claude Code 里，用 Bash/Edit/Playwright），平台只存取、永不当 prompt 执行 —— 跟内置 tb-* 不是一类。同名会覆盖，覆盖前自动留档可回滚。参数: project_id(项目UUID), content(SKILL.md全文,必填), name(可选,不传则取 frontmatter 里的 name), files(可选,附属文件{相对路径:文本内容},如 references/api.md), description(可选,不传取 frontmatter), visibility(public全平台可取/project仅本项目,默认public), overwrite(默认true)",
+)
+
+_register(
+    skills.list_skills,
+    name="tb_list_skills",
+    description="【看平台上有哪些 skill 可取用】列出可用的项目 skill(客户端侧执行那类)。传 project_id = 本项目的 + 全平台共享的；不传 = 只看全平台共享的。返回里的 skillId 拿去喂 tb_pull_skill。参数: project_id(可选,项目UUID), include_shared(默认true)",
+)
+
+_register(
+    skills.pull_skill,
+    name="tb_pull_skill",
+    description="【把平台上的 skill 取到本地】拿一个 skill 的全文和附属文件，返回里带 writeTo 落盘路径(.claude/skills/<name>/SKILL.md)，照着写文件即可。定位二选一：skill_id(推荐,跨项目取用用它,要求该 skill 是 public)，或 project_id + name(取自己项目的,不受 public 限制)。参数: skill_id(可选), project_id(可选), name(可选)",
 )
 
 

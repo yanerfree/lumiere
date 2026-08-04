@@ -8,10 +8,12 @@ import {
   CloudServerOutlined, ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
   NodeIndexOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
+  DeploymentUnitOutlined,
 } from '@ant-design/icons'
 import { api } from './utils/request'
 import { useLang } from './utils/i18n.jsx'
 import BranchSelector from './components/BranchSelector'
+import ServiceStatusBadge from './components/ServiceStatusBadge'
 import ProjectList from './pages/projects/ProjectList'
 import CaseManagement from './pages/cases/CaseManagement'
 import CaseDetail from './pages/cases/CaseDetail'
@@ -45,6 +47,7 @@ import Exploratory from './pages/exploratory/Exploratory'
 import Documents from './pages/documents/Documents'
 import ApiTest from './pages/api-test/ApiTest'
 import ScenarioGen from './pages/scenario-gen/ScenarioGen'
+import SystemServices from './pages/settings/SystemServices'
 
 const { Header, Sider, Content } = Layout
 
@@ -109,6 +112,7 @@ function AppLayout() {
   ] : [
     { key: '/projects', icon: <FolderOutlined />, label: t('menu.projects') },
     { type: 'divider' },
+    { key: '/settings/services', icon: <DeploymentUnitOutlined />, label: t('menu.services') },
     { key: '/settings/env', icon: <SettingOutlined />, label: t('menu.envConfig') },
     { key: '/settings/channels', icon: <BellOutlined />, label: t('menu.channels') },
     {
@@ -209,6 +213,7 @@ function AppLayout() {
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <ServiceStatusBadge />
           <Tooltip title={lang === 'zh' ? '简体中文 → English' : 'English → 简体中文'}>
             <Button type="text" size="small" icon={<GlobalOutlined style={{ color: '#7cacf8' }} />}
               onClick={() => setLang(lang === 'zh' ? 'en' : 'zh')} />
@@ -277,6 +282,7 @@ function AppLayout() {
             <Route path="/projects/:projectId/documents" element={<Documents />} />
             <Route path="/projects/:projectId/api-test" element={<ApiTest />} />
             <Route path="/projects/:projectId/scenario-gen" element={<ScenarioGen />} />
+            <Route path="/settings/services" element={<SystemServices />} />
             <Route path="/settings/env" element={<EnvConfig />} />
             <Route path="/settings/channels" element={<ChannelConfig />} />
             <Route path="/settings/ai-providers" element={<AIProviderConfig />} />

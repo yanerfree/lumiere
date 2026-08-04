@@ -37,12 +37,14 @@ from app.api.documents import router as documents_router
 from app.api.case_file import router as case_file_router
 from app.api.api_test import router as api_test_router
 from app.api.skill_manage import router as skill_manage_router
+from app.api.project_skills import router as project_skills_router
 from app.api.knowledge import router as knowledge_router
 from app.api.screenshots import router as screenshots_router
 from app.api.toolbox import router as toolbox_router
 from app.api.http_client import router as http_client_router
 from app.api.scenario_gen import router as scenario_gen_router
 from app.api.mcp_keys import router as mcp_keys_router
+from app.api.system_services import router as system_services_router
 from app.core.middleware import CamelCaseResponse, TraceIdMiddleware
 
 # --- MCP Server ---
@@ -291,11 +293,13 @@ app.include_router(api_test_router)
 app.include_router(scenario_gen_router)
 app.include_router(case_file_router)
 app.include_router(skill_manage_router)
+app.include_router(project_skills_router)
 app.include_router(knowledge_router)
 app.include_router(screenshots_router)
 app.include_router(toolbox_router)
 app.include_router(http_client_router)
 app.include_router(mcp_keys_router)
+app.include_router(system_services_router)
 
 # --- MCP Server ---
 # 只在独立端口（MCP_PORT，默认 18800）暴露，见 _start_standalone_mcp_server()。

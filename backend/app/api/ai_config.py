@@ -293,26 +293,54 @@ async def _do_test_connection(
             "max_tokens": 5,
         }
 
+    # 「测试连接」必须测应用真正走的那条路,否则结果会骗人:网关对非 Haiku 模型在 SDK 直连上
+    # 是持续 429,而真实调用会自动降级到 CLI 通道(claude-proxy)后成功 —— 裸测会把可用的配置
+    # 标成"异常"。所以这里也带上同一套处理:摘掉模型不接受的采样参数 + 429 降级 CLI 通道。
+    from app.services.ai.llm_client import (
+        _drop_rejected_param,
+        _has_proxy_channel,
+        _proxy_endpoint,
+        _supports_temperature,
+    )
+
+    if not _supports_temperature(test_body.get("model")):
+        test_body.pop("temperature", None)
+
     start = time.time()
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(test_url, json=test_body, headers=headers)
+
+            if resp.status_code == 400 and _drop_rejected_param(test_body, resp.text):
+                resp = await client.post(test_url, json=test_body, headers=headers)
+
+            via_proxy = False
+            if resp.status_code == 429 and _has_proxy_channel(test_url, provider):
+                fb = _proxy_endpoint()
+                resp = await client.post(fb, json=test_body, headers=headers, timeout=600)
+                via_proxy = True
+
         latency_ms = int((time.time() - start) * 1000)
 
         if resp.status_code == 200:
             data = resp.json()
             resp_model = data.get("model", model or "unknown")
+            suffix = "（经 CLI 通道，网关对该模型限流 SDK 直连）" if via_proxy else ""
             return {
                 "success": True,
-                "message": f"连接成功 · {resp_model}",
+                "message": f"连接成功 · {resp_model}{suffix}",
                 "latencyMs": latency_ms,
                 "model": resp_model,
+                "viaProxy": via_proxy,
             }
         else:
             error_text = resp.text[:200]
+            hint = ""
+            if resp.status_code == 429:
+                hint = "（网关限流；CLI 降级通道不可用，请确认 claude-proxy 在跑）"
             return {
                 "success": False,
-                "message": f"HTTP {resp.status_code}: {error_text}",
+                "message": f"HTTP {resp.status_code}{hint}: {error_text}",
                 "latencyMs": latency_ms,
             }
     except httpx.TimeoutException:

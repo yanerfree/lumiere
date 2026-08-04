@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import random
+import re
 from dataclasses import dataclass, field
 from typing import AsyncIterator
 
@@ -33,6 +34,38 @@ _BACKOFF_CAP = 30.0
 # 降级通道专用超时：proxy 每次要冷启真 CLI（实测非流式 ~36s），大 prompt 更久，
 # 沿用主路的 ai_timeout_seconds(默认120) 会把兜底也拖超时，等于没兜底。
 _PROXY_TIMEOUT = 600.0
+
+
+# 新一代模型不再接受采样参数,发了直接 400(网关原话:"`temperature` is deprecated for this model.")。
+# 实测:claude-sonnet-5 带 temperature → 400,去掉后 → 请求合法(仅可能被限流)。
+# 覆盖 5 系(opus/sonnet/fable/mythos)与 opus-4-7/4-8;老模型(haiku-4-5、sonnet-4-6 等)仍接受。
+_NO_SAMPLING_PARAMS = re.compile(
+    r"claude-(?:opus|sonnet|fable|mythos)-5|claude-opus-4-(?:7|8)", re.I
+)
+
+
+def _supports_temperature(model: str | None) -> bool:
+    return not _NO_SAMPLING_PARAMS.search(model or "")
+
+
+def _has_proxy_channel(current_endpoint: str, provider: str) -> bool:
+    """有没有可用的 CLI 降级通道(proxy 只讲 OpenAI 协议,anthropic provider 不适用)。"""
+    if provider == "anthropic":
+        return False
+    fb = _proxy_endpoint()
+    return bool(fb) and fb != current_endpoint
+
+
+def _drop_rejected_param(body: dict, err_text: str) -> str | None:
+    """网关报「某参数不支持」时,从请求体里摘掉它(就地改),返回被摘掉的参数名。
+
+    _NO_SAMPLING_PARAMS 漏掉新模型时靠这里兜住,避免又一次全线 400。
+    """
+    for p in ("temperature", "top_p", "top_k"):
+        if p in body and p in (err_text or ""):
+            body.pop(p, None)
+            return p
+    return None
 
 
 def _proxy_endpoint() -> str:
@@ -95,13 +128,19 @@ def _build_openai_body(
     temperature: float | None = None,
     config=None,
 ) -> dict:
-    return {
-        "model": model or (config.model if config else settings.ai_model),
+    mdl = model or (config.model if config else settings.ai_model)
+    body = {
+        "model": mdl,
         "messages": messages,
         "max_tokens": max_tokens or (config.max_tokens if config else settings.ai_max_tokens),
-        "temperature": temperature if temperature is not None else (config.temperature if config else settings.ai_temperature),
         "stream": stream,
     }
+    if _supports_temperature(mdl):
+        body["temperature"] = (
+            temperature if temperature is not None
+            else (config.temperature if config else settings.ai_temperature)
+        )
+    return body
 
 
 def _build_anthropic_body(
@@ -121,13 +160,18 @@ def _build_anthropic_body(
         else:
             chat_messages.append({"role": m["role"], "content": m["content"]})
 
+    mdl = model or (config.model if config else settings.ai_model)
     body: dict = {
-        "model": model or (config.model if config else settings.ai_model),
+        "model": mdl,
         "messages": chat_messages,
         "max_tokens": max_tokens or (config.max_tokens if config else settings.ai_max_tokens),
-        "temperature": temperature if temperature is not None else (config.temperature if config else settings.ai_temperature),
         "stream": stream,
     }
+    if _supports_temperature(mdl):
+        body["temperature"] = (
+            temperature if temperature is not None
+            else (config.temperature if config else settings.ai_temperature)
+        )
     if system_parts:
         body["system"] = "\n\n".join(system_parts)
     return body
@@ -176,6 +220,11 @@ async def _post_with_retry(
         if resp.status_code == 200:
             return resp
         last = resp
+        # 429 且有 CLI 通道可用 → 立刻降级,不做长退避。
+        # 网关对非 Haiku 模型是**持续**限流(不是瞬时):实测退避 3×30s 后仍 429,总耗时 ~98s
+        # 才靠降级成功;而 proxy 配额独立、几秒就回。干等纯属浪费。
+        if resp.status_code == 429 and _has_proxy_channel(endpoint, provider):
+            break
         if resp.status_code not in _RETRY_STATUS or attempt == _MAX_ATTEMPTS - 1:
             break
         delay = _retry_delay(resp, attempt)
@@ -185,11 +234,21 @@ async def _post_with_retry(
         )
         await asyncio.sleep(delay)
 
+    # 400 且是「参数不被该模型接受」→ 摘掉参数重试一次(正则漏网时的兜底)
+    if last is not None and last.status_code == 400:
+        dropped = _drop_rejected_param(body, last.text)
+        if dropped:
+            logger.warning("模型 %s 不接受 %s，去掉后重试", body.get("model"), dropped)
+            resp = await client.post(endpoint, json=body, headers=headers)
+            if resp.status_code == 200:
+                return resp
+            last = resp
+
     # 429 重试耗尽 → 走 CLI 通道（proxy 只讲 OpenAI 协议，anthropic provider 不降级）
-    if last is not None and last.status_code == 429 and provider != "anthropic":
+    if last is not None and last.status_code == 429:
         fb = _proxy_endpoint()
-        if fb and fb != endpoint:
-            logger.warning("网关持续限流，降级到 CLI 通道: %s", fb)
+        if _has_proxy_channel(endpoint, provider):
+            logger.warning("网关限流，降级到 CLI 通道: %s", fb)
             resp = await client.post(fb, json=body, headers=headers, timeout=_PROXY_TIMEOUT)
             if resp.status_code == 200:
                 return resp
@@ -278,7 +337,8 @@ async def stream(
                 # 首字节前失败才重试；已开始吐 delta 就不能重试（会重复输出）
                 status = resp.status_code
                 error_body = (await resp.aread()).decode("utf-8", errors="replace")[:500]
-                if status in _RETRY_STATUS and attempt < _MAX_ATTEMPTS - 1:
+                skip_backoff = status == 429 and _has_proxy_channel(target, provider)
+                if status in _RETRY_STATUS and attempt < _MAX_ATTEMPTS - 1 and not skip_backoff:
                     retry_delay = _retry_delay(resp, attempt)
 
             if retry_delay is not None:
@@ -290,9 +350,15 @@ async def stream(
                 await asyncio.sleep(retry_delay)
                 continue
 
-            if status == 429 and provider != "anthropic" and not proxy_tried:
+            # 400 参数不被接受 → 摘掉重试(同上,流式也要有)
+            if status == 400 and _drop_rejected_param(body, error_body):
+                logger.warning("模型 %s 不接受该采样参数，去掉后重试流式", body.get("model"))
+                attempt = 0
+                continue
+
+            if status == 429 and not proxy_tried:
                 fb = _proxy_endpoint()
-                if fb and fb != target:
+                if _has_proxy_channel(target, provider):
                     proxy_tried, target, attempt = True, fb, 0
                     logger.warning("网关持续限流，流式降级到 CLI 通道: %s", fb)
                     continue
