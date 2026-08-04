@@ -32,6 +32,10 @@ const NEW_ROUTE_PRESETS = [
   { name: '模型拒绝', path: '/mock-refusal/v1/chat/completions', presetMode: 'normal_refusal', statusCode: 200, responseType: 'refusal', finishReason: 'stop', responseBody: "I'm sorry, I can't assist with that request." },
   { name: '截断响应', path: '/mock-truncated/v1/chat/completions', presetMode: 'normal_length', statusCode: 200, responseType: 'text', finishReason: 'length', responseBody: 'This response was truncated because it reached the maximum token limit. The content is incomplete and ends mid-sentence, which is typical when the model hits max_tokens. The application should handle this by' },
   { name: '401 无效Key', path: '/mock-401/v1/chat/completions', presetMode: 'error_401_invalid_key', statusCode: 401, responseType: 'text', finishReason: 'stop', responseBody: 'Incorrect API key provided: sk-proj-****xxxx.' },
+  { name: '向量 Embeddings', path: '/v1/embeddings', presetMode: 'normal_embedding', statusCode: 200, responseType: 'embedding', finishReason: 'stop', responseBody: '' },
+  // Azure OpenAI：api-version=v1 走 /openai/v1/...，日期版本把部署名放在路径里
+  { name: 'Azure Chat (api-version=v1)', path: '/openai/v1/chat/completions', presetMode: 'normal_text', statusCode: 200, responseType: 'text', finishReason: 'stop', responseBody: 'This is a mock response from the LLM Mock service.' },
+  { name: 'Azure Chat (部署名通配)', path: '/openai/deployments/*/chat/completions', presetMode: 'normal_text', statusCode: 200, responseType: 'text', finishReason: 'stop', responseBody: 'This is a mock response from the LLM Mock service.' },
 ]
 
 export default function LlmMock() {
@@ -115,10 +119,21 @@ export default function LlmMock() {
   }, [routes])
   const isDefault = routeForm && routeForm.id === defaultRouteId
 
+  // 路径里的通配/查询串：* 只吃一段、** 跨层级、? 后面整段在匹配时忽略
+  const pathPattern = useMemo(() => {
+    const [body = '', query] = (routeForm?.path || '').split('?')
+    return {
+      hasWildcard: body.includes('*'),
+      hasQuery: query !== undefined,
+      // 通配路径本身不能直接请求，给一个能跑的示例地址
+      sample: body.replace(/\*+/g, 'gpt-4o-mini'),
+    }
+  }, [routeForm?.path])
+
   const fullUrl = useMemo(() => {
     if (!routeForm || !serviceStatus.running) return null
-    return `http://${window.location.hostname}:${serviceStatus.port}${routeForm.path}`
-  }, [routeForm, serviceStatus])
+    return `http://${window.location.hostname}:${serviceStatus.port}${pathPattern.sample}`
+  }, [routeForm, serviceStatus, pathPattern])
 
   const handleCreateRoute = async () => {
     try {
@@ -264,6 +279,16 @@ export default function LlmMock() {
   }
 
   const responseModeValue = routeForm?.responseMode || 'default'
+  const isEmbedding = routeForm?.responseType === 'embedding'
+
+  // 响应内容里写了个纯数字数组 → 固定向量；否则按输入文本确定性生成
+  const fixedVector = useMemo(() => {
+    if (!isEmbedding || !routeForm?.responseBody?.trim().startsWith('[')) return null
+    try {
+      const p = JSON.parse(routeForm.responseBody)
+      return Array.isArray(p) && p.length > 0 && p.every(x => typeof x === 'number') ? p : null
+    } catch { return null }
+  }, [isEmbedding, routeForm?.responseBody])
 
   const bodyHint = (() => {
     if (!routeForm) return ''
@@ -271,12 +296,17 @@ export default function LlmMock() {
     if (sc >= 400) return '只需填写错误消息，系统自动包装为 OpenAI 错误格式'
     if (routeForm.responseType === 'refusal') return '填写拒绝理由，放入 message.refusal'
     if (routeForm.responseType === 'tool_calls') return 'Tool Calls 在「高级设置」中配置'
+    if (routeForm.responseType === 'embedding') return '留空即按输入文本生成向量；填数字数组则固定返回该向量'
     return '填写 AI 回复文本，系统自动包装为 Chat Completion 格式'
   })()
 
   const previewJson = useMemo(() => {
     if (!routeForm) return ''
-    if (responseModeValue === 'random') return '// 随机模式：每次请求从内置模板池随机选取一条回复'
+    if (responseModeValue === 'random') {
+      return isEmbedding
+        ? '// 随机模式：每次请求返回一个随机向量（同一段文本两次调用也不一样，可用来测语义缓存「未命中」）'
+        : '// 随机模式：每次请求从内置模板池随机选取一条回复'
+    }
     const sc = routeForm.statusCode ?? 200
     if (sc >= 400) {
       const msg = routeForm.responseBody || 'Error message'
@@ -286,6 +316,19 @@ export default function LlmMock() {
     }
     const type = routeForm.responseType || 'text'
     const model = routeForm.modelMode === 'custom' && routeForm.customModel ? routeForm.customModel : '${request.model}'
+    if (type === 'embedding') {
+      const pt = routeForm.tokenMode === 'custom' ? (routeForm.customPromptTokens || 0) : '~auto'
+      return JSON.stringify({
+        object: 'list',
+        data: [{
+          object: 'embedding',
+          index: 0,
+          embedding: fixedVector || ['<按输入文本确定性生成，维度取请求 dimensions，否则按模型名推断（text-embedding-3-small → 1536）>'],
+        }],
+        model,
+        usage: { prompt_tokens: pt, total_tokens: pt },
+      }, null, 2)
+    }
     const msg = { role: 'assistant', content: null, refusal: null, annotations: [] }
     if (type === 'refusal') msg.refusal = routeForm.responseBody || "I'm sorry, I can't assist with that."
     else if (type === 'tool_calls') {
@@ -364,9 +407,19 @@ export default function LlmMock() {
               padding: '6px 12px', background: '#e0f7f6', border: '1px solid rgba(14,165,160,0.3)', borderRadius: 12,
             }}>
               <LinkOutlined style={{ color: '#0ea5a0', fontSize: 12 }} />
+              {pathPattern.hasWildcard && (
+                <Tag color="cyan" style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>示例</Tag>
+              )}
               <span style={{ fontSize: 12, fontFamily: MONO, color: '#0ea5a0', flex: 1, userSelect: 'all' }}>{fullUrl}</span>
               <Button size="small" type="text" icon={<CopyOutlined />} style={{ color: '#0ea5a0' }}
                 onClick={() => { copyToClipboard(fullUrl); message.success('已复制访问地址') }} />
+            </div>
+          )}
+          {/* 通配 / 带查询串的路径，说明清楚匹配规则，不然只能靠猜 */}
+          {(pathPattern.hasWildcard || pathPattern.hasQuery) && (
+            <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: -8, marginBottom: 16, lineHeight: 1.6 }}>
+              {pathPattern.hasWildcard && <>通配匹配：<code>*</code> 匹配一段（不跨 <code>/</code>），<code>**</code> 跨层级。</>}
+              {pathPattern.hasQuery && <>路径里 <code>?</code> 之后的查询串在匹配时忽略，带任意 <code>api-version</code> 都能命中。</>}
             </div>
           )}
           {!serviceStatus.running && (
@@ -391,25 +444,28 @@ export default function LlmMock() {
               <InputNumber value={routeForm.statusCode ?? 200} onChange={v => setRouteForm(f => ({ ...f, statusCode: v }))}
                 min={100} max={599} size="small" style={{ width: 80 }} />
             </div>
-            <div style={{ minWidth: 110 }}>
+            <div style={{ minWidth: 160 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应类型</div>
               <Select value={routeForm.responseType || 'text'} onChange={v => setRouteForm(f => ({ ...f, responseType: v }))}
-                size="small" style={{ width: 110 }}>
+                size="small" style={{ width: 160 }}>
                 <Select.Option value="text">文本回复</Select.Option>
                 <Select.Option value="tool_calls">Tool Calls</Select.Option>
                 <Select.Option value="refusal">模型拒绝</Select.Option>
+                <Select.Option value="embedding">向量 Embeddings</Select.Option>
               </Select>
             </div>
-            <div style={{ minWidth: 110 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>结束原因</div>
-              <Select value={routeForm.finishReason || 'stop'} onChange={v => setRouteForm(f => ({ ...f, finishReason: v }))}
-                size="small" style={{ width: 110 }}>
-                <Select.Option value="stop">stop</Select.Option>
-                <Select.Option value="length">length</Select.Option>
-                <Select.Option value="tool_calls">tool_calls</Select.Option>
-                <Select.Option value="content_filter">content_filter</Select.Option>
-              </Select>
-            </div>
+            {!isEmbedding && (
+              <div style={{ minWidth: 110 }}>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>结束原因</div>
+                <Select value={routeForm.finishReason || 'stop'} onChange={v => setRouteForm(f => ({ ...f, finishReason: v }))}
+                  size="small" style={{ width: 110 }}>
+                  <Select.Option value="stop">stop</Select.Option>
+                  <Select.Option value="length">length</Select.Option>
+                  <Select.Option value="tool_calls">tool_calls</Select.Option>
+                  <Select.Option value="content_filter">content_filter</Select.Option>
+                </Select>
+              </div>
+            )}
             <div style={{ flex: 1, minWidth: 170, maxWidth: 250 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>预设模式</div>
               <Select value={routeForm.presetMode} onChange={handlePresetChange}
@@ -449,11 +505,13 @@ export default function LlmMock() {
               <InputNumber value={routeForm.delayMs ?? 0} onChange={v => setRouteForm(f => ({ ...f, delayMs: v }))}
                 min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" />
             </div>
-            <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>SSE 间隔 (ms)</div>
-              <InputNumber value={routeForm.sseChunkDelayMs ?? 50} onChange={v => setRouteForm(f => ({ ...f, sseChunkDelayMs: v }))}
-                min={0} size="small" style={{ width: 80 }} placeholder="50" />
-            </div>
+            {!isEmbedding && (
+              <div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>SSE 间隔 (ms)</div>
+                <InputNumber value={routeForm.sseChunkDelayMs ?? 50} onChange={v => setRouteForm(f => ({ ...f, sseChunkDelayMs: v }))}
+                  min={0} size="small" style={{ width: 80 }} placeholder="50" />
+              </div>
+            )}
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Token 模式</div>
               <Radio.Group value={routeForm.tokenMode || 'auto'} onChange={e => setRouteForm(f => ({ ...f, tokenMode: e.target.value }))} size="small">
@@ -466,10 +524,12 @@ export default function LlmMock() {
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Prompt Tokens</div>
                 <InputNumber value={routeForm.customPromptTokens} onChange={v => setRouteForm(f => ({ ...f, customPromptTokens: v }))} min={0} size="small" style={{ width: 80 }} />
               </div>
-              <div>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Completion Tokens</div>
-                <InputNumber value={routeForm.customCompletionTokens} onChange={v => setRouteForm(f => ({ ...f, customCompletionTokens: v }))} min={0} size="small" style={{ width: 80 }} />
-              </div>
+              {!isEmbedding && (
+                <div>
+                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Completion Tokens</div>
+                  <InputNumber value={routeForm.customCompletionTokens} onChange={v => setRouteForm(f => ({ ...f, customCompletionTokens: v }))} min={0} size="small" style={{ width: 80 }} />
+                </div>
+              )}
             </>)}
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>模型模式</div>
@@ -489,7 +549,16 @@ export default function LlmMock() {
 
           {/* 随机模式提示 */}
           {responseModeValue === 'random' && (
-            <Alert type="info" showIcon message="随机模式：每次请求从内置模板池随机选取一条 AI 回复" style={{ fontSize: 12, marginBottom: 16 }} />
+            <Alert type="info" showIcon style={{ fontSize: 12, marginBottom: 16 }}
+              message={isEmbedding
+                ? '随机模式：每次请求返回随机向量，同一段文本前后两次不一致——用来测语义缓存「未命中」'
+                : '随机模式：每次请求从内置模板池随机选取一条 AI 回复'} />
+          )}
+
+          {/* 向量模式下响应内容填了非数字数组 —— 提醒它会被忽略，别以为原样返回 */}
+          {isEmbedding && responseModeValue !== 'random' && routeForm.responseBody?.trim() && !fixedVector && (
+            <Alert type="warning" showIcon style={{ fontSize: 12, marginBottom: 16 }}
+              message="响应内容不是数字数组，会被忽略：当前按输入文本确定性生成向量。想固定返回请填 [0.1, 0.2, 0.3] 这样的数组，或清空。" />
           )}
 
           {/* 响应内容 + 预览 — 左右分栏 */}
@@ -511,7 +580,9 @@ export default function LlmMock() {
                     style={{ fontFamily: MONO, fontSize: 12, flex: 1, minHeight: 200, resize: 'vertical' }}
                     placeholder={(routeForm.statusCode ?? 200) >= 400
                       ? '输入错误消息...\n如: Rate limit reached for gpt-4o...'
-                      : '输入 AI 回复文本...\n支持: ${request.model}  ${request.messages[-1].content}  ${timestamp}'}
+                      : isEmbedding
+                        ? '留空 → 按输入文本确定性生成向量（相同文本 → 相同向量，语义缓存能测出命中/未命中）\n填数字数组 → 固定返回该向量，如: [0.1, 0.2, 0.3]'
+                        : '输入 AI 回复文本...\n支持: ${request.model}  ${request.messages[-1].content}  ${timestamp}'}
                   />
                 ) : (
                   <div style={{ padding: '14px', background: 'transparent', borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)', fontSize: 12, color: '#8c8c8c' }}>

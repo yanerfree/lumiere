@@ -53,7 +53,7 @@
 | `app/services/ai_capabilities.py` → `CATEGORY_META[*].defaultModel` / `recommend` | 面板展示与推荐语（真正的播种在 alembic 迁移里） |
 | `app/config.py` → `ai_model` | `.env` 兜底默认 |
 | `app/services/ai/cli_agent.py` / `mcp_agent.py` | 模型兜底链末端 |
-| `app/services/llm_mock_manager.py` | LLM Mock 的假模型清单（装饰性） |
+| `app/services/llm_mock_manager.py` | LLM Mock 的假模型清单。chat 部分是装饰性的；**embedding 部分不是** —— 被测网关要在 `/v1/models` 里看到 embedding 模型，才认这个 Provider 能做语义缓存 |
 
 `app/api/ai_config.py` 里连通性探针固定用 haiku 发 `"hi"`，是最省的选择，不用跟着换。
 

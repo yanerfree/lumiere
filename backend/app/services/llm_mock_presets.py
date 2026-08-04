@@ -63,6 +63,24 @@ PRESETS: dict[str, dict] = {
         ],
     },
 
+    # ── 向量 Embeddings ──（响应内容留空即按输入文本确定性生成向量）
+    "normal_embedding": {
+        "label": "正常 - 向量 Embeddings",
+        "group": "normal",
+        "status_code": 200,
+        "finish_reason": "stop",
+        "response_type": "embedding",
+        "response_body": "",
+    },
+    "normal_embedding_fixed": {
+        "label": "正常 - 向量 (固定向量)",
+        "group": "normal",
+        "status_code": 200,
+        "finish_reason": "stop",
+        "response_type": "embedding",
+        "response_body": "[0.1, 0.2, 0.3]",
+    },
+
     # ── 客户端错误 4xx ──（只填错误消息，引擎自动包装为 OpenAI 错误格式）
     "error_400_invalid": {
         "label": "400 参数错误",

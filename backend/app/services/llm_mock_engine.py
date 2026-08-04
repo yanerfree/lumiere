@@ -1,12 +1,18 @@
-"""LLM Mock 引擎 — 路由匹配 + 响应生成 + SSE 流式 + Token 估算"""
+"""LLM Mock 引擎 — 路由匹配 + 响应生成 + SSE 流式 + Token 估算 + 向量 (Embeddings)"""
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import json
+import math
+import re
+import struct
 import time
 import uuid
 import string
 import random
+from functools import lru_cache
 from typing import AsyncIterator
 
 
@@ -350,6 +356,254 @@ async def build_response_stream(route: dict, request_body: dict) -> AsyncIterato
         yield _chunk({}, None, usage=usage_obj, choices_empty=True)
 
     yield "data: [DONE]\n\n"
+
+
+# ───── 向量 (Embeddings) ─────
+
+# 各家 embedding 模型的原生维度 —— 请求没带 dimensions 时按模型名推断
+EMBEDDING_MODEL_DIMS: dict[str, int] = {
+    "text-embedding-3-small": 1536,
+    "text-embedding-3-large": 3072,
+    "text-embedding-ada-002": 1536,
+    "text-embedding-v3": 1024,
+    "text-embedding-v2": 1536,
+    "text-embedding-v1": 1536,
+    "embedding-3": 2048,
+    "embedding-2": 1024,
+    "bge-m3": 1024,
+    "bge-large-zh-v1.5": 1024,
+}
+DEFAULT_EMBEDDING_DIM = 1536
+MAX_EMBEDDING_DIM = 4096
+# 密集分量的权重 —— 只为了让向量稠密好看，太大会稀释相似度
+_DENSE_WEIGHT = 0.3
+
+_CJK_START, _CJK_END = "一", "鿿"
+_TOKEN_RE = re.compile(rf"[a-z0-9]+|[{_CJK_START}-{_CJK_END}]")
+
+
+# ───── 路径通配匹配 ─────
+# Azure OpenAI 把「部署名」塞在路径里（/openai/deployments/gpt-4o-mini/chat/completions），
+# 一个部署配一条路由不现实，所以路由路径支持通配：
+#   *  匹配一段里的任意字符（不跨 /）
+#   ** 匹配任意层级（跨 /）
+# 路由路径里写了 ?query 的话只按 ? 前面的部分匹配 —— 直接把 Azure 那种带 api-version 的整条 URL
+# 粘进来也能命中，不然就是一个查不出原因的 404。
+
+@lru_cache(maxsize=256)
+def _compile_path_pattern(pattern: str) -> re.Pattern:
+    body = pattern.split("?", 1)[0]
+    out = []
+    for part in re.split(r"(\*\*|\*)", body):
+        if part == "**":
+            out.append(".*")
+        elif part == "*":
+            out.append("[^/]*")
+        elif part:
+            out.append(re.escape(part))
+    return re.compile("^" + "".join(out) + "$")
+
+
+def has_wildcard(pattern: str) -> bool:
+    return "*" in pattern.split("?", 1)[0]
+
+
+def path_matches(pattern: str, path: str) -> bool:
+    return _compile_path_pattern(pattern).fullmatch(path) is not None
+
+
+def is_embeddings_route(route: dict, path: str) -> bool:
+    """判断这次请求要不要按 embeddings 格式回。
+    显式配置 response_type=embedding 优先；路径以 /embeddings 结尾也算（兼容用户手建的路由 / 前缀兜底路由）。
+    """
+    if route.get("response_type") == "embedding":
+        return True
+    return path.rstrip("/").endswith("/embeddings")
+
+
+def collect_embedding_inputs(raw) -> list[str]:
+    """把 OpenAI 的 input 字段拍平成文本列表。
+    支持 str / list[str] / list[int](token ids) / list[list[int]]。
+    """
+    if raw is None:
+        return [""]
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, (int, float)):
+        return [str(raw)]
+    if isinstance(raw, list):
+        if not raw:
+            return [""]
+        # list[int] —— 整条当成一个输入（token ids）
+        if all(isinstance(x, (int, float)) and not isinstance(x, bool) for x in raw):
+            return [",".join(str(x) for x in raw)]
+        out = []
+        for item in raw:
+            if isinstance(item, str):
+                out.append(item)
+            elif isinstance(item, list):
+                out.append(",".join(str(x) for x in item))
+            else:
+                out.append(json.dumps(item, ensure_ascii=False, sort_keys=True))
+        return out or [""]
+    return [json.dumps(raw, ensure_ascii=False, sort_keys=True)]
+
+
+def resolve_embedding_dim(request_body: dict, model: str) -> int:
+    """维度优先级：请求 dimensions > 模型名推断 > 默认 1536。"""
+    requested = request_body.get("dimensions")
+    if isinstance(requested, (int, float)) and not isinstance(requested, bool):
+        dim = int(requested)
+        if dim > 0:
+            return min(dim, MAX_EMBEDDING_DIM)
+    return EMBEDDING_MODEL_DIMS.get(model, DEFAULT_EMBEDDING_DIM)
+
+
+def _tokenize_for_embedding(text: str) -> list[str]:
+    """英文按词、中文按单字 + 相邻双字 —— 让"相似文本"在向量上也相似。"""
+    tokens = _TOKEN_RE.findall(text.lower())
+    cjk = [t for t in tokens if len(t) == 1 and _CJK_START <= t <= _CJK_END]
+    bigrams = [cjk[i] + cjk[i + 1] for i in range(len(cjk) - 1)]
+    return tokens + bigrams
+
+
+def _dense_component(text: str, dim: int) -> list[float]:
+    """整段文本的密集分量 —— 让向量每一维都有值，看起来像真模型的输出，而不是一串 0。
+    shake_256 是可变长摘要，一次就能铺满任意维度。
+    """
+    raw = hashlib.shake_256(text.encode("utf-8")).digest(dim * 2)
+    ints = struct.unpack(f"<{dim}h", raw)
+    norm = math.sqrt(sum(i * i for i in ints)) or 1.0
+    return [i / norm for i in ints]
+
+
+def semantic_vector(text: str, dim: int) -> list[float]:
+    """确定性语义向量：同一段文本永远得到同一个向量，相似文本余弦相似度高、无关文本接近正交。
+    这样网关的语义缓存既能测出"命中"，也能测出"未命中"——全返回同一个假向量的话任何两个 prompt 都会 100% 相似。
+    用 hashlib 而不是内置 hash()，避免 PYTHONHASHSEED 让向量跨进程漂移。
+
+    骨架是按 token 做特征哈希（决定相似度），再叠一层权重很小的全文密集分量（只负责让向量稠密，
+    不同文本之间近似正交，不会把相似度搅乱）。
+    """
+    tokens = _tokenize_for_embedding(text)
+    if not tokens:
+        # 空输入也要给个稳定的非零向量，否则余弦相似度算不出来
+        tokens = ["\x00empty"]
+
+    sparse = [0.0] * dim
+    for token in tokens:
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+        h = int.from_bytes(digest, "big")
+        sparse[h % dim] += 1.0 if (h >> 63) & 1 else -1.0
+
+    sparse_norm = math.sqrt(sum(v * v for v in sparse)) or 1.0
+    dense = _dense_component(text, dim)
+    vec = [s / sparse_norm + _DENSE_WEIGHT * d for s, d in zip(sparse, dense)]
+    norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+    return [round(v / norm, 6) for v in vec]
+
+
+def _random_vector(dim: int) -> list[float]:
+    vec = [random.gauss(0, 1) for _ in range(dim)]
+    norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+    return [round(v / norm, 6) for v in vec]
+
+
+def _fixed_vector_from_body(response_body: str | None) -> list[float] | None:
+    """响应内容里写了个纯数字 JSON 数组，就原样当向量用（逃生口，比如固定 [0.1, 0.2, 0.3]）。"""
+    if not response_body or not response_body.strip().startswith("["):
+        return None
+    try:
+        parsed = json.loads(response_body)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if isinstance(parsed, list) and parsed and all(
+        isinstance(x, (int, float)) and not isinstance(x, bool) for x in parsed
+    ):
+        return [float(x) for x in parsed]
+    return None
+
+
+def _encode_embedding(vec: list[float], encoding_format: str) -> list[float] | str:
+    """openai-python 默认就是 base64 拿向量，这里必须支持，否则 SDK 侧解不开。"""
+    if encoding_format == "base64":
+        return base64.b64encode(struct.pack(f"<{len(vec)}f", *vec)).decode("ascii")
+    return vec
+
+
+def build_embeddings_response(route: dict, request_body: dict) -> tuple[dict, dict]:
+    """构建 OpenAI 兼容的 Embeddings 响应。返回 (response_body, extra_headers)"""
+    headers = _build_headers(route, "")
+
+    status_code = route["status_code"]
+    if status_code >= 400:
+        body_text = _resolve_template(route.get("response_body") or "", request_body)
+        try:
+            body = json.loads(body_text)
+        except (json.JSONDecodeError, TypeError):
+            err_type, err_code = _error_meta(status_code)
+            body = {"error": {"message": body_text, "type": err_type, "param": None, "code": err_code}}
+        return body, headers
+
+    req_model = request_body.get("model") or "text-embedding-3-small"
+    resp_model = req_model if route["model_mode"] == "follow_request" else (route.get("custom_model") or req_model)
+
+    inputs = collect_embedding_inputs(request_body.get("input"))
+    fixed = _fixed_vector_from_body(route.get("response_body"))
+    dim = len(fixed) if fixed else resolve_embedding_dim(request_body, resp_model)
+
+    encoding_format = request_body.get("encoding_format")
+    encoding_format = encoding_format if encoding_format in ("float", "base64") else "float"
+
+    random_mode = route.get("response_mode") == "random"
+
+    data = []
+    for idx, text in enumerate(inputs):
+        if fixed:
+            vec = fixed
+        elif random_mode:
+            vec = _random_vector(dim)
+        else:
+            vec = semantic_vector(text, dim)
+        data.append({
+            "object": "embedding",
+            "index": idx,
+            "embedding": _encode_embedding(vec, encoding_format),
+        })
+
+    if route["token_mode"] == "custom":
+        prompt_tokens = route.get("custom_prompt_tokens") or 0
+    else:
+        prompt_tokens = sum(estimate_tokens(t) for t in inputs)
+
+    body = {
+        "object": "list",
+        "data": data,
+        "model": resp_model,
+        "usage": {"prompt_tokens": prompt_tokens, "total_tokens": prompt_tokens},
+    }
+    return body, headers
+
+
+def compact_embeddings_for_log(body: dict, keep: int = 8) -> dict:
+    """给请求日志用的瘦身版：向量只留前几维。
+    原样存的话 1536 个浮点数会把日志撑爆、还会被截断成解析不了的半截 JSON。
+    """
+    data = body.get("data")
+    if not isinstance(data, list):
+        return body
+    slim = []
+    for item in data:
+        if not isinstance(item, dict):
+            slim.append(item)
+            continue
+        vec = item.get("embedding")
+        if isinstance(vec, list) and len(vec) > keep:
+            item = {**item, "embedding": vec[:keep] + [f"...共 {len(vec)} 维"]}
+        elif isinstance(vec, str) and len(vec) > 64:
+            item = {**item, "embedding": f"{vec[:64]}... (base64, 共 {len(vec)} 字符)"}
+        slim.append(item)
+    return {**body, "data": slim}
 
 
 def _build_headers(route: dict, request_id_or_completion_id: str) -> dict:

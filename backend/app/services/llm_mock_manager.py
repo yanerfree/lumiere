@@ -22,6 +22,24 @@ logger = logging.getLogger("llm_mock")
 
 _STATE_FILE = Path(__file__).resolve().parent.parent.parent / ".mock_state" / "llm_mock.json"
 
+# 没配 /v1/embeddings 路由时用的内置兜底配置
+_FALLBACK_EMBEDDING_ROUTE: dict = {
+    "id": None,
+    "name": "内置向量兜底",
+    "status_code": 200,
+    "response_type": "embedding",
+    "response_mode": "default",
+    "response_body": "",
+    "model_mode": "follow_request",
+    "custom_model": None,
+    "token_mode": "auto",
+    "custom_prompt_tokens": None,
+    "custom_completion_tokens": None,
+    "delay_ms": 0,
+    "finish_reason": None,
+    "response_headers": None,
+}
+
 
 class MockServerManager:
     def __init__(self):
@@ -130,6 +148,8 @@ class MockServerManager:
                 "gpt-3.5-turbo", "o1", "o1-mini", "o1-pro",
                 "o3", "o3-mini", "o4-mini",
                 "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+                # embedding 模型 —— 网关要在这里看到 embedding 才认这个 Provider 能做语义缓存
+                "text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002",
             ],
             "deepseek": [
                 "deepseek-chat", "deepseek-reasoner",
@@ -138,10 +158,12 @@ class MockServerManager:
                 "qwen-turbo", "qwen-plus", "qwen-max", "qwen-long",
                 "qwen2.5-72b-instruct", "qwen2.5-32b-instruct", "qwen2.5-14b-instruct", "qwen2.5-7b-instruct",
                 "qwen3-235b-a22b", "qwen3-32b", "qwen3-8b",
+                "text-embedding-v3", "text-embedding-v2",
             ],
             "zhipu": [
                 "glm-4-plus", "glm-4-air", "glm-4-flash", "glm-4-long",
                 "glm-4v-plus", "glm-4v",
+                "embedding-3", "embedding-2",
             ],
             "anthropic": [
                 "claude-opus-5", "claude-sonnet-5", "claude-fable-5",
@@ -149,6 +171,9 @@ class MockServerManager:
             ],
             "moonshot": [
                 "moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k",
+            ],
+            "baai": [
+                "bge-m3", "bge-large-zh-v1.5",
             ],
         }
         created = int(time.time()) - 86400
@@ -183,13 +208,29 @@ class MockServerManager:
         match_ms = (time.perf_counter() - t_match_start) * 1000
 
         if matched_route is None:
+            # embeddings 内置兜底：没配路由也要能回向量，否则网关探测一次 404 就判定这个 Provider 不支持语义缓存。
+            # 想改延迟/报错/固定向量，加一条 /v1/embeddings 路由即可覆盖它。
+            if engine.is_embeddings_route({}, path):
+                route_dict = dict(_FALLBACK_EMBEDDING_ROUTE)
+                t_build = time.perf_counter()
+                resp_body, extra_headers = engine.build_embeddings_response(route_dict, request_body)
+                t_done = time.perf_counter()
+                if self.capture_enabled:
+                    await self._log_request(
+                        route_dict, request, request_body, method, path,
+                        200, json.dumps(engine.compact_embeddings_for_log(resp_body), ensure_ascii=False), extra_headers,
+                        match_ms, (t_build - t0) * 1000, (t_done - t_build) * 1000, (t_done - t0) * 1000,
+                    )
+                return JSONResponse(resp_body, status_code=200, headers=extra_headers)
             return JSONResponse(
                 {"error": {"message": f"No mock route matched for {method} {path}", "type": "not_found", "param": None, "code": None}},
                 status_code=404,
             )
 
         route_dict = self._route_to_dict(matched_route)
-        is_stream = request_body.get("stream", False) and route_dict["status_code"] < 400
+        is_embeddings = engine.is_embeddings_route(route_dict, path)
+        # embeddings 接口没有流式，请求里带 stream 也按非流式回
+        is_stream = (not is_embeddings) and request_body.get("stream", False) and route_dict["status_code"] < 400
 
         # 延迟模拟
         delay = route_dict.get("delay_ms", 0)
@@ -219,16 +260,20 @@ class MockServerManager:
             headers["connection"] = "keep-alive"
             return StreamingResponse(stream_with_log(), media_type="text/event-stream", headers=headers)
         else:
-            resp_body, extra_headers = engine.build_response_json(route_dict, request_body)
+            if is_embeddings:
+                resp_body, extra_headers = engine.build_embeddings_response(route_dict, request_body)
+            else:
+                resp_body, extra_headers = engine.build_response_json(route_dict, request_body)
             t_done = time.perf_counter()
             body_ms = (t_done - t_first_byte) * 1000
             total_ms = (t_done - t0) * 1000
 
             status = route_dict["status_code"]
             if self.capture_enabled:
+                log_body = engine.compact_embeddings_for_log(resp_body) if is_embeddings and status < 400 else resp_body
                 await self._log_request(
                     route_dict, request, request_body, method, path,
-                    status, json.dumps(resp_body, ensure_ascii=False), extra_headers,
+                    status, json.dumps(log_body, ensure_ascii=False), extra_headers,
                     match_ms, first_byte_ms, body_ms, total_ms,
                 )
             return JSONResponse(resp_body, status_code=status, headers=extra_headers)
@@ -243,14 +288,24 @@ class MockServerManager:
                     await svc.increment_hit(session, r.id)
                     await session.commit()
                     return r
-            # 2. 前缀匹配（长路径优先）
+            # 2. 通配匹配（路径里带 * 的，长模式优先）—— Azure 那种把部署名塞进路径的场景
+            wildcards = sorted(
+                (r for r in enabled if engine.has_wildcard(r.path)),
+                key=lambda r: len(r.path), reverse=True,
+            )
+            for r in wildcards:
+                if engine.path_matches(r.path, path):
+                    await svc.increment_hit(session, r.id)
+                    await session.commit()
+                    return r
+            # 3. 前缀匹配（长路径优先）
             enabled.sort(key=lambda r: len(r.path), reverse=True)
             for r in enabled:
                 if r.path == "/" or path.startswith(r.path):
                     await svc.increment_hit(session, r.id)
                     await session.commit()
                     return r
-            # 3. 后缀匹配（兼容不同厂商前缀，如 /compatible-mode/v1/chat/completions）
+            # 4. 后缀匹配（兼容不同厂商前缀，如 /compatible-mode/v1/chat/completions）
             for r in enabled:
                 if r.path != "/" and path.endswith(r.path):
                     await svc.increment_hit(session, r.id)
