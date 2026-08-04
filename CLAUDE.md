@@ -16,6 +16,7 @@
 | AI 测试生成用法 | [docs/ai-test-generation-guide.md](docs/ai-test-generation-guide.md) |
 | AI 质量改进计划 | [docs/ai-quality-improvement-plan.md](docs/ai-quality-improvement-plan.md) |
 | 项目 Skill 怎么传上来 / 给别的项目取用、跟内置 tb-* 的边界 | [docs/skill-sharing.md](docs/skill-sharing.md) |
+| 下阶段做什么：生成效率 / 生成质量 / 失败优化（含现状实测盘点） | [docs/next-phase-gen-quality-and-failure.md](docs/next-phase-gen-quality-and-failure.md) |
 
 ## 长驻服务
 
