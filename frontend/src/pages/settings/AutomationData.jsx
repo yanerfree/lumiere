@@ -286,9 +286,9 @@ export default function AutomationData() {
           <Form.Item
             name="existsCheckText"
             label="存在性检查 (JSON)"
-            tooltip='跑自动化前如何判断它已存在。如 {"method":"GET","url":"/api/v1/upstreams","match":{"field":"name","equals":"default-upstream"}}'
+            tooltip='跑自动化前如何判断它已存在，以及抽哪个字段当变量。extract 的路径相对 match 命中的那一条写（直接 "id"），不要写 "data[0].id" —— 下标是另一种写死，列表顺序一变就抽到别的资源。不写 extract 就只判断存在、不注入任何变量。'
           >
-            <Input.TextArea rows={5} placeholder='{"method":"GET","url":"/api/v1/upstreams","match":{"field":"name","equals":"default-upstream"}}' style={{ fontFamily: 'monospace', fontSize: 12 }} />
+            <Input.TextArea rows={5} placeholder={'{"method":"GET","url":"/api/v1/upstreams",\n "match":{"field":"name","equals":"default-upstream"},\n "extract":{"upstreamId":"id"}}'} style={{ fontFamily: 'monospace', fontSize: 12 }} />
           </Form.Item>
           <Form.Item
             name="createDefText"

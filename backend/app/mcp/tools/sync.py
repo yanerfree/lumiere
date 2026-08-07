@@ -195,10 +195,14 @@ _SPEC_VARIABLES = """## 变量分层（回推纪律的基准，务必分清）
 ⚠ `exists_check` 的 `match` 必须用**稳定标识**（name / code 这类），**不要用 id** ——
 用 id 去 match 等于换个地方写死，换环境照样匹配不上。
 
+⚠ `extract` 的路径**相对 match 命中的那一条**写，直接写 `"id"`，不要写
+`"data.items[0].id"`。下标是另一种写死：match 找的是 name==X、extract 抽的却是第 0 条，
+列表顺序一变就静默注入别的资源的 id，步骤照跑不报错，最难查。
+
 ```json
 {"method":"GET","url":"${BASE_URL}/api/v1/upstreams?page_size=100",
  "match":{"field":"name","equals":"autotest-default-upstream"},
- "extract":{"upstreamId":"data.items[0].id"}}
+ "extract":{"upstreamId":"id"}}
 ```
 
 自检：这条链换到一个**干净环境**还能不能跑通？跑不通就是 A 没造全，或 B 漏了第 2 步。
@@ -682,12 +686,15 @@ async def upsert_automation_resource(
 
     ⚠ match 必须用**稳定标识**（name/code 这类），**不要用 id** —— 用 id 去 match
       等于换个地方写死，换环境照样匹配不上。
+    ⚠ extract 路径**相对 match 命中的那一条**写，直接 "id"，别写 "data.items[0].id" ——
+      下标是另一种写死，列表顺序一变就静默抽到别的资源，步骤照跑不报错。
+      （绝对路径仍兼容：命中项上取不到时会退回整包解析。）
     ⚠ 探不到时不会自动补建（create_def 暂只登记备查、不执行），只会让引用它的步骤报
       「变量未解析」，并在运行结果顶部提示缺哪个。所以第 2 步不能省。
 
     exists_check 形如 {"method":"GET","url":"${BASE_URL}/api/v1/upstreams?page_size=100",
                       "match":{"field":"name","equals":"autotest-default-upstream"},
-                      "extract":{"upstreamId":"data.items[0].id"}}
+                      "extract":{"upstreamId":"id"}}
     create_def   形如 {"method":"POST","url":"${BASE_URL}/api/v1/upstreams","body":{...}}
                  （登记备查，说明这资源当初是怎么造的；平台暂不自动执行）
     """

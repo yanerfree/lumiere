@@ -58,23 +58,36 @@ def _find_first_list(obj: Any):
     return None
 
 
-def _match_exists(data: Any, match: dict) -> bool:
-    """在响应中判断 match 条件是否命中。"""
+def _match_target(data: Any, match: dict) -> tuple[bool, Any]:
+    """判断 match 是否命中，并把**命中的那一条**一起返回。
+
+    只返回 bool 是不够的：extract 要抽的是"匹配到的那个资源的 id"，
+    不返回命中项，调用方就只能在整个响应上写 data[0].id ——
+    match 找的是 name==X，extract 抽的却是第 0 条，两者指向不同对象时
+    会静默注入错误的 id（实测过：match 中"测试平台"，抽到的是"网关管理系统"）。
+
+    返回 (命中?, 命中项)。命中项为 None 表示无法定位到具体对象
+    （无 match 条件、或 field 为空只判空列表），此时 extract 退回整包解析。
+    """
     if not match:
-        return True  # 无 match：能拿到 2xx 即视为存在
+        return True, None  # 无 match：能拿到 2xx 即视为存在
     field = match.get("field")
     equals = match.get("equals")
     lst = _dig(data, match["listPath"]) if match.get("listPath") else _find_first_list(data)
     if lst is None:
         # 也许 data 本身就是单对象
         if isinstance(data, dict) and field in data:
-            return str(data.get(field)) == str(equals)
-        return False
+            hit = str(data.get(field)) == str(equals)
+            return hit, (data if hit else None)
+        return False, None
     if not isinstance(lst, list):
-        return False
+        return False, None
     if field is None:
-        return len(lst) > 0
-    return any(isinstance(it, dict) and str(it.get(field)) == str(equals) for it in lst)
+        return len(lst) > 0, (lst[0] if lst else None)
+    for it in lst:
+        if isinstance(it, dict) and str(it.get(field)) == str(equals):
+            return True, it
+    return False, None
 
 
 async def _check_one(client: httpx.AsyncClient, base: str, headers: dict, res: AutomationResource) -> dict:
@@ -111,18 +124,25 @@ async def _check_one(client: httpx.AsyncClient, base: str, headers: dict, res: A
         data = resp.json()
     except Exception:  # noqa: BLE001
         data = None
-    exists = _match_exists(data, chk.get("match") or {})
+    exists, matched = _match_target(data, chk.get("match") or {})
     item.update(exists=exists, reason=None if exists else "未匹配到目标资源")
     # 顺带把 extract 里声明的值抽出来 —— 光判断"存在"不够，编排步骤要的是它的 id。
-    # 形如 {"extract": {"upstreamId": "data.items[0].id"}}
+    #
+    # 路径优先在**命中项**上解析（推荐写法 {"upstreamId": "id"}），取不到再退回
+    # 整包解析（兼容历史的 {"upstreamId": "data.items[0].id"}）。顺序不能反：
+    # 反过来的话，命中项里没有该字段时会悄悄拿整包第 0 条顶上，又变回抽错对象。
     if exists:
         # 用执行引擎那套 JSONPath-lite：_dig 只认点号，取不了 data[0].id 这种下标，
-        # 而列表取第 N 个恰恰是前置资源最常见的写法。
+        # 而列表取第 N 个是历史写法里最常见的。
         from app.services.api_test_runner import _extract_value
 
         values = {}
         for var, path in (chk.get("extract") or {}).items():
-            v = _extract_value(data, str(path))
+            v = None
+            if isinstance(matched, (dict, list)):
+                v = _extract_value(matched, str(path))
+            if v is None:
+                v = _extract_value(data, str(path))
             if v is not None:
                 values[str(var)] = v
         if values:
