@@ -39,18 +39,6 @@ function toCurl(req) {
   return parts.join(' \\\n')
 }
 
-/** 请求体里被遮掉的字段——生成的 cURL 里这些位置要人自己填回去 */
-function maskedFields(body) {
-  const out = []
-  const walk = (n, path) => {
-    if (n && typeof n === 'object') {
-      for (const [k, v] of Object.entries(n)) walk(v, path ? `${path}.${k}` : k)
-    } else if (n === '******') out.push(path)
-  }
-  walk(body, '')
-  return out
-}
-
 function bodySize(body) {
   if (body == null) return '-'
   const n = new Blob([typeof body === 'string' ? body : JSON.stringify(body)]).size
@@ -196,7 +184,6 @@ function KVTable({ data }) {
 /** 实际请求：真正发出去的那一份，按 URL / 查询参数 / 请求头 / 请求体 / cURL 分区列清楚 */
 function ActualRequest({ req }) {
   if (!req) return <div style={{ fontSize: 12, color: '#c9cdd4' }}>无请求数据</div>
-  const masked = maskedFields(req.body)
   const headers = req.headers || {}
   const ctype = Object.entries(headers).find(([k]) => k.toLowerCase() === 'content-type')?.[1]
   const paramRows = Array.isArray(req.params)
@@ -205,7 +192,10 @@ function ActualRequest({ req }) {
 
   return (
     <div style={{ fontSize: 11 }}>
-      <SectionTitle>请求 URL</SectionTitle>
+      {/* cURL 不铺出来占地方 —— 内容跟下面的 URL/头/体完全重复，点一下拿走就行 */}
+      <SectionTitle extra={
+        <a onClick={() => copy(toCurl(req), 'cURL')} style={{ fontSize: 11 }}>复制 cURL</a>
+      }>请求 URL</SectionTitle>
       <div style={{
         fontFamily: MONO, wordBreak: 'break-all', padding: '6px 8px',
         background: 'rgba(0,0,0,0.03)', borderRadius: 6,
@@ -228,16 +218,6 @@ function ActualRequest({ req }) {
         <SectionTitle>请求体 {ctype && <Tag style={{ marginLeft: 6, fontSize: 10, lineHeight: '16px', padding: '0 5px' }}>{String(ctype).split(';')[0]}</Tag>}</SectionTitle>
         <JsonBlock data={req.body} max={220} />
       </>)}
-
-      <SectionTitle extra={<a onClick={() => copy(toCurl(req), 'cURL')} style={{ fontSize: 11 }}>复制 cURL</a>}>
-        请求代码 · cURL
-      </SectionTitle>
-      <JsonBlock data={toCurl(req)} max={200} />
-      {masked.length > 0 && (
-        <div style={{ fontSize: 11, color: '#fa8c16', marginTop: 4 }}>
-          注意：{masked.join('、')} 是长期凭据，已遮蔽为 ****** —— 直接执行前请填回真实值。
-        </div>
-      )}
     </div>
   )
 }

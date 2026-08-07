@@ -156,19 +156,16 @@ _ORIGIN_LABEL = {
 }
 
 
-# 变量值一律给全值（截断了就没法核对），只有**长期凭据**遮起来。
-# token 类不遮：它会过期，而且"这个 Authorization 到底是什么"正是最常要核对的。
-_LONGLIVED_SECRET_RE = re.compile(r"(password|passwd|pwd|secret|credential|private_?key)", re.I)
-
-
 def _used_variables(origins: dict, env: dict, *objs) -> list[dict]:
-    """这一步实际引用到的变量：名字 + 真实取值 + 从哪来。值不截断。"""
+    """这一步实际引用到的变量：名字 + 真实取值 + 从哪来。
+
+    值一律给全值、不遮不截断。这是测试执行详情，看的就是"到底发出去了什么"——
+    遮掉密码等于让人没法核对登录步骤，复制出来的 cURL 也跑不了。
+    """
     used = []
     for name in sorted(set(_collect_ref_names(*objs))):
         o = origins.get(name) or {}
         val = env.get(name)
-        if val is not None and _LONGLIVED_SECRET_RE.search(name):
-            val = "******"
         used.append({
             "name": name,
             "value": val,
@@ -196,37 +193,6 @@ def _collect_ref_names(*objs) -> list[str]:
     for o in objs:
         walk(o)
     return names
-
-
-def _mask_authorization(headers: dict) -> dict:
-    """报告持久化时脱敏 Authorization，避免 token 泄漏。"""
-    masked = dict(headers)
-    for key in masked:
-        if key.lower() == "authorization" and isinstance(masked[key], str) and len(masked[key]) > 24:
-            masked[key] = masked[key][:16] + "..." + masked[key][-4:]
-    return masked
-
-
-_SECRET_FIELD_RE = re.compile(r"(password|passwd|pwd|secret|token|api_?key|credential)", re.I)
-
-
-def _mask_secrets(obj):
-    """请求体持久化前脱敏密码类字段。
-
-    Authorization 头早就脱敏了，但请求体里的 password 一直是明文落进
-    last_response、在运行结果面板里直接可见（登录步骤尤其明显）。同样该遮。
-    """
-    if isinstance(obj, dict):
-        out = {}
-        for k, v in obj.items():
-            if isinstance(k, str) and _SECRET_FIELD_RE.search(k) and isinstance(v, str) and v:
-                out[k] = "******"
-            else:
-                out[k] = _mask_secrets(v)
-        return out
-    if isinstance(obj, list):
-        return [_mask_secrets(v) for v in obj]
-    return obj
 
 
 def _resolve_variables(text, env: dict) -> str:
@@ -387,7 +353,7 @@ async def run_single_step(
             request_data={
                 "method": step.method, "url": url,
                 "urlTemplate": step.url,
-                "headers": headers, "body": _mask_secrets(body),
+                "headers": headers, "body": body,
                 "variablesUsed": _used_variables(origins or {}, env, step.url, step.headers, step.body),
                 "preScript": step.pre_script, "postScript": step.post_script,
             },
@@ -414,7 +380,7 @@ async def run_single_step(
         "method": step.method, "url": url,
         "urlTemplate": step.url,
         "headers": headers,
-        "body": _mask_secrets(body),
+        "body": body,
         "params": _resolve_obj(getattr(step, "params", None), env),
         "authOrigin": auth_origin,
         "variablesUsed": _used_variables(origins or {}, env, step.url, step.headers, step.body),
@@ -431,7 +397,6 @@ async def run_single_step(
             token = await token_cache.refresh_token(client)
             if token:
                 headers["Authorization"] = f"Bearer {token}"
-                request_data["headers"] = _mask_authorization(headers)
                 resp = await client.request(method=step.method, url=url, headers=headers, json=body if body else None)
 
         duration = int((time.time() - start) * 1000)
