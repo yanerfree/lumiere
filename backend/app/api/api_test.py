@@ -252,6 +252,7 @@ async def run_batch_scenarios(
 
     # 选择环境时合并 全局变量+环境变量 作为基础 env（优先级低于场景自身 env_variables）
     base_env: dict = {}
+    env_name: str | None = None
     if body.env_id:
         from app.services import environment_service
         try:
@@ -259,10 +260,17 @@ async def run_batch_scenarios(
             base_env = {item["key"]: item["value"] for item in merged}
         except Exception:
             logger.warning("加载环境变量失败 env_id=%s", body.env_id)
+        # 环境名带下去，运行详情里要能说清"这个值是哪个环境给的"
+        try:
+            from app.models.environment import Environment
+            env_obj = await session.get(Environment, uuid.UUID(body.env_id))
+            env_name = env_obj.name if env_obj else None
+        except Exception:
+            env_name = None
 
     async def event_stream():
         try:
-            async for event in run_batch(scenario_uuids, session, user_id=current_user.id, project_id=project_id, base_env=base_env, branch_id=branch_id):
+            async for event in run_batch(scenario_uuids, session, user_id=current_user.id, project_id=project_id, base_env=base_env, branch_id=branch_id, env_name=env_name):
                 yield f"data: {json.dumps({'type': event.type, **event.data}, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.exception("run_batch failed")

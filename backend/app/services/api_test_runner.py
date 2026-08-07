@@ -125,10 +125,77 @@ class TokenCache:
             return None
 
 
-def _inject_runtime_variables(env: dict) -> None:
+def _inject_runtime_variables(env: dict, origins: dict | None = None) -> None:
     """场景级运行时变量 — 同一场景内引用同一个值（便于创建+清理配套使用）。"""
-    env.setdefault("RANDOM_8", "".join(random.choices(string.ascii_lowercase + string.digits, k=8)))
-    env.setdefault("TIMESTAMP", str(int(time.time())))
+    for k, v in (
+        ("RANDOM_8", "".join(random.choices(string.ascii_lowercase + string.digits, k=8))),
+        ("TIMESTAMP", str(int(time.time()))),
+    ):
+        if k not in env:
+            env[k] = v
+            _note_origin(origins, k, "runtime", "平台运行时注入（同一场景内固定）")
+
+
+# ── 变量溯源 ────────────────────────────────────────────────────────────────
+# env 是个扁平字典，各来源合并进去以后"谁塞的"就没了。跑挂的时候最想知道的恰恰是
+# 「这个 id 哪来的、这个 token 哪来的」，所以合并的每一处都同步登记一条来源。
+def _note_origin(origins: dict | None, name: str, source: str, detail: str) -> None:
+    if origins is None:
+        return
+    origins[name] = {"source": source, "detail": detail}
+
+
+_ORIGIN_LABEL = {
+    "env": "环境变量",
+    "scenario_env": "场景自带变量",
+    "runtime": "运行时注入",
+    "scenario_var": "用例场景变量",
+    "resource": "项目级前置资源",
+    "extract": "上游步骤提取",
+    "auto_token": "平台自动登录",
+}
+
+
+# 变量值一律给全值（截断了就没法核对），只有**长期凭据**遮起来。
+# token 类不遮：它会过期，而且"这个 Authorization 到底是什么"正是最常要核对的。
+_LONGLIVED_SECRET_RE = re.compile(r"(password|passwd|pwd|secret|credential|private_?key)", re.I)
+
+
+def _used_variables(origins: dict, env: dict, *objs) -> list[dict]:
+    """这一步实际引用到的变量：名字 + 真实取值 + 从哪来。值不截断。"""
+    used = []
+    for name in sorted(set(_collect_ref_names(*objs))):
+        o = origins.get(name) or {}
+        val = env.get(name)
+        if val is not None and _LONGLIVED_SECRET_RE.search(name):
+            val = "******"
+        used.append({
+            "name": name,
+            "value": val,
+            "source": o.get("source", "unknown"),
+            "sourceLabel": _ORIGIN_LABEL.get(o.get("source"), "来源不明"),
+            "detail": o.get("detail", "未登记来源——可能是环境里直接带的键"),
+        })
+    return used
+
+
+def _collect_ref_names(*objs) -> list[str]:
+    names: list[str] = []
+
+    def walk(node):
+        if isinstance(node, str):
+            names.extend(re.findall(r"\$\{(\w+)\}", node))
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                walk(k)
+                walk(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                walk(v)
+
+    for o in objs:
+        walk(o)
+    return names
 
 
 def _mask_authorization(headers: dict) -> dict:
@@ -290,6 +357,8 @@ async def run_single_step(
     env: dict,
     client: httpx.AsyncClient,
     token_cache: TokenCache | None = None,
+    origins: dict | None = None,
+    step_index: int = 0,
 ) -> StepResult:
     if not step.enabled:
         return StepResult(
@@ -315,24 +384,42 @@ async def run_single_step(
                 "②是否该由更早的步骤 variables_extract 提取（顺序对不对）"
                 "③是否该在用例「场景变量」里定义。"
             ),
-            request_data={"method": step.method, "url": url,
-                          "headers": _mask_authorization(headers), "body": _mask_secrets(body)},
+            request_data={
+                "method": step.method, "url": url,
+                "urlTemplate": step.url,
+                "headers": headers, "body": _mask_secrets(body),
+                "variablesUsed": _used_variables(origins or {}, env, step.url, step.headers, step.body),
+                "preScript": step.pre_script, "postScript": step.post_script,
+            },
         )
 
-    if "Authorization" not in headers:
+    auth_origin = None
+    if "Authorization" in headers:
+        auth_origin = "步骤自己设的 Authorization 头（值由上面的变量解析而来）"
+    else:
         if "AUTH_TOKEN" in env:
             headers["Authorization"] = f"Bearer {env['AUTH_TOKEN']}"
+            auth_origin = "平台自动补：环境/上游提取里存在 AUTH_TOKEN"
         elif token_cache:
             token = await token_cache.get_token(client)
             if token:
                 headers["Authorization"] = f"Bearer {token}"
+                auth_origin = "平台自动登录取得（用所选环境的 ADMIN_USERNAME/ADMIN_PASSWORD 调 LOGIN_URL）"
     if "Content-Type" not in headers and body:
         headers["Content-Type"] = "application/json"
 
+    # headers 不再截断 Authorization —— 以前存的是 eyJ0eXAiO...UilM，
+    # 想核对 token 对不对根本没法看。请求体里的 password 仍然遮，那是长期凭据。
     request_data = {
         "method": step.method, "url": url,
-        "headers": _mask_authorization(headers),
+        "urlTemplate": step.url,
+        "headers": headers,
         "body": _mask_secrets(body),
+        "params": _resolve_obj(getattr(step, "params", None), env),
+        "authOrigin": auth_origin,
+        "variablesUsed": _used_variables(origins or {}, env, step.url, step.headers, step.body),
+        "preScript": step.pre_script,
+        "postScript": step.post_script,
     }
 
     start = time.time()
@@ -359,11 +446,20 @@ async def run_single_step(
         assertion_results = _check_assertions(resolved_assertions, resp.status_code, resp_body)
         all_pass = all(a["passed"] for a in assertion_results) if assertion_results else True
 
-        if step.variables_extract and resp_body:
-            for var_name, path in step.variables_extract.items():
-                val = _extract_value(resp_body, path)
+        extracted: list[dict] = []
+        if step.variables_extract:
+            for var_name, path in (step.variables_extract or {}).items():
+                val = _extract_value(resp_body, path) if resp_body else None
                 if val is not None:
                     env[var_name] = str(val)
+                    _note_origin(origins, var_name, "extract",
+                                 f"第 {step_index + 1} 步「{step.name}」从响应 {path} 提取")
+                extracted.append({
+                    "name": var_name, "path": path,
+                    "value": None if val is None else str(val),
+                    "ok": val is not None,
+                })
+        request_data["extracted"] = extracted
 
         return StepResult(
             step_id=str(step.id), step_name=step.name,
@@ -449,12 +545,19 @@ async def run_scenario(
     session: AsyncSession,
     base_env: dict | None = None,
     token_cache: TokenCache | None = None,
+    env_name: str | None = None,
 ) -> AsyncIterator[RunEvent]:
     async with _run_semaphore:
         # 变量优先级：步骤提取 > 场景变量(SV_*) > 运行时 > 用户选择的环境(base_env) > 场景 env_variables
+        # origins 与 env 平行维护，记录每个键"从哪来"，供运行详情做溯源展示。
+        origins: dict[str, dict] = {}
         env = dict(scenario.env_variables or {})
-        env.update(base_env or {})
-        _inject_runtime_variables(env)
+        for k in env:
+            _note_origin(origins, k, "scenario_env", "场景自带的 env_variables")
+        for k, v in (base_env or {}).items():
+            env[k] = v
+            _note_origin(origins, k, "env", f"所选执行环境「{env_name or '未命名'}」的变量 {k}")
+        _inject_runtime_variables(env, origins)
         # 源用例的场景变量：与 UI 脚本共用同一份定义（random 每次执行唯一）
         # 接口步骤里既可写 ${名字}（与抽屉提示一致），也可写 ${SV_名字}（与 UI 脚本 process.env.SV_x 同名）
         if getattr(scenario, "source_case_id", None):
@@ -463,8 +566,12 @@ async def run_scenario(
                 sv = await resolve_scenario_variables(session, scenario.source_case_id, global_lookup=env)
                 for k, val in sv.items():
                     env[k] = val  # SV_<name> / SV_RUN_ID
+                    _note_origin(origins, k, "scenario_var", f"用例「场景变量」定义的 {k}")
                     if k.startswith("SV_") and k != "SV_RUN_ID":
-                        env.setdefault(k[3:], val)  # 裸名 ${名字}，不覆盖已有环境变量
+                        if k[3:] not in env:  # 裸名 ${名字}，不覆盖已有环境变量
+                            env[k[3:]] = val
+                            _note_origin(origins, k[3:], "scenario_var",
+                                         f"用例「场景变量」定义的 {k[3:]}（同名 {k}）")
             except Exception as e:
                 logger.warning("解析源用例场景变量失败 case_id=%s: %s", scenario.source_case_id, e)
         if token_cache is None:
@@ -477,7 +584,9 @@ async def run_scenario(
         precheck_report: list[dict] = []
         try:
             vals, precheck_report = await _resolve_automation_resources(session, scenario, env, token_cache)
-            env.update(vals)
+            for k, v in vals.items():
+                env[k] = v
+                _note_origin(origins, k, "resource", f"项目级前置资源 exists_check 探测得到的 {k}")
         except Exception as e:
             logger.warning("解析项目级前置资源失败 scenario=%s: %s", scenario.code, e)
 
@@ -500,8 +609,8 @@ async def run_scenario(
 
         results = []
         async with httpx.AsyncClient(timeout=30, verify=False) as client:
-            for step in steps:
-                result = await run_single_step(step, env, client, token_cache)
+            for i, step in enumerate(steps):
+                result = await run_single_step(step, env, client, token_cache, origins=origins, step_index=i)
                 results.append(result)
 
                 step.last_status = result.status
@@ -557,6 +666,7 @@ async def run_batch(
     report_name: str | None = None,
     base_env: dict | None = None,
     branch_id: uuid.UUID | None = None,
+    env_name: str | None = None,
 ) -> AsyncIterator[RunEvent]:
     all_results: list[ScenarioResult] = []
     # 批量执行共享 TokenCache：同一角色只登录一次（ADR-3）
@@ -576,7 +686,7 @@ async def run_batch(
         steps = steps_result.scalars().all()
 
         scenario_result = None
-        async for event in run_scenario(scenario, steps, session, base_env=base_env, token_cache=token_cache):
+        async for event in run_scenario(scenario, steps, session, base_env=base_env, token_cache=token_cache, env_name=env_name):
             yield event
             if event.type == "scenario_done":
                 scenario_result = ScenarioResult(

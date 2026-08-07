@@ -1,12 +1,20 @@
 import { useState } from 'react'
-import { Tag, Button, Space, Tooltip, Spin } from 'antd'
+import { Tag, Button, Space, Tooltip, Spin, message } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined, CloseOutlined, LoadingOutlined,
-  RightOutlined, DownOutlined, FileTextOutlined,
+  RightOutlined, DownOutlined, FileTextOutlined, CopyOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 
 const METHOD_COLORS = { GET: '#0ea5a0', POST: '#0ea5a0', PUT: '#faad14', DELETE: '#e8453c', PATCH: '#7c5cbf' }
+const MONO = "'SF Mono', Monaco, Consolas, monospace"
+
+// 来源徽标配色：一眼区分「环境给的」「上游步骤提取的」「场景变量」
+const SRC_COLOR = {
+  env: '#0ea5a0', scenario_env: '#0ea5a0', scenario_var: '#7c5cbf',
+  extract: '#1677ff', resource: '#fa8c16', runtime: '#86909c',
+  auto_token: '#fa8c16', unknown: '#c9cdd4',
+}
 
 function fmt(ms) {
   if (!ms && ms !== 0) return '-'
@@ -14,16 +22,104 @@ function fmt(ms) {
   return `${(ms / 1000).toFixed(1)}s`
 }
 
-function JsonBlock({ data }) {
-  if (!data) return <span style={{ color: '#c9cdd4', fontSize: 12 }}>无数据</span>
+function copy(text, label) {
+  navigator.clipboard?.writeText(String(text ?? ''))
+    .then(() => message.success(`${label || '内容'}已复制`))
+    .catch(() => message.warning('复制失败，请手动选中'))
+}
+
+function CopyBtn({ text, label }) {
+  if (text == null || text === '') return null
+  return (
+    <Tooltip title={`复制${label || ''}完整值`}>
+      <CopyOutlined onClick={(e) => { e.stopPropagation(); copy(text, label) }}
+        style={{ fontSize: 11, color: '#86909c', cursor: 'pointer', marginLeft: 6 }} />
+    </Tooltip>
+  )
+}
+
+function SectionTitle({ children, extra }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', fontSize: 11, fontWeight: 600, color: '#86909c', marginBottom: 4, marginTop: 10 }}>
+      {children}
+      {extra && <span style={{ marginLeft: 'auto', fontWeight: 400 }}>{extra}</span>}
+    </div>
+  )
+}
+
+// 全值展示：不截断、可换行、可复制。定位问题时截断的值等于没有。
+function JsonBlock({ data, max = 260 }) {
+  if (data == null || data === '') return <span style={{ color: '#c9cdd4', fontSize: 12 }}>无数据</span>
   const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2)
   return (
-    <pre style={{
-      fontSize: 11, lineHeight: 1.5, margin: 0, padding: '8px 10px',
-      background: 'rgba(0,0,0,0.03)', borderRadius: 6, maxHeight: 200,
-      overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-      fontFamily: "'SF Mono', Monaco, Consolas, monospace",
-    }}>{text}</pre>
+    <div style={{ position: 'relative' }}>
+      <pre style={{
+        fontSize: 11, lineHeight: 1.55, margin: 0, padding: '8px 26px 8px 10px',
+        background: 'rgba(0,0,0,0.03)', borderRadius: 6, maxHeight: max,
+        overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', fontFamily: MONO,
+      }}>{text}</pre>
+      <span style={{ position: 'absolute', top: 6, right: 6 }}><CopyBtn text={text} /></span>
+    </div>
+  )
+}
+
+/** 这一步实际用到的每个 ${变量}：真实取值 + 从哪来。 */
+function VariablesUsed({ vars }) {
+  if (!vars?.length) return null
+  return (
+    <div>
+      <SectionTitle extra={`${vars.length} 个`}>变量取值与来源</SectionTitle>
+      <div style={{ border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, overflow: 'hidden' }}>
+        {vars.map((v, i) => (
+          <div key={v.name} style={{
+            padding: '6px 8px', fontSize: 11,
+            borderTop: i ? '1px solid rgba(0,0,0,0.04)' : 'none',
+            background: v.value == null ? 'rgba(232,69,60,0.05)' : 'transparent',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontFamily: MONO, fontWeight: 600, color: '#1d2129' }}>${'{'}{v.name}{'}'}</span>
+              <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
+                color={SRC_COLOR[v.source] || SRC_COLOR.unknown}>{v.sourceLabel}</Tag>
+              <CopyBtn text={v.value} label={v.name} />
+            </div>
+            <div style={{ fontFamily: MONO, color: v.value == null ? '#e8453c' : '#0e7a76', wordBreak: 'break-all', marginTop: 2 }}>
+              = {v.value == null ? '未解析（无来源）' : String(v.value)}
+            </div>
+            <div style={{ color: '#86909c', marginTop: 2 }}>{v.detail}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** 本步从响应里提取了什么，给后面的步骤用。 */
+function Extracted({ items }) {
+  if (!items?.length) return null
+  return (
+    <div>
+      <SectionTitle extra={`${items.filter(x => x.ok).length}/${items.length} 成功`}>提取变量（供后续步骤引用）</SectionTitle>
+      <div style={{ border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, overflow: 'hidden' }}>
+        {items.map((x, i) => (
+          <div key={x.name} style={{
+            padding: '6px 8px', fontSize: 11,
+            borderTop: i ? '1px solid rgba(0,0,0,0.04)' : 'none',
+            background: x.ok ? 'transparent' : 'rgba(232,69,60,0.05)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {x.ok ? <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 11 }} />
+                    : <CloseCircleOutlined style={{ color: '#e8453c', fontSize: 11 }} />}
+              <span style={{ fontFamily: MONO, fontWeight: 600 }}>${'{'}{x.name}{'}'}</span>
+              <span style={{ color: '#86909c' }}>← 响应 {x.path}</span>
+              <CopyBtn text={x.value} label={x.name} />
+            </div>
+            <div style={{ fontFamily: MONO, color: x.ok ? '#0e7a76' : '#e8453c', wordBreak: 'break-all', marginTop: 2 }}>
+              = {x.ok ? String(x.value) : '取不到（检查 JSONPath 或响应结构）'}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -155,68 +251,97 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
 
               {/* 展开详情 */}
               {isExpanded && detail && (
-                <div style={{ padding: '8px 16px 12px 28px', background: 'rgba(0,0,0,0.02)', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-                  {/* 请求 */}
+                <div style={{ padding: '8px 16px 14px 28px', background: 'rgba(0,0,0,0.02)', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
+                  {/* 请求 —— URL 是实际发出的那个；模板另起一行，两个都要看得到 */}
                   {detail.request && (
-                    <div style={{ marginBottom: 10 }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: '#86909c', marginBottom: 4 }}>请求</div>
-                      <div style={{ fontSize: 12, marginBottom: 4, fontFamily: 'monospace' }}>
+                    <div>
+                      <SectionTitle>请求</SectionTitle>
+                      <div style={{ fontSize: 12, fontFamily: MONO, wordBreak: 'break-all' }}>
                         <Tag color={METHOD_COLORS[detail.request.method]} style={{ fontSize: 11 }}>{detail.request.method}</Tag>
                         {detail.request.url}
+                        <CopyBtn text={detail.request.url} label="URL" />
                       </div>
-                      {detail.request.headers && Object.keys(detail.request.headers).length > 0 && (
-                        <div style={{ marginBottom: 4 }}>
-                          <span style={{ fontSize: 11, color: '#86909c' }}>Headers:</span>
-                          <div style={{ fontSize: 11, fontFamily: 'monospace', padding: '4px 8px', background: 'rgba(0,0,0,0.03)', borderRadius: 4, marginTop: 2 }}>
-                            {Object.entries(detail.request.headers).map(([k, v]) => (
-                              <div key={k}>{k}: {String(v)}</div>
-                            ))}
-                          </div>
+                      {detail.request.urlTemplate && detail.request.urlTemplate !== detail.request.url && (
+                        <div style={{ fontSize: 11, color: '#c9cdd4', fontFamily: MONO, marginTop: 2 }}>
+                          模板：{detail.request.urlTemplate}
                         </div>
                       )}
-                      {detail.request.body && <JsonBlock data={detail.request.body} />}
+
+                      {detail.request.headers && Object.keys(detail.request.headers).length > 0 && (
+                        <>
+                          <SectionTitle extra={detail.request.authOrigin ? `Authorization ${detail.request.authOrigin}` : null}>
+                            请求头
+                          </SectionTitle>
+                          <div style={{ fontSize: 11, fontFamily: MONO, padding: '6px 8px', background: 'rgba(0,0,0,0.03)', borderRadius: 6 }}>
+                            {Object.entries(detail.request.headers).map(([k, v]) => (
+                              <div key={k} style={{ display: 'flex', gap: 6, wordBreak: 'break-all', padding: '1px 0' }}>
+                                <span style={{ color: '#86909c', flexShrink: 0 }}>{k}:</span>
+                                <span style={{ flex: 1 }}>{String(v)}</span>
+                                <CopyBtn text={v} label={k} />
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      )}
+
+                      {detail.request.params && Object.keys(detail.request.params).length > 0 && (
+                        <><SectionTitle>Query 参数</SectionTitle><JsonBlock data={detail.request.params} /></>
+                      )}
+                      {detail.request.body != null && (
+                        <><SectionTitle>请求体</SectionTitle><JsonBlock data={detail.request.body} /></>
+                      )}
                     </div>
                   )}
 
-                  {/* 响应 */}
-                  <div style={{ marginBottom: 10 }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, color: '#86909c', marginBottom: 4 }}>
-                      响应
-                      {detail.statusCode && (
-                        <Tag color={detail.statusCode < 400 ? '#0ea5a0' : '#e8453c'} style={{ marginLeft: 8, fontSize: 11 }}>
-                          {detail.statusCode}
-                        </Tag>
-                      )}
-                      <span style={{ color: '#c9cdd4', fontWeight: 400, marginLeft: 8 }}>{fmt(detail.duration)}</span>
-                    </div>
-                    {detail.error ? (
-                      <div style={{ padding: '6px 10px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 6, fontSize: 12, color: '#e8453c' }}>
-                        {detail.error}
-                      </div>
-                    ) : (
-                      <JsonBlock data={detail.body} />
-                    )}
-                  </div>
+                  {/* 变量取值与来源 —— 「这个 id 哪来的」在这里回答 */}
+                  <VariablesUsed vars={detail.request?.variablesUsed} />
 
-                  {/* 断言 */}
+                  {/* 前置 / 后置脚本 */}
+                  {detail.request?.preScript && (
+                    <><SectionTitle>前置脚本</SectionTitle><JsonBlock data={detail.request.preScript} max={160} /></>
+                  )}
+
+                  {/* 响应 */}
+                  <SectionTitle extra={fmt(detail.duration)}>
+                    响应
+                    {detail.statusCode != null && (
+                      <Tag color={detail.statusCode < 400 ? '#0ea5a0' : '#e8453c'} style={{ marginLeft: 8, fontSize: 10, lineHeight: '16px', padding: '0 5px' }}>
+                        {detail.statusCode}
+                      </Tag>
+                    )}
+                  </SectionTitle>
+                  {detail.error ? (
+                    <div style={{ padding: '6px 10px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 6, fontSize: 12, color: '#e8453c', whiteSpace: 'pre-wrap' }}>
+                      {detail.error}
+                    </div>
+                  ) : (
+                    <JsonBlock data={detail.body} max={300} />
+                  )}
+
+                  {/* 断言 —— 期望与实际都写出来 */}
                   {detail.assertions?.length > 0 && (
-                    <div>
-                      <div style={{ fontSize: 11, fontWeight: 600, color: '#86909c', marginBottom: 4 }}>
-                        断言 ({detail.assertions.filter(a => a.passed).length}/{detail.assertions.length})
-                      </div>
+                    <>
+                      <SectionTitle extra={`${detail.assertions.filter(a => a.passed).length}/${detail.assertions.length} 通过`}>断言</SectionTitle>
                       {detail.assertions.map((a, j) => (
-                        <div key={j} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '2px 0' }}>
-                          {a.passed ? <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 12 }} /> :
-                                      <CloseCircleOutlined style={{ color: '#e8453c', fontSize: 12 }} />}
-                          <span style={{ fontFamily: 'monospace' }}>
-                            {a.type === 'status' ? `状态码 ${a.operator || '=='} ${a.value}` :
-                             a.type === 'body_contains' ? `响应包含 "${a.value}"` :
-                             a.type === 'body_field' ? `${a.field} ${a.operator || '=='} ${JSON.stringify(a.expected ?? a.value)}` :
+                        <div key={j} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11, padding: '2px 0' }}>
+                          {a.passed ? <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 12, marginTop: 3 }} /> :
+                                      <CloseCircleOutlined style={{ color: '#e8453c', fontSize: 12, marginTop: 3 }} />}
+                          <span style={{ fontFamily: MONO, wordBreak: 'break-all' }}>
+                            {a.type === 'status' ? `状态码 ${a.operator || '=='} ${JSON.stringify(a.value)}（实际 ${detail.statusCode}）` :
+                             a.type === 'body_contains' ? `响应${a.operator === 'not_contains' ? '不' : ''}包含 ${JSON.stringify(a.value)}` :
+                             a.type === 'body_field' ? `${a.field} ${a.operator || '=='} ${JSON.stringify(a.expected ?? a.value)}${a.actual !== undefined ? `（实际 ${JSON.stringify(a.actual)}）` : ''}` :
                              JSON.stringify(a)}
                           </span>
                         </div>
                       ))}
-                    </div>
+                    </>
+                  )}
+
+                  {/* 提取变量 */}
+                  <Extracted items={detail.request?.extracted} />
+
+                  {detail.request?.postScript && (
+                    <><SectionTitle>后置脚本</SectionTitle><JsonBlock data={detail.request.postScript} max={160} /></>
                   )}
                 </div>
               )}
