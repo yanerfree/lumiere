@@ -22,26 +22,28 @@ const CAT_COLORS = {
  */
 const PROFILES = {
   live: {
-    label: '活体验证回推',
-    hint: '在被测系统里真跑一遍再回写成果。刻意排除 tb_generate_api_test（凭文档造，与活体验证冲突）',
+    label: '用例：步骤 + 接口场景',
+    task: '在被测系统里真跑一遍，把测试步骤和接口链回写成用例',
+    hint: '刻意排除 tb_generate_api_test（凭文档造，与活体验证冲突）；不含 UI 脚本、报告、文档流水线',
     tools: [
       'tb_list_projects', 'tb_list_branches', 'tb_list_cases', 'tb_get_case', 'tb_get_folder_tree',
       'tb_create_case', 'tb_list_api_tree', 'tb_get_api_node', 'tb_list_environments',
       'tb_get_merged_variables', 'tb_get_sync_spec', 'tb_list_global_data',
-      'tb_upsert_scenario_variables', 'tb_list_scenario_variables',
+      'tb_upsert_scenario_variables', 'tb_list_scenario_variables', 'tb_upsert_automation_resource',
       'tb_sync_orchestrated_scenario', 'tb_list_api_tests', 'tb_get_api_test', 'tb_run_api_test',
     ],
   },
   docgen: {
-    label: '文档批量生成',
-    hint: '从需求文档批量产出用例的 AI 流水线',
+    label: '需求文档批量生成用例',
+    task: '喂一份需求文档，走 AI 流水线批量产出用例',
+    hint: '不含回推、执行 —— 这条路不碰被测系统',
     tools: [
       'tb_list_projects', 'tb_list_branches', 'tb_list_cases',
       'tb_create_scenario_task', 'tb_confirm_and_generate', 'tb_get_scenario_task',
       'tb_query_coverage_matrix', 'tb_get_generation_stats',
     ],
   },
-  all: { label: '全量（不限制）', hint: '开放所有工具，适合调试', tools: null },
+  all: { label: '全量（不限制）', task: '开放所有工具', hint: '调试用；工具太多会干扰 AI 选型，日常别用', tools: null },
 }
 
 const cardStyle = { borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)', boxShadow: 'none' }
@@ -83,6 +85,75 @@ function ToolPicker({ tools, byCategory, value, onChange }) {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/**
+ * 工具目录：按「我要干的活」看，而不是 36 条平铺。
+ * 选一个场景 → 该场景要调哪些工具直接高亮，其余灰掉，一眼能数清。
+ */
+function ToolCatalog({ tools, byCategory, onUseProfile }) {
+  const [scene, setScene] = useState('live')
+  const [onlyScene, setOnlyScene] = useState(true)
+  const prof = PROFILES[scene]
+  const inScene = (n) => !prof.tools || prof.tools.includes(n)
+  const usedCount = prof.tools ? prof.tools.length : tools.length
+
+  return (
+    <div>
+      <Card size="small" style={{ ...cardStyle, marginBottom: 16, background: 'rgba(14,165,160,0.03)' }}>
+        <div style={{ fontSize: 12, color: '#8c919e', marginBottom: 8 }}>我要干的活</div>
+        <Radio.Group value={scene} onChange={e => setScene(e.target.value)} optionType="button" buttonStyle="solid" size="small">
+          {Object.entries(PROFILES).map(([k, p]) => <Radio.Button key={k} value={k}>{p.label}</Radio.Button>)}
+        </Radio.Group>
+        <div style={{ marginTop: 10, fontSize: 13, color: '#4e5969' }}>{prof.task}</div>
+        <div style={{ marginTop: 4, fontSize: 12, color: '#8c919e' }}>{prof.hint}</div>
+        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 16 }}>
+          <span style={{ fontSize: 13 }}>
+            这件事会用到 <b style={{ color: '#0ea5a0', fontSize: 16 }}>{usedCount}</b> / {tools.length} 个工具
+          </span>
+          <Checkbox checked={onlyScene} onChange={e => setOnlyScene(e.target.checked)} style={{ fontSize: 12 }}>
+            只看用到的
+          </Checkbox>
+          <Button size="small" type="primary" ghost onClick={() => onUseProfile(scene)}>
+            按这个范围建 Key
+          </Button>
+        </div>
+      </Card>
+
+      {byCategory.map(([cat, items]) => {
+        const shown = onlyScene ? items.filter(t => inScene(t.name)) : items
+        if (!shown.length) return null
+        const hit = items.filter(t => inScene(t.name)).length
+        return (
+          <div key={cat} style={{ marginBottom: 18 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <Tag color={CAT_COLORS[cat]} style={{ fontSize: 12, margin: 0 }}>{cat}</Tag>
+              <Text type="secondary" style={{ fontSize: 12 }}>{hit}/{items.length} 个用到</Text>
+            </div>
+            <Table rowKey="name" dataSource={shown} pagination={false} size="small" showHeader={false}
+              rowClassName={r => inScene(r.name) ? '' : 'tool-dimmed'}
+              columns={[
+                {
+                  dataIndex: 'name', width: 240,
+                  render: (n) => (
+                    <span>
+                      {inScene(n)
+                        ? <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 12, marginRight: 6 }} />
+                        : <span style={{ display: 'inline-block', width: 18 }} />}
+                      <Text code style={{ fontSize: 11 }}>{n}</Text>
+                    </span>
+                  ),
+                },
+                { dataIndex: 'description', render: d => <span style={{ fontSize: 13 }}>{d}</span> },
+                { dataIndex: 'params', width: 220, render: p => <Text type="secondary" style={{ fontSize: 11 }}>{p}</Text> },
+              ]}
+            />
+          </div>
+        )
+      })}
+      <style>{`.tool-dimmed { opacity: .38 }`}</style>
     </div>
   )
 }
@@ -252,14 +323,8 @@ export default function MCPTools() {
           key: 'tools',
           label: <span><ThunderboltOutlined /> 工具列表 ({tools.length})</span>,
           children: (
-            <Table rowKey="name" dataSource={tools} pagination={false} size="small"
-              columns={[
-                { title: '工具', dataIndex: 'name', width: 220, render: n => <Text code style={{ fontSize: 11 }}>{n}</Text> },
-                { title: '分类', dataIndex: 'category', width: 80, render: c => <Tag color={CAT_COLORS[c]} style={{ fontSize: 11 }}>{c}</Tag> },
-                { title: '说明', dataIndex: 'description', render: d => <span style={{ fontSize: 13 }}>{d}</span> },
-                { title: '参数', dataIndex: 'params', width: 240, render: p => <Text type="secondary" style={{ fontSize: 11 }}>{p}</Text> },
-              ]}
-            />
+            <ToolCatalog tools={tools} byCategory={byCategory}
+              onUseProfile={(key) => { applyProfile(key); setCreateModalOpen(true); setNewKeyResult(null); setNewKeyName('') }} />
           ),
         },
         {
@@ -303,7 +368,7 @@ export default function MCPTools() {
                         {step.examples.map((ex, i) => (
                           <Card key={i} size="small" style={{ ...cardStyle, borderLeft: '3px solid #7cacf8' }}>
                             <div style={{ fontSize: 11, color: '#8c919e', marginBottom: 2 }}>{ex.hint}</div>
-                            <div style={{ fontSize: 13, fontFamily: 'monospace' }}>{ex.cmd}</div>
+                            <div style={{ fontSize: 13, fontFamily: 'var(--font-mono)' }}>{ex.cmd}</div>
                           </Card>
                         ))}
                       </div>
