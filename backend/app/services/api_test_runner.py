@@ -454,12 +454,15 @@ async def _resolve_automation_resources(session, scenario, env: dict, token_cach
     """
     from app.services import precheck_service
 
+    # 三个提前返回必须跟正常出口同形（dict, list）——调用方是按两个值解包的。
+    # 之前这里 return {} 会让每次运行都抛 ValueError 被 try/except 吞掉，
+    # 等于这条路从来没真跑起来过，日志里只留一句"解析项目级前置资源失败"。
     project_id = getattr(scenario, "project_id", None)
     if not project_id:
-        return {}
+        return {}, []
     base = (env.get("BASE_URL") or "").rstrip("/")
     if not base:
-        return {}
+        return {}, [{"name": "-", "ok": False, "reason": "当前环境没有 BASE_URL，无法探测前置资源"}]
 
     from app.models.automation_resource import AutomationResource
 
@@ -467,7 +470,7 @@ async def _resolve_automation_resources(session, scenario, env: dict, token_cach
         select(AutomationResource).where(AutomationResource.project_id == project_id)
     )).scalars().all()
     if not resources:
-        return {}
+        return {}, []
 
     headers = {}
     token = env.get("AUTH_TOKEN")
