@@ -117,6 +117,11 @@ function JsonBlock({ data, maxHeight = 500 }) {
   )
 }
 
+// 报告里一律显示**实际发出**的地址。step.url 存的可能是步骤定义里的模板
+// （${BASE_URL}/api/...），而同一屏的请求头却是真 token —— 一半变量一半真值，
+// 拿它没法定位问题。后端新报告已存真实地址，这里兼容历史报告。
+const stepRealUrl = (step) => step?.requestData?.url || step?.url
+
 function HeadersTable({ headers }) {
   if (!headers || typeof headers !== 'object') return null
   const entries = Object.entries(headers)
@@ -150,6 +155,10 @@ function StepDetailDrawer({ step, open, onClose }) {
   const respBody = step.responseData?.body ?? (step.responseData && !step.responseData.headers ? step.responseData : null)
   const reqHeaders = step.requestData?.headers
   const respHeaders = step.responseData?.headers
+  // 优先显示**实际发出**的地址。step.url 可能是步骤定义里的模板（${BASE_URL}/...），
+  // 而旁边的请求头却是真 token —— 一半变量一半真值，没法拿来定位问题。
+  // 后端新报告已经存真实地址了，这里兜住历史报告。
+  const realUrl = stepRealUrl(step)
 
   const tabItems = []
   if (reqBody != null) tabItems.push({ key: 'body', label: '请求体', children: <JsonBlock data={reqBody} /> })
@@ -222,14 +231,19 @@ function StepDetailDrawer({ step, open, onClose }) {
       </div>
 
       {/* Request URL (only when HTTP data exists) */}
-      {step.httpMethod && step.url && (
+      {step.httpMethod && realUrl && (
         <div style={{ padding: '16px 24px', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#1d2129', marginBottom: 8 }}>请求 URL:</div>
-          <div style={{ fontSize: 13, fontFamily: "Menlo, Monaco, monospace", lineHeight: 1.6 }}>
+          <div style={{ fontSize: 13, fontFamily: "Menlo, Monaco, monospace", lineHeight: 1.6, wordBreak: 'break-all' }}>
             <span style={{ color: mc, fontWeight: 700 }}>{step.httpMethod}</span>
             {'  '}
-            <span style={{ color: '#4e5969' }}>{step.url}</span>
+            <span style={{ color: '#4e5969' }}>{realUrl}</span>
           </div>
+          {realUrl !== step.url && (
+            <div style={{ fontSize: 11, color: '#c9cdd4', marginTop: 4, fontFamily: "Menlo, Monaco, monospace" }}>
+              模板：{step.url}
+            </div>
+          )}
         </div>
       )}
 
@@ -652,9 +666,9 @@ export default function ReportDetail() {
                             color: methodColor[step.httpMethod] || '#86909c',
                           }}>{step.httpMethod}</span>
                         )}
-                        {step.url && (
+                        {stepRealUrl(step) && (
                           <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#c9cdd4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {step.url.replace(/^https?:\/\/[^/]+/, '')}
+                            {stepRealUrl(step).replace(/^https?:\/\/[^/]+/, '')}
                           </span>
                         )}
                       </>
@@ -668,12 +682,12 @@ export default function ReportDetail() {
                             color: methodColor[step.httpMethod] || '#86909c',
                           }}>{step.httpMethod}</span>
                         )}
-                        {step.url && (
+                        {stepRealUrl(step) && (
                           <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {step.url.replace(/^https?:\/\/[^/]+/, '')}
+                            {stepRealUrl(step).replace(/^https?:\/\/[^/]+/, '')}
                           </span>
                         )}
-                        {!step.url && <span style={{ fontWeight: 500 }}>{step.stepName}</span>}
+                        {!stepRealUrl(step) && <span style={{ fontWeight: 500 }}>{step.stepName}</span>}
                       </>
                     )}
                   </div>

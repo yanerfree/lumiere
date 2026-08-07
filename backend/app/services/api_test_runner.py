@@ -585,10 +585,14 @@ async def run_batch(
                     scenario_status=scenario.status,
                     folder_id=str(scenario.folder_id) if scenario.folder_id else None,
                 )
+                # url 取**实际发出去**的那个，不是步骤定义里的模板。
+                # 以前直接用 s.url，报告里就成了 ${BASE_URL}/api/auth/login，而同一屏的
+                # 请求头又是真 token —— 一半变量一半真值，拿它根本没法定位问题。
                 scenario_result.steps = [
                     StepResult(
                         step_id=str(s.id), step_name=s.name,
-                        method=s.method, url=s.url,
+                        method=s.method,
+                        url=((s.last_response or {}).get("request") or {}).get("url") or s.url,
                         status=s.last_status or "skip",
                         status_code=s.last_response.get("statusCode") if s.last_response else None,
                         duration=s.last_response.get("duration", 0) if s.last_response else 0,

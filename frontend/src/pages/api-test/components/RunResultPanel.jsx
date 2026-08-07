@@ -36,6 +36,13 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
   const skipCount = results.filter(r => r.status === 'skip').length
   const totalDuration = results.reduce((s, r) => s + (r.duration || 0), 0)
 
+  // 整体结论：跑完只要有一步失败就是失败，别让人对着几个数字自己算
+  const verdict = running
+    ? { label: '执行中', color: '#0ea5a0', icon: <LoadingOutlined /> }
+    : failCount > 0
+      ? { label: '失败', color: '#e8453c', icon: <CloseCircleOutlined /> }
+      : { label: '通过', color: '#0ea5a0', icon: <CheckCircleOutlined /> }
+
   // 详情优先取本次运行事件自带的（后端 step_result 直接带 request/response/断言/error）。
   // scenario.steps[].lastResponse 是打开页面时加载的那一份，跑完不刷新就是旧的甚至没有，
   // 只靠它会让刚跑完的步骤展开显示「暂无详情数据」。
@@ -61,18 +68,25 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
           </Space>
           <Button type="text" size="small" icon={<CloseOutlined />} onClick={onClose} />
         </div>
-        <div style={{ display: 'flex', gap: 12, marginTop: 6, fontSize: 12 }}>
-          <span style={{ color: '#0ea5a0', fontWeight: 600 }}>
-            <CheckCircleOutlined /> {passCount} 通过
+
+        {/* 整体结论摆在最前面。以前只有「5 通过 / 0 失败 / 共 5 步」，
+            到底算过没过要人自己心算一下，一眼看不出来。 */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}>
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+            padding: '3px 12px', borderRadius: 999, fontSize: 13, fontWeight: 700,
+            color: '#fff', background: verdict.color,
+          }}>
+            {verdict.icon} {verdict.label}
           </span>
-          <span style={{ color: '#e8453c', fontWeight: 600 }}>
-            <CloseCircleOutlined /> {failCount} 失败
+          <span style={{ fontSize: 12, color: '#4e5969' }}>
+            {passCount}/{results.length} 步通过
+            {failCount > 0 && <span style={{ color: '#e8453c', fontWeight: 600 }}>，{failCount} 步失败</span>}
+            {skipCount > 0 && <span style={{ color: '#c9cdd4' }}>，{skipCount} 跳过</span>}
           </span>
-          {skipCount > 0 && <span style={{ color: '#c9cdd4' }}>{skipCount} 跳过</span>}
-          <span style={{ color: '#86909c' }}>共 {results.length} 步</span>
-          <span style={{ color: '#86909c' }}>{fmt(totalDuration)}</span>
+          <span style={{ fontSize: 12, color: '#86909c', marginLeft: 'auto' }}>{fmt(totalDuration)}</span>
         </div>
-        {envName && <div style={{ fontSize: 11, color: '#c9cdd4', marginTop: 2 }}>环境: {envName}</div>}
+        {envName && <div style={{ fontSize: 11, color: '#c9cdd4', marginTop: 4 }}>环境: {envName}</div>}
       </div>
 
       {/* 步骤列表 */}

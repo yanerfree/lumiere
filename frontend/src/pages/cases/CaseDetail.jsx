@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { createPortal } from 'react-dom'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table, Alert } from 'antd'
 import {
@@ -447,24 +446,6 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   const [reportId, setReportId] = useState(null)
   const [precheck, setPrecheck] = useState(null)   // 跑前前置资源预检结论
 
-  // 运行结果面板要吸在视口底部（见下方 render 处的说明）。fixed 需要自己算左边界，
-  // 否则会盖住左侧导航；宽度跟着卡片走，侧边栏收起/窗口缩放都能跟上。
-  const cardRef = useRef(null)
-  const [panelBox, setPanelBox] = useState(null)
-  useEffect(() => {
-    if (!showPanel) return
-    const measure = () => {
-      const el = cardRef.current
-      if (!el) return
-      const r = el.getBoundingClientRect()
-      setPanelBox({ left: r.left, width: r.width })
-    }
-    measure()
-    window.addEventListener('resize', measure)
-    const ro = new ResizeObserver(measure)
-    if (cardRef.current) ro.observe(cardRef.current)
-    return () => { window.removeEventListener('resize', measure); ro.disconnect() }
-  }, [showPanel])
 
   const base = `/projects/${projectId}/branches/${branchId}/api-tests`
 
@@ -534,7 +515,7 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   }
 
   return (
-    <Card ref={cardRef} styles={{ body: { padding: '14px 16px' } }} style={{ marginBottom: 12, border: '1px solid rgba(14,165,160,0.25)' }}>
+    <Card styles={{ body: { padding: '14px 16px' } }} style={{ marginBottom: 12, border: '1px solid rgba(14,165,160,0.25)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ApiOutlined style={{ color: '#0ea5a0' }} />
@@ -593,34 +574,28 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           } />
       )}
 
-      {/* 吸底。上面的步骤编辑区很高，面板要是跟着文档流排在后面，点完「运行全部」
-          结果就落在屏幕外，看着像没反应 —— 得滚到底才发现它一直在那。
-          三个坑依次踩过：
-          1) sticky 不行 —— 面板是卡片的最后一个孩子，父盒子到它就结束了，没有可粘的余量；
-          2) fixed 直接写也不行 —— 卡片自己带 backdrop-filter: blur(12px)（清新风的毛玻璃），
-             有 backdrop-filter 的元素会成为 fixed 后代的包含块，left 被又叠加了一次卡片左边距；
-          3) 所以挂到 body 上，位置用卡片实测的 left/width，既真吸视口又不盖左侧导航。 */}
-      {showPanel && (stepResults.length > 0 || running) && createPortal(
-        <div style={{
-          position: 'fixed', bottom: 0, zIndex: 900,
-          left: panelBox?.left ?? 0, width: panelBox?.width ?? '100%',
-          maxHeight: '46vh', display: 'flex', flexDirection: 'column',
-          background: '#fff', borderTop: '1px solid rgba(0,0,0,0.08)',
-          borderRadius: '10px 10px 0 0', overflow: 'hidden',
-          boxShadow: '0 -6px 24px rgba(0,0,0,0.14)',
-        }}>
-          <RunResultPanel
-            results={stepResults}
-            scenario={scenario}
-            running={running}
-            reportId={reportId}
-            projectId={projectId}
-            envName={(environments.find(e => e.id === runEnv) || {}).name}
-            onClose={() => setShowPanel(false)}
-          />
-        </div>,
-        document.body,
-      )}
+      {/* 右侧抽屉。跟「接口测试」模块页保持同一种呈现，那边一直就是右侧 Drawer。
+          曾经试过排在文档流里（步骤编辑区很高，结果落到屏幕外，像没反应）和吸底
+          （能看见但形态跟另一个页面不一致），都不对，回到 Drawer。 */}
+      <Drawer
+        open={showPanel && (stepResults.length > 0 || running)}
+        onClose={() => setShowPanel(false)}
+        placement="right"
+        width={560}
+        mask={false}
+        closable={false}
+        styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' } }}
+      >
+        <RunResultPanel
+          results={stepResults}
+          scenario={scenario}
+          running={running}
+          reportId={reportId}
+          projectId={projectId}
+          envName={(environments.find(e => e.id === runEnv) || {}).name}
+          onClose={() => setShowPanel(false)}
+        />
+      </Drawer>
     </Card>
   )
 }
