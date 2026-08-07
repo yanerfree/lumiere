@@ -7,7 +7,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 
 const METHOD_COLORS = { GET: '#0ea5a0', POST: '#0ea5a0', PUT: '#faad14', DELETE: '#e8453c', PATCH: '#7c5cbf' }
-const MONO = "'SF Mono', Monaco, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 
 // 来源徽标配色：一眼区分「环境给的」「上游步骤提取的」「场景变量」
 const SRC_COLOR = {
@@ -146,7 +146,11 @@ function Assertions({ items, statusCode }) {
           <span style={{ color: '#86909c', minWidth: 14 }}>{j + 1}.</span>
           {a.passed ? <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 12, marginTop: 2 }} />
                     : <CloseCircleOutlined style={{ color: '#e8453c', fontSize: 12, marginTop: 2 }} />}
-          <span style={{ fontFamily: MONO, wordBreak: 'break-all' }}>{desc(a)}</span>
+          <span style={{ fontFamily: MONO, wordBreak: 'break-all' }}>
+            {desc(a)}
+            {/* 断言本身写错时要说是写错了，别混在"没通过"里让人去查被测系统 */}
+            {a.error && <div style={{ color: '#fa8c16', marginTop: 2 }}>{a.error}</div>}
+          </span>
         </div>
       ))}
     </div>

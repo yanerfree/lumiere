@@ -274,12 +274,37 @@ def _expects_status(assertions: list[dict], code: int) -> bool:
     return False
 
 
+# 每种断言类型认哪些 operator。不认识的必须当场说出来 ——
+# 以前一律落到 passed=False，于是出现"状态码 200、期望 200、却显示失败"
+# 这种查不出原因的假失败（写成 eq 而不是 == 就会中招）。
+_VALID_OPS = {
+    "status": ("==", "!=", "in"),
+    "body_contains": ("contains", "not_contains"),
+    "body_field": ("==", "!=", "not_empty", "contains", "not_contains"),
+}
+
+
+# 没写 operator 时按类型兜底：body_contains 天然是「包含」，兜成 == 等于必然失败。
+_DEFAULT_OP = {"status": "==", "body_field": "==", "body_contains": "contains"}
+
+
 def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> list[dict]:
     results = []
     for a in assertions:
         passed = False
         a_type = a.get("type")
-        operator = a.get("operator", "==")
+        operator = a.get("operator") or _DEFAULT_OP.get(a_type, "==")
+
+        valid = _VALID_OPS.get(a_type)
+        if valid is not None and operator not in valid:
+            results.append({**a, "passed": False,
+                            "error": f"不认识的操作符「{operator}」；{a_type} 支持：{'、'.join(valid)}"})
+            continue
+        if valid is None:
+            results.append({**a, "passed": False,
+                            "error": f"不认识的断言类型「{a_type}」；支持：{'、'.join(_VALID_OPS)}"})
+            continue
+
         expected = a.get("expected", a.get("value"))
         field_path = a.get("field") or (a.get("value") if a.get("expected") is not None or operator == "not_empty" else None)
 

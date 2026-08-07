@@ -110,7 +110,7 @@ function SnippetPicker({ snippets, onInsert }) {
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#1d2129' }}>{item.label}</span>
                 <span style={{ fontSize: 10, color: '#86909c' }}>{item.desc}</span>
               </div>
-              <pre style={{ margin: 0, padding: '4px 8px', background: 'rgba(0,0,0,0.02)', borderRadius: 8, fontSize: 10, color: '#4e5969', fontFamily: 'monospace', lineHeight: 1.5, whiteSpace: 'pre-wrap', border: '1px solid rgba(0,0,0,0.05)', maxHeight: 80, overflow: 'hidden' }}>{item.code}</pre>
+              <pre style={{ margin: 0, padding: '4px 8px', background: 'rgba(0,0,0,0.02)', borderRadius: 8, fontSize: 10, color: '#4e5969', fontFamily: 'var(--font-mono)', lineHeight: 1.5, whiteSpace: 'pre-wrap', border: '1px solid rgba(0,0,0,0.05)', maxHeight: 80, overflow: 'hidden' }}>{item.code}</pre>
             </div>
           ))}
         </div>
@@ -134,10 +134,10 @@ function VarPicker({ onInsert }) {
               onMouseEnter={e => e.currentTarget.style.background = '#f0f5ff'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
               <div>
-                <div style={{ fontSize: 12, fontFamily: 'monospace', color: '#0ea5a0' }}>{`{{${v.key}}}`}</div>
+                <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#0ea5a0' }}>{`{{${v.key}}}`}</div>
                 <div style={{ fontSize: 10, color: '#86909c' }}>{v.desc}</div>
               </div>
-              <span style={{ fontSize: 10, color: '#8c8c8c', fontFamily: 'monospace' }}>{v.example}</span>
+              <span style={{ fontSize: 10, color: '#8c8c8c', fontFamily: 'var(--font-mono)' }}>{v.example}</span>
             </div>
           ))}
         </div>
@@ -272,9 +272,9 @@ function KvEditor({ items = [], onChange, keyPh = 'Key', valPh = 'Value' }) {
             <Button size="small" type="primary" onClick={fromBulk}>确定</Button>
           </Space>
         </div>
-        <Input.TextArea value={bulkText} onChange={e => setBulkText(e.target.value)}
+        <Input.TextArea spellCheck={false} value={bulkText} onChange={e => setBulkText(e.target.value)}
           autoSize={{ minRows: 6, maxRows: 18 }} placeholder={`Content-Type: application/json\nAuthorization: Bearer {{token}}  // 认证\n// X-Debug: true  // 注释行=禁用`}
-          style={{ fontFamily: 'monospace', fontSize: 11 }} />
+          style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
       </div>
     )
   }
@@ -304,11 +304,11 @@ function KvEditor({ items = [], onChange, keyPh = 'Key', valPh = 'Value' }) {
           {isHeader ? (
             <AutoComplete size="small" value={r.key} placeholder={keyPh} onChange={v => up(i, 'key', v)}
               options={headerOptions.filter(o => !r.key || o.value.toLowerCase().includes(r.key.toLowerCase()))}
-              style={{ flex: 3, fontFamily: 'monospace', fontSize: 11 }} />
+              style={{ flex: 3, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
           ) : (
-            <Input size="small" value={r.key} placeholder={keyPh} onChange={e => up(i, 'key', e.target.value)} style={{ flex: 3, fontFamily: 'monospace', fontSize: 11 }} />
+            <Input spellCheck={false} size="small" value={r.key} placeholder={keyPh} onChange={e => up(i, 'key', e.target.value)} style={{ flex: 3, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
           )}
-          <Input size="small" value={r.value} placeholder={valPh} onChange={e => up(i, 'value', e.target.value)} style={{ flex: 4, fontFamily: 'monospace', fontSize: 11 }} />
+          <Input spellCheck={false} size="small" value={r.value} placeholder={valPh} onChange={e => up(i, 'value', e.target.value)} style={{ flex: 4, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
           <Input size="small" value={r.desc || ''} placeholder="描述" onChange={e => up(i, 'desc', e.target.value)} style={{ flex: 3, fontSize: 11, color: '#86909c' }} />
           <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={() => onChange(items.filter((_, j) => j !== i))} />
         </div>
@@ -351,7 +351,7 @@ function CompactApiRow({ step, index, isSelected, onClick, onRemove, onCopy, onD
       <Tag style={{ margin: 0, fontWeight: 700, fontSize: 9, background: mc.bg, color: mc.color, border: 'none', padding: '0 5px', lineHeight: '16px', minWidth: 38, textAlign: 'center' }}>{method}</Tag>
       <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
         <div style={{ fontSize: 12, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
-        {subLabel && <div style={{ fontSize: 10, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{subLabel}</div>}
+        {subLabel && <div style={{ fontSize: 10, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{subLabel}</div>}
       </div>
       <div style={{ display: 'flex', gap: 2, flexShrink: 0, alignItems: 'center' }}>
         {assertCount > 0 && <span title={`${assertCount} 个断言`} style={{ fontSize: 9, background: '#e0f7f6', color: '#0ea5a0', borderRadius: 8, padding: '0 4px', lineHeight: '16px', fontWeight: 600 }}>{assertCount}</span>}
@@ -420,9 +420,9 @@ function CompactForEachRow({ node, children, onRemove }) {
         {collapsed ? <CaretRightOutlined style={{ fontSize: 9, color: '#13c2c2' }} /> : <CaretDownOutlined style={{ fontSize: 9, color: '#13c2c2' }} />}
         <UnorderedListOutlined style={{ color: '#13c2c2', fontSize: 11 }} />
         <span style={{ fontSize: 11, color: '#13c2c2', fontWeight: 500 }}>ForEach</span>
-        <span style={{ fontSize: 11, color: '#13c2c2', fontFamily: 'monospace' }}>{node.iterVar || 'item'}</span>
+        <span style={{ fontSize: 11, color: '#13c2c2', fontFamily: 'var(--font-mono)' }}>{node.iterVar || 'item'}</span>
         <span style={{ fontSize: 10, color: '#86909c' }}>in</span>
-        <span style={{ fontSize: 11, color: '#13c2c2', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{node.dataSource || '[]'}</span>
+        <span style={{ fontSize: 11, color: '#13c2c2', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{node.dataSource || '[]'}</span>
         <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ fontSize: 10, width: 20, height: 20 }} />
       </div>
       {!collapsed && <div style={{ paddingLeft: 16 }}>{children}</div>}
@@ -442,7 +442,7 @@ function CompactConditionRow({ node, onRemove, thenChildren, elseChildren }) {
         {collapsed ? <CaretRightOutlined style={{ fontSize: 9, color: '#faad14' }} /> : <CaretDownOutlined style={{ fontSize: 9, color: '#faad14' }} />}
         <BranchesOutlined style={{ color: '#faad14', fontSize: 11 }} />
         <span style={{ fontSize: 11, color: '#faad14', fontWeight: 500 }}>IF</span>
-        <span style={{ fontSize: 11, color: '#faad14', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'monospace' }}>{node.condition || 'True'}</span>
+        <span style={{ fontSize: 11, color: '#faad14', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{node.condition || 'True'}</span>
         <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ fontSize: 10, width: 20, height: 20 }} />
       </div>
       {!collapsed && (
@@ -555,7 +555,7 @@ const opMeta = {
 }
 
 const assertTypes = [{ value: 'status', label: '状态码' }, { value: 'jsonPath', label: 'Response JSON' }, { value: 'contains', label: '包含' }, { value: 'header', label: '响应头' }]
-const assertOps = [{ value: 'eq', label: '等于' }, { value: 'ne', label: '不等于' }, { value: 'gt', label: '大于' }, { value: 'lt', label: '小于' }, { value: 'contains', label: '包含' }, { value: 'notEmpty', label: '非空' }, { value: 'in', label: '属于(多选其一)' }]
+const assertOps = [{ value: 'eq', label: '等于' }, { value: 'ne', label: '不等于' }, { value: 'gt', label: '大于' }, { value: 'lt', label: '小于' }, { value: 'contains', label: '包含' }, { value: 'notContains', label: '不包含' }, { value: 'notEmpty', label: '非空' }, { value: 'in', label: '属于(多选其一)' }]
 
 function opSummary(op) {
   if (op.type === 'assertion') {
@@ -618,11 +618,11 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
               <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Select size="small" value={op.assertType || 'status'} onChange={v => up('assertType', v)} options={assertTypes} style={{ width: 120 }} />
                 {(op.assertType === 'jsonPath' || op.assertType === 'header') && (
-                  <Tooltip title="JSONPath 示例：$.data.id, $.list[0].name, $.total"><Input size="small" value={op.path || ''} placeholder="$.data.id" onChange={e => up('path', e.target.value)} style={{ width: 160, fontFamily: 'monospace', fontSize: 11 }} /></Tooltip>
+                  <Tooltip title="JSONPath 示例：$.data.id, $.list[0].name, $.total"><Input spellCheck={false} size="small" value={op.path || ''} placeholder="$.data.id" onChange={e => up('path', e.target.value)} style={{ width: 160, fontFamily: 'var(--font-mono)', fontSize: 11 }} /></Tooltip>
                 )}
                 <Select size="small" value={op.operator || 'eq'} onChange={v => up('operator', v)} options={assertOps} style={{ width: 80 }} />
                 {op.operator !== 'notEmpty' && (
-                  <Input size="small" value={op.expected || ''} placeholder={op.assertType === 'status' ? '200' : '期望值'} onChange={e => up('expected', e.target.value)} style={{ flex: 1, minWidth: 80, fontFamily: 'monospace', fontSize: 11 }} />
+                  <Input spellCheck={false} size="small" value={op.expected || ''} placeholder={op.assertType === 'status' ? '200' : '期望值'} onChange={e => up('expected', e.target.value)} style={{ flex: 1, minWidth: 80, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                 )}
               </div>
               <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>
@@ -636,10 +636,10 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
           {op.type === 'extractor' && (
             <div>
               <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                <Tooltip title="后续步骤可用 {{变量名}} 引用"><Input size="small" value={op.variable || ''} placeholder="如: token" onChange={e => up('variable', e.target.value)} style={{ width: 100, fontFamily: 'monospace', fontSize: 11 }} /></Tooltip>
+                <Tooltip title="后续步骤可用 {{变量名}} 引用"><Input spellCheck={false} size="small" value={op.variable || ''} placeholder="如: token" onChange={e => up('variable', e.target.value)} style={{ width: 100, fontFamily: 'var(--font-mono)', fontSize: 11 }} /></Tooltip>
                 <Tag style={{ margin: 0, fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none' }}>临时变量</Tag>
                 <span style={{ fontSize: 11, color: '#86909c' }}>Response JSON</span>
-                <Tooltip title="JSONPath 示例：$.data.token, $.list[0].id"><Input size="small" value={op.path || ''} placeholder="$.data.token" onChange={e => up('path', e.target.value)} style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }} /></Tooltip>
+                <Tooltip title="JSONPath 示例：$.data.token, $.list[0].id"><Input spellCheck={false} size="small" value={op.path || ''} placeholder="$.data.token" onChange={e => up('path', e.target.value)} style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 11 }} /></Tooltip>
               </div>
               <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>从响应 JSON 中提取值存为临时变量，后续步骤用 {'{{变量名}}'} 引用</div>
             </div>
@@ -651,10 +651,10 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
                   placeholder="Header 名称" style={{ width: 160, fontSize: 11 }} filterOption={(input, opt) => opt.value.toLowerCase().includes(input.toLowerCase())} />
                 <Select size="small" value={op.sourceType || 'literal'} onChange={v => up('sourceType', v)} style={{ width: 110 }}
                   options={[{ value: 'literal', label: '直接输入' }, { value: 'context', label: '上下文变量' }]} />
-                <Input size="small" value={op.value || ''} onChange={e => up('value', e.target.value)}
+                <Input spellCheck={false} size="small" value={op.value || ''} onChange={e => up('value', e.target.value)}
                   placeholder={op.sourceType === 'context' ? '变量名，如 token' : '值，如 Bearer xxx'}
                   prefix={op.sourceType === 'context' ? <span style={{ color: '#0ea5a0', fontSize: 10 }}>{'{{'}...{'}}'}</span> : null}
-                  style={{ flex: 1, minWidth: 120, fontFamily: 'monospace', fontSize: 11 }} />
+                  style={{ flex: 1, minWidth: 120, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
               </div>
               <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>设置请求头字段，"上下文变量"模式会自动用前面步骤提取的值</div>
             </div>
@@ -671,24 +671,24 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
               </div>
               {(op.mode || 'field') === 'field' ? (
                 <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-                  <Input size="small" value={op.path || ''} onChange={e => up('path', e.target.value)}
-                    placeholder="字段路径，如 data.user_id" style={{ width: 160, fontFamily: 'monospace', fontSize: 11 }} />
+                  <Input spellCheck={false} size="small" value={op.path || ''} onChange={e => up('path', e.target.value)}
+                    placeholder="字段路径，如 data.user_id" style={{ width: 160, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                   <span style={{ fontSize: 11, color: '#86909c' }}>=</span>
-                  <Input size="small" value={op.value || ''} onChange={e => up('value', e.target.value)}
+                  <Input spellCheck={false} size="small" value={op.value || ''} onChange={e => up('value', e.target.value)}
                     placeholder={op.sourceType === 'context' ? '变量名' : '值'}
                     prefix={op.sourceType === 'context' ? <span style={{ color: '#0ea5a0', fontSize: 10 }}>{'{{'}...{'}}'}</span> : null}
-                    style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }} />
+                    style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                 </div>
               ) : (
                 <div>
                   {op.sourceType === 'context' ? (
-                    <Input size="small" value={op.value || ''} onChange={e => up('value', e.target.value)}
+                    <Input spellCheck={false} size="small" value={op.value || ''} onChange={e => up('value', e.target.value)}
                       placeholder="上下文变量名" prefix={<span style={{ color: '#0ea5a0', fontSize: 10 }}>{'{{'}...{'}}'}</span>}
-                      style={{ fontFamily: 'monospace', fontSize: 11 }} />
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                   ) : (
-                    <Input.TextArea value={op.value || ''} onChange={e => up('value', e.target.value)}
+                    <Input.TextArea spellCheck={false} value={op.value || ''} onChange={e => up('value', e.target.value)}
                       placeholder='{"key": "value"}' autoSize={{ minRows: 2, maxRows: 8 }}
-                      style={{ fontFamily: 'monospace', fontSize: 11 }} />
+                      style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                   )}
                 </div>
               )}
@@ -705,9 +705,9 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
                   {snippets && <SnippetPicker snippets={snippets} onInsert={code => insertAtCursor(scriptRef, op.code || '', code, v => up('code', v))} />}
                 </Space>
               </div>
-              <Input.TextArea ref={scriptRef} value={op.code || ''} onChange={e => up('code', e.target.value)}
+              <Input.TextArea spellCheck={false} ref={scriptRef} value={op.code || ''} onChange={e => up('code', e.target.value)}
                 placeholder="# 在此编写脚本，或点击「片段」快速插入" autoSize={{ minRows: 3, maxRows: 16 }}
-                style={{ fontFamily: 'monospace', fontSize: 11 }} />
+                style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
             </div>
           )}
           {op.type === 'wait' && (
@@ -813,8 +813,8 @@ function AuthEditor({ auth, onChange }) {
       {a.type === 'bearer' && (
         <div>
           <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Token</div>
-          <Input size="small" value={a.token || ''} onChange={e => up('token', e.target.value)}
-            placeholder="输入 Token，支持 {{variable}}" style={{ fontFamily: 'monospace', fontSize: 11 }} />
+          <Input spellCheck={false} size="small" value={a.token || ''} onChange={e => up('token', e.target.value)}
+            placeholder="输入 Token，支持 {{variable}}" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
           <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 6 }}>会自动添加 Authorization: Bearer {'<token>'} 请求头</div>
         </div>
       )}
@@ -840,7 +840,7 @@ function AuthEditor({ auth, onChange }) {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Key 值</div>
-              <Input size="small" value={a.keyValue || ''} onChange={e => up('keyValue', e.target.value)} placeholder="your-api-key" style={{ fontFamily: 'monospace', fontSize: 11 }} />
+              <Input spellCheck={false} size="small" value={a.keyValue || ''} onChange={e => up('keyValue', e.target.value)} placeholder="your-api-key" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
             </div>
           </div>
           <div>
@@ -997,7 +997,7 @@ function ResponsePanel({ response, onAddAssertion }) {
           </div>
           <pre style={{
             margin: 0, padding: 12, background: '#fafbfc', border: '1px solid rgba(0,0,0,0.05)', borderRadius: 6,
-            fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6, maxHeight: 400, overflow: 'auto',
+            fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.6, maxHeight: 400, overflow: 'auto',
             whiteSpace: 'pre-wrap', wordBreak: 'break-all',
           }}>{bodyMode === 'pretty' && isJson && onAddAssertion ? renderJsonTree(JSON.parse(rawBody)) : (search ? highlightSearch(displayBody) : displayBody)}</pre>
         </div>
@@ -1016,8 +1016,8 @@ function ResponsePanel({ response, onAddAssertion }) {
           </div>
           {respHeaders.map((h, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, padding: '4px 0', borderBottom: '1px solid #f8f8f8', fontSize: 11 }}>
-              <span style={{ fontWeight: 600, color: '#4e5969', width: 200, flexShrink: 0, fontFamily: 'monospace' }}>{h.key}</span>
-              <span style={{ color: '#86909c', fontFamily: 'monospace', wordBreak: 'break-all' }}>{h.value}</span>
+              <span style={{ fontWeight: 600, color: '#4e5969', width: 200, flexShrink: 0, fontFamily: 'var(--font-mono)' }}>{h.key}</span>
+              <span style={{ color: '#86909c', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{h.value}</span>
             </div>
           ))}
         </div>
@@ -1029,8 +1029,8 @@ function ResponsePanel({ response, onAddAssertion }) {
           {cookies.map((c, i) => (
             <div key={i} style={{ padding: '6px 0', borderBottom: '1px solid #f8f8f8', fontSize: 11 }}>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span style={{ fontWeight: 600, color: '#4e5969', fontFamily: 'monospace' }}>{c.name}</span>
-                <span style={{ color: '#0ea5a0', fontFamily: 'monospace', wordBreak: 'break-all' }}>{c.value}</span>
+                <span style={{ fontWeight: 600, color: '#4e5969', fontFamily: 'var(--font-mono)' }}>{c.name}</span>
+                <span style={{ color: '#0ea5a0', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{c.value}</span>
               </div>
               {c.attrs && <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 2 }}>{c.attrs}</div>}
             </div>
@@ -1227,13 +1227,13 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
                 : `当前环境前置 URL：${baseUrl}（只读，随所选环境变化；要打别的地址请直接填完整 http(s) 地址）`}>
                 <span style={{ fontSize: 11, color: '#86909c', background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.08)', borderRight: 'none',
                   borderRadius: '8px 0 0 8px', padding: '3px 8px', whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis',
-                  display: 'inline-block', lineHeight: '16px', fontFamily: 'monospace', flexShrink: 0, cursor: 'default', userSelect: 'none',
+                  display: 'inline-block', lineHeight: '16px', fontFamily: 'var(--font-mono)', flexShrink: 0, cursor: 'default', userSelect: 'none',
                   textDecoration: isAbsolute ? 'line-through' : 'none', opacity: isAbsolute ? 0.45 : 1 }}>
                   <GlobalOutlined style={{ marginRight: 4, fontSize: 10 }} />{baseUrl}
                 </span>
               </Tooltip>
             )}
-            <Input size="small" value={urlPathOnly} style={{ fontFamily: 'monospace', fontSize: 12, borderRadius: baseUrl ? '0 4px 4px 0' : undefined }}
+            <Input spellCheck={false} size="small" value={urlPathOnly} style={{ fontFamily: 'var(--font-mono)', fontSize: 12, borderRadius: baseUrl ? '0 4px 4px 0' : undefined }}
               placeholder="/api/auth/login"
               onChange={e => {
                 // 输入框里只编辑路径；${BASE_URL} 前缀由 restoreBase 补回，
@@ -1264,7 +1264,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
         </div>
         {/* 完整 URL 预览 */}
         {paramCount > 0 && (
-          <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4, fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
             title={resolvedUrl}>
             {resolvedUrl}
           </div>
@@ -1277,15 +1277,15 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
         <div style={{ marginBottom: 8, fontSize: 12, color: '#86909c' }}>
           粘贴 cURL 命令，自动解析为请求配置。也可以直接在 URL 栏粘贴 cURL 触发导入。
         </div>
-        <Input.TextArea value={curlText} onChange={e => setCurlText(e.target.value)}
+        <Input.TextArea spellCheck={false} value={curlText} onChange={e => setCurlText(e.target.value)}
           placeholder={`curl -X POST 'https://api.example.com/login' \\\n  -H 'Content-Type: application/json' \\\n  -d '{"username":"admin","password":"123456"}'`}
-          autoSize={{ minRows: 6, maxRows: 14 }} style={{ fontFamily: 'monospace', fontSize: 11 }} />
+          autoSize={{ minRows: 6, maxRows: 14 }} style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
         {curlText.trim() && (() => {
           const preview = parseCurl(curlText)
           return (
             <div style={{ marginTop: 10, padding: 10, background: 'rgba(0,0,0,0.02)', borderRadius: 6, fontSize: 11 }}>
               <div style={{ fontWeight: 600, marginBottom: 4, color: '#4e5969' }}>解析预览：</div>
-              <div><Tag color={methodColors[preview.method]?.color}>{preview.method}</Tag> <span style={{ fontFamily: 'monospace' }}>{preview.url}</span></div>
+              <div><Tag color={methodColors[preview.method]?.color}>{preview.method}</Tag> <span style={{ fontFamily: 'var(--font-mono)' }}>{preview.url}</span></div>
               {preview.headers.length > 0 && <div style={{ color: '#86909c', marginTop: 4 }}>Headers: {preview.headers.map(h => h.key).join(', ')}</div>}
               {preview.params.length > 0 && <div style={{ color: '#86909c' }}>Params: {preview.params.map(p => `${p.key}=${p.value}`).join(', ')}</div>}
               {preview.body && <div style={{ color: '#86909c' }}>Body: {preview.body.slice(0, 100)}{preview.body.length > 100 ? '...' : ''}</div>}
@@ -1338,9 +1338,9 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
               <div style={{ padding: '16px 0', textAlign: 'center', color: '#8c8c8c', fontSize: 12 }}>此请求不包含 Body</div>
             )}
             {((step.bodyType || 'json') === 'json' || step.bodyType === 'raw') && (
-              <Input.TextArea value={step.body || ''} onChange={e => up('body', e.target.value)}
+              <Input.TextArea spellCheck={false} value={step.body || ''} onChange={e => up('body', e.target.value)}
                 placeholder='{\n  "username": "admin"\n}' autoSize={{ minRows: 6, maxRows: 18 }}
-                style={{ fontFamily: 'monospace', fontSize: 11 }} />
+                style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
             )}
             {step.bodyType === 'form' && (
               <KvEditor items={step.formParams || []} onChange={v => up('formParams', v)} keyPh="字段名" valPh="字段值" />
@@ -1418,7 +1418,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
               </div>
               <pre style={{
                 margin: 0, padding: 12, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 6,
-                fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6, maxHeight: 400, overflow: 'auto',
+                fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.6, maxHeight: 400, overflow: 'auto',
                 whiteSpace: 'pre-wrap', wordBreak: 'break-all',
               }}>{code}</pre>
             </div>
