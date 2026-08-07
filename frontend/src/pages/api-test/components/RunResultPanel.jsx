@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Tag, Button, Space, Tooltip, Spin, message } from 'antd'
+import { Tag, Button, Space, Tooltip, Spin, message, Tabs } from 'antd'
 import {
   CheckCircleOutlined, CloseCircleOutlined, CloseOutlined, LoadingOutlined,
   RightOutlined, DownOutlined, FileTextOutlined, CopyOutlined,
@@ -20,6 +20,17 @@ function fmt(ms) {
   if (!ms && ms !== 0) return '-'
   if (ms < 1000) return `${ms}ms`
   return `${(ms / 1000).toFixed(1)}s`
+}
+
+function bodySize(body) {
+  if (body == null) return '-'
+  const n = new Blob([typeof body === 'string' ? body : JSON.stringify(body)]).size
+  return n < 1024 ? `${n}B` : `${(n / 1024).toFixed(1)}KB`
+}
+
+function consoleCount(d) {
+  return (d.request?.extracted?.length || 0) +
+         (d.request?.variablesUsed || []).filter(v => v.source !== 'runtime').length
 }
 
 function copy(text, label) {
@@ -63,62 +74,98 @@ function JsonBlock({ data, max = 260 }) {
   )
 }
 
-/** 这一步实际用到的每个 ${变量}：真实取值 + 从哪来。 */
-function VariablesUsed({ vars }) {
-  if (!vars?.length) return null
+/** 控制台：变量的读与写，一行一条，像日志。
+    不再摆成"来源说明"大表 —— 那太啰嗦，一屏看不完。来源压进同一行的尾注里。 */
+function ConsoleLines({ used, extracted }) {
+  const lines = []
+  for (const x of extracted || []) {
+    lines.push({
+      key: `w-${x.name}`, ok: x.ok, op: '设置',
+      text: <>已设置变量 <b>{x.name}</b> = <span style={{ color: x.ok ? '#0e7a76' : '#e8453c' }}>
+        {x.ok ? String(x.value) : '取不到'}</span></>,
+      note: `取自响应 ${x.path}`, copy: x.value,
+    })
+  }
+  for (const v of used || []) {
+    if (v.source === 'runtime') continue          // 平台自注入的噪音，不用刷屏
+    lines.push({
+      key: `r-${v.name}`, ok: v.value != null, op: '使用',
+      text: <>使用变量 <b>{v.name}</b> = <span style={{ color: v.value == null ? '#e8453c' : '#0e7a76' }}>
+        {v.value == null ? '未解析' : String(v.value)}</span></>,
+      note: v.detail, copy: v.value,
+    })
+  }
+  if (!lines.length) return <div style={{ fontSize: 12, color: '#c9cdd4', padding: '8px 2px' }}>本步没有变量读写</div>
   return (
-    <div>
-      <SectionTitle extra={`${vars.length} 个`}>变量取值与来源</SectionTitle>
-      <div style={{ border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, overflow: 'hidden' }}>
-        {vars.map((v, i) => (
-          <div key={v.name} style={{
-            padding: '6px 8px', fontSize: 11,
-            borderTop: i ? '1px solid rgba(0,0,0,0.04)' : 'none',
-            background: v.value == null ? 'rgba(232,69,60,0.05)' : 'transparent',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontFamily: MONO, fontWeight: 600, color: '#1d2129' }}>${'{'}{v.name}{'}'}</span>
-              <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px' }}
-                color={SRC_COLOR[v.source] || SRC_COLOR.unknown}>{v.sourceLabel}</Tag>
-              <CopyBtn text={v.value} label={v.name} />
-            </div>
-            <div style={{ fontFamily: MONO, color: v.value == null ? '#e8453c' : '#0e7a76', wordBreak: 'break-all', marginTop: 2 }}>
-              = {v.value == null ? '未解析（无来源）' : String(v.value)}
-            </div>
-            <div style={{ color: '#86909c', marginTop: 2 }}>{v.detail}</div>
+    <div style={{ fontFamily: MONO, fontSize: 11 }}>
+      {lines.map(l => (
+        <div key={l.key} style={{
+          display: 'flex', gap: 6, padding: '5px 6px', alignItems: 'flex-start',
+          borderBottom: '1px solid rgba(0,0,0,0.04)',
+          background: l.ok ? 'transparent' : 'rgba(232,69,60,0.05)',
+        }}>
+          <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', flexShrink: 0 }}
+            color={l.op === '设置' ? '#1677ff' : '#86909c'}>{l.op}</Tag>
+          <div style={{ flex: 1, wordBreak: 'break-all' }}>
+            <div>{l.text}</div>
+            <div style={{ color: '#c9cdd4', marginTop: 1 }}>{l.note}</div>
           </div>
-        ))}
-      </div>
+          <CopyBtn text={l.copy} label={l.key} />
+        </div>
+      ))}
     </div>
   )
 }
 
-/** 本步从响应里提取了什么，给后面的步骤用。 */
-function Extracted({ items }) {
-  if (!items?.length) return null
+/** 断言结果：期望 + 实际，一行一条 */
+function Assertions({ items, statusCode }) {
+  if (!items?.length) return <div style={{ fontSize: 12, color: '#c9cdd4' }}>本步没有断言</div>
+  const desc = (a) =>
+    a.type === 'status' ? `状态码 ${a.operator || '=='} ${JSON.stringify(a.value)}（实际 ${statusCode}）` :
+    a.type === 'body_contains' ? `响应${a.operator === 'not_contains' ? '不' : ''}包含 ${JSON.stringify(a.value)}` :
+    a.type === 'body_field' ? `${a.field} ${a.operator || '=='} ${JSON.stringify(a.expected ?? a.value)}${a.actual !== undefined ? `（实际 ${JSON.stringify(a.actual)}）` : ''}` :
+    JSON.stringify(a)
   return (
     <div>
-      <SectionTitle extra={`${items.filter(x => x.ok).length}/${items.length} 成功`}>提取变量（供后续步骤引用）</SectionTitle>
-      <div style={{ border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, overflow: 'hidden' }}>
-        {items.map((x, i) => (
-          <div key={x.name} style={{
-            padding: '6px 8px', fontSize: 11,
-            borderTop: i ? '1px solid rgba(0,0,0,0.04)' : 'none',
-            background: x.ok ? 'transparent' : 'rgba(232,69,60,0.05)',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              {x.ok ? <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 11 }} />
-                    : <CloseCircleOutlined style={{ color: '#e8453c', fontSize: 11 }} />}
-              <span style={{ fontFamily: MONO, fontWeight: 600 }}>${'{'}{x.name}{'}'}</span>
-              <span style={{ color: '#86909c' }}>← 响应 {x.path}</span>
-              <CopyBtn text={x.value} label={x.name} />
-            </div>
-            <div style={{ fontFamily: MONO, color: x.ok ? '#0e7a76' : '#e8453c', wordBreak: 'break-all', marginTop: 2 }}>
-              = {x.ok ? String(x.value) : '取不到（检查 JSONPath 或响应结构）'}
-            </div>
-          </div>
-        ))}
+      {items.map((a, j) => (
+        <div key={j} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11, padding: '3px 0' }}>
+          <span style={{ color: '#86909c', minWidth: 14 }}>{j + 1}.</span>
+          {a.passed ? <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 12, marginTop: 2 }} />
+                    : <CloseCircleOutlined style={{ color: '#e8453c', fontSize: 12, marginTop: 2 }} />}
+          <span style={{ fontFamily: MONO, wordBreak: 'break-all' }}>{desc(a)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** 实际请求：真正发出去的那一份 */
+function ActualRequest({ req }) {
+  if (!req) return <div style={{ fontSize: 12, color: '#c9cdd4' }}>无请求数据</div>
+  return (
+    <div style={{ fontSize: 11 }}>
+      <div style={{ fontFamily: MONO, wordBreak: 'break-all', marginBottom: 6 }}>
+        <Tag color={METHOD_COLORS[req.method]} style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}>{req.method}</Tag>
+        {req.url}<CopyBtn text={req.url} label="URL" />
+        {req.urlTemplate && req.urlTemplate !== req.url && (
+          <div style={{ color: '#c9cdd4', marginTop: 2 }}>模板 {req.urlTemplate}</div>
+        )}
       </div>
+      {req.authOrigin && (
+        <div style={{ color: '#86909c', marginBottom: 6 }}>Authorization —— {req.authOrigin}</div>
+      )}
+      {req.headers && Object.keys(req.headers).length > 0 && (
+        <div style={{ fontFamily: MONO, padding: '6px 8px', background: 'rgba(0,0,0,0.03)', borderRadius: 6, marginBottom: 6 }}>
+          {Object.entries(req.headers).map(([k, v]) => (
+            <div key={k} style={{ display: 'flex', gap: 6, wordBreak: 'break-all', padding: '1px 0' }}>
+              <span style={{ color: '#86909c', flexShrink: 0 }}>{k}:</span>
+              <span style={{ flex: 1 }}>{String(v)}</span>
+              <CopyBtn text={v} label={k} />
+            </div>
+          ))}
+        </div>
+      )}
+      {req.body != null && <JsonBlock data={req.body} max={220} />}
     </div>
   )
 }
@@ -251,98 +298,51 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
 
               {/* 展开详情 */}
               {isExpanded && detail && (
-                <div style={{ padding: '8px 16px 14px 28px', background: 'rgba(0,0,0,0.02)', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-                  {/* 请求 —— URL 是实际发出的那个；模板另起一行，两个都要看得到 */}
-                  {detail.request && (
-                    <div>
-                      <SectionTitle>请求</SectionTitle>
-                      <div style={{ fontSize: 12, fontFamily: MONO, wordBreak: 'break-all' }}>
-                        <Tag color={METHOD_COLORS[detail.request.method]} style={{ fontSize: 11 }}>{detail.request.method}</Tag>
-                        {detail.request.url}
-                        <CopyBtn text={detail.request.url} label="URL" />
-                      </div>
-                      {detail.request.urlTemplate && detail.request.urlTemplate !== detail.request.url && (
-                        <div style={{ fontSize: 11, color: '#c9cdd4', fontFamily: MONO, marginTop: 2 }}>
-                          模板：{detail.request.urlTemplate}
-                        </div>
-                      )}
+                <div style={{ padding: '8px 14px 12px 26px', background: 'rgba(0,0,0,0.02)', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
+                  {/* 一行状态条：状态码 / 耗时 / 大小 */}
+                  <div style={{ display: 'flex', gap: 14, fontSize: 11, color: '#4e5969', padding: '5px 8px', background: 'rgba(0,0,0,0.03)', borderRadius: 6, marginBottom: 8 }}>
+                    <span>HTTP 状态码：<b style={{ color: (detail.statusCode ?? 0) < 400 && detail.statusCode ? '#0ea5a0' : '#e8453c' }}>{detail.statusCode ?? '未发出'}</b></span>
+                    <span>耗时：<b>{fmt(detail.duration)}</b></span>
+                    <span>大小：<b>{bodySize(detail.body)}</b></span>
+                  </div>
 
-                      {detail.request.headers && Object.keys(detail.request.headers).length > 0 && (
-                        <>
-                          <SectionTitle extra={detail.request.authOrigin ? `Authorization ${detail.request.authOrigin}` : null}>
-                            请求头
-                          </SectionTitle>
-                          <div style={{ fontSize: 11, fontFamily: MONO, padding: '6px 8px', background: 'rgba(0,0,0,0.03)', borderRadius: 6 }}>
-                            {Object.entries(detail.request.headers).map(([k, v]) => (
-                              <div key={k} style={{ display: 'flex', gap: 6, wordBreak: 'break-all', padding: '1px 0' }}>
-                                <span style={{ color: '#86909c', flexShrink: 0 }}>{k}:</span>
-                                <span style={{ flex: 1 }}>{String(v)}</span>
-                                <CopyBtn text={v} label={k} />
-                              </div>
-                            ))}
-                          </div>
-                        </>
-                      )}
-
-                      {detail.request.params && Object.keys(detail.request.params).length > 0 && (
-                        <><SectionTitle>Query 参数</SectionTitle><JsonBlock data={detail.request.params} /></>
-                      )}
-                      {detail.request.body != null && (
-                        <><SectionTitle>请求体</SectionTitle><JsonBlock data={detail.request.body} /></>
-                      )}
-                    </div>
-                  )}
-
-                  {/* 变量取值与来源 —— 「这个 id 哪来的」在这里回答 */}
-                  <VariablesUsed vars={detail.request?.variablesUsed} />
-
-                  {/* 前置 / 后置脚本 */}
-                  {detail.request?.preScript && (
-                    <><SectionTitle>前置脚本</SectionTitle><JsonBlock data={detail.request.preScript} max={160} /></>
-                  )}
-
-                  {/* 响应 */}
-                  <SectionTitle extra={fmt(detail.duration)}>
-                    响应
-                    {detail.statusCode != null && (
-                      <Tag color={detail.statusCode < 400 ? '#0ea5a0' : '#e8453c'} style={{ marginLeft: 8, fontSize: 10, lineHeight: '16px', padding: '0 5px' }}>
-                        {detail.statusCode}
-                      </Tag>
-                    )}
-                  </SectionTitle>
-                  {detail.error ? (
-                    <div style={{ padding: '6px 10px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 6, fontSize: 12, color: '#e8453c', whiteSpace: 'pre-wrap' }}>
+                  {detail.error && (
+                    <div style={{ padding: '6px 10px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 6, fontSize: 11, color: '#e8453c', whiteSpace: 'pre-wrap', marginBottom: 8 }}>
                       {detail.error}
                     </div>
-                  ) : (
-                    <JsonBlock data={detail.body} max={300} />
                   )}
 
-                  {/* 断言 —— 期望与实际都写出来 */}
+                  {/* 断言结果常驻在页签之上——跑挂了第一眼要看的就是它 */}
                   {detail.assertions?.length > 0 && (
-                    <>
-                      <SectionTitle extra={`${detail.assertions.filter(a => a.passed).length}/${detail.assertions.length} 通过`}>断言</SectionTitle>
-                      {detail.assertions.map((a, j) => (
-                        <div key={j} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11, padding: '2px 0' }}>
-                          {a.passed ? <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 12, marginTop: 3 }} /> :
-                                      <CloseCircleOutlined style={{ color: '#e8453c', fontSize: 12, marginTop: 3 }} />}
-                          <span style={{ fontFamily: MONO, wordBreak: 'break-all' }}>
-                            {a.type === 'status' ? `状态码 ${a.operator || '=='} ${JSON.stringify(a.value)}（实际 ${detail.statusCode}）` :
-                             a.type === 'body_contains' ? `响应${a.operator === 'not_contains' ? '不' : ''}包含 ${JSON.stringify(a.value)}` :
-                             a.type === 'body_field' ? `${a.field} ${a.operator || '=='} ${JSON.stringify(a.expected ?? a.value)}${a.actual !== undefined ? `（实际 ${JSON.stringify(a.actual)}）` : ''}` :
-                             JSON.stringify(a)}
-                          </span>
-                        </div>
-                      ))}
-                    </>
+                    <div style={{ marginBottom: 8 }}>
+                      <SectionTitle extra={`${detail.assertions.filter(a => a.passed).length}/${detail.assertions.length} 通过`}>断言结果</SectionTitle>
+                      <Assertions items={detail.assertions} statusCode={detail.statusCode} />
+                    </div>
                   )}
 
-                  {/* 提取变量 */}
-                  <Extracted items={detail.request?.extracted} />
-
-                  {detail.request?.postScript && (
-                    <><SectionTitle>后置脚本</SectionTitle><JsonBlock data={detail.request.postScript} max={160} /></>
-                  )}
+                  {/* 其余内容收进页签，不再一路向下铺开 */}
+                  <Tabs
+                    size="small"
+                    defaultActiveKey={detail.error ? 'req' : 'body'}
+                    items={[
+                      { key: 'body', label: '响应体', children: <JsonBlock data={detail.body} max={300} /> },
+                      {
+                        key: 'console',
+                        label: `控制台${consoleCount(detail) ? ` ${consoleCount(detail)}` : ''}`,
+                        children: <ConsoleLines used={detail.request?.variablesUsed} extracted={detail.request?.extracted} />,
+                      },
+                      { key: 'req', label: '实际请求', children: <ActualRequest req={detail.request} /> },
+                      ...(detail.request?.preScript || detail.request?.postScript ? [{
+                        key: 'script', label: '脚本',
+                        children: (
+                          <div>
+                            {detail.request?.preScript && (<><SectionTitle>前置</SectionTitle><JsonBlock data={detail.request.preScript} max={160} /></>)}
+                            {detail.request?.postScript && (<><SectionTitle>后置</SectionTitle><JsonBlock data={detail.request.postScript} max={160} /></>)}
+                          </div>
+                        ),
+                      }] : []),
+                    ]}
+                  />
                 </div>
               )}
 
