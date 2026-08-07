@@ -22,6 +22,35 @@ function fmt(ms) {
   return `${(ms / 1000).toFixed(1)}s`
 }
 
+/** 把实际发出的请求还原成可直接执行的 cURL。
+    用单引号包裹，内部单引号按 shell 规矩转义成 '\'' —— 不转义的话 JSON 里带引号
+    的值会把命令截断，复制出去根本跑不了。 */
+function toCurl(req) {
+  if (!req?.url) return ''
+  const q = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`
+  const parts = [`curl -X ${req.method || 'GET'} ${q(req.url)}`]
+  for (const [k, v] of Object.entries(req.headers || {})) {
+    parts.push(`  -H ${q(`${k}: ${v}`)}`)
+  }
+  if (req.body != null && req.body !== '') {
+    const b = typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
+    parts.push(`  -d ${q(b)}`)
+  }
+  return parts.join(' \\\n')
+}
+
+/** 请求体里被遮掉的字段——生成的 cURL 里这些位置要人自己填回去 */
+function maskedFields(body) {
+  const out = []
+  const walk = (n, path) => {
+    if (n && typeof n === 'object') {
+      for (const [k, v] of Object.entries(n)) walk(v, path ? `${path}.${k}` : k)
+    } else if (n === '******') out.push(path)
+  }
+  walk(body, '')
+  return out
+}
+
 function bodySize(body) {
   if (body == null) return '-'
   const n = new Blob([typeof body === 'string' ? body : JSON.stringify(body)]).size
@@ -30,7 +59,7 @@ function bodySize(body) {
 
 function consoleCount(d) {
   return (d.request?.extracted?.length || 0) +
-         (d.request?.variablesUsed || []).filter(v => v.source !== 'runtime').length
+         (d.request?.preScript ? 1 : 0) + (d.request?.postScript ? 1 : 0)
 }
 
 function copy(text, label) {
@@ -74,28 +103,25 @@ function JsonBlock({ data, max = 260 }) {
   )
 }
 
-/** 控制台：变量的读与写，一行一条，像日志。
-    不再摆成"来源说明"大表 —— 那太啰嗦，一屏看不完。来源压进同一行的尾注里。 */
-function ConsoleLines({ used, extracted }) {
+/** 控制台：只记这一步**自己产出**的东西 —— 提取了什么、脚本干了什么。
+    不再打印"使用了哪些变量"：那些值在「实际请求」的 URL 和请求头里已经是解析后的
+    真值，再列一遍纯属重复。想知道某个值哪来的，看设置它的那一步的这条日志即可。 */
+function ConsoleLines({ extracted, preScript, postScript }) {
   const lines = []
   for (const x of extracted || []) {
     lines.push({
-      key: `w-${x.name}`, ok: x.ok, op: '设置',
+      key: `w-${x.name}`, ok: x.ok, op: '提取',
       text: <>已设置变量 <b>{x.name}</b> = <span style={{ color: x.ok ? '#0e7a76' : '#e8453c' }}>
-        {x.ok ? String(x.value) : '取不到'}</span></>,
+        {x.ok ? String(x.value) : '取不到（检查 JSONPath 或响应结构）'}</span></>,
       note: `取自响应 ${x.path}`, copy: x.value,
     })
   }
-  for (const v of used || []) {
-    if (v.source === 'runtime') continue          // 平台自注入的噪音，不用刷屏
-    lines.push({
-      key: `r-${v.name}`, ok: v.value != null, op: '使用',
-      text: <>使用变量 <b>{v.name}</b> = <span style={{ color: v.value == null ? '#e8453c' : '#0e7a76' }}>
-        {v.value == null ? '未解析' : String(v.value)}</span></>,
-      note: v.detail, copy: v.value,
-    })
+  if (preScript) lines.push({ key: 'pre', ok: true, op: '前置', text: <>执行前置脚本</>, note: String(preScript).slice(0, 160) })
+  if (postScript) lines.push({ key: 'post', ok: true, op: '后置', text: <>执行后置脚本</>, note: String(postScript).slice(0, 160) })
+
+  if (!lines.length) {
+    return <div style={{ fontSize: 12, color: '#c9cdd4', padding: '8px 2px' }}>本步没有提取变量，也没有前后置脚本</div>
   }
-  if (!lines.length) return <div style={{ fontSize: 12, color: '#c9cdd4', padding: '8px 2px' }}>本步没有变量读写</div>
   return (
     <div style={{ fontFamily: MONO, fontSize: 11 }}>
       {lines.map(l => (
@@ -105,7 +131,7 @@ function ConsoleLines({ used, extracted }) {
           background: l.ok ? 'transparent' : 'rgba(232,69,60,0.05)',
         }}>
           <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', flexShrink: 0 }}
-            color={l.op === '设置' ? '#1677ff' : '#86909c'}>{l.op}</Tag>
+            color={l.op === '提取' ? '#1677ff' : '#86909c'}>{l.op}</Tag>
           <div style={{ flex: 1, wordBreak: 'break-all' }}>
             <div>{l.text}</div>
             <div style={{ color: '#c9cdd4', marginTop: 1 }}>{l.note}</div>
@@ -139,33 +165,79 @@ function Assertions({ items, statusCode }) {
   )
 }
 
-/** 实际请求：真正发出去的那一份 */
+/** 名称 / 值 两列表 —— 请求头、查询参数都用它，字段名和值分开对齐，不再挤成一行文本 */
+function KVTable({ data }) {
+  const rows = Array.isArray(data)
+    ? data.filter(r => r && (r.key ?? r.name)).map(r => [r.key ?? r.name, r.value])
+    : Object.entries(data || {})
+  if (!rows.length) return null
+  return (
+    <div style={{ border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, overflow: 'hidden' }}>
+      <div style={{ display: 'flex', background: 'rgba(0,0,0,0.03)', fontSize: 11, color: '#86909c', fontWeight: 600 }}>
+        <div style={{ width: 132, flexShrink: 0, padding: '4px 8px' }}>名称</div>
+        <div style={{ flex: 1, padding: '4px 8px' }}>值</div>
+      </div>
+      {rows.map(([k, v], i) => (
+        <div key={`${k}-${i}`} style={{
+          display: 'flex', fontSize: 11, fontFamily: MONO, alignItems: 'flex-start',
+          borderTop: '1px solid rgba(0,0,0,0.05)',
+        }}>
+          <div style={{ width: 132, flexShrink: 0, padding: '5px 8px', color: '#4e5969', wordBreak: 'break-all' }}>{k}</div>
+          <div style={{ flex: 1, padding: '5px 8px', wordBreak: 'break-all', display: 'flex', gap: 4 }}>
+            <span style={{ flex: 1 }}>{String(v ?? '')}</span>
+            <CopyBtn text={v} label={k} />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** 实际请求：真正发出去的那一份，按 URL / 查询参数 / 请求头 / 请求体 / cURL 分区列清楚 */
 function ActualRequest({ req }) {
   if (!req) return <div style={{ fontSize: 12, color: '#c9cdd4' }}>无请求数据</div>
+  const masked = maskedFields(req.body)
+  const headers = req.headers || {}
+  const ctype = Object.entries(headers).find(([k]) => k.toLowerCase() === 'content-type')?.[1]
+  const paramRows = Array.isArray(req.params)
+    ? req.params.filter(p => p && (p.key ?? p.name))
+    : Object.entries(req.params || {}).map(([key, value]) => ({ key, value }))
+
   return (
     <div style={{ fontSize: 11 }}>
-      <div style={{ fontFamily: MONO, wordBreak: 'break-all', marginBottom: 6 }}>
+      <SectionTitle>请求 URL</SectionTitle>
+      <div style={{
+        fontFamily: MONO, wordBreak: 'break-all', padding: '6px 8px',
+        background: 'rgba(0,0,0,0.03)', borderRadius: 6,
+      }}>
         <Tag color={METHOD_COLORS[req.method]} style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}>{req.method}</Tag>
         {req.url}<CopyBtn text={req.url} label="URL" />
-        {req.urlTemplate && req.urlTemplate !== req.url && (
-          <div style={{ color: '#c9cdd4', marginTop: 2 }}>模板 {req.urlTemplate}</div>
-        )}
       </div>
-      {req.authOrigin && (
-        <div style={{ color: '#86909c', marginBottom: 6 }}>Authorization —— {req.authOrigin}</div>
-      )}
-      {req.headers && Object.keys(req.headers).length > 0 && (
-        <div style={{ fontFamily: MONO, padding: '6px 8px', background: 'rgba(0,0,0,0.03)', borderRadius: 6, marginBottom: 6 }}>
-          {Object.entries(req.headers).map(([k, v]) => (
-            <div key={k} style={{ display: 'flex', gap: 6, wordBreak: 'break-all', padding: '1px 0' }}>
-              <span style={{ color: '#86909c', flexShrink: 0 }}>{k}:</span>
-              <span style={{ flex: 1 }}>{String(v)}</span>
-              <CopyBtn text={v} label={k} />
-            </div>
-          ))}
+
+      {paramRows.length > 0 && (<>
+        <SectionTitle>查询参数 {paramRows.length}</SectionTitle>
+        <KVTable data={paramRows} />
+      </>)}
+
+      {Object.keys(headers).length > 0 && (<>
+        <SectionTitle>请求头 {Object.keys(headers).length}</SectionTitle>
+        <KVTable data={headers} />
+      </>)}
+
+      {req.body != null && req.body !== '' && (<>
+        <SectionTitle>请求体 {ctype && <Tag style={{ marginLeft: 6, fontSize: 10, lineHeight: '16px', padding: '0 5px' }}>{String(ctype).split(';')[0]}</Tag>}</SectionTitle>
+        <JsonBlock data={req.body} max={220} />
+      </>)}
+
+      <SectionTitle extra={<a onClick={() => copy(toCurl(req), 'cURL')} style={{ fontSize: 11 }}>复制 cURL</a>}>
+        请求代码 · cURL
+      </SectionTitle>
+      <JsonBlock data={toCurl(req)} max={200} />
+      {masked.length > 0 && (
+        <div style={{ fontSize: 11, color: '#fa8c16', marginTop: 4 }}>
+          注意：{masked.join('、')} 是长期凭据，已遮蔽为 ****** —— 直接执行前请填回真实值。
         </div>
       )}
-      {req.body != null && <JsonBlock data={req.body} max={220} />}
     </div>
   )
 }
@@ -329,18 +401,9 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
                       {
                         key: 'console',
                         label: `控制台${consoleCount(detail) ? ` ${consoleCount(detail)}` : ''}`,
-                        children: <ConsoleLines used={detail.request?.variablesUsed} extracted={detail.request?.extracted} />,
+                        children: <ConsoleLines extracted={detail.request?.extracted} preScript={detail.request?.preScript} postScript={detail.request?.postScript} />,
                       },
                       { key: 'req', label: '实际请求', children: <ActualRequest req={detail.request} /> },
-                      ...(detail.request?.preScript || detail.request?.postScript ? [{
-                        key: 'script', label: '脚本',
-                        children: (
-                          <div>
-                            {detail.request?.preScript && (<><SectionTitle>前置</SectionTitle><JsonBlock data={detail.request.preScript} max={160} /></>)}
-                            {detail.request?.postScript && (<><SectionTitle>后置</SectionTitle><JsonBlock data={detail.request.postScript} max={160} /></>)}
-                          </div>
-                        ),
-                      }] : []),
                     ]}
                   />
                 </div>
