@@ -10,10 +10,12 @@ import { copyToClipboard } from '../../utils/clipboard'
 
 const { Text } = Typography
 
+// 分类名跟后端 _section() 一一对应，改名要同步改
 const CAT_COLORS = {
-  '用例': 'blue', 'API 接口': 'cyan', '环境变量': 'orange', '测试报告': 'purple',
-  '接口测试': 'geekblue', '功能场景生成': 'magenta', '项目与分支': 'green',
-  'UI 脚本': 'volcano', '文档生成': 'gold', '回推同步': 'red',
+  '定位项目/分支': 'green', '用例·手工步骤': 'blue', '接口库·只记怎么调': 'cyan',
+  '接口场景·可执行': 'geekblue', '环境与变量': 'orange', '回推入库': 'red',
+  '需求→用例流水线': 'magenta', 'UI 脚本': 'volcano', '执行报告': 'purple',
+  '文档规范': 'gold', 'Skill 共享': 'default',
 }
 
 /**
@@ -229,7 +231,7 @@ export default function MCPTools() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: 12, color: '#8c919e', marginBottom: 2 }}>MCP 服务地址</div>
-            <span style={{ fontSize: 16, fontFamily: "'SF Mono', Monaco, Consolas, monospace", fontWeight: 500, color: '#2e3138', letterSpacing: 0.3 }}>
+            <span style={{ fontSize: 16, fontFamily: 'var(--font-mono)', fontWeight: 500, color: '#2e3138', letterSpacing: 0.3 }}>
               {mcpUrl}
             </span>
           </div>
@@ -357,7 +359,7 @@ export default function MCPTools() {
                         <pre style={{
                           background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.06)',
                           borderRadius: 12, padding: '14px 18px', fontSize: 12,
-                          fontFamily: "'SF Mono', Monaco, monospace", overflow: 'auto', lineHeight: 1.6,
+                          fontFamily: 'var(--font-mono)', overflow: 'auto', lineHeight: 1.6,
                         }}>{step.code}</pre>
                         <Button size="small" icon={<CopyOutlined />} style={{ position: 'absolute', top: 10, right: 10 }}
                           onClick={() => copy(step.code)}>复制</Button>

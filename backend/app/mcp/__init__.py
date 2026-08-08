@@ -237,93 +237,93 @@ def _register(func, name: str, description: str):
 
 # ── 测试用例工具 ─────────────────────────────────
 
-_section("用例")
+_section("用例·手工步骤")
 
 _register(
     test_cases.list_cases,
     name="tb_list_cases",
-    description="列出分支下的测试用例，支持分页和筛选。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, priority(P0/P1/P2/P3), case_type(api/e2e)",
+    description="列出分支下的用例（手工步骤那一层）。找已有用例、确认编号、看某模块测了哪些时用。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, priority(P0/P1/P2/P3), case_type(api/e2e)",
 )
 
 _register(
     test_cases.get_case,
     name="tb_get_case",
-    description="获取单条测试用例的完整详情。参数: case_id(用例UUID)",
+    description="读一条用例的全部内容：手工步骤、前置条件、预期结果、模块归属。改它或给它挂接口场景之前先读一遍。参数: case_id(用例UUID)",
 )
 
 _register(
     test_cases.create_case,
     name="tb_create_case",
-    description="创建一条功能测试用例，自动生成编号和目录。参数: branch_id, title, module(中文如'服务管理'), case_type(e2e/api), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result",
+    description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。参数: branch_id, title, module(中文如'服务管理'), case_type(e2e/api), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result",
 )
 
 _register(
     test_cases.get_folder_tree,
     name="tb_get_folder_tree",
-    description="获取用例文件夹树形结构，含每层用例数量。参数: branch_id(分支UUID)",
+    description="用例目录树 + 每层用例数。决定新用例该放哪个模块时用。参数: branch_id(分支UUID)",
 )
 
 
 # ── API 接口工具 ──────────────────────────────────
 
-_section("API 接口")
+_section("接口库·只记怎么调")
 
 _register(
     api_endpoints.list_api_tree,
     name="tb_list_api_tree",
-    description="获取项目下所有 API 接口的树形结构（文件夹和端点）。参数: project_id(项目UUID)",
+    description="列出项目的**接口库**目录树。接口库只记「系统有哪些接口、怎么调」，没有断言、不能执行——编排接口场景之前来这里查接口长什么样。参数: project_id(项目UUID)",
 )
 
 _register(
     api_endpoints.get_api_node,
     name="tb_get_api_node",
-    description="获取单个 API 节点详情（含 method, url, headers, body, auth 等）。参数: node_id(节点UUID)",
+    description="读单个接口的调用方式：method / url / params / headers / body / auth。拿它去拼接口场景的步骤。参数: node_id(节点UUID)",
 )
 
 _register(
     api_endpoints.create_api_node,
     name="tb_create_api_node",
-    description="创建 API 接口节点（endpoint 或 folder）。参数: project_id(项目UUID), name(名称), node_type(endpoint/folder,默认endpoint), method(GET/POST/PUT/DELETE等), url(接口路径), parent_id(可选,父文件夹UUID), params(可选,查询参数[{key,value,desc}]), headers(可选,[{key,value,desc}]), body(可选,请求体), body_type(可选,json/form/raw/none), auth(可选,{type,token}), description(可选), sort_order(排序,默认0)",
+    description="往**接口库**里加一个接口或文件夹。这是在维护接口文档，不产生可执行的测试——要可执行的用 tb_sync_orchestrated_scenario。参数: project_id(项目UUID), name(名称), node_type(endpoint/folder,默认endpoint), method(GET/POST/PUT/DELETE等), url(接口路径), parent_id(可选,父文件夹UUID), params(可选,查询参数[{key,value,desc}]), headers(可选,[{key,value,desc}]), body(可选,请求体), body_type(可选,json/form/raw/none), auth(可选,{type,token}), description(可选), sort_order(排序,默认0)",
 )
 
 
 # ── 环境变量工具 ──────────────────────────────────
 
-_section("环境变量")
+_section("环境与变量")
 
 _register(
     environments.list_environments,
     name="tb_list_environments",
-    description="列出所有测试环境。",
+    description="列出所有测试环境（环境名 + envId）。跑任何场景前都得先选一个，拿到的 envId 传给 tb_run_api_test。",
 )
 
 _register(
     environments.get_merged_variables,
     name="tb_get_merged_variables",
-    description="获取合并后的变量（全局变量 + 环境变量，环境优先）。参数: env_id(环境UUID)",
+    description="看某个环境执行时实际会注入哪些变量（全局变量 + 该环境变量，同名以环境为准）。排查「变量未解析」先查这里。参数: env_id(环境UUID)",
 )
 
 
 # ── 测试报告工具 ──────────────────────────────────
 
-_section("测试报告")
+_section("执行报告")
 
 _register(
     test_reports.get_report_summary,
     name="tb_get_report_summary",
-    description="获取测试报告摘要（通过/失败/跳过/通过率 + 模块级分布）。参数: plan_id, report_id(可选)",
+    description="一次执行的总览：通过 / 失败 / 跳过 / 通过率，以及按模块的分布。参数: plan_id, report_id(可选)",
 )
 
 _register(
     test_reports.get_failed_scenarios,
     name="tb_get_failed_scenarios",
-    description="获取报告中失败的用例（含步骤、错误信息）。参数: plan_id, report_id(可选)",
+    description="只看失败的那些：哪一步挂了、断言差在哪、错误信息是什么。定位失败从这个工具开始，别去翻全量报告。参数: plan_id, report_id(可选)",
 )
 
 
 # ── 接口测试工具 ──────────────────────────────────
 
-_section("接口测试")
+_section("接口场景·可执行")
 
 _register(
     api_tests.generate_api_test,
@@ -334,25 +334,25 @@ _register(
 _register(
     api_tests.list_api_test_scenarios,
     name="tb_list_api_tests",
-    description="列出接口测试场景。参数: branch_id(分支UUID), folder_id(可选), status(可选: draft/published/deprecated)",
+    description="列出分支下的**接口场景**（可执行的那种：多步 + 断言 + 变量提取）。参数: branch_id(分支UUID), folder_id(可选), status(可选: draft/published/deprecated)",
 )
 
 _register(
     api_tests.get_api_test_scenario,
     name="tb_get_api_test",
-    description="获取接口测试场景详情（含所有步骤、断言、变量提取）。参数: scenario_id(场景UUID)",
+    description="读一条接口场景的全部内容：每一步的请求、断言、提取了什么变量。想知道它到底怎么测的就读这个。参数: scenario_id(场景UUID)",
 )
 
 _register(
     api_tests.run_api_test,
     name="tb_run_api_test",
-    description="执行接口测试场景并返回结果汇总。参数: scenario_ids(逗号分隔的场景UUID列表), env_id(可选但强烈建议：传了才注入该环境的 BASE_URL/账号/token，${BASE_URL} 这类引用才能解析)",
+    description="**真的跑一遍**接口场景，返回每步的状态码和断言结果。参数: scenario_ids(逗号分隔的场景UUID列表), env_id(可选但强烈建议：传了才注入该环境的 BASE_URL/账号/token，${BASE_URL} 这类引用才能解析)",
 )
 
 
 # ── 功能场景测试工具 ──────────────────────────────
 
-_section("功能场景生成")
+_section("需求→用例流水线")
 
 _register(
     scenario_gen.create_scenario_task,
@@ -383,24 +383,24 @@ _register(
 
 # ── 项目与分支查询工具 ──────────────────────────────
 
-_section("项目与分支")
+_section("定位项目/分支")
 
 _register(
     projects.list_projects,
     name="tb_list_projects",
-    description="列出所有项目（名称、ID、描述）。用于确定要操作的目标项目。",
+    description="列出所有项目。几乎每个工具都要 project_id，一般从这里起步。",
 )
 
 _register(
     projects.list_branches,
     name="tb_list_branches",
-    description="列出项目下所有活跃分支。参数: project_id(项目UUID)",
+    description="列出项目下的活跃分支。用例和接口场景都挂在分支上，branch_id 从这里拿。参数: project_id(项目UUID)",
 )
 
 _register(
     scenario_gen.get_generation_stats,
     name="tb_get_generation_stats",
-    description="查询 AI 生成质量统计：通过率/拒绝率/总数。参数: branch_id(分支UUID)",
+    description="AI 生成用例的质量统计：通过率 / 拒绝率 / 总数。看流水线产出质量用。参数: branch_id(分支UUID)",
 )
 
 
@@ -411,7 +411,7 @@ _section("UI 脚本")
 _register(
     ui_scripts.generate_ui_script,
     name="tb_generate_ui_script",
-    description="AI 生成 Playwright UI 测试脚本。读取用例步骤，调用 LLM 生成可执行的 Playwright Python 脚本并保存。参数: case_id(用例UUID), env_id(可选，环境UUID，用于获取 BASE_URL)",
+    description="让**平台侧**的 AI 读用例的手工步骤，生成 Playwright Python 脚本并存到该用例上。（外部 Claude 自己写的脚本目前没有回推通道）参数: case_id(用例UUID), env_id(可选，环境UUID，用于获取 BASE_URL)",
 )
 
 _register(
@@ -429,13 +429,13 @@ _register(
 _register(
     ui_scripts.get_ui_script_result,
     name="tb_get_ui_script_result",
-    description="获取用例最近一次 UI 脚本执行结果（状态、耗时、错误摘要、截图数）。参数: case_id(用例UUID)",
+    description="看某条用例最近一次 UI 脚本跑成什么样：状态、耗时、错误摘要、截图数。参数: case_id(用例UUID)",
 )
 
 
 # ── 文档生成规范工具 ──────────────────────────────
 
-_section("文档生成")
+_section("文档规范")
 
 _register(
     documents.get_doc_spec,
@@ -446,7 +446,7 @@ _register(
 
 # ── 回推同步工具（活体验证成果写回）──────────────────
 
-_section("回推同步")
+_section("回推入库")
 
 
 _register(
