@@ -132,10 +132,31 @@ async def create_case(
     preconditions: str | None = None,
     steps: list | None = None,
     expected_result: str | None = None,
+    target_level: str = "spec",
 ) -> dict:
-    """创建一条测试用例。自动生成 case_code 和目录。创建前会做质量校验，不合格时返回 warnings。"""
+    """创建一条测试用例。自动生成 case_code 和目录。
+
+    入库前过门禁（C3/C4）：完全同名硬拒、模糊词硬拒、P0 不许一次性直出三件套；
+    相似标题只提醒不拦 —— 字符串相似度分不清"同一测试点换说法"和"不同测试点用词像"，
+    误拦会逼你把标题改得看不出关系来绕过，比多一条重复用例有害得多。
+    """
+    from app.services import intake_gate
 
     warnings = _validate_case_quality(title, module, priority, preconditions, steps, expected_result)
+
+    if target_level not in ("spec", "spec_api", "full"):
+        return {"error": "target_level 只能是 spec / spec_api / full"}
+
+    gate_errors, gate_warns = await intake_gate.check_one(
+        session, uuid.UUID(branch_id), title, module, priority
+    )
+    gate_errors.extend(intake_gate.check_p0_two_phase(priority, target_level, False))
+    if gate_errors:
+        return {
+            "error": "用例没通过入库门禁，改完再传：",
+            "problems": gate_errors,
+        }
+    warnings = list(warnings or []) + gate_warns
 
     if steps:
         # 自动拆分粒度过粗的步骤（"一步一动作"规范）
@@ -162,7 +183,9 @@ async def create_case(
         expected_result=expected_result,
     )
     case = await case_service.create_case(session, uuid.UUID(branch_id), data, source="ai")
-    result = _case_to_dict(case)
+    case.target_level = target_level
+    await session.commit()
+    result = {**_case_to_dict(case), "targetLevel": case.target_level}
     if warnings:
         result["_qualityWarnings"] = warnings
     return result
