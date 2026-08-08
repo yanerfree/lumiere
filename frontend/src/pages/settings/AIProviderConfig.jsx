@@ -226,10 +226,17 @@ export default function AIProviderConfig() {
       render: (p) => PROVIDERS.find(x => x.value === p)?.label || p,
     },
     {
-      title: '模型',
+      // 这一列是**连接自带的默认值**，不是实际调用用的模型 —— 实际用哪个由下面
+      // 「AI 能力 → 模型」决定。原来标题就叫「模型」，和下面的「实际生效」并排
+      // 摆着两个不同的数字谁也不解释谁，用户看表格以为平台还在用 4.6。
+      title: (
+        <Tooltip title="连接自带的默认模型，一般用于测试连通性。实际调用用哪个模型，由下面的「AI 能力 → 模型」决定。">
+          <span style={{ borderBottom: '1px dashed #c9cdd4', cursor: 'help' }}>默认模型</span>
+        </Tooltip>
+      ),
       dataIndex: 'model',
       width: 220,
-      render: (m) => <Tag>{m}</Tag>,
+      render: (m) => <Tag style={{ color: '#86909c' }}>{m}</Tag>,
     },
     {
       title: '状态',

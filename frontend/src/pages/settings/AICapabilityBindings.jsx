@@ -167,58 +167,75 @@ export default function AICapabilityBindings({ overview, onOverviewReload }) {
         }
       />
 
-      {/* 兜底链:开关开着到底会用哪个连接、哪个模型,不让用户猜 */}
-      {overview?.fallback && (
-        <div
-          style={{
-            marginBottom: 14, padding: '10px 14px', borderRadius: 8,
-            background: fallbackEnabled ? 'rgba(22,119,255,0.04)' : 'rgba(0,0,0,0.03)',
-            border: '1px solid rgba(22,119,255,0.12)',
+      {/* 「现在在用」——用户一天里 99% 的时候只想知道这一件事：我点生成，是谁在算？
+          原来这里是「兜底连接：公司网关-Sonnet · claude-sonnet-4-6」紧挨着
+          「实际生效：文本生成 → claude-sonnet-5」，两个模型号并排放着谁也不解释谁。
+          工程师看到这个第一反应不是"我要升级"，是"这页面在骗我" —— 用户抱怨
+          "平台只能选 4.6" 就是看的那一行，而下拉里其实一直有 opus-5。
+          解决"打架"的办法不是把两个数字解释清楚，是让首屏只剩一个。 */}
+      {overview?.fallback && (() => {
+        const resolved = overview.fallback.resolved || []
+        const models = [...new Set(resolved.map(r => r.model).filter(Boolean))]
+        const conn = overview.fallback.connection
+        const single = models.length === 1 ? models[0] : null
+        return (
+          <div style={{
+            marginBottom: 16, padding: '16px 18px', borderRadius: 12,
+            background: fallbackEnabled ? 'linear-gradient(135deg, rgba(14,165,160,0.06), rgba(78,138,240,0.05))' : 'rgba(0,0,0,0.03)',
+            border: '1px solid rgba(14,165,160,0.18)',
             opacity: fallbackEnabled ? 1 : 0.55,
-          }}
-        >
-          <Space wrap size="middle" style={{ marginBottom: 6 }}>
-            <Text strong style={{ fontSize: 13 }}>兜底连接：</Text>
-            <Select
-              size="small"
-              style={{ minWidth: 240 }}
-              value={overview.fallback.connection?.id}
-              placeholder={overview.fallback.usingEnv ? '.env 兜底（未设系统默认配置）' : '未设置'}
-              disabled={!fallbackEnabled || switchingConn}
-              loading={switchingConn}
-              onChange={switchFallbackConn}
-              options={(overview.candidates || []).map(c => ({
-                value: c.id,
-                label: `${c.name} · ${c.model}`,
-              }))}
-            />
-            {overview.fallback.connection && !overview.fallback.connection.status && <Tag>未测试</Tag>}
-            {overview.fallback.connection?.status === 'ok' && <Tag color="cyan">连接正常</Tag>}
-            {overview.fallback.connection?.status && overview.fallback.connection.status !== 'ok' && (
-              <Tag color="error" icon={<WarningOutlined />}>
-                连接异常{overview.fallback.connection.statusMessage ? `：${overview.fallback.connection.statusMessage}` : ''}
-              </Tag>
-            )}
-            {!overview.fallback.connection && overview.fallback.usingEnv && (
-              <Tag color="orange">
-                正在用 .env 兜底（{overview.fallback.envModel || '未设模型'}），建议指定一个系统默认配置
-              </Tag>
-            )}
-            {!overview.fallback.connection && !overview.fallback.usingEnv && (
-              <Tag color="error" icon={<WarningOutlined />}>无可用兜底：未设系统默认且 .env 未启用</Tag>
-            )}
-          </Space>
-          <div style={{ fontSize: 12.5 }}>
-            <Text type="secondary">实际生效：</Text>
-            {(overview.fallback.resolved || []).map((r, i) => (
-              <span key={r.category}>
-                {i > 0 && <Text type="secondary"> · </Text>}
-                {r.label} → {r.model ? <Tag style={{ marginInlineEnd: 0 }}>{r.model}</Tag> : <Text type="secondary">—</Text>}
-              </span>
-            ))}
+          }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 16, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 280 }}>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>平台当前在用</div>
+                {single ? (
+                  <div style={{ fontSize: 26, fontWeight: 600, letterSpacing: 0.3, color: '#1d2129', fontFamily: 'var(--font-mono)' }}>
+                    {single}
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                    {resolved.map(r => (
+                      <div key={r.category} style={{ fontSize: 15 }}>
+                        <span style={{ color: '#86909c', fontSize: 12, marginRight: 6 }}>{r.label}</span>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{r.model || '—'}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{ fontSize: 12, color: '#86909c', marginTop: 6 }}>
+                  经 {conn?.name || (overview.fallback.usingEnv ? '.env 配置' : '未配置')}
+                  {conn?.baseUrlMasked && (
+                    <span style={{ marginLeft: 6, fontFamily: 'var(--font-mono)', color: '#4e5969' }}>
+                      {conn.baseUrlMasked}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                {conn?.status === 'ok'
+                  ? <Tag color="success" style={{ margin: 0 }}>连接正常</Tag>
+                  : conn
+                    ? <Tooltip title={conn.statusMessage}><Tag color="error" style={{ margin: 0 }}>连接异常</Tag></Tooltip>
+                    : <Tag color="warning" style={{ margin: 0 }}>未配置兜底</Tag>}
+                <div style={{ fontSize: 12, color: '#86909c', marginTop: 8 }}>
+                  {single
+                    ? `这一个模型负责平台上全部 ${registry.length} 项 AI 能力`
+                    : `${resolved.length} 个档位各用各的模型`}
+                </div>
+                <div style={{ marginTop: 6 }}>
+                  <Select
+                    size="small" style={{ minWidth: 230 }}
+                    value={overview.fallback.connection?.id}
+                    onChange={switchFallbackConn}
+                    placeholder="选择兜底连接"
+                    options={(overview.candidates || []).map(c => ({ value: c.id, label: c.name }))}
+                  />
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
         {visibleBindings.map(b => {
