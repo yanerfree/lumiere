@@ -59,6 +59,7 @@ async def _build_and_flush(session, branch_id, case_code, folder_id, data, sourc
         script_ref_file=data.script_ref_file,
         script_ref_func=data.script_ref_func,
         remark=data.remark,
+        target_level=getattr(data, "target_level", None) or "spec",
     )
     session.add(case)
     await session.flush()

@@ -2107,44 +2107,14 @@ export default function CaseDetail() {
                     },
                     {
                       title: '错误摘要', dataIndex: 'errorSummary', ellipsis: true,
-                      render: v => v ? <span style={{ color: '#e8453c', fontFamily: 'monospace', fontSize: 12 }}>{v}</span> : '-'
+                      render: v => v ? <span style={{ color: '#e8453c', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{v}</span> : '-'
                     },
                   ]}
                 />
               </Card>
             )},
 
-            { key: 'casefile', label: '病历', children: <CaseFileTab caseId={caseId} /> },
-            ...(caseData.source === 'ai' || caseData.reviewStatus ? [
-              { key: 'trace', label: '需求溯源', children: (
-                <Card styles={{ body: { padding: 16 } }}>
-                  {caseData.requirementPointIds?.length > 0 ? (
-                    <div>
-                      <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>关联需求点</h4>
-                      {caseData.requirementPointIds.map((rp, i) => (
-                        <Tag key={i} color="blue" style={{ marginBottom: 4 }}>{rp}</Tag>
-                      ))}
-                    </div>
-                  ) : (
-                    <Empty description="无关联需求点" />
-                  )}
-                  {caseData.generationTaskId && (
-                    <div style={{ marginTop: 12 }}>
-                      <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 4 }}>生成任务</h4>
-                      <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{caseData.generationTaskId}</span>
-                    </div>
-                  )}
-                </Card>
-              )},
-              { key: 'archive', label: '生成档案', children: (
-                <Card styles={{ body: { padding: 16 } }}>
-                  <div style={{ textAlign: 'center', padding: 40, color: '#bfc4cd' }}>
-                    <p>生成档案时间线 — 基于 case_gen_events 的事件序列</p>
-                    <p style={{ fontSize: 12 }}>（generated/scored/reviewed/rejected/regenerated 事件将在此展示）</p>
-                  </div>
-                </Card>
-              )},
-            ] : []),
+            { key: 'provenance', label: '来源', children: <ProvenanceTab caseId={caseId} /> },
           ]} />
         </div>
       </div>
@@ -2343,6 +2313,124 @@ function FailureTriagePanel({ projectId, branchId, caseId, run, onConfirmed }) {
         </div>
       )}
     </div>
+  )
+}
+
+
+// 这条用例从哪来：关联的需求点（带原文引用）+ 生成事件时间线。
+// 替代原来的「需求溯源」和「生成档案」——
+//   需求溯源只渲染一个裸编号 "R3"，而 requirement_points 里有标题、原文引用和
+//   字符偏移锚点，107 条数据一直在，只是最后一公里没接；
+//   生成档案是一句写死的占位文案（"xxx 事件将在此展示"），而 case_gen_events
+//   里有 49 条真事件。产品里出现开发者写给自己的备忘录，是最直接的可信度损失。
+const GEN_EVENT_LABEL = {
+  generated: { label: '生成', color: 'blue' },
+  scored: { label: '评分', color: 'purple' },
+  reviewed: { label: '评审', color: 'cyan' },
+  rejected: { label: '打回', color: 'red' },
+  regenerated: { label: '重生成', color: 'orange' },
+}
+
+function ProvenanceTab({ caseId }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!caseId) return
+    setLoading(true)
+    api.get(`/cases/${caseId}/provenance`)
+      .then(res => setData(res.data)).catch(() => {}).finally(() => setLoading(false))
+  }, [caseId])
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+  if (!data) return <Empty description="加载失败" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+
+  const pts = data.requirementPoints || []
+  const evs = data.events || []
+
+  return (
+    <Card styles={{ body: { padding: '16px 24px' } }}>
+      <div style={{ marginBottom: 18 }}>
+        <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>
+          关联需求点 {pts.length > 0 && <span style={{ color: '#c9cdd4' }}>（{pts.length}）</span>}
+        </h4>
+        {pts.length === 0 ? (
+          <span style={{ fontSize: 12, color: '#c9cdd4' }}>
+            没有关联需求点。用「AI 生成用例」从需求文档产出的用例才会带需求点。
+          </span>
+        ) : pts.map(p => (
+          <div key={p.code} style={{
+            marginBottom: 10, padding: '10px 12px', borderRadius: 10,
+            background: p.missing ? '#fff2f0' : 'rgba(0,0,0,0.02)',
+            border: p.missing ? '1px solid #ffccc7' : '1px solid rgba(0,0,0,0.04)',
+          }}>
+            <Space size={8} style={{ marginBottom: p.quoteText ? 6 : 0 }}>
+              <Tag color={p.missing ? 'error' : 'blue'} style={{ margin: 0, fontFamily: 'var(--font-mono)' }}>{p.code}</Tag>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>
+                {p.title || '需求点已不存在'}
+              </span>
+              {p.missing && (
+                <Tooltip title="用例上记着这个编号，但需求文档里已经查不到它 —— 需求可能改过，这条用例也许该更新">
+                  <Tag color="error" style={{ margin: 0, fontSize: 11 }}>需求已变更？</Tag>
+                </Tooltip>
+              )}
+              {p.status && p.status !== 'active' && <Tag style={{ margin: 0, fontSize: 11 }}>{p.status}</Tag>}
+            </Space>
+            {p.quoteText && (
+              <div style={{
+                fontSize: 12.5, color: '#4e5969', lineHeight: 1.7,
+                paddingLeft: 10, borderLeft: '3px solid rgba(78,138,240,0.35)',
+              }}>
+                {p.quoteText}
+                {p.quoteOffset != null && (
+                  <span style={{ marginLeft: 8, fontSize: 11, color: '#c9cdd4' }}>
+                    原文第 {p.quoteOffset} 字
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>
+          生成事件 {evs.length > 0 && <span style={{ color: '#c9cdd4' }}>（{evs.length}）</span>}
+        </h4>
+        {evs.length === 0 ? (
+          <span style={{ fontSize: 12, color: '#c9cdd4' }}>
+            这条是{data.source === 'ai' ? 'AI 生成的，但没有留下事件记录' : '手工建的，没有生成事件'}
+          </span>
+        ) : (
+          <div style={{ borderLeft: '2px solid rgba(0,0,0,0.05)', paddingLeft: 14, marginLeft: 6 }}>
+            {evs.map((e, i) => {
+              const cfg = GEN_EVENT_LABEL[e.eventType] || { label: e.eventType, color: 'default' }
+              return (
+                <div key={i} style={{ paddingBottom: 12, position: 'relative' }}>
+                  <span style={{
+                    position: 'absolute', left: -19, top: 5, width: 7, height: 7,
+                    borderRadius: '50%', background: '#c9cdd4', display: 'block',
+                  }} />
+                  <Space size={8}>
+                    <Tag color={cfg.color} style={{ margin: 0, fontSize: 11 }}>{cfg.label}</Tag>
+                    <span style={{ fontSize: 12, color: '#86909c' }}>
+                      {(e.createdAt || '').slice(0, 16).replace('T', ' ')}
+                    </span>
+                    {e.actor && <span style={{ fontSize: 12, color: '#c9cdd4' }}>by {e.actor}</span>}
+                  </Space>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {data.generationTaskId && (
+        <div style={{ marginTop: 14, fontSize: 11, color: '#c9cdd4' }}>
+          生成任务 <span style={{ fontFamily: 'var(--font-mono)' }}>{data.generationTaskId}</span>
+        </div>
+      )}
+    </Card>
   )
 }
 

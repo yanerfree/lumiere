@@ -27,6 +27,9 @@ class CreateCaseRequest(BaseSchema):
     script_ref_file: str | None = None
     script_ref_func: str | None = None
     remark: str | None = None
+    # 这条用例**要**做到什么程度。CC 的断点续跑靠它判"还欠什么"——
+    # 人在页面上建的用例如果不带这个，CC 永远不知道该不该给它补接口和 UI。
+    target_level: Literal["spec", "spec_api", "full"] = "spec"
 
 
 class UpdateCaseRequest(BaseSchema):

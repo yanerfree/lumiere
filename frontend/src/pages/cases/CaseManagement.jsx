@@ -261,6 +261,9 @@ export default function CaseManagement() {
         steps: [{ seq: 1, action: '待补充', expected: '' }],
         apiScenario: values.initApi ? { steps: [{ seq: 1, phase: 'action', action: '待补充', expected: '', apiEndpoint: '' }], scriptRefFile: '', scriptRefFunc: '', variablesUsed: [] } : undefined,
         uiScenario: values.initUi ? { steps: [{ seq: 1, phase: 'action', action: '待补充', expected: '', uiTarget: '' }], scriptRefFile: '', scriptRefFunc: '', variablesUsed: [] } : undefined,
+        // 勾选的维度就是"这条要做到什么程度"。Claude Code 断点续跑靠它判还欠什么 ——
+        // 不带这个字段的话，人建的用例在 CC 眼里永远只需要手工步骤。
+        targetLevel: values.initUi ? 'full' : (values.initApi ? 'spec_api' : 'spec'),
       })
       message.success('用例创建成功')
       setCreateCaseOpen(false)
@@ -830,7 +833,11 @@ export default function CaseManagement() {
             </Form.Item>
           </div>
           <div style={{ padding: '8px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 12 }}>
-            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 8 }}>同时初始化场景（可选）</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 8 }}>
+              这条要做到什么程度？<span style={{ color: '#c9cdd4' }}>
+                （都不勾＝只要手工步骤。Claude Code 补自动化时按这个判还欠什么）
+              </span>
+            </div>
             <Space>
               <Form.Item name="initApi" valuePropName="checked" noStyle>
                 <Checkbox>接口测试场景</Checkbox>
