@@ -290,7 +290,7 @@ export default function AIProviderConfig() {
       <Card size="small" style={{ marginBottom: 12, background: 'rgba(0,0,0,0.02)' }}>
         <div style={{ fontSize: 13, lineHeight: 2 }}>
           <b>AI 服务为以下功能提供支持：</b>
-          <span style={{ marginLeft: 12 }}>AI 用例生成 · AI 脚本生成 · 质量评审 · 失败诊断</span>
+          <span style={{ marginLeft: 12 }}>AI 用例生成 · 功能场景生成 · 质量评审 · 失败诊断 · 文档生成</span>
           <br/>
           <b>配置步骤：</b>
           <span style={{ marginLeft: 12 }}>① 新增 AI 服务 → ② 测试连接 → ③ 分配给项目 → ④ 项目内选择使用</span>

@@ -24,7 +24,9 @@ from app.deps.auth import get_current_user, require_role
 from app.deps.db import get_db
 from app.models.ai_provider_config import AICapabilityBinding, AIGlobalSettings, AIProviderConfig
 from app.models.user import User
-from app.services.ai_capabilities import CAPABILITY_REGISTRY, CATEGORY_META, BUILTIN_CATEGORIES
+from app.services.ai_capabilities import (
+    CAPABILITY_REGISTRY, CATEGORY_META, BUILTIN_CATEGORIES, active_categories,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +236,8 @@ async def get_overview(
 
     # ① 兜底链：project_id=None 正好只走全局兜底路径
     resolved_fallback = []
-    for cat in BUILTIN_CATEGORIES:
+    # 只报还有活着模块的档位；全下线的档位继续报模型会误导（见 active_categories 注释）
+    for cat in active_categories():
         cfg = await resolve_ai_config(None, session, capability=cat)
         resolved_fallback.append({
             "category": cat,

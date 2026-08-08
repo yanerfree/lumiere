@@ -104,85 +104,18 @@ async def create_script(
     }
 
 
-@router.post("/generate")
-async def generate_script_ai(
-    project_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    case_id: uuid.UUID,
-    script_type: str = Query(alias="type", default="ui"),
-    env_id: uuid.UUID | None = Body(default=None, alias="envId", embed=True),
-    step_hints: dict | None = Body(default=None, alias="stepHints", embed=True),
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
-):
-    """AI 生成 Playwright 测试脚本"""
-    if script_type != "ui":
-        raise AppError(code="INVALID_TYPE", message="AI 生成仅支持 UI 脚本类型")
-
-    from app.services.ai.ui_script_gen_service import generate_ui_script
-    result = await generate_ui_script(
-        case_id=str(case_id),
-        session=session,
-        env_id=str(env_id) if env_id else None,
-    )
-    await session.commit()
-    return {"data": result}
-
-
-@router.post("/generate-stream")
-async def generate_script_ai_stream(
-    project_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    case_id: uuid.UUID,
-    script_type: str = Query(alias="type", default="ui"),
-    env_id: uuid.UUID | None = Body(default=None, alias="envId", embed=True),
-    step_hints: dict | None = Body(default=None, alias="stepHints", embed=True),
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
-):
-    """SSE 流式 AI 生成 — MCP Agent 探索式脚本生成"""
-    if script_type != "ui":
-        raise AppError(code="INVALID_TYPE", message="仅支持 UI 脚本")
-
-    case = await session.get(Case, case_id)
-    if not case:
-        raise NotFoundError(code="CASE_NOT_FOUND", message="用例不存在")
-
-    from app.services.ai.ui_script_gen_service import generate_ui_script_stream
-
-    async def event_generator():
-        async for chunk in generate_ui_script_stream(
-            case_id=str(case_id),
-            session=session,
-            env_id=str(env_id) if env_id else None,
-            step_hints=step_hints,
-        ):
-            yield chunk
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-@router.post("/repair")
-async def repair_script_ai(
-    project_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    case_id: uuid.UUID,
-    error_summary: str = Body(default="", alias="errorSummary"),
-    stdout: str = Body(default=""),
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
-):
-    """AI 分析执行失败原因并修复脚本"""
-    from app.services.ai.ui_script_gen_service import repair_ui_script
-    result = await repair_ui_script(
-        case_id=str(case_id),
-        session=session,
-        error_summary=error_summary,
-        stdout=stdout,
-    )
-    await session.commit()
-    return {"data": result}
-
+# ── 平台侧 AI 生成/自愈已封存（2026-08-08）─────────────────────────────
+# 原有三个路由 /generate、/generate-stream、/repair 在此下线：页面入口已全部
+# 摘掉，留着路由就是留一条"平台也能生成"的暗路，与 docs/cc-platform-loop-spec.md
+# 红线 1（平台侧生成能力归零，不是降权）直接冲突。
+#
+# 服务层代码没删（ui_script_gen_service / cli_agent，ui_agent_engine=cli 仍在），
+# 重新启用的三条判据见该文档红线 1：①探索期数据隔离 ②跑满 20 条测广度
+# ③两条都过了再评估作为「批量首稿」通道回来。
+#
+# 现在的通道：外部 Claude Code 本地写好跑通 → tb_sync_ui_script 回推 →
+# tb_run_ui_script 让平台在标准环境执行确认。
+# ────────────────────────────────────────────────────────────────────
 
 @router.get("/preflight")
 async def preflight_run(

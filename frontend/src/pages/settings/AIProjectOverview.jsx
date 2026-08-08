@@ -78,8 +78,10 @@ export default function AIProjectOverview({ overview, loading, onReload }) {
         message={
           <span style={{ fontSize: 12.5 }}>
             每一行都是后端<b>真实解析</b>出来的结果（与实际调用同一套逻辑）。
-            注意：项目自选/自建时，<b>文本模型尊重项目自己选的连接</b>，而
-            <b> UI 脚本模型由全局档位统一覆盖</b>（UI 生成必须强模型，项目级没有该概念）。
+            注意：项目自选/自建时，<b>文本模型尊重项目自己选的连接</b>。
+            {categories.some(c => c.key === 'ui_script') && (
+              <> 而<b> UI 脚本模型由全局档位统一覆盖</b>（UI 生成必须强模型，项目级没有该概念）。</>
+            )}
             {customCount > 0 && ` 另有 ${customCount} 个自定义档位按模块覆盖，未在此表展开。`}
           </span>
         }

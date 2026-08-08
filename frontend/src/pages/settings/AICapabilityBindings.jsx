@@ -110,7 +110,18 @@ export default function AICapabilityBindings({ overview, onOverviewReload }) {
   if (loading && !data) return <Spin style={{ display: 'block', margin: '32px auto' }} />
   if (!data) return null
 
-  const { bindings = [], registry = [], categoryMeta = {}, fallbackEnabled } = data
+  const { bindings = [], registry: rawRegistry = [], categoryMeta = {}, fallbackEnabled } = data
+  // 已下线/已封存的能力不展示 —— 留着一张永远不会被点亮的卡片，
+  // 只会让每个新用户重新问一遍"这个是坏了还是我没配好"。
+  // 后端保留了 key（删了会让调用静默降档到 text 档），这里只是不渲染。
+  const registry = rawRegistry.filter(m => !m.deprecated)
+  // 一个模块都不剩的内置档位不渲染 —— 留一张永远点不亮的卡片，
+  // 每个新用户都要重新问一遍"这个是坏了还是我没配好"。
+  // 自定义档位即使空着也留，那是用户自己建的。
+  const hiddenBuiltin = bindings.filter(
+    b => b.isBuiltin && !registry.some(m => m.category === b.category)
+  )
+  const visibleBindings = bindings.filter(b => !hiddenBuiltin.includes(b))
   // 被自定义档位圈走的模块 key,内置卡片里就不再重复展示
   const claimed = new Set(bindings.filter(b => !b.isBuiltin).flatMap(b => b.moduleKeys || []))
 
@@ -210,7 +221,7 @@ export default function AICapabilityBindings({ overview, onOverviewReload }) {
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(340px, 1fr))', gap: 14 }}>
-        {bindings.map(b => {
+        {visibleBindings.map(b => {
           const mods = modulesForCard(b)
           const warn = b.category === 'ui_script' && isWeakForAgentic(b.model)
           return (
@@ -289,6 +300,15 @@ export default function AICapabilityBindings({ overview, onOverviewReload }) {
           )
         })}
       </div>
+
+      {hiddenBuiltin.length > 0 && (
+        <div style={{ marginTop: 12, fontSize: 12, color: '#86909c', lineHeight: 1.7 }}>
+          {hiddenBuiltin.map(b => b.label).join('、')} 已下线，不再由平台调 AI。
+          UI 脚本改为在外部 Claude Code 本地写好、真跑通后回推，平台负责存、跑、留痕。
+          <br />
+          具体怎么用：<Text code style={{ fontSize: 12 }}>MCP 工具中心 → 用例：步骤 + 接口场景</Text>
+        </div>
+      )}
 
       <Button
         type="dashed"

@@ -134,11 +134,13 @@ mcp = FastMCP(
 - 基于第二步获取的真实 UI 信息，生成用例步骤
 - 每条用例调用 tb_create_case 入库
 
-第五步：生成 UI 自动化脚本（可选，用户要求时执行）
-- 对生成的用例，调用 tb_generate_ui_script 自动生成 Playwright 脚本
-- 需要指定 env_id（环境ID，包含 BASE_URL 等配置）
-- 脚本通过 Playwright MCP 逐步操作真实浏览器生成，基于页面真实元素
-- 生成后自动执行验证，通过的脚本保存到用例
+第五步：UI 自动化脚本（可选，用户要求时执行）
+- **平台不生成脚本**。你在自己机器上用 Playwright 写、本地真跑通，再调
+  tb_sync_ui_script 回推；入库前会硬拦截写死的服务地址和凭据。
+- 写之前先调 tb_get_sync_spec(kind='ui_script') 对齐写法（变量必须走
+  os.getenv 顶格声明，平台执行时把所选环境的真值替换进默认值）。
+- 回推后调 tb_run_ui_script(case_id, env_id) 让**平台**在标准环境上跑一遍确认——
+  你本机跑通不算数（本机有 dev server、有残留数据、有 cookie）。
 
 用例质量规范：
 - 步骤必须是页面操作（点击按钮、填写输入框），禁止接口调用风格
@@ -407,12 +409,6 @@ _register(
 # ── UI 脚本工具 ──────────────────────────────────
 
 _section("UI 脚本")
-
-_register(
-    ui_scripts.generate_ui_script,
-    name="tb_generate_ui_script",
-    description="让**平台侧**的 AI 读用例的手工步骤，生成 Playwright Python 脚本并存到该用例上。（外部 Claude 自己写的脚本目前没有回推通道）参数: case_id(用例UUID), env_id(可选，环境UUID，用于获取 BASE_URL)",
-)
 
 _register(
     ui_scripts.run_ui_script,
