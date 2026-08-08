@@ -2,7 +2,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 from app.core.audit import audit_log
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -109,6 +109,17 @@ async def _next_case_code(
     """
     module_tag = _module_tag(module)
     prefix = f"TC-{module_tag}-"
+
+    # 事务级 advisory lock，按 (branch, 模块前缀) 排队。
+    #
+    # 只靠"撞唯一约束再重试"救不回并发：并发的几个请求都还没提交，回滚后重算
+    # MAX 依然看不到彼此的行，会一直撞同一个号直到重试耗尽（实测 8 并发挂 1 个）。
+    # advisory lock 持有到**提交**才释放，所以后来者拿到锁时，前一个的行已经可见，
+    # MAX 自然往前走。锁粒度是"这条分支的这个模块"，不影响别的模块并行建。
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
+        {"k": f"case_code:{branch_id}:{prefix}"},
+    )
 
     # 查询当前分支下该模块的最大序号
     result = await session.execute(

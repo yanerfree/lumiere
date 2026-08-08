@@ -17,12 +17,26 @@ from app.services.import_service import _get_or_create_folder, _next_case_code
 async def create_case(
     session: AsyncSession, branch_id: uuid.UUID, data: CreateCaseRequest, source: str = "manual"
 ) -> Case:
-    """创建用例。自动生成 case_code，自动创建目录。"""
-    folder_id, _, _ = await _get_or_create_folder(
-        session, branch_id, data.module, data.submodule
-    )
-    case_code = await _next_case_code(session, branch_id, data.module)
+    """创建用例。自动生成 case_code，自动创建目录。
 
+    编号走 `SELECT MAX(case_code)` → +1，两个 CC 同时在同一 branch+module 建用例
+    会算出同一个号，被 `uq_case_branch_code` 拦住。数据不会写坏，但第二个写入方
+    拿到的是原始的 IntegrityError —— CC 看到一个语焉不详的失败很可能去改脚本，
+    而正确动作只是重试。所以在这里吞掉冲突并重试（重跑 MAX 就会拿到新号）。
+    """
+    from app.services.concurrency import retry_on_conflict
+
+    async def _create() -> Case:
+        folder_id, _, _ = await _get_or_create_folder(
+            session, branch_id, data.module, data.submodule
+        )
+        case_code = await _next_case_code(session, branch_id, data.module)
+        return await _build_and_flush(session, branch_id, case_code, folder_id, data, source)
+
+    return await retry_on_conflict(_create, session, what="创建用例")
+
+
+async def _build_and_flush(session, branch_id, case_code, folder_id, data, source) -> Case:
     case = Case(
         branch_id=branch_id,
         case_code=case_code,

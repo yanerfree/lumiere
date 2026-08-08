@@ -34,6 +34,19 @@ async def fallback_user_id(session: AsyncSession) -> uuid.UUID | None:
     只在后台任务确实没带 user_id 时用。正常路径都应该把真实执行人传进来——
     记账记成别人，比不记还糟。
     """
+    # MCP 调用先认调用方自己的 Key 身份 —— 记成别人比不记还糟，而且事后补不回来
+    try:
+        from app.mcp.middleware import current_caller_user_id
+        caller = await current_caller_user_id()
+        if caller:
+            uid = uuid.UUID(caller)
+            hit = (await session.execute(
+                select(User.id).where(User.id == uid, User.is_active.is_(True))
+            )).scalar_one_or_none()
+            if hit:
+                return hit
+    except Exception:  # noqa: BLE001
+        pass
     return (
         await session.execute(
             select(User.id)

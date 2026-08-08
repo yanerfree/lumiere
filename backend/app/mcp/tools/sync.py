@@ -118,7 +118,28 @@ def _looks_hardcoded(value: str) -> bool:
 
 
 async def _active_user_id(session: AsyncSession) -> uuid.UUID | None:
-    """MCP 无登录上下文：created_by 取一个真实 active 用户（优先 admin），避免外键失败。"""
+    """回推落库时的 created_by —— **优先用调用方自己的身份**。
+
+    MCP 请求没有登录会话，但 API Key 上绑着 user_id，中间件已经按 key_hash 查出来了。
+    此前这里直接取"第一个 active 用户"，于是多人一起用时所有人的回推都记成同一个
+    admin：操作日志失去意义，「CC归因 vs 人确认」没法按人分桶，而且**这段历史事后
+    补不回来**（行里永久写着 admin）。
+
+    拿不到调用方身份（环境变量 key / 匿名放行）才退回兜底 —— executed_by 是
+    NOT NULL FK，宁可记成兜底用户也不能让"脚本明明跑通了却存不下结果"。
+    """
+    try:
+        from app.mcp.middleware import current_caller_user_id
+        caller = await current_caller_user_id()
+        if caller:
+            uid = uuid.UUID(caller)
+            exists = (await session.execute(
+                select(User.id).where(User.id == uid, User.is_active.is_(True))
+            )).scalar_one_or_none()
+            if exists:
+                return exists
+    except Exception:  # noqa: BLE001
+        pass
     return (
         await session.execute(
             select(User.id).where(User.is_active.is_(True))
