@@ -1,12 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox } from 'antd'
-import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, RobotOutlined, CodeOutlined, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, RobotOutlined, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, getValidToken } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
 import { useEnv, buildEnvOptions } from '../../utils/env'
 import TestForgeModal from './TestForgeModal'
-import AIScriptModal from '../../components/AIScriptModal'
 
 const priorityColors = { P0: '#fff', P1: '#fff', P2: '#fff', P3: '#fff' }
 const priorityBg = { P0: '#e8453c', P1: '#ff7d00', P2: '#4e8af0', P3: 'rgba(0,0,0,0.08)' }
@@ -59,7 +58,6 @@ export default function CaseManagement() {
   // 导入
   const [importOpen, setImportOpen] = useState(false)
   const [testforgeOpen, setTestforgeOpen] = useState(false)
-  const [scriptModalOpen, setScriptModalOpen] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const [importing, setImporting] = useState(false)
 
@@ -652,18 +650,9 @@ export default function CaseManagement() {
                 <Tooltip title="从 API 接口定义生成手工测试用例，需要接口信息">
                   <Button ghost icon={<ApiOutlined />} onClick={() => setTestforgeOpen(true)}>从接口生成</Button>
                 </Tooltip>
-                <Tooltip title={selectedRowKeys.length > 0
-                  ? `为选中的 ${selectedRowKeys.length} 条用例生成 pytest + httpx 自动化测试脚本`
-                  : '先勾选用例，再点此按钮为选中用例生成 pytest 自动化脚本'
-                }>
-                  <Button
-                    icon={<CodeOutlined />}
-                    disabled={selectedRowKeys.length === 0}
-                    onClick={() => setScriptModalOpen(true)}
-                  >
-                    AI 生成脚本{selectedRowKeys.length > 0 ? ` (${selectedRowKeys.length})` : ''}
-                  </Button>
-                </Tooltip>
+                {/* 批量「AI 生成脚本」已下线：走的是 scripts/generate-stream 那条平台侧生成管道，
+                    实测跑不通（详情页的单条入口同批下线）。UI 脚本改由外部 Claude Code 写好跑通后
+                    经 tb_sync_ui_script 回推。 */}
                 <Tooltip title="AI 从完整性/准确性/有效性/可执行性 4 维度评审当前模块的用例质量，输出评分和改进建议">
                   <Button icon={<SearchOutlined />} onClick={() => handleQualityReview()}>AI 评审</Button>
                 </Tooltip>
@@ -988,14 +977,6 @@ export default function CaseManagement() {
         open={testforgeOpen}
         onClose={() => setTestforgeOpen(false)}
         onImported={() => fetchCases()}
-      />
-
-      <AIScriptModal
-        projectId={projectId}
-        branchId={globalBranchId}
-        caseIds={selectedRowKeys}
-        open={scriptModalOpen}
-        onClose={() => setScriptModalOpen(false)}
       />
 
       {/* 批量执行弹窗 */}
