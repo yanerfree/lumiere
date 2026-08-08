@@ -248,21 +248,53 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 
 ### 第一刀 · 让失败看得见（唯一承诺范围）
 
-**主线判据**：造 5 个真实失败，分类器答对 4 个。**答不对就回来改规则，不准往下做。**
+**主线判据**：见 §5.1 的封样混淆矩阵。**不达标就回来改规则，不准往下做。**
 
-| # | Story | 改哪里 | 大小 |
+#### 评审裁定（2026-08-08 需求评审，Murat + Amelia 提出，已逐条复核代码）
+
+**裁定 1 · `script_runs` = 自动化执行事实 + 证据表；`test_reports` 不动。**
+
+评审查出**三条回归路径都不写 `script_runs`**：
+- 计划执行 `engine/tasks/execution.py` — 只写 `TestReport/TestReportScenario/TestReportStep`
+- adhoc 批量 `engine/tasks/adhoc_execution.py` — 同上
+- **页面「运行验证」** `api/scripts.py:_run_python_stream` — **一行都不写**。而 `CaseDetail.jsx:651` 走的正是它
+
+通过率也不从 `script_runs` 算（`execution_service.py:122` 基于 `TestReportScenario.status`）。
+
+**后果**：A3/A4/A5 的证据全挂在 `script_runs` → 覆盖不到任何回归失败；**A1 单独做也没用**——修完 type 参数，用户点运行照样看不到新记录。
+
+**不做完整口径迁移**：`TestReportScenario` 的冗余字段配的是 `case_id` nullable + 无 CASCADE（`models/report.py:44-50`）——**那是故意的快照语义**（用例删了历史报告还得能看），退化成汇总会毁掉它。改动量约完整方案的 40%，`execution_service` 和报告前端一行不动。
+
+**A6 里「通过率口径加 filter」这半句删除**——全库没有任何通过率从 `script_runs` 算。
+
+**裁定 2 · 重试写 N 行 + `attempt` 列。** `execution.py:229-257` 重试 N 次只把最后一次写进 scenario。flaky 判定要的正是"同一版本多次结果翻转"，**现在不攒以后攒不到**。通过率不受影响（仍从 report 算）。
+
+**裁定 3 · A5 返回截图临时文件路径，不返回 base64。** screenshots 是 base64 存 JSONB，单行最大 ~6.7MB → 塞进 MCP 返回值约 170 万 token，**照字面做不到**。CC 与平台同机，返回绝对路径，CC 用 Read 看图。
+
+**裁定 4 · A4 只输出「现象」，不输出「原因」。** 原写法输出 `script_bug`/`system_bug` 是**归因**，与 §2.3「平台判是什么、CC 判为什么」自相矛盾，等于让确定性规则踩红线 3。且原验收「改按钮 id → 判 script_bug」本身是错的——产品改了 id 语义上是**用例过期**，平台从 HAR 永远区分不了。
+
+改为六类现象：`timeout` / `element_not_found` / `assertion_mismatch` / `http_5xx` / `script_error` / `dependency_unresolved`。最后一类是平台自己抛的错（变量未解析、资源探测失败），它 100% 知道，不算归因。
+
+**裁定 5 · `_parse_har` 白名单改黑名单。** 现在是 `if "/api/" not in url and "json" not in ct: continue`（`cli_agent.py:190`）——被测系统前缀不是 `/api/`（`/v1/`、`/gateway/`）会**把 HAR 清空**，分类器一律 `unknown`。改成按 mimeType 排除（png/css/js/font/ico）。
+
+**裁定 6 · A2 标 `deprecated: true`，不删注册表 key。** `ui-script` 仍有活调用方（`ui_script_gen_service.py:373` `resolve_ai_config(capability="ui-script")`），删 key 会走 `category_of()` 的 `.get(cap,"text")` 兜底 → **静默降档到 text 档模型**。且 `BUILTIN_CATEGORIES` 注释写明不可删，删空 `ui_script` 类别会让「AI 能力→模型」页出现空档位——CLAUDE.md 明令要避免的现象。前端只渲染非 deprecated。
+
+#### Story 清单
+
+| # | Story | 依赖 | 大小 |
 |---|---|---|---|
-| **A1** | 修执行历史 type 参数 bug | 前端传脚本类型而非用例类型 | XS |
-| **A2** | 摘掉 `tb_generate_ui_script`；从 AI 能力注册表删除 4 个死能力 | `app/mcp/__init__.py`、`app/services/ai_capabilities.py` | XS |
-| **A3** | **HAR 录制 + 落库** | `pw_conftest.py` 的 `browser_context_args` 加 `record_har_path`；复用 `cli_agent._parse_har`（已滤静态资源）；`script_runs` 加 `captured_requests jsonb` | S |
-| **A4** | `script_runs` 加 `failure_type` + 平台侧确定性分类 | 新文件 `app/services/failure_triage.py`。**失败时刻前 5s 时间窗 + 排非本域**。输出 `dependency` / `system_bug` / `script_bug` / `unknown` 四类。**必须有单测，用真实失败样本做 fixture** | M |
-| **A5** | `tb_get_ui_script_result` 返回**截图本身** + HAR 摘要 + 失败步骤上下文 | `app/mcp/tools/ui_scripts.py` | S |
-| **A6** | 执行模式分离 `run_mode` | `script_runs` 加列；`/run` 收 `mode`；通过率口径加 filter；`tb_run_ui_script`→debug，`batch`→regression | S |
-| **V1** | `tb_list_global_data` 加 `probe=true`：跑 `check_resources`，返回每个资源 exists / missing+reason / 探到的 values，**并带上 `create_def`** | `app/mcp/tools/sync.py` | S |
-| **V2** | 探测**三态化**：`exists` / `missing`（确实没有，可造）/ `unknown`（**401、HTTP≥400、超时归这里，别动**）。现在全归 `exists=False`，CC 拿到会以为"不存在，我造一个"——**token 一过期就造出一堆重复底座，而且 `keep=true` 没人清理** | `app/services/precheck_service.py` | S |
-| **V3** | 自动化数据页文案改实话：去掉"缺则补建"；「缺失可自动创建」列改成「缺失时怎么办」（显示"CC 按 create_def 自建" / "⚠ 未登记创建方式"）；空态改成"CC 活体验证时会自动登记到这里"，不再引导人手填 | `AutomationData.jsx` | XS |
+| **A0** | **执行记账补齐**（新增，主线关键路径）：`script_runs` 一次性加 `report_scenario_id` / `run_mode` / `attempt` / `captured_requests` / `failure_phenomenon`（**单 migration**）；plan / adhoc / Python-SSE 三条路补写 `ScriptRun` 行；`_execute` / `_execute_adhoc` 透传 `user_id`（`executed_by` 是 NOT NULL FK）；`tb_run_ui_script`→debug，batch→regression | — | **M** |
+| **A1** | `type` 污染两处都改：`CaseDetail.jsx:1792`（执行历史）+ `:2182`（「快速执行」→ `POST /run?type=e2e` → `get_active_script(cid,"e2e")` 空 → 404） | A0 | S |
+| **A2** | 摘平台侧 UI 生成**四个口子**：`tb_generate_ui_script`、`POST .../scripts/generate`、`POST .../scripts/generate-stream`、`mcp/__init__.py:138` prompt 里教 CC 调它那句；注册表 4 项标 deprecated | — | S |
+| **A3** | HAR 录制（`pw_conftest.py:27` + `ts_runner.py:145` / `scripts.py:373` **两份孪生 playwright.config**）+ **4 个采集点**（跟着 `_collect_screenshots` 走，不跟着 sandbox 走）+ 白名单改黑名单 + **body 字段级脱敏**（`requestBody` 现在原样留 8000 字符，登录密码会明文入库再经 A5 送进 CC 上下文）+ 体积上限 | A0 | **M** |
+| **A4** | `failure_triage.py` 输出六类现象 + `evidence_hints`。**超时分支不能依赖 HAR**（Playwright 只在 `context.close()` flush，进程被 kill 时 HAR 缺失/截断）。单测用真实失败 fixture | A3 | M |
+| **A5** | `tb_get_ui_script_result` 返回截图**临时文件路径** + HAR 摘要 + 失败步骤上下文 | A0/A3 | S |
+| **V1+V2** | 合并为一条（`_check_one` 一次改完）：`list_global_data(project_id, env_id=None, probe=False)`——**`check_resources` 要 `env_id`，原写法照抄会崩**；三态化 `exists`/`missing`/`unknown`；带 `create_def`（**要脱敏**，它记着当初怎么造的，大概率带 Authorization）；probe **并发 + 超时压到 5s**（现在串行 15s×N，MCP 调用会先超时）。**执行注入行为不变**（`api_test_runner.py:513` 的 `exists=False` → 不注入 → 步骤报错，这个行为是对的） | — | S |
+| **V3** | 自动化数据页文案改实话 | — | XS |
 
-> V1+V2 和 A3（HAR 落库）是同一件事的两面——**把证据和反馈还给 CC**。V1/V2 做完，共享资源这个功能才第一次真正跑得起来（现在 0 行不是没人用，是用了没有回音）。
+并行度：A2 / V1+V2 / V3 无依赖，可与 A0 同时开。**A0 是主线唯一的关键路径起点。**
+
+> V1+V2 和 A3 是同一件事的两面——**把证据和反馈还给 CC**。V1/V2 做完，共享资源这个功能才第一次跑得起来（现在 0 行不是没人用，是用了没有回音）。
 
 > **为什么 A3~A5 排在计划工具之前**：Winston 原排序是先补计划工具，Murat 反对——"给 CC 看到截图和失败上下文，比做计划工具更急"。采纳 Murat，理由用 Winston 自己的话：证据这一步"**人自己看失败也变轻松了，不依赖 CC 也回本**"，是唯一一个不依赖后续步骤就能独立兑现价值的。计划工具做完只是让 CC 能按按钮——人本来就能按。
 
@@ -310,16 +342,38 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 
 ## 5. 验收标准（可判定，不含"用户满意"）
 
-### 第一刀
-1. 执行历史对有 N 条记录的用例显示 N 条（N>0），type 切换后数量正确
-2. 回推**断言数为 0** 的脚本 → 明确拒绝，**查库确认无记录**
-3. 回推合法脚本（带本地通过证据）→ 入库 → 平台以 `regression` 模式执行 → 执行历史出现 1 条新记录
-4. 手动改坏被测系统一处（改掉某按钮 id）→ 分类显示 `script_bug` **而不是 `unknown`**
-5. 手动让某接口返回 500 → 分类显示 `system_bug`
-6. 4/5 两次执行中出现 favicon 等静态资源 404 时，**分类结论不变**（验证时间窗 + 静态资源过滤生效）
-7. `tb_get_ui_script_result` 返回的截图，CC 能实际看到内容（不是数量）
+### 第一刀 · 记账与证据（A0/A1/A2/A5/V/V3）
+1. **页面上点「运行验证」跑一条 UI 脚本 → 执行历史立刻 +1**（现在是 0，`_run_python_stream` 不记账）
+2. **计划执行一批 → 每条用例在 `script_runs` 各有一行**，`run_mode='regression'`，且 `report_scenario_id` 能反查到报告
+3. 执行历史对有 N 条记录的用例显示 N 条（N>0），type 切换后数量正确
+4. 重试 3 次的用例 → `script_runs` 有 3 行，`attempt` 分别为 1/2/3
+5. `tb_get_ui_script_result` 返回截图路径，**CC 用 Read 打开能看到图**
+6. `POST .../scripts/generate` / `generate-stream` / `tb_generate_ui_script` 三个口子均已下线；「AI 能力→模型」页**不出现空档位**，且文本档模型未被静默改动
+7. `tb_list_global_data(probe=true, env_id=X)` 对一个已登记资源返回 `exists` + 探到的 values；把 token 改坏 → 返回 **`unknown` 而不是 `missing`**；执行时变量注入行为不变
 
-**成败判据：造 5 个失败，分类器答对 4 个。**
+### 第一刀 · 分类器（A3/A4）——封样混淆矩阵
+
+**流程**：先写下 8 个样本的期望标签并存档（封样），**再**跑分类器。出题和跑分不能同一步。
+
+| # | 构造方式 | 期望现象 |
+|---|---|---|
+| 1 | 改掉某按钮 id | `element_not_found` |
+| 2 | 让某接口返回 500 | `http_5xx` |
+| 3 | 断言期望值改错（页面正常） | `assertion_mismatch` |
+| 4 | 脚本里制造 NameError | `script_error` |
+| 5 | 引用一个未登记的 `${x}` | `dependency_unresolved` |
+| 6 | 把页面加载拖到超时 | `timeout` |
+| **7** | **脚本自身超时，但 HAR 干净** | **`unknown`**（负样本） |
+| **8** | **断言不匹配 + 无 5xx + 无元素错误 + 有无关 `/api/` 5xx 噪音** | **`unknown`**（负样本） |
+
+**判据（三条全满足才算过）**：
+- **不允许跨类错**（应判 A 判成 B）
+- 判成 `unknown` 算保守，**不算错**
+- 7、8 两条判成任何具体类别都算错——**这是在测「它知不知道自己不知道」**
+
+**8 条全部转成 `failure_triage` 的常驻单测 fixture**，否则改规则时会静默退化。
+
+**适用通道声明**：只对「平台 pytest 执行器 + 有 HAR」的运行成立。npx/TS 通道的 `ScriptRun` 现在不存 screenshots（`api/scripts.py:462` 写死 `[]`），不在本刀范围。
 
 ### 第二刀
 1. CC 提交无 `evidence` 的归因 → 被拒收
