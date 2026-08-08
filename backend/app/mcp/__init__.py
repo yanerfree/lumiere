@@ -472,7 +472,7 @@ _register(
 _register(
     sync.upsert_automation_resource,
     name="tb_upsert_automation_resource",
-    description="【共享基础数据·登记怎么找到它】路线B专用：多条用例共用、反复重建代价大的底座(上游/负载、隔离上下文、长期存在的应用)。用法=先 tb_list_global_data 查有没有 → 没有就**你自己调接口造出来且不清理** → 再用本工具登记 exists_check。之后每次跑，平台在第一步之前自动探测并注入 ${资源名}，换环境也能找到对应资源。注意 match 要用 name/code 这类稳定标识，不能用 id(等于换个地方写死)；探不到不会自动补建，只会报「变量未解析」。只属于本条用例的数据别用这个，那种该在场景开头自建、末尾清理。参数: project_id, name(引用名), exists_check(必填,{method,url,match,extract}), create_def(可选,登记备查当初怎么造的), description, keep(默认true)",
+    description="【共享基础数据·登记怎么找到它】路线B专用：多条用例共用、反复重建代价大的底座(上游/负载、隔离上下文、长期存在的应用)。用法=先 tb_list_global_data 查有没有 → 没有就**你自己调接口造出来且不清理** → 再用本工具登记 exists_check。之后每次跑，平台在第一步之前自动探测并注入 ${资源名}，换环境也能找到对应资源。注意 match 要用 name/code 这类稳定标识，不能用 id(等于换个地方写死)；探不到时平台**不会**替你补建（create_def 只登记备查、不执行），只会报「变量未解析」——要补就调 tb_list_global_data(probe=true, env_id=...) 看哪条 state=missing，然后你自己按它的 createDef 造。只属于本条用例的数据别用这个，那种该在场景开头自建、末尾清理。参数: project_id, name(引用名), exists_check(必填,{method,url,match,extract}), create_def(可选,登记备查当初怎么造的), description, keep(默认true)",
 )
 
 _register(
@@ -491,7 +491,7 @@ _register(
 _register(
     sync.list_global_data,
     name="tb_list_global_data",
-    description="【回推前查】汇总项目级**可引用**全局数据（全局变量+各环境变量键+自动化共享资源，凭证脱敏），帮你判断哪些走 global_ref、哪些别写死。参数: project_id(项目UUID)",
+    description="【回推前查】汇总项目级**可引用**全局数据（全局变量+各环境变量键+自动化共享资源，凭证脱敏），帮你判断哪些走 global_ref、哪些别写死。**传 probe=true + env_id 会在该环境上真探测一遍共享资源**，每条给出 state：exists=探到了(附 extract 抽出的 values) / missing=确实没有，照它的 createDef 你自己调接口造出来（造完不用改配置，existsCheck 下次自然探得到）/ unknown=平台没查成(401、5xx、超时)，**别动它**——一次 token 过期就照 createDef 补建，会在被测环境造出一堆重复底座且 keep=true 没人清理。平台**不执行** createDef，只告诉你缺了什么、当初怎么造的。参数: project_id(项目UUID), env_id(可选，probe=true 时必填), probe(默认false)",
 )
 
 

@@ -52,7 +52,11 @@ _ENV_MIRROR_KEYS = {
     "ADMIN_USERNAME", "ADMIN_PASSWORD", "TENANT_USERNAME", "TENANT_PASSWORD",
     "ADMIN_USER", "ADMIN_PASS",
 }
-_SECRET_RE = re.compile(r"(PASSWORD|PWD|TOKEN|SECRET|KEY)", re.I)
+# AUTH/AUTHORIZATION/CREDENTIAL/COOKIE 也得算 —— create_def 里最常见的凭证
+# 恰恰是 headers.Authorization，漏了它等于白脱敏。
+# 含 PASS：ADMIN_PASS 这种写法此前漏网，明文进了 CC 的上下文。
+# 脱敏这件事误报是安全方向（多盖一个值无所谓），漏报不是。
+_SECRET_RE = re.compile(r"(PASSWORD|PASSWD|PASS|PWD|TOKEN|SECRET|KEY|AUTH|CREDENTIAL|COOKIE|SESSION)", re.I)
 # 明显是结构值/枚举/路径，不该被当成「写死的业务数据」误报
 _STRUCT_ENUM = {
     "true", "false", "null", "none", "yes", "no", "on", "off",
@@ -656,11 +660,44 @@ async def list_scenario_variables(session: AsyncSession, case_id: str) -> dict:
 # 4. 只读：项目级可引用数据
 # ─────────────────────────────────────────────────────────────
 
-async def list_global_data(session: AsyncSession, project_id: str) -> dict:
+def _mask_deep(obj, depth: int = 0):
+    """递归脱敏 create_def —— 它记着"当初怎么造的"，大概率带 Authorization 头和账号。"""
+    if depth > 6:
+        return obj
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if _SECRET_RE.search(str(k)):
+                out[k] = "***"
+            else:
+                out[k] = _mask_deep(v, depth + 1)
+        return out
+    if isinstance(obj, list):
+        return [_mask_deep(v, depth + 1) for v in obj[:20]]
+    if isinstance(obj, str) and len(obj) > 300:
+        return obj[:300] + "…"
+    return obj
+
+
+async def list_global_data(
+    session: AsyncSession,
+    project_id: str,
+    env_id: str | None = None,
+    probe: bool = False,
+) -> dict:
     """汇总项目级**可引用**的全局数据，帮你判断哪些该走 global_ref、哪些不该写死。
 
     含：全局变量、各环境变量键（凭证类脱敏）、项目自动化共享资源。返回的键名可用于
-    场景变量 kind=global_ref（value_template 填该键名），或步骤里 ${键名} 直接引用。"""
+    场景变量 kind=global_ref（value_template 填该键名），或步骤里 ${键名} 直接引用。
+
+    probe=True 时**在指定环境上真探测一遍**共享资源（需要 env_id），每条返回：
+      state=exists   探到了，附 values（extract 抽出来的 id 等）
+      state=missing  确实没有 —— 照它的 createDef 自己调接口造出来，造完不用改任何
+                     配置，existsCheck 下次自然探得到
+      state=unknown  **我没查成**（401/5xx/超时/没配 url）—— 别动它。一次 token 过期
+                     就照 createDef 补建，会在被测环境造出一堆重复底座，而且 keep=true
+                     没人清理
+    平台**不执行** createDef，只告诉你缺了什么、当初怎么造的。"""
     from app.models.automation_resource import AutomationResource
     from app.models.environment import Environment
 
@@ -693,23 +730,47 @@ async def list_global_data(session: AsyncSession, project_id: str) -> dict:
             "variables": [{"key": ev.key, "value": _mask(ev.key, ev.value)} for ev in evs],
         })
 
+    rows = (await session.execute(
+        select(AutomationResource).where(AutomationResource.project_id == pid)
+        .order_by(AutomationResource.name)
+    )).scalars().all()
     resources = [{
         "name": r.name,
         "description": r.description,
         "keep": r.keep,
         "existsCheck": r.exists_check,
-    } for r in (await session.execute(
-        select(AutomationResource).where(AutomationResource.project_id == pid)
-        .order_by(AutomationResource.name)
-    )).scalars().all()]
+        # 缺失时照这个自己造（平台不执行它）。带凭证的字段已脱敏。
+        "createDef": _mask_deep(r.create_def) if r.create_def else None,
+    } for r in rows]
+
+    probe_note = None
+    if probe:
+        if not env_id:
+            probe_note = "probe=true 需要 env_id —— 探测要拿该环境的 BASE_URL 和 token。先调 tb_list_environments。"
+        else:
+            from app.services import precheck_service
+            rep = await precheck_service.check_resources(session, pid, env_id)
+            by_name = {i["name"]: i for i in
+                       (rep.get("satisfied", []) + rep.get("missing", []) + rep.get("unknown", []))}
+            for item in resources:
+                hit = by_name.get(item["name"])
+                if hit:
+                    item["state"] = hit.get("state")
+                    item["reason"] = hit.get("reason")
+                    item["values"] = hit.get("values")
+            probe_note = (f"已在环境 {env_id} 上探测：存在 {len(rep.get('satisfied', []))} / "
+                          f"缺失 {len(rep.get('missing', []))} / 没查成 {len(rep.get('unknown', []))}")
 
     return {
         "projectId": project_id,
         "globalVariables": global_vars,
         "environments": env_data,
         "automationResources": resources,
+        "probed": bool(probe and env_id),
+        "probeNote": probe_note,
         "usage": "键名可用于：场景变量 kind=global_ref(value_template=键名)，或步骤 ${键名}。"
-                 "凭证类值已脱敏(***)，运行时由平台按所选环境真实注入。",
+                 "凭证类值已脱敏(***)，运行时由平台按所选环境真实注入。"
+                 " 想知道某个共享资源在某环境上现在到底有没有，传 probe=true + env_id。",
     }
 
 

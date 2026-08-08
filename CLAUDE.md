@@ -21,7 +21,9 @@
 
 ## 长驻服务
 
-UI 脚本生成和限流降级依赖两个常驻进程，用 `deploy/start-ai-services.sh` 启动（幂等）：
+用 `deploy/start-ai-services.sh` 启动（幂等）：
 
-- **claude-proxy :38210** — 429 降级通道。挂了则限流只能靠重试。
-- **playwright-mcp :38931** — UI 脚本生成的浏览器通道。host 只认 `localhost`。
+- **claude-proxy :38210** — 429 降级通道。挂了则限流只能靠重试。**文本生成仍依赖它**。
+- **playwright-mcp :38931** — 平台侧 UI 脚本生成的浏览器通道，host 只认 `localhost`。
+  **2026-08-08 起平台侧 UI 生成已封存**（见上表那份文档的红线 1），所以**日常运行不需要起它**；
+  顶栏「服务 N/17」里它显示 notConfigured 是正常的，不是坏了。只有要重新启用平台侧生成时才起。
