@@ -445,6 +445,13 @@ export default function MCPTools() {
         onCancel={() => setScopeEditing(null)} onOk={saveScope} okText="保存">
         {scopeEditing && (
           <div>
+            {/* 用户抱怨过"改了工具就要重新生成 Key，太麻烦"。改范围其实一直是就地生效的，
+                但弹窗里从来没说过这句话 —— 人打开只看到两个单选和保存，疑虑一点没被打消。 */}
+            <div style={{ fontSize: 12.5, color: '#4e5969', background: 'rgba(14,165,160,0.06)',
+              border: '1px solid rgba(14,165,160,0.18)', borderRadius: 10, padding: '8px 12px', marginBottom: 12, lineHeight: 1.8 }}>
+              保存后<b>立即对这个 Key 生效</b>。Key 本身不变 —— 对面的 Claude Code
+              不用改配置、不用重连，下一次 <Text code style={{ fontSize: 11 }}>tools/list</Text> 就是新范围。
+            </div>
             <Radio.Group
               value={scopeEditing.tools === null ? 'all' : 'custom'}
               onChange={e => setScopeEditing(s => ({
