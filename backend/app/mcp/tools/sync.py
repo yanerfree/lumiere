@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.api_test import ApiTestScenario, ApiTestStep
 from app.models.api_test_folder import ApiTestFolder
 from app.models.case import Case
+from app.services import script_service
 from app.models.environment import EnvironmentVariable, GlobalVariable
 from app.models.scenario_variable import ScenarioVariable
 from app.models.user import User
@@ -247,13 +248,67 @@ _SPEC_CASE = """## 步骤用例（tb_create_case，非本模块，但一并说�
 steps 每项含 seq/action/expected；多角色加 [管理员]/[租户] 标记。"""
 
 
+_SPEC_UI_SCRIPT = """## 用例的 UI 脚本（tb_sync_ui_script）
+
+把你在本地**写好并真跑通过**的 Playwright 脚本回推到某条用例的「UI 测试」页签。
+平台不再自己生成脚本——生成这件事由你（外部 Claude Code）做，平台负责存、跑、留痕。
+
+### 变量怎么取（这是硬检查，写死会被拒绝入库）
+
+外部取值一律从环境变量读，**在模块顶部声明一次**，后面全用变量拼：
+
+```python
+import os
+from playwright.sync_api import Page, expect
+
+BASE_URL = os.getenv("BASE_URL", "")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+SVC_NAME = os.getenv("SV_svcName", "")        # 场景变量前缀 SV_
+
+def test_创建服务后列表可见(page: Page):
+    page.goto(f"{BASE_URL}/login")
+    page.get_by_placeholder("用户名").fill(ADMIN_USERNAME)
+    page.get_by_placeholder("密码").fill(ADMIN_PASSWORD)
+    page.get_by_role("button", name="登 录").click()
+    ...
+    expect(page.get_by_text(SVC_NAME)).to_be_visible()
+```
+
+- ❌ `page.goto("http://192.168.51.108:5173/login")` —— 写死服务地址，换环境必挂，**拒绝入库**
+- ❌ `fill("admin123")` —— 写死凭据，**拒绝入库**
+- ✅ `page.goto(f"{BASE_URL}/login")`
+
+平台执行时会把该环境的变量注入进程环境，并把 `NAME = os.getenv("NAME", "默认值")`
+这一行的默认值替换成真值——所以**必须写成这个形状**，写 `os.environ["X"]` 拿不到替换。
+
+可用的键：环境变量（BASE_URL / 各角色账号密码 / LOGIN_URL，见 tb_list_global_data）、
+场景变量（`SV_` + 变量名，跟接口场景共用同一份，见 tb_list_scenario_variables）、
+`TEST_TOKEN`（平台按用例前置条件自动登录拿到的 token，造数/清理用）。
+
+### 形状要求
+
+- Python：必须有 `def test_xxx` —— 平台用 pytest 跑它。默认文件名 test_ui.py
+- TypeScript：必须有 `test(...)` —— 平台用 `npx playwright test` 跑它。默认文件名 ui.spec.ts
+- 两种都支持，按内容/文件名自动判，也可以显式传 language
+
+### 流程
+
+1. 本地写脚本，**先自己跑通**（别回推没验证过的东西）
+2. `tb_sync_ui_script(case_id, content)` 入库
+3. `tb_run_ui_script(case_id, env_id)` 在目标环境上再跑一遍——平台跑通了才算通
+4. 失败看 `tb_get_ui_script_result(case_id)`：状态、耗时、错误摘要、截图数
+"""
+
+
 async def get_sync_spec(kind: str = "all") -> dict:
-    """获取回推规范。kind: case(步骤用例) / api_scenario(编排接口场景) / variables(变量纪律) / all。
+    """获取回推规范。kind: case(步骤用例) / api_scenario(编排接口场景) / ui_script(UI 脚本) / variables(变量纪律) / all。
 
     回推前先调它对齐口径：怎么选变量层、步骤/断言/提取物 JSON 形状、禁止写死的正反例。"""
     parts = {
         "variables": _SPEC_VARIABLES,
         "api_scenario": _SPEC_API_SCENARIO,
+        "ui_script": _SPEC_UI_SCRIPT,
         "case": _SPEC_CASE,
     }
     if kind in parts:
@@ -268,7 +323,8 @@ async def get_sync_spec(kind: str = "all") -> dict:
         "2. tb_upsert_scenario_variables 建/更新该用例的场景变量（部分固定+部分随机用 kind=template）。\n"
         "3. tb_sync_orchestrated_scenario 回推接口链——步骤里**只用 ${var}，零写死**；"
         "悬空引用会被硬拦截，疑似写死会软警告。\n"
-        "4. tb_run_api_test 执行，确认变量都被正确解析。\n\n"
+        "4. tb_run_api_test 执行，确认变量都被正确解析。\n"
+        "5. 要顺带补 UI 脚本：本地写好跑通 → tb_sync_ui_script 入库 → tb_run_ui_script 在目标环境再跑一遍。\n\n"
         + "\n\n".join(selected.values())
     )
     return {"kind": kind, "playbook": playbook, "sections": selected}
@@ -754,4 +810,140 @@ async def upsert_automation_resource(
                    f"场景开跑前会自动探测并注入，步骤里用 ${{{res.name}}} 引用，别再写死 UUID。"
                    " ⚠ 探不到时不会自动补建（create_def 暂只登记不执行），"
                    "只会让引用它的步骤报「变量未解析」——请确认该资源在目标环境确实存在。",
+    }
+
+
+# ── UI 脚本回推 ──────────────────────────────────────────────────────────────
+
+_UI_ENV_HINT = 'BASE_URL = os.getenv("BASE_URL", "")'
+
+# 服务地址/凭据写死是硬伤：换环境就全挂，而且挂得很隐蔽（脚本还在跑，只是打了别的系统）。
+_URL_LITERAL_RE = re.compile(r"""["'`](https?://[^"'`\s]+)["'`]""")
+_CRED_LITERAL_RE = re.compile(
+    r"""(password|passwd|pwd|token|secret|api_?key)\s*[:=]\s*["'`]([^"'`\s]{4,})["'`]""",
+    re.I,
+)
+
+
+def _detect_language(content: str, file_name: str | None) -> str:
+    name = (file_name or "").lower()
+    if name.endswith((".ts", ".tsx", ".js", ".mjs")):
+        return "typescript"
+    if name.endswith(".py"):
+        return "python"
+    if "import { test" in content or "@playwright/test" in content:
+        return "typescript"
+    return "python"
+
+
+def _scan_ui_script(content: str, language: str) -> tuple[list[str], list[str]]:
+    """返回 (硬错误, 软警告)。规矩跟接口回推一致：外部取值一律走变量，不许写死。"""
+    errors: list[str] = []
+    warns: list[str] = []
+    reader = "process.env" if language == "typescript" else "os.getenv"
+
+    for line in content.splitlines():
+        if reader in line:
+            continue  # 这一行本身就是在读变量，允许它带默认值
+        for m in _URL_LITERAL_RE.finditer(line):
+            errors.append(
+                f'写死了服务地址 {m.group(1)[:60]} —— 换环境必挂。'
+                f'改成从变量取：{_UI_ENV_HINT}，再用 f"{{BASE_URL}}/xxx" 拼。'
+            )
+        for m in _CRED_LITERAL_RE.finditer(line):
+            errors.append(
+                f'写死了凭据 {m.group(1)} —— 凭据只能来自环境变量。'
+                f'改成 {reader}("ADMIN_PASSWORD"{"" if language == "typescript" else ", \'\'"})。'
+            )
+
+    if language == "python":
+        if "def test_" not in content:
+            errors.append("没找到 def test_ 开头的测试函数 —— 平台用 pytest 跑它，必须有。")
+        if "os" not in content.split("\n")[0] and "import os" not in content:
+            warns.append("没 import os，那就没法读环境变量；除非这条用例真的不需要任何外部取值。")
+    else:
+        if "test(" not in content:
+            errors.append("没找到 test(...) 用例 —— 平台用 npx playwright test 跑它，必须有。")
+
+    return errors, warns
+
+
+def _first_test_func(content: str) -> str | None:
+    m = re.search(r"^\s*(?:async\s+)?def\s+(test_\w+)", content, re.M)
+    return m.group(1) if m else None
+
+
+async def sync_ui_script(
+    session: AsyncSession,
+    case_id: str,
+    content: str,
+    language: str | None = None,
+    file_name: str | None = None,
+) -> dict:
+    """把你在本地写好并跑通的 Playwright 脚本回推到用例上。"""
+    try:
+        cid = uuid.UUID(case_id)
+    except (ValueError, AttributeError):
+        return {"error": f"case_id 不是合法 UUID: {case_id}"}
+
+    content = (content or "").strip()
+    if not content:
+        return {"error": "content 是空的——要回推的是脚本正文，不是文件路径。"}
+
+    case = await session.get(Case, cid)
+    if not case:
+        return {"error": f"用例不存在: {case_id}"}
+
+    lang = (language or "").lower() or _detect_language(content, file_name)
+    if lang not in ("python", "typescript"):
+        return {"error": f"language 只支持 python / typescript，收到 {language}"}
+
+    errors, warns = _scan_ui_script(content, lang)
+    if errors:
+        return {
+            "error": "脚本没通过入库检查，先改掉下面这些再传（这些问题换个环境就会挂）：",
+            "problems": errors,
+            "spec": "调 tb_get_sync_spec(kind='ui_script') 看完整规矩和可抄的模板。",
+        }
+
+    fname = file_name or ("test_ui.py" if lang == "python" else "ui.spec.ts")
+    func = _first_test_func(content) if lang == "python" else None
+
+    script = await script_service.create_script(
+        session, case_id=cid, script_type="ui", content=content,
+        file_name=fname, func_name=func, language=lang,
+        source="cc_synced", created_by=await _active_user_id(session),
+    )
+
+    # 页面的「UI 测试」页签是看 cases.ui_scenario 决定渲不渲染的，脚本存在 scripts 表 ——
+    # 两个数据源。只写脚本不建场景，页面会一直显示「还没有 UI 脚本」，
+    # 明明已经回推成功、也能跑通。所以这里顺带按手工步骤把场景壳建出来。
+    if not case.ui_scenario:
+        manual = case.steps or []
+        steps = [
+            {
+                "seq": i + 1,
+                "phase": "setup" if i == 0 else ("verify" if i == len(manual) - 1 else "action"),
+                "action": (st or {}).get("action", ""),
+                "expected": (st or {}).get("expected", ""),
+                "uiTarget": "",
+            }
+            for i, st in enumerate(manual)
+        ] or [{"seq": 1, "phase": "action", "action": "见脚本", "expected": "", "uiTarget": ""}]
+        case.ui_scenario = {"steps": steps, "variablesUsed": []}
+    case.ui_scenario_status = "debugging"
+    await session.commit()
+
+    return {
+        "status": "ok",
+        "scriptId": str(script.id),
+        "version": script.version,
+        "language": lang,
+        "fileName": fname,
+        "funcName": func,
+        "warnings": warns,
+        "message": (
+            f"已回推到用例「{case.case_code} {case.title}」的 UI 测试页签（v{script.version}）。"
+            f"下一步用 tb_run_ui_script(case_id, env_id) 在目标环境上真跑一遍确认。"
+        ),
     }

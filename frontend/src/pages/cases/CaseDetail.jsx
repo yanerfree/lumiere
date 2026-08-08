@@ -614,9 +614,7 @@ function ScenarioEditor({
   const [newVarInput, setNewVarInput] = useState('')
   const [debugRunning, setDebugRunning] = useState(false)
   const [debugResult, setDebugResult] = useState(null)
-  const [aiGenerating, setAiGenerating] = useState(false)
   const [previewScreenshot, setPreviewScreenshot] = useState(null)
-  const [stepHints, setStepHints] = useState({})
   const [showNoiseSteps, setShowNoiseSteps] = useState(false)
   const [selectedApis, setSelectedApis] = useState([])
   const [apiArranging, setApiArranging] = useState(false)
@@ -631,86 +629,6 @@ function ScenarioEditor({
       const res = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/runs?type=ui&limit=10`)
       setDebugHistory((res.data || []).filter(r => r.status !== 'passed'))
     } catch { /* ignore */ }
-  }
-
-  const handleAiGenerate = async () => {
-    if (type === 'api') return
-    if (!runEnv) { message.warning('请先选择执行环境（需要 BASE_URL）'); return }
-    const genStart = Date.now()
-    setAiGenerating(true)
-    setDebugResult({ status: 'running', _drawerOpen: true, steps: [] })
-    setLiveSteps([])
-    liveStepsRef.current = []
-
-    const token = await getValidToken()
-    const url = `/api/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/generate-stream?type=ui`
-    const controller = new AbortController()
-    abortRef.current = controller
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ envId: runEnv, stepHints: Object.keys(stepHints).length ? stepHints : undefined }),
-        signal: controller.signal,
-      })
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let currentEvent = null
-
-      const processChunk = async () => {
-        const { done, value } = await reader.read()
-        if (done) return
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) { currentEvent = line.slice(7).trim(); continue }
-          if (line.startsWith('data: ') && currentEvent) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (currentEvent === 'step_start') {
-                setLiveSteps(prev => { const n = [...prev, { ...data, status: 'running' }]; liveStepsRef.current = n; return n })
-              } else if (currentEvent === 'step_done') {
-                setLiveSteps(prev => {
-                  const existing = prev.find(s => s.seq === data.seq)
-                  const n = existing
-                    ? prev.map(s => s.seq === data.seq ? { ...s, ...data } : s)
-                    : [...prev, data]
-                  liveStepsRef.current = n; return n
-                })
-              } else if (currentEvent === 'done') {
-                const live = liveStepsRef.current;
-                const screenshots = (data.results || [])
-                  .filter(r => r.screenshot && r.status === 'failed')
-                  .map((r, i) => ({ base64: r.screenshot, name: `步骤失败: ${r.step?.substring(0,30) || '未知'}` }));
-                setDebugResult({ ...data, durationMs: data.durationMs ?? data.duration_ms ?? (Date.now() - genStart), steps: live.length > 0 ? live : data.results || [], screenshots, _drawerOpen: true });
-                if (!scenario) {
-                  setScenario({ steps: (manualSteps || []).map((s, i) => ({ seq: i + 1, action: s.action || '', expected: s.expected || '' })), variablesUsed: [] })
-                }
-                if (onScriptSaved) onScriptSaved()
-                setTimeout(() => scriptEditorRef.current?.refresh(), 300)
-                setAiGenerating(false)
-                setLiveSteps([]); liveStepsRef.current = []
-                if (data.all_passed) message.success('生成并验证全部通过！')
-                else message.warning('部分步骤失败，查看详情')
-                return
-              }
-            } catch {}
-            currentEvent = null
-          }
-        }
-        await processChunk()
-      }
-      await processChunk()
-    } catch (e) {
-      if (e.name !== 'AbortError') {
-        message.error(e?.message || 'AI 生成失败')
-      }
-      setAiGenerating(false)
-    }
   }
 
   // 流式运行脚本 — 实时推送步骤进度
@@ -846,26 +764,27 @@ function ScenarioEditor({
   if (!scenario) return (
     <Card styles={{ body: { padding: '24px 20px' } }}>
       {type !== 'api' && manualSteps?.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, padding: '32px 0' }}>
+        /* 平台侧「AI 生成脚本」入口已下线：实测几十次没跑通过，弱模型 + 管道崩 + 执行器精分。
+           脚本改由外部 Claude Code 在本地写好、跑通，再经 tb_sync_ui_script 回推进来。
+           平台只负责存、跑、留痕——它擅长的部分。 */
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '32px 0' }}>
           <DesktopOutlined style={{ fontSize: 40, color: 'rgba(124,92,191,0.25)' }} />
           <div style={{ fontSize: 14, color: '#4e5969', fontWeight: 500 }}>
-            基于手动测试步骤（{manualSteps.length} 步）生成 Playwright 自动化脚本
+            该用例还没有 UI 脚本（手动测试步骤 {manualSteps.length} 步）
           </div>
-          <div style={{ fontSize: 12, color: '#86909c', maxWidth: 400, textAlign: 'center' }}>
-            AI 将分析用例的操作步骤和预期结果，生成可执行的 Playwright Python 测试脚本，并在目标系统上运行验证
+          <div style={{ fontSize: 12, color: '#86909c', maxWidth: 460, textAlign: 'center', lineHeight: 1.7 }}>
+            UI 脚本由 Claude Code 在本地写好并跑通后回推进来，平台负责存、跑、留痕。<br />
+            在连了本平台 MCP 的 Claude Code 里说：<br />
+            <span style={{
+              display: 'inline-block', marginTop: 6, padding: '4px 10px', borderRadius: 6,
+              background: 'rgba(0,0,0,0.04)', fontFamily: 'var(--font-mono)', fontSize: 11, color: '#4e5969',
+            }}>
+              把用例「{caseTitle}」的 UI 脚本写出来并回推（case_id={caseId}）
+            </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-            <Select size="middle" value={runEnv} onChange={onEnvChange} style={{ width: 220 }}
-              popupMatchSelectWidth={false}
-              placeholder="选择执行环境" options={buildEnvOptions(environments)} />
-            <Button type="primary" size="middle" icon={<ThunderboltOutlined />}
-              loading={aiGenerating} disabled={!runEnv}
-              onClick={handleAiGenerate}
-              style={{ background: '#7c5cbf', borderColor: '#7c5cbf', height: 36 }}>
-              AI 生成脚本
-            </Button>
+          <div style={{ fontSize: 12, color: '#c9cdd4' }}>
+            它会先调 tb_get_sync_spec(kind='ui_script') 对齐写法，再用 tb_sync_ui_script 入库
           </div>
-          {!runEnv && <div style={{ fontSize: 12, color: '#c9cdd4' }}>请先选择环境（需要配置 BASE_URL 变量）</div>}
         </div>
       ) : type !== 'api' ? (
         <Empty description="该用例没有手动测试步骤，请先在「手动测试步骤」Tab 添加步骤" image={Empty.PRESENTED_IMAGE_SIMPLE} />
@@ -913,9 +832,6 @@ function ScenarioEditor({
     if (type !== 'api' && caseId) {
       // 从 ui_scenario 恢复上次生成的步骤和接口数据
       const uiData = scenario || {}
-      if (uiData.stepHints && Object.keys(uiData.stepHints).length) {
-        setStepHints(uiData.stepHints)
-      }
       if (uiData.lastResults?.length > 0 && !debugResult) {
         const allPassed = uiData.lastResults.every(r => r.status === 'passed')
         setDebugResult({
@@ -948,12 +864,6 @@ function ScenarioEditor({
             <Select size="small" value={runEnv} onChange={onEnvChange} style={{ width: 180 }}
               popupMatchSelectWidth={false}
               placeholder="选择环境" options={buildEnvOptions(environments)} />
-            <Button size="small" icon={<ThunderboltOutlined />}
-              loading={aiGenerating} disabled={!runEnv}
-              onClick={handleAiGenerate}
-              style={{ borderColor: '#7c5cbf', color: '#7c5cbf' }}>
-              {aiGenerating ? '生成中...' : 'AI 生成'}
-            </Button>
             <Button size="small" type="primary" icon={<PlayCircleOutlined />}
               loading={debugRunning} disabled={!runEnv}
               onClick={handleDebugRun}
@@ -1067,15 +977,6 @@ function ScenarioEditor({
                                 {script_bug: '脚本问题', system_bug: '系统Bug', case_expired: '用例过期', dependency: '缺少依赖'}[s.failure_type] || s.failure_type
                               }</Tag>
                             )}
-                            {!ok && !isRunning && (
-                              <div style={{ marginTop: 4 }}>
-                                <Input size="small" placeholder="输入指导（如：改成验证运行中）"
-                                  value={stepHints[i] || ''} onChange={e => setStepHints(prev => ({ ...prev, [i]: e.target.value }))}
-                                  style={{ width: '100%', fontSize: 12 }}
-                                  suffix={stepHints[i] ? <span style={{ fontSize: 11, color: '#7c5cbf', cursor: 'pointer' }} onClick={() => message.info('指导已记录，重新生成时将应用')}>已记录</span> : null}
-                                />
-                              </div>
-                            )}
                           </div>
                           {s.duration_ms != null && <span style={{ fontSize: 11, color: '#c9cdd4', flexShrink: 0 }}>{s.duration_ms >= 1000 ? `${(s.duration_ms / 1000).toFixed(1)}s` : `${s.duration_ms}ms`}</span>}
                         </div>
@@ -1083,22 +984,12 @@ function ScenarioEditor({
                     })}
                   </div>
                   )})() : (
-                  <div style={{ padding: 32, textAlign: 'center', color: '#c9cdd4' }}>点击「AI 生成」生成脚本后查看执行步骤</div>
+                  <div style={{ padding: 32, textAlign: 'center', color: '#c9cdd4' }}>点击「运行验证」后查看执行步骤</div>
                 )}
               </div>
             )},
             { key: 'script', label: '脚本视图', children: (
               <div style={{ position: 'relative' }}>
-                {aiGenerating && (
-                  <div style={{
-                    position: 'absolute', inset: 0, zIndex: 10,
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,
-                    background: 'rgba(30,30,46,0.9)', borderRadius: 8,
-                  }}>
-                    <Spin size="large" />
-                    <div style={{ color: '#cdd6f4', fontSize: 14 }}>AI 正在逐步生成脚本...</div>
-                  </div>
-                )}
                 <ScriptEditor
                   ref={scriptEditorRef}
                   projectId={projectId} branchId={branchId} caseId={caseId}

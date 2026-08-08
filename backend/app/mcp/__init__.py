@@ -480,6 +480,19 @@ _register(
 )
 
 _register(
+    sync.sync_ui_script,
+    name="tb_sync_ui_script",
+    description=(
+        "【用例·UI 脚本】把你在本地写好并**跑通过**的 Playwright 脚本回推到某条用例的「UI 测试」页签。"
+        "入库前硬拦截写死的服务地址和凭据（换环境必挂），并检查有没有 pytest/playwright 认得的测试函数。"
+        "写之前先调 tb_get_sync_spec(kind='ui_script') 看变量怎么取、模板长什么样。"
+        "回推后用 tb_run_ui_script(case_id, env_id) 在目标环境上真跑一遍确认。"
+        "参数: case_id(用例UUID), content(脚本正文，不是路径), "
+        "language(可选 python/typescript，不传自动判), file_name(可选)"
+    ),
+)
+
+_register(
     sync.list_global_data,
     name="tb_list_global_data",
     description="【回推前查】汇总项目级**可引用**全局数据（全局变量+各环境变量键+自动化共享资源，凭证脱敏），帮你判断哪些走 global_ref、哪些别写死。参数: project_id(项目UUID)",
