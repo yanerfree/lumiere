@@ -188,15 +188,31 @@ async def get_ui_script_result(
     )
     run = result.scalar_one_or_none()
 
+    if not run:
+        return {
+            "has_script": script is not None,
+            "script_version": script.version if script else None,
+            "script_source": script.source if script else None,
+            "last_run": None,
+        }
+
+    from app.services import run_evidence_service
+    evidence = run_evidence_service.build(run)
+
     return {
         "has_script": script is not None,
         "script_version": script.version if script else None,
         "script_source": script.source if script else None,
         "last_run": {
+            "run_id": str(run.id),
             "status": run.status,
+            "run_mode": run.run_mode,
+            "attempt": run.attempt,
             "duration_ms": run.duration_ms,
             "error_summary": run.error_summary,
-            "screenshots_count": len(run.screenshots or []),
             "created_at": run.created_at.isoformat() if run.created_at else None,
-        } if run else None,
+            # 平台的初判：只判「是什么」（现象），「为什么」（归因）归你
+            "failure_phenomenon": run.failure_phenomenon,
+            **evidence,
+        },
     }

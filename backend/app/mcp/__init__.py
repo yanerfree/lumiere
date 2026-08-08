@@ -425,7 +425,7 @@ _register(
 _register(
     ui_scripts.get_ui_script_result,
     name="tb_get_ui_script_result",
-    description="看某条用例最近一次 UI 脚本跑成什么样：状态、耗时、错误摘要、截图数。参数: case_id(用例UUID)",
+    description="【失败证据包】拿这条用例最近一次 UI 执行的**完整证据**，用来判断为什么挂：截图（返回**文件路径**，和平台同机，直接 Read 打开看图）、网络流量摘要（按状态码分桶 + 展开非 2xx 和写操作那几条，其余页面自身的 GET 已折叠）、stdout 尾部、以及平台按确定性规则给的**现象**初判 failure_phenomenon（timeout / element_not_found / assertion_mismatch / http_5xx / script_error / dependency_unresolved / unknown）。⚠ 现象不是归因 —— 平台判「是什么」，「为什么」由你判断。参数: case_id(用例UUID)",
 )
 
 
