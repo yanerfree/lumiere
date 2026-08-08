@@ -981,12 +981,29 @@ async def sync_ui_script(
         return {"error": f"language 只支持 python / typescript，收到 {language}"}
 
     errors, warns = _scan_ui_script(content, lang)
+
+    # ── 断言门禁（B5）──
+    # 唯一的硬拦截：一条断言都没有。"跑通了但什么都不验证"是最常见的作弊路径，
+    # 而且 100% 可判。强度变化只给软警告 —— 强度做不到可靠硬判，误拦会逼你
+    # 拆断言凑数，比不拦更糟。
+    from app.services import assertion_profile as ap
+    profile = ap.build(content)
+    if profile["total"] == 0:
+        errors.append(
+            "整个脚本一条断言都没有 —— 这样它只能证明流程跑完了没报错，"
+            "证明不了结果是对的。至少断言一个具体结果（页面文案 / 数量 / 状态码）。"
+        )
+
     if errors:
         return {
             "error": "脚本没通过入库检查，先改掉下面这些再传（这些问题换个环境就会挂）：",
             "problems": errors,
             "spec": "调 tb_get_sync_spec(kind='ui_script') 看完整规矩和可抄的模板。",
         }
+
+    # 和上一版比，把退化说出来。不拦，但让它**可见** —— 看得见就治得住。
+    prev = await script_service.get_active_script(session, cid, "ui")
+    warns.extend(ap.diff_warnings(prev.assertion_profile if prev else None, profile))
 
     fname = file_name or ("test_ui.py" if lang == "python" else "ui.spec.ts")
     func = _first_test_func(content) if lang == "python" else None
@@ -996,6 +1013,7 @@ async def sync_ui_script(
         file_name=fname, func_name=func, language=lang,
         source="cc_synced", created_by=await _active_user_id(session),
     )
+    script.assertion_profile = profile
 
     # 页面的「UI 测试」页签是看 cases.ui_scenario 决定渲不渲染的，脚本存在 scripts 表 ——
     # 两个数据源。只写脚本不建场景，页面会一直显示「还没有 UI 脚本」，

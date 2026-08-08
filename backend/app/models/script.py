@@ -43,6 +43,9 @@ class Script(Base):
         String(20), nullable=False, default="manual", server_default="manual"
     )  # manual / git_sync / upload
     commit_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    # 断言指纹（B5）：条数 + 按类型分桶 + 强度分。存下来才能和下一版对比，
+    # 让"改到绿了但测试死了"这种退化**可见**。
+    assertion_profile: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
