@@ -1,5 +1,9 @@
 """失败分类器的封样验收（A4）。
 
+10 条封样：1~8 是设计时想到的，9~10 是 dogfood 跑真实回归时捞出来的形态 ——
+Playwright 的 expect() 失败文本里**同时**含 AssertionError 和 "waiting for locator"
+的 call log，1~8 里两类恰好是分开的两种写法，所以覆盖不到，实测误判成 element_not_found。
+
 判据（评审裁定，见 docs/cc-platform-loop-spec.md §5）：
 - **封样**：期望标签写死在这里，改分类器不许改这些期望值
 - **不允许跨类错**：应判 A 判成 B 一律失败
@@ -102,6 +106,33 @@ SEALED_SAMPLES = [
                  _req(f"{BASE}/api/projects", 200, "2026-08-08T10:00:30+00:00"),
              ]),
         UNKNOWN,
+    ),
+    # ── 9/10：dogfood 实测捞出来的真实形态。原来 1~8 覆盖不到 ──
+    (
+        "9-真实Playwright expect失败(元素找到了但值不对)",
+        dict(status="failed",
+             error_summary=(
+                 "AssertionError: Locator expected to have text '我的项目'\n"
+                 "Actual value: 项目列表 \n"
+                 "Call log:\n"
+                 '  - Expect "to_have_text" with timeout 8000ms\n'
+                 '  - waiting for locator("h2, .page-title, h1").first\n'
+                 "    20 × locator resolved to <h2>项目列表</h2>\n"
+                 '       - unexpected value "项目列表"\n'
+             ),
+             captured_requests=_OK_TRAFFIC),
+        ASSERTION_MISMATCH,
+    ),
+    (
+        "10-真的没找到元素(从没 resolved 过)",
+        dict(status="failed",
+             error_summary=(
+                 "playwright._impl._errors.TimeoutError: Locator.click: Timeout 5000ms exceeded.\n"
+                 "Call log:\n"
+                 '  - waiting for locator("#never-exists")\n'
+             ),
+             captured_requests=_OK_TRAFFIC),
+        ELEMENT_NOT_FOUND,
     ),
 ]
 

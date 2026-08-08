@@ -56,12 +56,19 @@ _ELEMENT_RE = re.compile(
     r"locator\([^)]*\) to be",
     re.I,
 )
-# 断言不匹配
+# 断言不匹配。
+# ⚠ 这几个模式必须**先于**元素匹配 —— Playwright 的 expect() 失败文本里同时含
+# AssertionError 和一段 "waiting for locator" 的 call log，按元素判会把
+# "元素找到了但内容不对" 误判成 "元素找不到"（dogfood 实测踩到）。判据是
+# 「有实际值」：locator resolved / Actual value 说明元素**找到了**，只是值不对。
 _ASSERTION_RE = re.compile(
-    r"\bAssertionError\b|assert .*==|Expected:.*Received:|expect\(.*\)\.to|"
-    r"to_have_(?:text|count|value|url)|to_be_visible",
+    r"\bAssertionError\b|Actual value\s*:|Locator expected to|"
+    r"unexpected value|Expected:.*Received:|assert .*==",
     re.I,
 )
+# 元素确实**没找到**的特征：定位器等超时且从没解析到任何元素。
+# "locator resolved to <...>" 出现就说明找到了，那是断言问题不是定位问题。
+_ELEMENT_RESOLVED_RE = re.compile(r"locator resolved to|Actual value\s*:", re.I)
 # 整体超时（平台执行器的文案 / pytest 超时）
 _TIMEOUT_RE = re.compile(r"执行超时|Timeout .*exceeded|TimeoutError|timed out", re.I)
 
@@ -163,6 +170,12 @@ def classify(
                 "reason": f"失败前 {FAILURE_WINDOW_SECONDS}s 内被测系统返回 "
                           f"{first.get('status')}：{first.get('method')} {first.get('url')}",
                 "evidence": evidence}
+
+    # 断言在前：元素**找到了但值不对**，和元素**根本没找到**是两回事。
+    # 判据是文本里有没有"实际值"（locator resolved to / Actual value）。
+    if _ASSERTION_RE.search(text) and _ELEMENT_RESOLVED_RE.search(text):
+        return {"phenomenon": ASSERTION_MISMATCH,
+                "reason": "元素找到了，但它的值和期望不符", "evidence": evidence}
 
     if _ELEMENT_RE.search(text):
         return {"phenomenon": ELEMENT_NOT_FOUND,

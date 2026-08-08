@@ -47,7 +47,8 @@ async def list_cases(
     target_level 说要做到哪一步，三个维度状态说已经做到哪一步，差集就是待办。
     中断之后重跑不用从头来，也不会把做完的又捡回来重做一遍。
     """
-    from sqlalchemy import and_, or_, select
+    from sqlalchemy import and_, cast, or_, select
+    from sqlalchemy.dialects.postgresql import JSONB
 
     from app.models.case import Case
 
@@ -75,11 +76,19 @@ async def list_cases(
     if manual_status:
         stmt = stmt.where(Case.manual_status == manual_status)
     if pending_only:
-        # 「还欠着」= 目标要这一维，但这一维还没到 executable
+        # 「还欠着」= **CC 还有活要干**，不是"人审没审过"。
+        #
+        # 正常流程是：回推 → debugging → 平台跑通 → pending_review → 人审 → executable。
+        # 用 `!= executable` 当判据，等人审的用例会被 CC 一遍遍捡回来重做，**这个循环
+        # 永远不收敛**（dogfood 实测踩到：UI 都跑通了 owes 还挂着）。
+        # pending_review / executable 都是"轮到人了"，CC 该放手。
+        todo = ("not_started", "draft", "debugging", "needs_fix")
         stmt = stmt.where(or_(
-            Case.manual_status != "executable",
-            and_(Case.target_level.in_(("spec_api", "full")), Case.api_status != "executable"),
-            and_(Case.target_level == "full", Case.ui_status != "executable"),
+            # 手工步骤按"有没有写"判 —— 步骤是内容不是执行物，没有"跑通"这回事，
+            # manual_status 只有人工在页面上才会推进，拿它当判据同样不收敛。
+            or_(Case.steps.is_(None), Case.steps == cast("[]", JSONB)),
+            and_(Case.target_level.in_(("spec_api", "full")), Case.api_status.in_(todo)),
+            and_(Case.target_level == "full", Case.ui_status.in_(todo)),
         ))
 
     from sqlalchemy import func as sa_func
@@ -101,14 +110,21 @@ async def list_cases(
     }
 
 
+_CC_TODO = ("not_started", "draft", "debugging", "needs_fix")
+
+
 def _owes(c) -> list[str]:
-    """这条用例还欠哪几维（按 target_level 判）。"""
+    """这条用例**CC 还欠哪几维**（按 target_level 判）。
+
+    判据是"CC 还有活要干"，不是"人审没审过" —— pending_review / executable
+    都轮到人了，CC 该放手。手工步骤按有没有写判，它不是执行物、没有跑通这回事。
+    """
     owes = []
-    if c.manual_status != "executable":
+    if not (c.steps or []):
         owes.append("manual")
-    if c.target_level in ("spec_api", "full") and c.api_status != "executable":
+    if c.target_level in ("spec_api", "full") and c.api_status in _CC_TODO:
         owes.append("api")
-    if c.target_level == "full" and c.ui_status != "executable":
+    if c.target_level == "full" and c.ui_status in _CC_TODO:
         owes.append("ui")
     return owes
 

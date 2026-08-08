@@ -373,7 +373,7 @@ _register(
 _register(
     test_reports.get_failed_scenarios,
     name="tb_get_failed_scenarios",
-    description="只看失败的那些：哪一步挂了、断言差在哪、错误信息是什么。定位失败从这个工具开始，别去翻全量报告。参数: plan_id, report_id(可选)",
+    description="【执行报告】拿这次报告里所有失败的用例，**每条带 runId** —— 用它调 tb_get_ui_script_result 看证据包（截图路径 / 流量 / 平台的现象初判），判完再调 tb_submit_analysis 回填归因。参数: plan_id(计划UUID), report_id(可选，不传取最近一次)",
 )
 
 
