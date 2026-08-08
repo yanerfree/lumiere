@@ -353,27 +353,57 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 
 ### 第一刀 · 分类器（A3/A4）——封样混淆矩阵
 
-**流程**：先写下 8 个样本的期望标签并存档（封样），**再**跑分类器。出题和跑分不能同一步。
+**流程**：期望标签固化在 `backend/tests/test_failure_triage.py` 的 `SEALED_SAMPLES` 里（封样）。
+改分类器不许改这些期望值。
 
 | # | 构造方式 | 期望现象 |
 |---|---|---|
-| 1 | 改掉某按钮 id | `element_not_found` |
-| 2 | 让某接口返回 500 | `http_5xx` |
-| 3 | 断言期望值改错（页面正常） | `assertion_mismatch` |
+| 1 | 改掉按钮 id → 定位器超时 | `element_not_found` |
+| 2 | 同域接口返回 500（错误文本与 #1 **完全相同**） | `http_5xx` |
+| 3 | 断言期望值改错，页面正常 | `assertion_mismatch` |
 | 4 | 脚本里制造 NameError | `script_error` |
-| 5 | 引用一个未登记的 `${x}` | `dependency_unresolved` |
-| 6 | 把页面加载拖到超时 | `timeout` |
-| **7** | **脚本自身超时，但 HAR 干净** | **`unknown`**（负样本） |
-| **8** | **断言不匹配 + 无 5xx + 无元素错误 + 有无关 `/api/` 5xx 噪音** | **`unknown`**（负样本） |
+| 5 | 引用未登记的 `${upstreamId}` | `dependency_unresolved` |
+| 6 | 整体执行超时 | `timeout` |
+| **7** | **没见过的错误形态**（`net::ERR_CONNECTION_REFUSED`） | **`unknown`**（负样本） |
+| **8** | **error_summary 为空 + 有个离失败很远的无关 5xx 噪音** | **`unknown`**（负样本） |
 
 **判据（三条全满足才算过）**：
 - **不允许跨类错**（应判 A 判成 B）
 - 判成 `unknown` 算保守，**不算错**
-- 7、8 两条判成任何具体类别都算错——**这是在测「它知不知道自己不知道」**
+- 7、8 判成任何具体类别都算错——**这是在测「它知不知道自己不知道」**
 
-**8 条全部转成 `failure_triage` 的常驻单测 fixture**，否则改规则时会静默退化。
+另加两条常驻断言：5xx 必须**同域**（第三方 CDN 挂了不算）、必须**在失败窗口内**
+（离失败很远的 5xx 不算数）。一个「见 5xx 就判 http_5xx」的规则能拿 6/8，
+样本 8 和这两条专门拦它。
+
+**8 条 + 2 条全部是常驻单测**，不是一次性验收——不进常驻的话，下次改规则会静默退化。
 
 **适用通道声明**：只对「平台 pytest 执行器 + 有 HAR」的运行成立。npx/TS 通道的 `ScriptRun` 现在不存 screenshots（`api/scripts.py:462` 写死 `[]`），不在本刀范围。
+
+### ✅ 第一刀实测结果（2026-08-08，全部通过）
+
+| 验收 | 结果 |
+|---|---|
+| AC1 页面「运行验证」→ 执行历史 +1 | ✅ 此前恒定不增长（`_run_python_stream` 一行不写） |
+| AC2 计划执行 → `run_mode=regression` + `report_scenario_id` 反查到报告 | ✅ |
+| AC3 执行历史返回全部记录（不按脚本类型过滤） | ✅ |
+| AC4 `retryCount=2` 的失败用例 → `attempt` 1/2/3 三行 | ✅ |
+| AC5 证据包返回**可 Read 打开**的截图路径 | ✅ 打开确认是失败当时的真实页面；返回体 4952 字节（若塞 base64 约 170 万 token） |
+| AC6 平台侧生成四个口子全下线 | ✅ 三个 REST 均 404；MCP 36 工具不含 `tb_generate_ui_script` |
+| AC7 共享资源探测三态化 + 执行注入行为不变 | ✅ exists/missing/unknown 各命中一条 |
+| AC-分类器 封样 8 条无跨类错 | ✅ 11 passed |
+
+**最能说明问题的一条**：样本 2 的错误文本和样本 1 **一模一样**（都是
+`Locator.click: Timeout 5000ms exceeded`），全靠 HAR 里的同域 500 才分开。
+没有 A3，它必然被误判成 `element_not_found`——这就是「先补证据再谈分诊」的实证。
+
+**途中撞上并修掉的（都不是本次引入的）**：
+- 计划执行此前**完全跑不了**：项目上一个过期的 `script_base_path` 会在建沙箱那步
+  直接 `return error`，哪怕计划里每条都用不着沙箱。症状是全部 scenario 停在 pending
+- 两处凭证泄漏：`_SECRET_RE` 漏了 `AUTH`（`create_def` 里最常见的凭证恰恰是
+  `headers.Authorization`）和 `PASS`（`ADMIN_PASS` 明文进了 CC 的上下文）
+- `_run_python_stream` 的 stdout 逐行消费不留存，执行历史展开永远是空日志
+- CLAUDE.md 声称 playwright-mcp 是常规运行前提，而它只服务于已封存的平台侧生成
 
 ### 第二刀
 1. CC 提交无 `evidence` 的归因 → 被拒收
