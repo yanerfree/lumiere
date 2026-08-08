@@ -128,12 +128,24 @@ export default function ApiTest() {
 
   useEffect(() => { fetchFolders() }, [fetchFolders])
 
+  // 当前档位一条都没有时，得知道"别的档位有没有" —— 否则一进页面就是「暂无数据」，
+  // 而库里明明有回推进来的编排链，人只会以为自己白推了。默认只看单接口是有意的，
+  // 但空态必须说出真话（实测：分支里唯一一条场景是编排链，页面显示暂无数据）。
+  const [otherKindCount, setOtherKindCount] = useState(0)
+
   const fetchScenarios = useCallback(async () => {
     if (!branchId) return
     setLoading(true)
     try {
       const res = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests?kind=${kindFilter}`)
-      setScenarios(res.data || [])
+      const list = res.data || []
+      setScenarios(list)
+      if (list.length === 0 && kindFilter !== 'all') {
+        const all = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests?kind=all`)
+        setOtherKindCount((all.data || []).length)
+      } else {
+        setOtherKindCount(0)
+      }
     } catch { /* */ } finally { setLoading(false) }
   }, [projectId, branchId, kindFilter])
 
@@ -464,6 +476,7 @@ export default function ApiTest() {
           onStatusChange={setStatusFilter}
           kindFilter={kindFilter}
           onKindChange={setKindFilter}
+          otherKindCount={otherKindCount}
           onSelectScenario={(id) => loadScenario(id)}
           onDelete={handleDelete}
           onGenerate={() => { setGenOpen(true); form.resetFields() }}

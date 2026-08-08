@@ -1,145 +1,72 @@
-import { Card, Tag, Space, Typography, Divider, Table, Timeline, Badge } from 'antd'
-import {
-  RobotOutlined, ApiOutlined, ThunderboltOutlined, FileTextOutlined,
-  BugOutlined, SearchOutlined, CodeOutlined, FileSearchOutlined,
-  CheckCircleOutlined, ClockCircleOutlined, ToolOutlined,
-  ExperimentOutlined, BookOutlined,
-} from '@ant-design/icons'
+// AI 能力总览 —— 这一页只回答一个问题：**平台上哪些地方会调 AI，各自用的哪个模型。**
+//
+// 原来它是一份手写的 Phase 路线图，说了好几件已经不成立的事：把摘掉的「AI 生成脚本」
+// 按钮写成可用、把 MCP 工具写死成 8 个（实际 37）、指着一个不存在的「AI 诊断」按钮、
+// 把已经能用的探索测试写成"规划中"。用户的原话是"我要求非常的清晰，目前有点太乱了"。
+//
+// 现在整页的数据只有一个来源：后端 CAPABILITY_REGISTRY + 档位绑定（GET /api/ai-capabilities）。
+// 后端加一个 AI 调用点，这页自己就多一行；下线一个，这页自己就挪到"已下线"。手写清单
+// 和真相分家这件事不会再发生。
+import { useEffect, useState } from 'react'
+import { Card, Tag, Space, Typography, Table, Spin, Alert } from 'antd'
+import { RobotOutlined, ApiOutlined } from '@ant-design/icons'
+import { Link, useParams } from 'react-router-dom'
+import { api } from '../../utils/request'
 
-const { Text, Paragraph } = Typography
+const { Text } = Typography
 
-const PHASES = [
-  {
-    phase: 'Phase 1',
-    title: '基础能力',
-    tag: '已完成',
-    tagColor: 'success',
-    items: [
-      {
-        title: 'AI 用例生成',
-        icon: <FileTextOutlined />,
-        status: 'done',
-        what: '从 API 接口定义 + 业务规则，自动生成多维度测试用例',
-        where: '用例管理 → 工具栏「AI 生成用例」',
-        output: '测试用例（手动步骤），6 维度覆盖，自动去重入库',
-        dimensions: '正向流程 · 参数验证 · 业务规则 · 边界值 · 异常场景 · 安全',
-      },
-      {
-        title: 'AI 脚本生成',
-        icon: <CodeOutlined />,
-        status: 'done',
-        what: '根据已有用例生成 pytest + httpx 自动化测试脚本',
-        where: '用例管理 → 勾选用例 → 工具栏「AI 生成脚本」',
-        output: 'pytest 脚本代码，可直接复制到项目中运行',
-      },
-      {
-        title: 'MCP Server',
-        icon: <ApiOutlined />,
-        status: 'done',
-        what: '暴露平台数据的标准 MCP 协议接口，供 AI 工具读写',
-        where: `MCP 地址: http://${window.location.hostname}:18800/mcp/`,
-        output: '8 个工具：用例 CRUD、API 接口查询、环境变量',
-      },
-      {
-        title: 'AI 配置管理',
-        icon: <ToolOutlined />,
-        status: 'done',
-        what: '多级 AI 配置：系统级创建 → 分配给项目 → 项目级选择或自建',
-        where: '系统菜单「AI 管理」/ 项目菜单「AI 智能 → AI 配置」',
-        output: '每个项目独立使用自己的 AI 配置，互不影响',
-      },
-    ],
-  },
-  {
-    phase: 'Phase 2',
-    title: '核心 Skill',
-    tag: '进行中',
-    tagColor: 'processing',
-    items: [
-      {
-        title: '质量评审',
-        icon: <SearchOutlined />,
-        status: 'done',
-        what: 'AI 从完整性、准确性、有效性、可执行性 4 维度评审用例质量并打分',
-        where: '用例管理 → 工具栏「AI 评审」按钮',
-        output: '质量分（0-100）+ 问题清单 + 覆盖矩阵 + 改进建议',
-      },
-      {
-        title: '探索测试',
-        icon: <BugOutlined />,
-        status: 'planned',
-        what: 'AI 辅助人工探索测试：生成章程 → 引导检查 → 记录发现 → 输出报告',
-        where: '计划入口：项目菜单新增「探索测试」',
-        output: '探索报告（Bug / 风险 / 改进 + 覆盖热力图）',
-      },
-      {
-        title: '失败诊断',
-        icon: <FileSearchOutlined />,
-        status: 'done',
-        what: '分析测试失败原因，3 分类（脚本Bug / 系统Bug / 环境问题）+ 修复建议',
-        where: '测试报告 → 失败用例旁「AI 诊断」按钮',
-        output: '诊断结论 + 置信度 + 可行动的修复方案',
-      },
-    ],
-  },
-  {
-    phase: 'Phase 3',
-    title: '文档能力',
-    tag: '已完成',
-    tagColor: 'success',
-    items: [
-      {
-        title: '文档生成',
-        icon: <BookOutlined />,
-        status: 'done',
-        what: '自动截图 + AI 写文档。平台直接生成或通过 Claude Code 生成',
-        where: '项目菜单「文档管理」→ 生成按钮',
-        output: '带截图的 Markdown 文档，可导出 HTML/ZIP',
-      },
-    ],
-  },
-  {
-    phase: 'Phase 4',
-    title: '闭环运营',
-    tag: '已完成',
-    tagColor: 'success',
-    items: [
-      {
-        title: '病历系统',
-        icon: <ExperimentOutlined />,
-        status: 'done',
-        what: '每条用例的历史时间线：生成 → 评审 → 执行 → 诊断，自动标签',
-        where: 'API: GET /api/cases/{id}/file',
-        output: '事件时间线 + 自动标签（#不稳定 #需要关注 #待验证）',
-      },
-      {
-        title: '用量统计',
-        icon: <ToolOutlined />,
-        status: 'done',
-        what: 'Token 消耗追踪，按项目/Skill 统计用量',
-        where: 'API: GET /api/projects/{id}/ai-usage',
-        output: '按 Skill 分组的调用次数和 Token 消耗',
-      },
-    ],
-  },
-]
-
-const MCP_TOOLS = [
-  { name: 'tb_list_cases', description: '列出分支下的测试用例，支持分页和筛选', category: '用例' },
-  { name: 'tb_get_case', description: '获取单条测试用例的完整详情', category: '用例' },
-  { name: 'tb_create_case', description: '创建测试用例，自动生成编号和目录', category: '用例' },
-  { name: 'tb_get_folder_tree', description: '获取用例文件夹树形结构', category: '用例' },
-  { name: 'tb_list_api_tree', description: '获取项目所有 API 接口树', category: 'API' },
-  { name: 'tb_get_api_node', description: '获取 API 节点详情（method/url/body）', category: 'API' },
-  { name: 'tb_list_environments', description: '列出所有测试环境', category: '环境' },
-  { name: 'tb_get_merged_variables', description: '获取合并后的环境变量', category: '环境' },
-]
+// 谁在执行 —— 平台侧 LLM，还是外部 Claude Code。边界见 docs/cc-platform-loop-spec.md
+const RUNNER = {
+  platform: { label: '平台执行', color: 'cyan' },
+  cc: { label: 'Claude Code 执行', color: 'blue' },
+}
 
 export default function AICapabilities() {
-  const mcpColumns = [
-    { title: '工具名称', dataIndex: 'name', width: 220, render: (n) => <Text code>{n}</Text> },
-    { title: '分类', dataIndex: 'category', width: 80, render: (c) => <Tag>{c}</Tag> },
-    { title: '说明', dataIndex: 'description' },
+  const { projectId } = useParams()
+  const [data, setData] = useState(null)
+  const [toolCount, setToolCount] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    Promise.all([
+      api.get('/ai-capabilities').then(r => r.data).catch(() => null),
+      api.get('/mcp-keys/tools').then(r => (r.data || []).length).catch(() => null),
+    ]).then(([caps, n]) => {
+      setData(caps)
+      setToolCount(n)
+    }).finally(() => setLoading(false))
+  }, [])
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div>
+  if (!data) return <Alert type="error" message="拿不到 AI 能力清单，检查后端是否在 8756 端口" />
+
+  const bindings = data.bindings || []
+  const registry = data.registry || []
+  const modelOf = (category) => bindings.find(b => b.key === category)?.model || '—'
+  const labelOf = (category) => bindings.find(b => b.key === category)?.label || category
+
+  const live = registry.filter(c => !c.deprecated)
+  const gone = registry.filter(c => c.deprecated)
+
+  const columns = [
+    {
+      title: '能力', dataIndex: 'label', width: 210,
+      render: (v, r) => (
+        <div>
+          <div style={{ fontWeight: 500 }}>{v}</div>
+          <Text code style={{ fontSize: 11 }}>{r.key}</Text>
+        </div>
+      ),
+    },
+    { title: '在哪用', dataIndex: 'where', width: 210, render: v => <span style={{ color: '#4e5969' }}>{v}</span> },
+    {
+      title: '走哪个档位', dataIndex: 'category', width: 140,
+      render: v => <Tag>{labelOf(v)}</Tag>,
+    },
+    {
+      title: '当前模型', dataIndex: 'category', key: 'model', width: 190,
+      render: v => <Text code style={{ fontSize: 12 }}>{modelOf(v)}</Text>,
+    },
   ]
 
   return (
@@ -150,106 +77,74 @@ export default function AICapabilities() {
           AI 能力总览
         </h2>
         <span style={{ fontSize: 13, color: '#86909c' }}>
-          testBench 平台的 AI 能力路线图。已完成的功能可直接使用，规划中的功能按阶段推进。
+          平台上会调 AI 的地方，一共 {live.length} 处，全在下面。改模型去
+          {' '}<Link to="/settings/ai-providers">AI 服务配置 → AI 能力→模型</Link>。
         </span>
       </div>
 
-      {/* 按阶段展示 */}
-      {PHASES.map((phase) => (
-        <div key={phase.phase} style={{ marginBottom: 24 }}>
-          <Divider orientation="left" style={{ margin: '8px 0 12px' }}>
-            <Space>
-              <Text strong>{phase.phase}</Text>
-              <Text type="secondary">{phase.title}</Text>
-              <Tag color={phase.tagColor}>{phase.tag}</Tag>
-            </Space>
-          </Divider>
-
-          <div style={{ display: 'grid', gridTemplateColumns: phase.items.length === 1 ? '1fr' : '1fr 1fr', gap: 12 }}>
-            {phase.items.map(item => (
-              <Card
-                key={item.title}
-                size="small"
-                style={{ borderLeft: item.status === 'done' ? '3px solid #0ea5a0' : '3px solid rgba(0,0,0,0.15)' }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 6 }}>
-                  <Space>
-                    {item.icon}
-                    <Text strong style={{ fontSize: 15 }}>{item.title}</Text>
-                  </Space>
-                  {item.status === 'done'
-                    ? <Tag color="cyan" icon={<CheckCircleOutlined />}>可用</Tag>
-                    : <Tag icon={<ClockCircleOutlined />}>规划中</Tag>
-                  }
-                </div>
-                <div style={{ fontSize: 13, lineHeight: 1.9 }}>
-                  <div><Text strong>做什么：</Text>{item.what}</div>
-                  <div><Text strong>在哪用：</Text>{item.where}</div>
-                  <div><Text strong>输出：</Text>{item.output}</div>
-                  {item.dimensions && (
-                    <div style={{ marginTop: 4 }}>
-                      <Text strong>覆盖维度：</Text>
-                      <span style={{ color: '#0ea5a0' }}>{item.dimensions}</span>
-                    </div>
-                  )}
-                </div>
-              </Card>
-            ))}
-          </div>
-        </div>
-      ))}
-
-      {/* MCP 工具 */}
-      <Divider orientation="left" style={{ margin: '8px 0 12px' }}>
-        <Space><ApiOutlined /> MCP 工具（AI 读写平台数据的接口）</Space>
-      </Divider>
-
-      <Card size="small" style={{ marginBottom: 12, background: 'rgba(0,0,0,0.02)' }}>
+      {/* 边界：哪些活是平台干的，哪些活平台不干 */}
+      <Card size="small" style={{ marginBottom: 16, background: 'rgba(14,165,160,0.04)', border: '1px solid rgba(14,165,160,0.18)' }}>
         <div style={{ fontSize: 13, lineHeight: 2 }}>
-          <b>MCP Server 地址：</b><Text code>{`http://${window.location.hostname}:18800/mcp/`}</Text>
-          <br/>
-          <b>用途：</b>AI Skill 执行时通过这些工具读取项目数据并写入生成结果。Claude Code 等外部 MCP 客户端也可连接使用。
+          <Tag color={RUNNER.platform.color}>{RUNNER.platform.label}</Tag>
+          从文档、用例这类<b>文本</b>产出文本：生成用例、生成接口场景、写文档、评审。
+          <br />
+          <Tag color={RUNNER.cc.color}>{RUNNER.cc.label}</Tag>
+          需要<b>真的把系统跑一遍</b>才算数的活：写 UI 脚本、跑通它、分析失败原因。
+          平台在这条链上只做两件事 —— 出证据（截图/请求/按规则算的失败现象）、存结论（人确认的原因）。
+          <span style={{ color: '#86909c' }}>　详见 docs/cc-platform-loop-spec.md</span>
         </div>
       </Card>
 
       <Table
-        rowKey="name"
-        columns={mcpColumns}
-        dataSource={MCP_TOOLS}
-        pagination={false}
+        rowKey="key"
         size="small"
-        style={{ marginBottom: 24 }}
+        columns={columns}
+        dataSource={live}
+        pagination={false}
+        style={{ marginBottom: 20 }}
       />
 
-      {/* 双引擎 */}
-      <Divider orientation="left" style={{ margin: '8px 0 12px' }}>
-        <Space><ToolOutlined /> 两种使用方式</Space>
-      </Divider>
+      {gone.length > 0 && (
+        <>
+          <div style={{ fontSize: 13, color: '#86909c', margin: '0 0 8px' }}>
+            已下线 / 已封存（留在这里是为了说清楚为什么不做了，免得过阵子又被加回来）
+          </div>
+          <Table
+            rowKey="key"
+            size="small"
+            showHeader={false}
+            pagination={false}
+            style={{ marginBottom: 20, opacity: 0.75 }}
+            columns={[
+              // key 是不能断的标识符，和标题挤在一行会被拦腰折断，所以分两行放
+              { dataIndex: 'label', width: 230, render: (v, r) => (
+                <div>
+                  <div><s>{v}</s></div>
+                  <Text code style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{r.key}</Text>
+                </div>
+              ) },
+              { dataIndex: 'deprecatedNote', render: v => <span style={{ fontSize: 12.5, color: '#86909c' }}>{v || '已下线'}</span> },
+            ]}
+            dataSource={gone}
+          />
+        </>
+      )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        <Card size="small" style={{ borderLeft: '3px solid #0ea5a0' }}>
-          <Space style={{ marginBottom: 8 }}>
-            <Text strong style={{ fontSize: 15 }}>Web 引擎（浏览器）</Text>
-            <Tag color="#0ea5a0">推荐</Tag>
-          </Space>
-          <div style={{ fontSize: 13, lineHeight: 2 }}>
-            <div>直接在平台页面操作，零安装</div>
-            <div><b>入口：</b>用例管理工具栏 AI 按钮</div>
-            <div><b>特点：</b>实时进度 · 预览导入 · 可暂停</div>
+      <Card size="small" style={{ background: 'rgba(0,0,0,0.02)' }}>
+        <div style={{ fontSize: 13, lineHeight: 2 }}>
+          <Space><ApiOutlined /><b>MCP 工具</b></Space>
+          <div>
+            外部 Claude Code 通过 MCP 读写平台数据。地址{' '}
+            <Text code>{`http://${window.location.hostname}:18800/mcp/`}</Text>
+            {toolCount != null && <>，当前 <b>{toolCount}</b> 个工具。</>}
           </div>
-        </Card>
-        <Card size="small" style={{ borderLeft: '3px solid rgba(0,0,0,0.15)' }}>
-          <Space style={{ marginBottom: 8 }}>
-            <Text strong style={{ fontSize: 15 }}>Claude Code 引擎（CLI）</Text>
-            <Tag>高级</Tag>
-          </Space>
-          <div style={{ fontSize: 13, lineHeight: 2 }}>
-            <div>终端通过 MCP 协议调用平台工具</div>
-            <div><b>入口：</b>Claude Code → <Text code>/tf-forge</Text></div>
-            <div><b>特点：</b>更强 LLM · 读本地代码 · 灵活定制</div>
+          <div>
+            完整目录、按活分类、Key 的工具范围，都在
+            {' '}<Link to={`/projects/${projectId}/settings/mcp-tools`}>MCP 工具中心</Link>
+            {' '}—— 这里不再抄一份，抄的那份迟早和真相不一样。
           </div>
-        </Card>
-      </div>
+        </div>
+      </Card>
     </div>
   )
 }

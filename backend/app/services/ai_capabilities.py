@@ -44,7 +44,7 @@ CAPABILITY_REGISTRY = [
     # ── 文本生成型 ──
     {"key": "tb-case-generate",        "label": "AI 生成接口用例",      "category": "text",      "where": "用例管理 / AI 侧栏"},
     {"key": "tb-quality-review",       "label": "用例质量评审",         "category": "text",      "where": "用例管理"},
-    {"key": "tb-diagnose",             "label": "失败诊断",             "category": "text",      "where": "测试报告详情"},
+    {"key": "tb-diagnose",             "label": "失败诊断",             "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "归因归外部 Claude Code（tb_submit_analysis），平台只按规则出现象、由人确认结论。前端从来没有调用入口"},
     {"key": "scenario-gen",            "label": "功能场景测试生成",     "category": "text",      "where": "场景生成 Stage1-4"},
     {"key": "api-test-generate",       "label": "接口测试场景生成",     "category": "text",      "where": "接口测试"},
     {"key": "api-test-optimize",       "label": "接口场景 AI 优化",     "category": "text",      "where": "接口测试步骤"},

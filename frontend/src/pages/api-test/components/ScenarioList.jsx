@@ -8,7 +8,7 @@ export default function ScenarioList({
   scenarios, selectedFolderIds, loading,
   searchKeyword, onSearchChange,
   statusFilter, onStatusChange,
-  kindFilter, onKindChange,
+  kindFilter, onKindChange, otherKindCount = 0,
   onSelectScenario, onDelete,
   onGenerate, onCreate, onBatch,
   folderTree,
@@ -122,11 +122,26 @@ export default function ScenarioList({
             onChange: setSelectedIds,
           }}
           pagination={{ pageSize: 20, size: 'small', showTotal: t => `共 ${t} 条` }}
+          locale={{
+            emptyText: otherKindCount > 0 && kindFilter === 'single' ? (
+              <div style={{ padding: '28px 12px', color: '#86909c', fontSize: 13, lineHeight: 1.9 }}>
+                <div>「单接口」下没有场景。</div>
+                <div>
+                  这个分支有 <b style={{ color: '#1d2129' }}>{otherKindCount}</b> 条
+                  <b style={{ color: '#1d2129' }}>用例编排</b>的接口场景 —— 它们跟着用例走，
+                  平时在「用例详情 → 接口测试」里看。
+                </div>
+                <Button size="small" type="link" style={{ padding: 0 }} onClick={() => onKindChange('all')}>
+                  在这里一起显示 →
+                </Button>
+              </div>
+            ) : undefined,
+          }}
           onRow={r => ({ onClick: () => onSelectScenario(r.id), style: { cursor: 'pointer' } })}
           columns={[
             {
               title: '场景ID', dataIndex: 'code', width: 100,
-              render: v => <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#86909c' }}>{v}</span>,
+              render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c' }}>{v}</span>,
             },
             {
               title: '标题', dataIndex: 'title', ellipsis: true,
