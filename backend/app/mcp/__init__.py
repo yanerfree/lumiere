@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis
 
 mcp = FastMCP(
     name="testBench",
@@ -307,6 +307,34 @@ _register(
 
 
 # ── 测试报告工具 ──────────────────────────────────
+
+_section("失败归因")
+
+_register(
+    analysis.submit_analysis,
+    name="tb_submit_analysis",
+    description=(
+        "【失败归因】把你对某次失败的**原因**判断写回平台。先调 tb_get_ui_script_result 拿证据包和 run_id，"
+        "看完截图、流量再来判。"
+        "⚠ 这条**不会改任何状态**：不动用例状态、不进通过率、不改报告结论 —— 它进「待确认」队列，人拍板才算数。"
+        "⚠ evidence 必须**指向平台侧证据的具体位置**（哪条请求 / 哪句 error_summary / 第几张截图），"
+        "只有你自己的推理会被直接拒收；引用的东西这次执行里必须真有，否则也拒。"
+        "⚠ 拿不准就 cause=unknown + confidence=low。低置信配一个具体 cause 会被拒 —— "
+        "一个看起来很有道理的错答案，比一句「我不知道」有害得多。"
+        "参数: run_id(执行记录UUID), "
+        "cause(product_defect被测系统缺陷/test_defect脚本自己写错/case_expired需求变了用例过期/"
+        "env_issue环境依赖问题/data_issue数据问题/flaky不稳定/unknown看不出来), "
+        "confidence(high/medium/low), reasoning(为什么是这个原因而不是别的，写不出因果的归因基本是瞎猜), "
+        "evidence([{type:error_summary|request|screenshot|stdout|phenomenon, ref:具体位置}]), "
+        "proposed_fix_target(script/product/data/case/env/none)"
+    ),
+)
+
+_register(
+    analysis.list_pending_confirm,
+    name="tb_list_pending_confirm",
+    description="【失败归因】列出「已归因、还没人确认」的失败 —— 你交上去还没被拍板的那些。参数: project_id(可选), limit(默认20)",
+)
 
 _section("执行报告")
 

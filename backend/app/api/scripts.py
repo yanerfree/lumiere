@@ -593,6 +593,56 @@ async def list_script_runs(
     }
 
 
+@router.get("/runs/{run_id}/analysis")
+async def get_run_analysis(
+    project_id: uuid.UUID, branch_id: uuid.UUID, case_id: uuid.UUID, run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    """一次执行的三层失败判断：平台现象 / CC 归因 / 人工确认。"""
+    from app.services.analysis_service import CAUSES
+    run = (await session.execute(
+        select(ScriptRun).where(ScriptRun.id == run_id, ScriptRun.case_id == case_id)
+    )).scalar_one_or_none()
+    if not run:
+        raise NotFoundError(code="RUN_NOT_FOUND", message="执行记录不存在")
+    return {"data": {
+        "runId": str(run.id),
+        "status": run.status,
+        "phenomenon": run.failure_phenomenon,
+        "ccAnalysis": run.cc_analysis,
+        "confirmedCause": run.confirmed_cause,
+        "confirmedNote": run.confirmed_note,
+        "confirmedAt": run.confirmed_at.isoformat() if run.confirmed_at else None,
+        "causeOptions": [{"value": k, "label": v} for k, v in CAUSES.items()],
+    }}
+
+
+@router.post("/runs/{run_id}/confirm")
+async def confirm_run_cause(
+    project_id: uuid.UUID, branch_id: uuid.UUID, case_id: uuid.UUID, run_id: uuid.UUID,
+    cause: str = Body(..., embed=True),
+    note: str = Body(default="", embed=True),
+    session: AsyncSession = Depends(get_db),
+    user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """人工确认失败原因 —— **这是结论的唯一写入口**。
+
+    CC 的归因只是建议，进待确认队列；确认之后才算数。
+    """
+    from app.services import analysis_service
+    try:
+        run = await analysis_service.confirm(session, run_id, cause, note, user.id)
+    except ValueError as e:
+        raise AppError(code="INVALID_CONFIRM", message=str(e)) from e
+    return {"data": {
+        "runId": str(run.id),
+        "confirmedCause": run.confirmed_cause,
+        "confirmedNote": run.confirmed_note,
+        "confirmedAt": run.confirmed_at.isoformat() if run.confirmed_at else None,
+    }}
+
+
 @router.post("/{script_id}/activate")
 async def activate_script_version(
     project_id: uuid.UUID,

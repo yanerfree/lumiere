@@ -344,3 +344,18 @@ async def list_models(
 
     return {"data": {"models": [{"id": m, "displayName": m} for m in _PRESET_MODELS], "source": "preset",
                      "message": "网关未返回模型清单,已回退预置清单"}}
+
+
+# ── CC 归因质量（B6）──────────────────────────────────────
+# 放在 AI 能力这组下面：它量的是"AI 的判断准不准"，和这一组的其它指标同类。
+# 平台此前只有生成通过率，没有任何东西量 AI 判断的质量。
+
+@router.get("/analysis-agreement")
+async def analysis_agreement(
+    project_id: uuid.UUID | None = None,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """CC 归因 vs 人确认 的一致率（按 cause 分桶）。"""
+    from app.services.analysis_service import agreement_stats
+    return {"data": await agreement_stats(session, project_id)}
