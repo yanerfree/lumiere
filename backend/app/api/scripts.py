@@ -267,31 +267,22 @@ async def run_script(
     finally:
         shutil.rmtree(sandbox_dir, ignore_errors=True)
 
-    run_record = ScriptRun(
-        case_id=case_id,
-        script_id=script.id,
-        script_type=script_type,
-        status=result.get("status", "error"),
-        duration_ms=result.get("duration_ms"),
-        error_summary=result.get("error_summary"),
-        stdout=result.get("stdout"),
-        screenshots=result.get("screenshots") or None,
-        executed_by=user.id,
+    from app.services import script_run_service
+    run_record = await script_run_service.record_run(
+        session,
+        case_id=case_id, script_id=script.id, script_type=script_type,
+        result=result, executed_by=user.id,
+        run_mode=script_run_service.DEBUG,
     )
-    session.add(run_record)
 
-    # 更新用例 UI 场景状态
+    # 更新用例 UI 场景状态（debug 只许向前推进，失败不打回——见 apply_case_status）
     if script_type == "ui":
         case = await session.get(Case, case_id)
-        if case:
-            case.ui_scenario_status = "completed" if result.get("status") == "passed" else "debugging"
-            if result.get("status") == "passed":
-                if case.ui_status in ("debugging", "not_started", "draft", "needs_fix"):
-                    case.ui_status = "pending_review"
-            else:
-                case.ui_status = "debugging"
+        script_run_service.apply_case_status(case, "ui", result.get("status"), script_run_service.DEBUG)
 
     await session.commit()
+    if run_record is None:
+        return {"data": result}
     await session.refresh(run_record)
 
     result["id"] = str(run_record.id)
@@ -438,23 +429,21 @@ async def _run_typescript_stream(script, case_id, env_vars, user, session):
             if not error_summary:
                 error_summary = (stderr_text + stdout_text)[-2000:]
 
-        run_record = ScriptRun(
+        from app.services import script_run_service
+        await script_run_service.record_run(
+            session,
             case_id=case_id, script_id=script.id, script_type="ui",
-            status=status, duration_ms=duration_ms,
-            error_summary=error_summary,
-            stdout=(stdout_text + stderr_text)[-5000:],
+            result={
+                "status": status, "duration_ms": duration_ms,
+                "error_summary": error_summary,
+                "stdout": (stdout_text + stderr_text)[-5000:],
+            },
             executed_by=user.id,
+            run_mode=script_run_service.DEBUG,
         )
-        session.add(run_record)
 
         case = await session.get(Case, case_id)
-        if case:
-            case.ui_scenario_status = "completed" if status == "passed" else "debugging"
-            if status == "passed":
-                if case.ui_status in ("debugging", "not_started", "draft", "needs_fix"):
-                    case.ui_status = "pending_review"
-            else:
-                case.ui_status = "debugging"
+        script_run_service.apply_case_status(case, "ui", status, script_run_service.DEBUG)
         await session.commit()
 
         final = json.dumps({
@@ -523,6 +512,8 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
         cwd=sandbox_dir, env=run_env,
     )
     stderr_chunks = []
+    # stdout 原本是逐行消费掉只转发步骤标记，不留存 —— 于是执行历史展开后是空日志。
+    stdout_chunks = []
 
     async def drain_stderr():
         async for line in proc.stderr:
@@ -533,6 +524,7 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
     try:
         async for line in proc.stdout:
             text = line.decode("utf-8", errors="ignore").rstrip()
+            stdout_chunks.append(text)
             if text.startswith("##STEP_START##"):
                 data = text[len("##STEP_START##"):]
                 yield f"event: step_start\ndata: {data}\n\n"
@@ -573,6 +565,25 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
         from app.engine.executor import _collect_screenshots
         screenshots = _collect_screenshots(pw_output_dir) if pw_output_dir else []
 
+        # 页面「运行验证」走的就是这条路，此前一行都不记 —— 用户跑完，
+        # 执行历史纹丝不动，看起来像执行没生效。
+        from app.services import script_run_service
+        await script_run_service.record_run(
+            session,
+            case_id=case_id, script_id=script.id, script_type="ui",
+            result={
+                "status": status, "duration_ms": duration_ms,
+                "error_summary": error_summary,
+                "stdout": ("\n".join(stdout_chunks) + ("\n--- STDERR ---\n" + stderr if stderr else ""))[-10000:],
+                "screenshots": screenshots,
+            },
+            executed_by=user.id,
+            run_mode=script_run_service.DEBUG,
+        )
+        case = await session.get(Case, case_id)
+        script_run_service.apply_case_status(case, "ui", status, script_run_service.DEBUG)
+        await session.commit()
+
         final = json.dumps({
             "status": status, "duration_ms": duration_ms, "error_summary": error_summary,
             "steps": steps, "screenshots": screenshots,
@@ -595,17 +606,23 @@ async def list_script_runs(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
-    script_type: str = Query(alias="type", default="api"),
+    script_type: str | None = Query(alias="type", default=None),
     limit: int = Query(default=20, le=100),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
 ):
-    """获取用例的脚本执行历史列表。"""
+    """获取用例的脚本执行历史列表。
+
+    不传 type 就返回该用例的全部执行记录。一条用例可以同时挂接口脚本和 UI 脚本
+    （用例的 type 是 api/e2e，脚本的 type 是 api/ui，两者不是一回事），
+    页面按单一类型过滤会看不全——原先前端把用例 type 直接当脚本 type 传，
+    e2e 用例永远查不到任何记录。
+    """
+    stmt = select(ScriptRun).where(ScriptRun.case_id == case_id)
+    if script_type:
+        stmt = stmt.where(ScriptRun.script_type == script_type)
     result = await session.execute(
-        select(ScriptRun)
-        .where(ScriptRun.case_id == case_id, ScriptRun.script_type == script_type)
-        .order_by(ScriptRun.created_at.desc())
-        .limit(limit)
+        stmt.order_by(ScriptRun.created_at.desc()).limit(limit)
     )
     runs = result.scalars().all()
     return {
@@ -614,6 +631,8 @@ async def list_script_runs(
                 "id": str(r.id),
                 "case_id": str(r.case_id),
                 "script_type": r.script_type,
+                "run_mode": r.run_mode,
+                "attempt": r.attempt,
                 "status": r.status,
                 "duration_ms": r.duration_ms,
                 "error_summary": r.error_summary,

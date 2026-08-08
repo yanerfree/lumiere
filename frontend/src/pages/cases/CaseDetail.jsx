@@ -1740,7 +1740,7 @@ export default function CaseDetail() {
 
       // Check if there's an active script in the scripts table
       try {
-        const scriptRes = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/active?type=${vals.type}`)
+        const scriptRes = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/active?type=${vals.type === 'e2e' ? 'ui' : 'api'}`)
         setHasActiveScript(!!scriptRes.data)
       } catch { setHasActiveScript(false) }
 
@@ -1790,7 +1790,9 @@ export default function CaseDetail() {
   async function loadScriptRuns() {
     setScriptRunsLoading(true)
     try {
-      const res = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/runs?type=${type}`)
+      // 不传 type —— 用例的 type 是 api/e2e，脚本的 type 是 api/ui，两者不是一回事。
+      // 原先直接把用例 type 当脚本 type 传，e2e 用例永远查不到，api 用例也看不到自己的 UI 执行。
+      const res = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/runs`)
       setScriptRuns(res.data || [])
     } catch { setScriptRuns([]) }
     finally { setScriptRunsLoading(false) }
@@ -2076,6 +2078,20 @@ export default function CaseDetail() {
                       render: v => v ? new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'
                     },
                     {
+                      title: '类型', dataIndex: 'scriptType', width: 70,
+                      render: v => <Tag style={{ margin: 0, fontSize: 11 }} color={v === 'ui' ? 'purple' : 'cyan'}>{v === 'ui' ? 'UI' : '接口'}</Tag>
+                    },
+                    {
+                      // 回归=计划/批量跑，算通过率；调试=即席跑，不算
+                      title: '模式', dataIndex: 'runMode', width: 90,
+                      render: (v, row) => (
+                        <span style={{ fontSize: 12, color: v === 'regression' ? '#0ea5a0' : '#86909c' }}>
+                          {v === 'regression' ? '回归' : '调试'}
+                          {row.attempt > 1 && <span style={{ marginLeft: 4, color: '#fa8c16' }}>第{row.attempt}次</span>}
+                        </span>
+                      )
+                    },
+                    {
                       title: '状态', dataIndex: 'status', width: 100,
                       render: v => <Tag color={v === 'passed' ? undefined : v === 'failed' ? 'error' : 'warning'} style={{ fontWeight: 600, ...(v === 'passed' ? { background: '#e0f7f6', color: '#0ea5a0', border: 'none' } : {}) }}>{(v || 'unknown').toUpperCase()}</Tag>
                     },
@@ -2180,7 +2196,7 @@ export default function CaseDetail() {
                     if (!runEnv) { message.warning('请先选择执行环境'); return }
                     setRunStatus('running'); setRunResult(null)
                     try {
-                      const res = await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/run?type=${type}`, { envId: runEnv })
+                      const res = await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/run?type=${type === 'e2e' ? 'ui' : 'api'}`, { envId: runEnv })
                       setRunStatus('done')
                       setRunResult(res.data)
                     } catch (e) {

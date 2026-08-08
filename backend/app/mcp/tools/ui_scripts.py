@@ -40,8 +40,12 @@ async def run_ui_script(
     case_id: str,
     env_id: str,
     session: AsyncSession = None,
+    run_mode: str = "debug",
 ) -> dict:
-    """执行用例的 UI 脚本并返回结果"""
+    """执行用例的 UI 脚本并返回结果。
+
+    run_mode 默认 debug —— 这个工具的语义就是"聚焦调试单条"，不进通过率口径；
+    批量回归由 run_ui_scripts_batch 传 regression。"""
     cid = uuid.UUID(case_id)
     script = await script_service.get_active_script(session, cid, "ui")
     if not script:
@@ -103,37 +107,17 @@ async def run_ui_script(
     finally:
         shutil.rmtree(sandbox_dir, ignore_errors=True)
 
-    # MCP 无登录上下文：executed_by 取一个真实用户（优先 admin），
+    # MCP 无登录上下文：executed_by 由 record_run 内部兜底取一个真实 active 用户，
     # 否则会命中 script_runs.executed_by 外键约束，导致「脚本明明跑通了却存不下结果」。
-    from app.models.user import User
-    executor_id = (
-        await session.execute(
-            select(User.id).where(User.is_active.is_(True)).order_by(User.role.asc(), User.created_at.asc()).limit(1)
-        )
-    ).scalar_one_or_none()
-
-    run_record = ScriptRun(
-        case_id=cid,
-        script_id=script.id,
-        script_type="ui",
-        status=result.get("status", "error"),
-        duration_ms=result.get("duration_ms"),
-        error_summary=result.get("error_summary"),
-        stdout=result.get("stdout"),
-        screenshots=result.get("screenshots") or None,
-        executed_by=executor_id,
+    from app.services import script_run_service
+    await script_run_service.record_run(
+        session,
+        case_id=cid, script_id=script.id, script_type="ui",
+        result=result, executed_by=None, run_mode=run_mode,
     )
-    session.add(run_record)
 
     case = await session.get(Case, cid)
-    if case:
-        case.ui_scenario_status = "completed" if result.get("status") == "passed" else "debugging"
-        # 状态体系 v2：运行失败→调试中；通过则从调试中/未开始/草稿 恢复为待审，已可执行/待审保持不降级
-        if result.get("status") == "passed":
-            if case.ui_status in ("debugging", "not_started", "draft", "needs_fix"):
-                case.ui_status = "pending_review"
-        else:
-            case.ui_status = "debugging"
+    script_run_service.apply_case_status(case, "ui", result.get("status"), run_mode)
 
     await session.commit()
 
@@ -159,7 +143,8 @@ async def run_ui_scripts_batch(
     passed = failed = skipped = 0
     for cid in ids:
         try:
-            r = await run_ui_script(case_id=cid, env_id=env_id, session=session)
+            # 批量 = 回归，进通过率口径；失败允许把维度状态打回 debugging
+            r = await run_ui_script(case_id=cid, env_id=env_id, session=session, run_mode="regression")
             st = r.get("status", "error")
         except Exception as e:
             st = "error"

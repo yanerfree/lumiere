@@ -72,4 +72,16 @@ class ScriptRun(Base):
     executed_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
+    # ── 执行记账（A0）──
+    # 计划执行/adhoc 批量跑出来的行，反查回它在报告里对应的那条。报告删了执行事实还在。
+    report_scenario_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("test_report_scenarios.id", ondelete="SET NULL"), nullable=True
+    )
+    # debug=即席调试（不进通过率口径）/ regression=计划与批量回归
+    run_mode: Mapped[str] = mapped_column(String(12), nullable=False, server_default="debug", default="debug")
+    # 计划执行会重试 N 次，每次单独一行。只记最后一次的话，flaky 判定要的
+    # "同一版本多次结果翻转"就永远攒不到。
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    captured_requests: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    failure_phenomenon: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
