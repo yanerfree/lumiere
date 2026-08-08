@@ -98,6 +98,12 @@ class Case(Base):
     api_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="not_started", server_default="not_started"
     )
+    # 这条用例**要**做到什么程度（C1）：spec 只要手工步骤 / spec_api 步骤+接口 / full 三件套。
+    # 和上面三个"已经做到哪儿"的状态配合，就是 CC 断点续跑的判据：
+    # target_level=full 但 ui_status != executable 的，就是还欠着的那些。
+    target_level: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="spec", server_default="spec"
+    )
     source: Mapped[str] = mapped_column(String(10), nullable=False)  # imported / manual
     script_ref_file: Mapped[str | None] = mapped_column(String(500), nullable=True)
     script_ref_func: Mapped[str | None] = mapped_column(String(200), nullable=True)

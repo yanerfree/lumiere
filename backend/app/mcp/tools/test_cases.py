@@ -34,24 +34,83 @@ async def list_cases(
     folder_id: str | None = None,
     priority: str | None = None,
     case_type: str | None = None,
+    module: str | None = None,
+    target_level: str | None = None,
+    ui_status: str | None = None,
+    api_status: str | None = None,
+    manual_status: str | None = None,
+    pending_only: bool = False,
 ) -> dict:
-    """列出分支下的测试用例，支持分页和筛选。"""
-    cases, total = await case_service.list_cases(
-        session,
-        uuid.UUID(branch_id),
-        page=page,
-        page_size=min(page_size, 100),
-        keyword=keyword,
-        folder_id=uuid.UUID(folder_id) if folder_id else None,
-        priority=priority,
-        case_type=case_type,
-    )
+    """列出分支下的测试用例，支持分页和筛选。
+
+    **断点续跑就靠这个**（C2）：传 pending_only=true 只返回"还欠着的" ——
+    target_level 说要做到哪一步，三个维度状态说已经做到哪一步，差集就是待办。
+    中断之后重跑不用从头来，也不会把做完的又捡回来重做一遍。
+    """
+    from sqlalchemy import and_, or_, select
+
+    from app.models.case import Case
+
+    stmt = select(Case).where(Case.branch_id == uuid.UUID(branch_id), Case.deleted_at.is_(None))
+    if keyword:
+        stmt = stmt.where(Case.title.ilike(f"%{keyword}%"))
+    if folder_id:
+        stmt = stmt.where(Case.folder_id == uuid.UUID(folder_id))
+    if priority:
+        stmt = stmt.where(Case.priority == priority)
+    if case_type:
+        stmt = stmt.where(Case.type == case_type)
+    if module:
+        # 模块名存在目录上，这里按目录名匹配，省得调用方先去查 folder_id
+        from app.models.case import CaseFolder
+        stmt = stmt.where(Case.folder_id.in_(
+            select(CaseFolder.id).where(CaseFolder.name == module)
+        ))
+    if target_level:
+        stmt = stmt.where(Case.target_level == target_level)
+    if ui_status:
+        stmt = stmt.where(Case.ui_status == ui_status)
+    if api_status:
+        stmt = stmt.where(Case.api_status == api_status)
+    if manual_status:
+        stmt = stmt.where(Case.manual_status == manual_status)
+    if pending_only:
+        # 「还欠着」= 目标要这一维，但这一维还没到 executable
+        stmt = stmt.where(or_(
+            Case.manual_status != "executable",
+            and_(Case.target_level.in_(("spec_api", "full")), Case.api_status != "executable"),
+            and_(Case.target_level == "full", Case.ui_status != "executable"),
+        ))
+
+    from sqlalchemy import func as sa_func
+    total = (await session.execute(
+        select(sa_func.count()).select_from(stmt.subquery())
+    )).scalar_one()
+    rows = (await session.execute(
+        stmt.order_by(Case.case_code).offset((page - 1) * min(page_size, 100)).limit(min(page_size, 100))
+    )).scalars().all()
+
     return {
-        "cases": [_case_to_dict(c) for c in cases],
+        "cases": [{**_case_to_dict(c), "targetLevel": c.target_level,
+                   "owes": _owes(c)} for c in rows],
         "total": total,
         "page": page,
         "pageSize": page_size,
+        "usage": "owes 列出这条还欠哪几维。断点续跑：pending_only=true 只拿还欠着的，"
+                 "做完一维就回推一维，对应维度状态会自己往前走。",
     }
+
+
+def _owes(c) -> list[str]:
+    """这条用例还欠哪几维（按 target_level 判）。"""
+    owes = []
+    if c.manual_status != "executable":
+        owes.append("manual")
+    if c.target_level in ("spec_api", "full") and c.api_status != "executable":
+        owes.append("api")
+    if c.target_level == "full" and c.ui_status != "executable":
+        owes.append("ui")
+    return owes
 
 
 async def get_case(session: AsyncSession, case_id: str) -> dict | None:
