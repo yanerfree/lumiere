@@ -51,6 +51,9 @@ async def start_execution(
 
     report = TestReport(
         plan_id=plan_id,
+        # project_id 此前漏了 —— 库里 21/89 条报告是 NULL，导致按项目查报告
+        # （tb_list_reports、以及任何项目维度的报告列表）一条都查不到计划报告。
+        project_id=plan.project_id,
         branch_id=plan.branch_id,
         environment_id=plan.environment_id,
         executed_by=executed_by,

@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans
 
 mcp = FastMCP(
     name="testBench",
@@ -309,6 +309,32 @@ _register(
 # ── 测试报告工具 ──────────────────────────────────
 
 _section("执行报告")
+
+_section("执行报告")
+
+_register(
+    plans.list_plans,
+    name="tb_list_plans",
+    description="【执行报告】列出项目下的测试计划，拿 planId。**这是入口** —— tb_get_report_summary / tb_get_failed_scenarios 都要 planId，没有它那两个工具根本用不了。返回含用例数、最近一次 reportId。参数: project_id(项目UUID), status(可选: draft/executing/completed), limit(默认20)",
+)
+
+_register(
+    plans.create_plan,
+    name="tb_create_plan",
+    description="【执行报告】新建一个自动化测试计划（只建不跑，触发要另调 tb_run_plan）。参数: project_id, branch_id, name(计划名), case_ids(逗号分隔的用例UUID), test_type(e2e跑UI脚本/api跑接口脚本，默认e2e), environment_id(强烈建议传，不传执行时拿不到 BASE_URL 和账号), retry_count(默认0)",
+)
+
+_register(
+    plans.run_plan,
+    name="tb_run_plan",
+    description="【执行报告】触发计划在**平台执行器**上跑（这一跑算回归、进通过率口径）。立刻返回 taskId 和 reportId，执行是异步的 —— 拿 reportId 轮询 tb_get_report_summary。注意：你只是按了按钮，结果由平台执行器写；你不能写执行结果、也不能改用例通过状态。参数: plan_id(计划UUID)",
+)
+
+_register(
+    plans.list_reports,
+    name="tb_list_reports",
+    description="【执行报告】列出测试报告，拿 reportId + 通过率。参数: project_id(项目UUID), plan_id(可选，按计划过滤), limit(默认20)",
+)
 
 _register(
     test_reports.get_report_summary,
