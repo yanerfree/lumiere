@@ -206,6 +206,7 @@ async def run_script(
         case_id=case_id, script_id=script.id, script_type=script_type,
         result=result, executed_by=user.id,
         run_mode=script_run_service.DEBUG,
+        base_url=env_vars.get("BASE_URL"),
     )
 
     # 更新用例 UI 场景状态（debug 只许向前推进，失败不打回——见 apply_case_status）
@@ -302,6 +303,7 @@ async def _run_typescript_stream(script, case_id, env_vars, user, session):
     baseURL: '{base_url}',
     headless: true,
     screenshot: 'on',
+    recordHar: { path: './test-results/network.har', content: 'embed' },
     video: 'on',
     locale: 'zh-CN',
   }},
@@ -362,6 +364,12 @@ async def _run_typescript_stream(script, case_id, env_vars, user, session):
             if not error_summary:
                 error_summary = (stderr_text + stdout_text)[-2000:]
 
+        from app.engine.executor import _collect_screenshots
+        from app.engine.har import har_path_for, parse_har
+        ts_out = Path(sandbox_dir) / "test-results"
+        screenshots = _collect_screenshots(str(ts_out))
+        captured_requests = parse_har(har_path_for(ts_out))
+
         from app.services import script_run_service
         await script_run_service.record_run(
             session,
@@ -370,6 +378,8 @@ async def _run_typescript_stream(script, case_id, env_vars, user, session):
                 "status": status, "duration_ms": duration_ms,
                 "error_summary": error_summary,
                 "stdout": (stdout_text + stderr_text)[-5000:],
+                "screenshots": screenshots,
+                "captured_requests": captured_requests,
             },
             executed_by=user.id,
             run_mode=script_run_service.DEBUG,
@@ -381,7 +391,7 @@ async def _run_typescript_stream(script, case_id, env_vars, user, session):
 
         final = json.dumps({
             "status": status, "duration_ms": duration_ms,
-            "error_summary": error_summary, "steps": [], "screenshots": [],
+            "error_summary": error_summary, "steps": [], "screenshots": screenshots,
         }, ensure_ascii=False, default=str)
         yield f"event: done\ndata: {final}\n\n"
 
@@ -416,8 +426,9 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
     if is_playwright_script(content):
         pw_output_dir = str(Path(sandbox_dir) / ".pw_results")
         Path(pw_output_dir).mkdir(parents=True, exist_ok=True)
+        from app.engine.har import har_path_for
         from app.engine.pw_conftest import write_playwright_conftest
-        write_playwright_conftest(sandbox_dir, env_vars)
+        write_playwright_conftest(sandbox_dir, env_vars, har_path=har_path_for(pw_output_dir))
 
     plugin_src = Path(__file__).resolve().parent.parent / "engine" / "plugins" / "tea_capture.py"
     step_src = Path(__file__).resolve().parent.parent / "engine" / "plugins" / "tea_step.py"
@@ -496,7 +507,9 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
             if steps: break
 
         from app.engine.executor import _collect_screenshots
+        from app.engine.har import har_path_for, parse_har
         screenshots = _collect_screenshots(pw_output_dir) if pw_output_dir else []
+        captured_requests = parse_har(har_path_for(pw_output_dir)) if pw_output_dir else []
 
         # 页面「运行验证」走的就是这条路，此前一行都不记 —— 用户跑完，
         # 执行历史纹丝不动，看起来像执行没生效。
@@ -509,6 +522,7 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
                 "error_summary": error_summary,
                 "stdout": ("\n".join(stdout_chunks) + ("\n--- STDERR ---\n" + stderr if stderr else ""))[-10000:],
                 "screenshots": screenshots,
+                "captured_requests": captured_requests,
             },
             executed_by=user.id,
             run_mode=script_run_service.DEBUG,

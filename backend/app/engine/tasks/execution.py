@@ -264,6 +264,7 @@ async def _execute(
                     run_mode=script_run_service.REGRESSION,
                     attempt=actual_attempts,
                     report_scenario_id=scenario.id,
+                    base_url=env_vars.get("BASE_URL"),
                 )
 
                 if case_result["status"] == "passed" or attempt == retry_count:

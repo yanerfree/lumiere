@@ -55,6 +55,7 @@ async def record_run(
     run_mode: str = DEBUG,
     attempt: int = 1,
     report_scenario_id=None,
+    base_url: str | None = None,
     commit: bool = False,
 ) -> ScriptRun | None:
     """把一次脚本执行落进 script_runs。
@@ -67,6 +68,22 @@ async def record_run(
         if not uid:
             logger.warning("script_runs 记账跳过：没有可用的 executed_by（case=%s）", case_id)
             return None
+
+        # 失败现象分类（A4）。只判「是什么」不判「为什么」——归因归 CC。
+        # 放在这个唯一写入口，四条执行路径自动都有；判不出来会老实标 unknown。
+        phenomenon = None
+        if (result.get("status") or "") != "passed":
+            try:
+                from app.services import failure_triage
+                phenomenon = failure_triage.classify(
+                    status=result.get("status"),
+                    error_summary=result.get("error_summary"),
+                    stdout=result.get("stdout"),
+                    captured_requests=result.get("captured_requests"),
+                    base_url=base_url,
+                )["phenomenon"]
+            except Exception:  # noqa: BLE001
+                logger.exception("失败分类异常（不影响记账）")
 
         run = ScriptRun(
             case_id=case_id if isinstance(case_id, uuid.UUID) else uuid.UUID(str(case_id)),
@@ -82,6 +99,7 @@ async def record_run(
             run_mode=run_mode,
             attempt=attempt,
             report_scenario_id=report_scenario_id,
+            failure_phenomenon=phenomenon,
         )
         session.add(run)
         await (session.commit() if commit else session.flush())

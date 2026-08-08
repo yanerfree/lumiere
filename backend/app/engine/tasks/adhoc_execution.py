@@ -262,6 +262,7 @@ async def _execute_adhoc(
                 executed_by=user_id,
                 run_mode=script_run_service.REGRESSION,
                 report_scenario_id=scenario.id,
+                base_url=env_vars.get("BASE_URL"),
             )
 
             for j, step in enumerate(case_result.get("steps", [])):
