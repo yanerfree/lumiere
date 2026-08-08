@@ -17,6 +17,7 @@ import ScenarioVariables from '../../components/ScenarioVariables'
 import ApiStepList, { generateApiCodeFromSteps } from '../../components/ApiStepList'
 import { scenarioToNodes, nodeToStepPatch } from './apiStepAdapter'
 import RunResultPanel from '../api-test/components/RunResultPanel'
+import FailureTriagePanel from '../../components/FailureTriagePanel'
 
 const priorityColors = { P0: '#fff', P1: '#fff', P2: '#fff', P3: '#fff' }
 const priorityBg = { P0: '#e8453c', P1: '#ff7d00', P2: '#4e8af0', P3: 'rgba(0,0,0,0.08)' }
@@ -285,7 +286,7 @@ function ScenarioStepsView({ steps, extraCol, extraColLabel, extraPlaceholder, e
           ) : <span style={{ width: 52, flexShrink: 0 }} />}
           <span style={{ flex: 2 }}>{s.action || '-'}</span>
           {extraCol && (
-            <span style={{ flex: 1, fontSize: 12, fontFamily: 'monospace', color: extraColor || '#0ea5a0' }}>
+            <span style={{ flex: 1, fontSize: 12, fontFamily: 'var(--font-mono)', color: extraColor || '#0ea5a0' }}>
               {s[extraCol] || ''}
             </span>
           )}
@@ -313,11 +314,11 @@ function ScriptViewer({ scriptData, loading, error, onRetry }) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <FileTextOutlined style={{ color: '#86909c' }} />
-          <span style={{ fontFamily: 'monospace', color: '#4e5969' }}>{scriptData.filePath}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', color: '#4e5969' }}>{scriptData.filePath}</span>
           {scriptData.funcName && <Tag color="blue" style={{ fontSize: 11, margin: 0 }}>{scriptData.funcName}</Tag>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Tag style={{ fontSize: 11, margin: 0, fontFamily: 'monospace' }}>{scriptData.commitSha?.substring(0, 8)}</Tag>
+          <Tag style={{ fontSize: 11, margin: 0, fontFamily: 'var(--font-mono)' }}>{scriptData.commitSha?.substring(0, 8)}</Tag>
           <Tooltip title="复制脚本内容">
             <Button type="text" size="small" icon={<CopyOutlined />} onClick={() => {
               copyToClipboard(scriptData.content)
@@ -329,7 +330,7 @@ function ScriptViewer({ scriptData, loading, error, onRetry }) {
       <div style={{ maxHeight: 500, overflow: 'auto', background: '#1e1e1e' }}>
         <pre style={{
           margin: 0, padding: '12px 0', fontSize: 13, lineHeight: 1.6,
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace", color: '#d4d4d4',
+          fontFamily: 'var(--font-mono)', color: '#d4d4d4',
         }}>
           {scriptData.content.split('\n').map((line, i) => {
             const fn = scriptData.funcName
@@ -369,7 +370,7 @@ function ScenarioCard({ scenario, type, accentColor, icon, scriptContent, script
       {scenario.scriptRefFile && (
         <div style={{ marginBottom: 16, padding: '8px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
           <CodeOutlined style={{ color: '#86909c' }} />
-          <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#4e5969' }}>{scenario.scriptRefFile}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#4e5969' }}>{scenario.scriptRefFile}</span>
           {scenario.scriptRefFunc && <Tag color={accentColor} style={{ fontSize: 11, margin: 0 }}>{scenario.scriptRefFunc}</Tag>}
         </div>
       )}
@@ -386,7 +387,7 @@ function ScenarioCard({ scenario, type, accentColor, icon, scriptContent, script
           <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>依赖参数</h4>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {scenario.variablesUsed.map((v, i) => (
-              <Tag key={i} style={{ fontFamily: 'monospace', fontSize: 12, background: '#edf3ff', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '2px 8px' }}>{v}</Tag>
+              <Tag key={i} style={{ fontFamily: 'var(--font-mono)', fontSize: 12, background: '#edf3ff', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '2px 8px' }}>{v}</Tag>
             ))}
           </div>
         </div>
@@ -520,7 +521,7 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ApiOutlined style={{ color: '#0ea5a0' }} />
           <span style={{ fontSize: 13, fontWeight: 600, color: '#1d2129' }}>接口场景</span>
-          {scenario && <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c' }}>{scenario.code}</span>}
+          {scenario && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#86909c' }}>{scenario.code}</span>}
           {scenario && <span style={{ fontSize: 12, color: '#86909c' }}>{(scenario.steps || []).length} 个请求</span>}
           {result && (
             <Tag color={result.passed ? 'success' : 'error'} style={{ margin: 0, cursor: 'pointer' }}
@@ -642,7 +643,6 @@ function ScenarioEditor({
       abortRef.current = null
     }
     setDebugRunning(false)
-    setAiGenerating(false)
     setLiveSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'cancelled', error: '用户取消' } : s))
     setDebugResult(prev => prev ? { ...prev, status: 'cancelled' } : prev)
     message.info('已停止执行')
@@ -1123,11 +1123,11 @@ function ScenarioEditor({
                           )
                         })()}
                         <div style={{ flex: 1, marginLeft: 8, minWidth: 0 }}>
-                          <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {(r.path || r.url || '').replace(/^https?:\/\/[^/]+/, '')}
                           </div>
                           {reqBody && (
-                            <div style={{ fontSize: 10, color: '#86909c', fontFamily: 'monospace', marginTop: 2, maxHeight: 40, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            <div style={{ fontSize: 10, color: '#86909c', fontFamily: 'var(--font-mono)', marginTop: 2, maxHeight: 40, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {String(reqBody).substring(0, 120)}{String(reqBody).length > 120 ? '...' : ''}
                             </div>
                           )}
@@ -1142,7 +1142,7 @@ function ScenarioEditor({
                       </div>
                       {expanded && (
                         <div style={{ padding: '10px 12px 12px 44px', background: 'rgba(14,165,160,0.03)', borderBottom: '1px solid rgba(0,0,0,0.04)', fontSize: 12 }}>
-                          <div style={{ color: '#4e5969', wordBreak: 'break-all', marginBottom: 6, fontFamily: 'monospace', fontSize: 11 }}>
+                          <div style={{ color: '#4e5969', wordBreak: 'break-all', marginBottom: 6, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
                             <b style={{ color: '#1d2129' }}>{r.method}</b> {r.url}
                           </div>
                           {r.queryParams && Object.keys(r.queryParams).length > 0 && (
@@ -1326,7 +1326,7 @@ function ScenarioEditor({
                   <div style={{ padding: '0 24px 16px' }}>
                     <pre style={{
                       margin: 0, padding: 14, borderRadius: 8, fontSize: 11, lineHeight: 1.5,
-                      fontFamily: "'JetBrains Mono', monospace", background: '#1e1e2e', color: '#cdd6f4',
+                      fontFamily: 'var(--font-mono)', background: '#1e1e2e', color: '#cdd6f4',
                       maxHeight: 350, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                     }}>
                       {debugResult.stdout}
@@ -1350,7 +1350,7 @@ function ScenarioEditor({
                           <span style={{ fontSize: 11, color: '#c9cdd4' }}>{run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : ''}</span>
                         </div>
                         {run.errorSummary && (
-                          <div style={{ fontSize: 11, color: '#e8453c', fontFamily: 'monospace', lineHeight: 1.4, wordBreak: 'break-all' }}>
+                          <div style={{ fontSize: 11, color: '#e8453c', fontFamily: 'var(--font-mono)', lineHeight: 1.4, wordBreak: 'break-all' }}>
                             {run.errorSummary.substring(0, 200)}{run.errorSummary.length > 200 ? '...' : ''}
                           </div>
                         )}
@@ -1468,9 +1468,9 @@ function ScenarioEditor({
                     }}>{s.seq}</span>
                     <Input value={s.action || ''} onChange={e => updateStepField(i, 'action', e.target.value)}
                       placeholder="描述操作步骤..." variant="borderless" style={{ flex: 2, fontSize: 13 }} />
-                    <Input value={s.uiTarget || ''} onChange={e => updateStepField(i, 'uiTarget', e.target.value)}
+                    <Input spellCheck={false} value={s.uiTarget || ''} onChange={e => updateStepField(i, 'uiTarget', e.target.value)}
                       placeholder="页面URL或元素选择器" variant="borderless"
-                      style={{ flex: 1, fontSize: 12, fontFamily: 'monospace', color: accentColor }} />
+                      style={{ flex: 1, fontSize: 12, fontFamily: 'var(--font-mono)', color: accentColor }} />
                     <Input value={s.expected || ''} onChange={e => updateStepField(i, 'expected', e.target.value)}
                       placeholder="预期结果..." variant="borderless" style={{ flex: 1, fontSize: 13, color: '#86909c' }} />
                     <Button type="text" danger size="small" icon={<DeleteOutlined />}
@@ -1516,10 +1516,10 @@ function ScenarioEditor({
             <Button type="text" size="small" onClick={() => setDebugResult(null)} style={{ color: '#c9cdd4' }}>关闭</Button>
           </div>
           {debugResult.errorSummary && (
-            <div style={{ padding: '8px 14px', fontSize: 12, color: '#e8453c', fontFamily: 'monospace' }}>{debugResult.errorSummary}</div>
+            <div style={{ padding: '8px 14px', fontSize: 12, color: '#e8453c', fontFamily: 'var(--font-mono)' }}>{debugResult.errorSummary}</div>
           )}
           {debugResult.stdout && (
-            <pre style={{ margin: 0, padding: 14, fontSize: 11, fontFamily: 'monospace', background: '#1e1e2e', color: '#cdd6f4', maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+            <pre style={{ margin: 0, padding: 14, fontSize: 11, fontFamily: 'var(--font-mono)', background: '#1e1e2e', color: '#cdd6f4', maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
               {debugResult.stdout}
             </pre>
           )}
@@ -1589,8 +1589,8 @@ function TemplateModal({ open, onClose, projectId, branchId, scenarioType, onSel
                     <Tag color="blue" style={{ fontSize: 11 }}>{sc?.steps?.length || 0} 步</Tag>
                   </div>
                   <div style={{ fontSize: 12, color: '#86909c' }}>
-                    <span style={{ fontFamily: 'monospace' }}>{t.caseCode}</span>
-                    {sc?.scriptRefFile && <span style={{ marginLeft: 8, fontFamily: 'monospace' }}>{sc.scriptRefFile}</span>}
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>{t.caseCode}</span>
+                    {sc?.scriptRefFile && <span style={{ marginLeft: 8, fontFamily: 'var(--font-mono)' }}>{sc.scriptRefFile}</span>}
                   </div>
                 </div>
               )
@@ -1845,7 +1845,7 @@ export default function CaseDetail() {
         <Button type="text" icon={<ArrowLeftOutlined />} size="small" onClick={handleBack} style={{ color: '#86909c' }} />
         <span style={{ fontSize: 12, color: '#c9cdd4' }}>用例管理</span>
         <span style={{ color: 'rgba(0,0,0,0.15)', fontSize: 12 }}>/</span>
-        <span style={{ fontSize: 12, color: '#86909c', fontFamily: 'monospace' }}>{caseCode}</span>
+        <span style={{ fontSize: 12, color: '#86909c', fontFamily: 'var(--font-mono)' }}>{caseCode}</span>
       </div>
 
       <Card styles={{ body: { padding: '16px 20px' } }} style={{ marginBottom: 16 }}>
@@ -1983,15 +1983,15 @@ export default function CaseDetail() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                     {variablesUsed.map((v, i) => (
                       <Tag key={i} closable onClose={() => setVariablesUsed(prev => prev.filter((_, j) => j !== i))}
-                        style={{ fontFamily: 'monospace', fontSize: 11, background: '#edf3ff', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '1px 6px' }}>
+                        style={{ fontFamily: 'var(--font-mono)', fontSize: 11, background: '#edf3ff', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '1px 6px' }}>
                         {v}
                       </Tag>
                     ))}
                     {variablesUsed.length === 0 && <span style={{ fontSize: 12, color: '#c9cdd4' }}>暂无</span>}
                   </div>
                   <div style={{ display: 'flex', gap: 4 }}>
-                    <Input value={newVarInput} onChange={e => setNewVarInput(e.target.value)} size="small"
-                      placeholder="参数名" style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }}
+                    <Input spellCheck={false} value={newVarInput} onChange={e => setNewVarInput(e.target.value)} size="small"
+                      placeholder="参数名" style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 11 }}
                       onKeyDown={e => { if (e.key === 'Enter' && newVarInput.trim()) { setVariablesUsed(prev => [...prev, newVarInput.trim()]); setNewVarInput('') } }} />
                     <Button size="small" icon={<PlusOutlined />} disabled={!newVarInput.trim()}
                       onClick={() => { setVariablesUsed(prev => [...prev, newVarInput.trim()]); setNewVarInput('') }} />
@@ -2152,7 +2152,7 @@ export default function CaseDetail() {
         <div style={{ padding: '12px 0' }}>
           <div style={{ padding: '12px 16px', background: 'rgba(0,0,0,0.02)', borderRadius: 12, marginBottom: 20 }}>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>
-            <div style={{ fontSize: 12, color: '#86909c', fontFamily: 'monospace' }}>{caseCode}</div>
+            <div style={{ fontSize: 12, color: '#86909c', fontFamily: 'var(--font-mono)' }}>{caseCode}</div>
           </div>
           <div style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>选择执行环境</div>
@@ -2163,7 +2163,7 @@ export default function CaseDetail() {
             <div>
               {scriptRefFile && (
                 <div style={{ fontSize: 12, color: '#86909c', marginBottom: 12, textAlign: 'center' }}>
-                  脚本: <span style={{ fontFamily: 'monospace', color: '#4e5969' }}>{scriptRefFile}</span>
+                  脚本: <span style={{ fontFamily: 'var(--font-mono)', color: '#4e5969' }}>{scriptRefFile}</span>
                 </div>
               )}
               <div style={{ textAlign: 'center', marginBottom: runResult ? 16 : 0 }}>
@@ -2200,14 +2200,14 @@ export default function CaseDetail() {
                   {runResult.errorSummary && (
                     <div style={{ padding: '10px 14px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 12, marginBottom: 12 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: '#e8453c', marginBottom: 4 }}>错误信息</div>
-                      <pre style={{ margin: 0, fontSize: 12, color: '#434343', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 150, overflow: 'auto' }}>{runResult.errorSummary}</pre>
+                      <pre style={{ margin: 0, fontSize: 12, color: '#434343', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 150, overflow: 'auto' }}>{runResult.errorSummary}</pre>
                     </div>
                   )}
 
                   {runResult.stdout && (
                     <details>
                       <summary style={{ cursor: 'pointer', fontSize: 12, color: '#86909c', marginBottom: 6, userSelect: 'none' }}>执行日志</summary>
-                      <pre style={{ margin: 0, padding: 12, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontSize: 11, fontFamily: 'monospace', maxHeight: 250, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{runResult.stdout}</pre>
+                      <pre style={{ margin: 0, padding: 12, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontSize: 11, fontFamily: 'var(--font-mono)', maxHeight: 250, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{runResult.stdout}</pre>
                     </details>
                   )}
                 </div>
@@ -2225,96 +2225,6 @@ export default function CaseDetail() {
   )
 }
 
-
-
-// 一次失败的三层判断：平台现象（机器算的）/ CC 归因（建议）/ 人工确认（唯一算数的结论）。
-// 三层分开显示而不是并排两栏让人挑 —— 那是把矛盾转嫁给用户，两栏一旦不一致
-// 用户对两边都会失去信任。
-function FailureTriagePanel({ projectId, branchId, caseId, run, onConfirmed }) {
-  const [data, setData] = useState(null)
-  const [cause, setCause] = useState(null)
-  const [note, setNote] = useState('')
-  const [saving, setSaving] = useState(false)
-
-  const base = `/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/runs/${run.id}`
-  useEffect(() => {
-    api.get(`${base}/analysis`).then(res => {
-      setData(res.data)
-      // 预填 CC 的判断 —— 人多数时候是认可的，改一下就是覆盖
-      setCause(res.data.confirmedCause || res.data.ccAnalysis?.cause || null)
-      setNote(res.data.confirmedNote || '')
-    }).catch(() => {})
-  }, [run.id])
-
-  if (!data) return null
-  const cc = data.ccAnalysis
-  const confirmed = !!data.confirmedCause
-
-  const submit = async () => {
-    if (!cause) { message.warning('先选一个原因'); return }
-    if (!note.trim()) { message.warning('写一句理由 —— 确认是唯一算数的结论，不是走形式'); return }
-    setSaving(true)
-    try {
-      await api.post(`${base}/confirm`, { cause, note })
-      message.success('已确认')
-      const res = await api.get(`${base}/analysis`)
-      setData(res.data)
-      onConfirmed?.()
-    } catch (e) {
-      message.error(e?.response?.data?.error?.message || '确认失败')
-    } finally { setSaving(false) }
-  }
-
-  return (
-    <div style={{ marginBottom: 12, padding: 12, borderRadius: 10, background: 'rgba(250,140,22,0.04)', border: '1px solid rgba(250,140,22,0.18)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: '#86909c' }}>平台现象</span>
-        <Tag color="orange" style={{ margin: 0 }}>{data.phenomenon || 'unknown'}</Tag>
-        <span style={{ fontSize: 11, color: '#c9cdd4' }}>规则算的，只说"是什么"，不说"为什么"</span>
-      </div>
-
-      {cc ? (
-        <div style={{ marginBottom: 10, paddingLeft: 10, borderLeft: '2px solid rgba(78,138,240,0.35)' }}>
-          <div style={{ fontSize: 12, marginBottom: 3 }}>
-            <span style={{ color: '#86909c' }}>Claude Code 归因　</span>
-            <Tag color="blue" style={{ margin: 0 }}>{cc.cause}</Tag>
-            <span style={{ marginLeft: 6, color: '#86909c' }}>置信 {cc.confidence}</span>
-            <span style={{ marginLeft: 6, color: '#c9cdd4' }}>by {cc.author} · {(cc.submittedAt || '').slice(0, 16).replace('T', ' ')}</span>
-          </div>
-          <div style={{ fontSize: 12.5, color: '#4e5969', lineHeight: 1.6 }}>{cc.reasoning}</div>
-          <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            {(cc.evidence || []).map((e, i) => (
-              <Tag key={i} style={{ fontSize: 11, margin: 0 }}>{e.type}: {String(e.ref).slice(0, 46)}</Tag>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div style={{ fontSize: 12, color: '#c9cdd4', marginBottom: 10 }}>
-          还没有归因。在 Claude Code 里说：分析用例 {caseId} 最近一次失败并回推（它会先调 tb_get_ui_script_result 拿证据包）
-        </div>
-      )}
-
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: confirmed ? '#0ea5a0' : '#1d2129', fontWeight: 600 }}>
-          {confirmed ? '已确认' : '人工确认'}
-        </span>
-        <Select size="small" style={{ width: 210 }} value={cause} onChange={setCause}
-          placeholder="确认原因" options={(data.causeOptions || []).map(o => ({ value: o.value, label: o.label }))} />
-        <Input size="small" style={{ flex: 1, minWidth: 200 }} value={note} onChange={e => setNote(e.target.value)}
-          placeholder="为什么是这个原因（必填）" />
-        <Button size="small" type="primary" loading={saving} onClick={submit}>
-          {confirmed ? '更新确认' : '确认'}
-        </Button>
-      </div>
-      {confirmed && (
-        <div style={{ fontSize: 11, color: '#86909c', marginTop: 4 }}>
-          确认于 {(data.confirmedAt || '').slice(0, 16).replace('T', ' ')}
-          {cc && cc.cause !== data.confirmedCause && <span style={{ color: '#fa8c16', marginLeft: 8 }}>（推翻了 CC 的判断）</span>}
-        </div>
-      )}
-    </div>
-  )
-}
 
 
 // 这条用例从哪来：关联的需求点（带原文引用）+ 生成事件时间线。

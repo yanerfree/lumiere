@@ -461,6 +461,31 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 2. 单批含 >15% P0 的回推被整批打回
 3. `priority=P0` 的用例走一次性三件套 → 被平台拒绝，提示走两阶段
 
+### ✅ 补：按用户使用方式走查捡回来的两个（2026-08-08，均已实测）
+
+**① 三层失败判断原来只做在用例详情，等于没做。**
+QA 看失败的路径是「测试报告 → 点开失败那条」，不是「用例管理 → 找到那条用例 →
+执行历史 → 展开」。原来报告页失败区只有一句 `💡 可在用例管理页使用「AI 评审」
+分析失败原因` —— 一句把人踢到别处、且指向已封存能力的提示。
+
+改法：`FailureTriagePanel` 抽到 `frontend/src/components/`，用例详情和报告详情
+共用一份（两份实现一定各改各的）；`get_report_with_scenarios` 一次查完每条场景
+最后一次 attempt 的 `ScriptRun`（不走 N+1），API 带上 `runId/branchId/phenomenon/
+ccAnalysis/confirmedCause`。收起的行上直接显示中文现象徽标，人工确认过之后徽标
+变成绿色的原因 —— 20 条失败能一眼分堆，不用一条条展开。
+
+实测：`element_not_found` → 就地选「环境/依赖问题」+ 写理由 → 确认成功 → 收起行
+变绿「✓ 环境问题」。接口测试报告（没有 `script_run`）退化成一句人话，不崩不空。
+
+**② `start_execution` 判"自动/手动"用的还是旧字段，和执行器不是同一套判据。**
+执行器认的是「该维度 `executable` + `scripts` 表有活跃脚本」（`engine/tasks/
+execution.py:204-211`），而 `start_execution` 只认 `automation_status=='automated'`。
+CC 回推的用例两个旧字段一个都不沾，于是**报告一开始把它们全算成"手动"**，
+`manual_count` 和进度从第一秒就是错的，直到执行器跑到它才把 `execution_type`
+改回来。抽出 `_will_run_automated()` 让两边共用一份判据。
+
+实测：executable 的算 automated、`not_started` 的算 manual，`manualCount=1` 正确。
+
 ---
 
 ## 6. 延后 / 需要真实数据才能定的
