@@ -330,6 +330,44 @@ async def release_quarantine(
     return {"data": {"caseId": str(case.id), "quarantinedUntil": None}}
 
 
+@router.post("/{case_id}/confirm-expected")
+async def confirm_expected(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    case_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """确认「预期结果」这一列 —— P0 两阶段的第二阶段。
+
+    确认之后才允许给这条 P0 挂接口场景和 UI 脚本。人的介入点刻意选得极窄：
+    只看「预期结果」一列，一屏二三十条几分钟看完。让人审全文他会疲劳、会盖章。
+
+    之后改动步骤或预期结果会自动作废这次确认 —— 确认的是当时那一版。
+    """
+    from datetime import datetime, timezone
+
+    from app.core.exceptions import ValidationError
+    from app.models.case import Case
+
+    case = await session.get(Case, case_id)
+    if case is None or case.branch_id != branch_id:
+        raise NotFoundError(code="CASE_NOT_FOUND", message="用例不存在")
+    if not (case.expected_result or "").strip() and not case.steps:
+        raise ValidationError(code="NOTHING_TO_CONFIRM",
+                              message="这条用例还没有步骤和预期结果，没什么可确认的")
+
+    case.expected_confirmed_at = datetime.now(timezone.utc)
+    case.expected_confirmed_by = current_user.id
+    await session.commit()
+    await write_audit_log(session, action="confirm_expected", target_type="case",
+                          target_id=case.id, target_name=case.title)
+    return {"data": {
+        "caseId": str(case.id),
+        "expectedConfirmedAt": case.expected_confirmed_at.isoformat(),
+    }}
+
+
 @router.post("/{case_id}/copy", status_code=HTTP_201_CREATED)
 async def copy_case(
     project_id: uuid.UUID,

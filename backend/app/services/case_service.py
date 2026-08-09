@@ -93,9 +93,20 @@ async def update_case(
         case.priority = data.priority
     if data.preconditions is not None:
         case.preconditions = data.preconditions
-    if data.steps is not None:
+    # 改了步骤或预期结果，之前那次「预期结果已确认」就作废 —— 确认的是当时那一版。
+    # 不作废的话，确认会变成一次性的终身通行证：确认完再把预期改成模糊的，
+    # P0 门禁照样放行，等于白确认。
+    if data.steps is not None and data.steps != case.steps:
         case.steps = data.steps
-    if data.expected_result is not None:
+        case.expected_confirmed_at = None
+        case.expected_confirmed_by = None
+    elif data.steps is not None:
+        case.steps = data.steps
+    if data.expected_result is not None and data.expected_result != case.expected_result:
+        case.expected_result = data.expected_result
+        case.expected_confirmed_at = None
+        case.expected_confirmed_by = None
+    elif data.expected_result is not None:
         case.expected_result = data.expected_result
     if data.variables_used is not None:
         case.variables_used = data.variables_used

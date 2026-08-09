@@ -111,6 +111,9 @@ class CaseResponse(BaseSchema):
     # 自动隔离：非空且未过期 = 还在隔离中；evidence 是判定依据，人要能复核
     quarantined_until: datetime | None = None
     flaky_evidence: dict | None = None
+    # P0 两阶段：有人确认过「预期结果」这一列没有。改了步骤/预期结果会清掉
+    expected_confirmed_at: datetime | None = None
+    expected_confirmed_by: uuid.UUID | None = None
     remark: str | None
     # AI 审核扩展
     review_status: str | None = None

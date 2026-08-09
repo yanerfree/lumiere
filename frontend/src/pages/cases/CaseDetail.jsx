@@ -1650,6 +1650,18 @@ export default function CaseDetail() {
       message.error(e?.response?.data?.error?.message || '解除失败')
     }
   }
+
+  // P0 两阶段：确认过「预期结果」这一列，才允许给它挂接口场景和 UI 脚本
+  const expectedConfirmed = !!caseData?.expectedConfirmedAt
+  const confirmExpected = async () => {
+    try {
+      await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/confirm-expected`)
+      message.success('已确认预期结果，现在可以补接口场景和 UI 脚本了')
+      loadData()
+    } catch (e) {
+      message.error(e?.response?.data?.error?.message || '确认失败')
+    }
+  }
   const [preconditions, setPreconditions] = useState('')
   const [expectedResult, setExpectedResult] = useState('')
   const [scriptRefFile, setScriptRefFile] = useState('')
@@ -1940,6 +1952,45 @@ export default function CaseDetail() {
               )}
             </div>
           </InlineProp>
+          {/* P0 才显示。挂接口/UI 之前必须有人过一遍「预期结果」这一列 ——
+              三份产物同源生成必然互相一致，而一致会被当成已经验证过。
+              这个标不显示的话，CC 回推被门禁拦住时，人在页面上根本找不到怎么解。 */}
+          {priority === 'P0' && (
+            <InlineProp icon={<CheckCircleOutlined />}
+              value={expectedConfirmed ? '预期已确认' : '预期待确认'}
+              color={expectedConfirmed ? '#0ea5a0' : '#fa8c16'}
+              bg={expectedConfirmed ? '#e0f7f6' : '#fff7e6'}>
+              <div style={{ padding: '4px 8px', minWidth: 320, lineHeight: 1.8 }}>
+                {expectedConfirmed ? (
+                  <>
+                    <div style={{ fontSize: 12.5, color: '#0ea5a0', fontWeight: 600 }}>
+                      已确认，可以补接口场景和 UI 脚本
+                    </div>
+                    <div style={{ fontSize: 12, color: '#4e5969' }}>
+                      确认时间：{new Date(caseData.expectedConfirmedAt).toLocaleString('zh-CN')}
+                      <br />
+                      改动步骤或预期结果会让这次确认自动失效 —— 确认的是当时那一版。
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 12.5, color: '#fa8c16', fontWeight: 600 }}>
+                      还没人确认过预期结果，暂时不能挂接口场景 / UI 脚本
+                    </div>
+                    <div style={{ fontSize: 12, color: '#4e5969' }}>
+                      P0 走两阶段：步骤、接口断言、UI 断言如果由同一次生成推出来，
+                      三份必然互相一致，而一致会被当成已经验证过。
+                      <br />
+                      只需要看下面「预期结果」这一列写得对不对，看完点确认。
+                    </div>
+                    <Button size="small" type="primary" ghost style={{ marginTop: 8 }} onClick={confirmExpected}>
+                      确认预期结果
+                    </Button>
+                  </>
+                )}
+              </div>
+            </InlineProp>
+          )}
           <ReadonlyProp label="来源" value={caseData.source || 'manual'} />
           {caseData.reviewStatus && (
             <ReadonlyProp label="审核" value={

@@ -112,6 +112,13 @@ class Case(Base):
     # 判定依据落在 flaky_evidence 里，人要能复核"凭什么说它 flaky"。
     quarantined_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     flaky_evidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # P0 两阶段的第二阶段：有人逐条看过「预期结果」这一列并认可。
+    # 改了步骤或预期结果会清掉 —— 确认的是当时那一版，不是终身通行证。
+    expected_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expected_confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     # —— AI 生成用例扩展（功能场景测试模块，仅 source=ai 使用；旧数据全部为 NULL）——
     # pending_review / approved / rejected

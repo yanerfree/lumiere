@@ -185,3 +185,32 @@ def check_p0_two_phase(priority: str, target_level: str, has_confirmed_expected:
         "先只回推步骤用例（target_level=spec），让人确认「预期结果」这一列之后，"
         "再补接口和 UI。人选了 full 也不行 —— 门禁要能覆盖手滑。"
     ]
+
+
+# 第二阶段的闸：往已有 P0 用例上挂产物时看确认了没有。
+# 缺了它的话，上面那道只拦住"一次调用里的声明"—— 实测（真 MCP 连接）：
+# 改成 target_level=spec 建 P0 → 放行，紧接着 tb_sync_orchestrated_scenario
+# + tb_sync_ui_script 全部成功，中间没有任何人确认过。三件套照样同源直出。
+_ARTIFACT_LABEL = {"api": "接口场景", "ui": "UI 脚本"}
+
+
+def check_p0_artifact(priority: str, confirmed_at, kind: str, case_code: str = "") -> list[str]:
+    """给 P0 用例挂接口场景 / UI 脚本之前，先看「预期结果」确认了没有。
+
+    只拦 P0。其余优先级照旧直接挂 —— 这道闸的成本要花在真正挂了就得停线的那一档上。
+    """
+    if (priority or "").upper() != "P0":
+        return []
+    if confirmed_at:
+        return []
+    label = _ARTIFACT_LABEL.get(kind, "自动化产物")
+    who = f"{case_code} " if case_code else ""
+    return [
+        f"{who}是 P0，但它的「预期结果」还没有人确认过，现在不能挂{label}。"
+        "\n为什么：步骤、接口断言、UI 断言如果都由同一次生成推出来，三份必然互相一致，"
+        "而一致会被当成已经验证过。典型失效是把「创建成功」理解成「返回 200」——"
+        "三层全绿，但真实业务是异步创建，200 只代表受理。"
+        "\n怎么解：让人在用例详情里过一遍「预期结果」这一列（一屏二三十条，几分钟），"
+        "点「确认预期结果」；确认之后再回来挂，这一步就会放行。"
+        "\n注意：之后再改动步骤或预期结果，确认会自动失效 —— 确认的是当时那一版。"
+    ]
