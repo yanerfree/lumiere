@@ -63,11 +63,15 @@ function PassRateRing({ rate, passed, total, size = 160, running = false, done =
         strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
         transform={`rotate(-90 ${size/2} ${size/2})`}
         style={{ transition: 'stroke-dashoffset 0.6s ease' }} />
+      {/* 跑完了就显示通过率（这个环本来就叫 PassRateRing）。
+          原来标签写「已完成」、数字却是**通过数** —— 一份跑完 1 条、失败 1 条的报告
+          上会显示「已完成 0」，和旁边的「执行: 1」直接打架。而且通过数右边已经
+          单独列了一份，环里重复一遍没有信息增量。 */}
       <text x={size/2} y={size/2 - 14} textAnchor="middle" dominantBaseline="central"
-        style={{ fontSize: 13, fill: running ? '#0ea5a0' : '#86909c' }}>{running ? '执行中' : '已完成'}</text>
+        style={{ fontSize: 13, fill: running ? '#0ea5a0' : '#86909c' }}>{running ? '执行中' : '通过率'}</text>
       <text x={size/2} y={size/2 + 10} textAnchor="middle" dominantBaseline="central"
         style={{ fontSize: running ? 22 : 28, fontWeight: 700, fill: '#1d2129' }}>
-        {running ? `${done}/${total}` : (passed ?? 0)}
+        {running ? `${done}/${total}` : `${pct.toFixed(pct % 1 === 0 ? 0 : 1)}%`}
       </text>
     </svg>
   )

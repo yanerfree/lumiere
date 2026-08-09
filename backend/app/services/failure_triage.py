@@ -69,6 +69,15 @@ _ASSERTION_RE = re.compile(
 # 元素确实**没找到**的特征：定位器等超时且从没解析到任何元素。
 # "locator resolved to <...>" 出现就说明找到了，那是断言问题不是定位问题。
 _ELEMENT_RESOLVED_RE = re.compile(r"locator resolved to|Actual value\s*:", re.I)
+# Playwright 自己把话说死的措辞：元素**没找到**。
+# 出现这句就不必再推断 —— 它比 "Actual value:" 这类间接线索硬。
+#
+# 上一轮为了修「元素找到了但值不对被误判成 element_not_found」，加了
+# "Actual value: 出现即视为元素已解析" 的判据。但 expect(...).to_be_visible()
+# 失败时文本是 `Actual value: None ... Error: element(s) not found`——
+# None 恰恰说明**没找到**，于是又反向误判成 assertion_mismatch（dogfood2 实测）。
+# 两次误判方向相反，说明"靠有没有实际值来推断"本身就不够；这条是直接证据。
+_ELEMENT_ABSENT_RE = re.compile(r"element\(s\) not found|Actual value\s*:\s*None", re.I)
 # 整体超时（平台执行器的文案 / pytest 超时）
 _TIMEOUT_RE = re.compile(r"执行超时|Timeout .*exceeded|TimeoutError|timed out", re.I)
 
@@ -169,6 +178,12 @@ def classify(
         return {"phenomenon": HTTP_5XX,
                 "reason": f"失败前 {FAILURE_WINDOW_SECONDS}s 内被测系统返回 "
                           f"{first.get('status')}：{first.get('method')} {first.get('url')}",
+                "evidence": evidence}
+
+    # Playwright 明说"没找到"的，直接判，不再推断。
+    if _ELEMENT_ABSENT_RE.search(text):
+        return {"phenomenon": ELEMENT_NOT_FOUND,
+                "reason": "定位器没找到元素（Playwright 明确报 element(s) not found）",
                 "evidence": evidence}
 
     # 断言在前：元素**找到了但值不对**，和元素**根本没找到**是两回事。

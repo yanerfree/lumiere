@@ -134,6 +134,25 @@ SEALED_SAMPLES = [
              captured_requests=_OK_TRAFFIC),
         ELEMENT_NOT_FOUND,
     ),
+    # ── 11：dogfood2 捞出来的。样本 9 的修复自己引入的反向误判 ──
+    # to_be_visible() 失败时文本长这样：既有 AssertionError，又有 "Actual value: None"。
+    # 样本 9 的判据是"出现 Actual value: 就说明元素找到了"，于是把这条判成了
+    # assertion_mismatch —— 而 None + "element(s) not found" 恰恰说明**没找到**。
+    # 9 和 11 方向相反，必须同时钉住，任何一边的修法都不能把另一边弄挂。
+    (
+        "11-真实 to_be_visible 失败(元素根本不存在)",
+        dict(status="failed",
+             error_summary=(
+                 "AssertionError: Locator expected to be visible\n"
+                 "Actual value: None\n"
+                 "Error: element(s) not found \n"
+                 "Call log:\n"
+                 '  - Expect "to_be_visible" with timeout 5000ms\n'
+                 '  - waiting for get_by_placeholder("用户名")\n'
+             ),
+             captured_requests=_OK_TRAFFIC),
+        ELEMENT_NOT_FOUND,
+    ),
 ]
 
 
