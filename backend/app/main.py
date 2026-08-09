@@ -46,7 +46,8 @@ from app.api.scenario_gen import router as scenario_gen_router
 from app.api.mcp_keys import router as mcp_keys_router
 from app.api.system_services import router as system_services_router
 from app.core.middleware import CamelCaseResponse, TraceIdMiddleware
-from app.deps.auth import get_current_user
+from app.deps.auth import get_current_user, require_project_role
+from app.deps.scope import verify_case_access, verify_path_scope
 
 # --- MCP Server ---
 from app.mcp import mcp
@@ -273,44 +274,49 @@ app.add_exception_handler(Exception, unhandled_exception_handler)
 # 对应的封样在 tests/test_endpoint_auth.py。
 _AUTHED = [Depends(get_current_user)]
 
+# 分支/用例这条链上的路由器：除了"你是不是这个项目的成员"，还得验路径里的
+# branch_id / case_id 确实属于这个项目、这个分支。见 app/deps/scope.py 的说明
+# （实测越权读到过、也改掉过别的项目的用例）。
+_SCOPED = [Depends(verify_path_scope)]
+
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(users_router)
 app.include_router(projects_router)
-app.include_router(branches_router)
-app.include_router(cases_router)
-app.include_router(folders_router)
+app.include_router(branches_router, dependencies=_SCOPED)
+app.include_router(cases_router, dependencies=_SCOPED)
+app.include_router(folders_router, dependencies=_SCOPED)
 app.include_router(variables_router)
 app.include_router(plans_router)
 app.include_router(reports_router)
 app.include_router(tasks_router)
 app.include_router(logs_router)
-app.include_router(scripts_router)
-app.include_router(scenario_variables_router)
+app.include_router(scripts_router, dependencies=_SCOPED)
+app.include_router(scenario_variables_router, dependencies=_SCOPED)
 app.include_router(automation_resources_router)
 app.include_router(i18n_messages_router)
-app.include_router(scripts_export_router)
-app.include_router(testforge_router)
+app.include_router(scripts_export_router, dependencies=_SCOPED)
+app.include_router(testforge_router, dependencies=_SCOPED)
 app.include_router(debug_router, dependencies=_AUTHED)
 app.include_router(api_collections_router)
 app.include_router(llm_mock_router, dependencies=_AUTHED)
 app.include_router(api_mock_router, dependencies=_AUTHED)
 app.include_router(proxy_probe_router, dependencies=_AUTHED)
-app.include_router(ai_router)
+app.include_router(ai_router, dependencies=_SCOPED)
 app.include_router(ai_config_router, dependencies=_AUTHED)
 app.include_router(ai_provider_router)
 app.include_router(project_ai_config_router)
 app.include_router(ai_capabilities_router)
-app.include_router(skill_run_router)
+app.include_router(skill_run_router, dependencies=_SCOPED)
 app.include_router(mcp_mock_router, dependencies=_AUTHED)
 app.include_router(protocol_mock_router, dependencies=_AUTHED)
 app.include_router(oauth2_mock_router, dependencies=_AUTHED)
 app.include_router(load_test_router, dependencies=_AUTHED)
 app.include_router(exploratory_router)
-app.include_router(documents_router)
-app.include_router(api_test_router)
-app.include_router(scenario_gen_router)
-app.include_router(case_file_router)
+app.include_router(documents_router, dependencies=[Depends(require_project_role('project_admin', 'developer', 'tester', 'guest'))])
+app.include_router(api_test_router, dependencies=_SCOPED)
+app.include_router(scenario_gen_router, dependencies=_SCOPED)
+app.include_router(case_file_router, dependencies=[Depends(verify_case_access)])
 app.include_router(skill_manage_router, dependencies=_AUTHED)
 app.include_router(project_skills_router)
 app.include_router(knowledge_router)
