@@ -21,19 +21,31 @@ logger = logging.getLogger(__name__)
 
 _CJK = re.compile(r"[一-鿿]")
 
+# 方法名两种写法都要认：JS/TS 是 getByRole，Python 是 get_by_role。
+#
+# 这里原来只写了驼峰。而平台上**所有**脚本都是 Python（回推通道走 pytest +
+# playwright.sync_api，平台侧生成早已封存），所以这个采集器从上线起就一条也没抽到过
+# ——实测扫 4 个脚本、added=0，页面上「扫描脚本采集」按了等于没按。
+def _m(camel: str, snake: str) -> str:
+    return f"(?:{camel}|{snake})"
+
+
 # 各定位方式的字面量抽取规则：(正则, 分类, 文案捕获组序号)
-# 说明：getByRole 里 role 与 name 都要，name 才是文案，role 作分类。
+# 说明：get_by_role 里 role 与 name 都要，name 才是文案，role 作分类。
+# name 的写法 JS 是 `name: '导入'`、Python 是 `name="导入"`，所以分隔符收 [:=]。
 _PATTERNS: list[tuple[re.Pattern, str | None, int]] = [
-    # getByRole('button', { name: '导入' }) —— 分类取 role（group1），文案取 name（group3）
-    (re.compile(r"""getByRole\(\s*(['"])([^'"]+)\1[^)]*?\bname:\s*(['"])(.+?)\3""", re.DOTALL), None, 4),
-    # getByPlaceholder('请输入 用户名')
-    (re.compile(r"""getByPlaceholder\(\s*(['"])(.+?)\1"""), "placeholder", 2),
-    # getByLabel('服务名称')
-    (re.compile(r"""getByLabel\(\s*(['"])(.+?)\1"""), "label", 2),
-    # getByTitle('删除')
-    (re.compile(r"""getByTitle\(\s*(['"])(.+?)\1"""), "title", 2),
-    # getByText('登录', { exact: true })
-    (re.compile(r"""getByText\(\s*(['"])(.+?)\1"""), "text", 2),
+    # get_by_role("button", name="导入") / getByRole('button', { name: '导入' })
+    (re.compile(
+        _m("getByRole", "get_by_role")
+        + r"""\(\s*(['"])([^'"]+)\1[^)]*?\bname\s*[:=]\s*(['"])(.+?)\3""", re.DOTALL), None, 4),
+    # get_by_placeholder("请输入 用户名")
+    (re.compile(_m("getByPlaceholder", "get_by_placeholder") + r"""\(\s*(['"])(.+?)\1"""), "placeholder", 2),
+    # get_by_label("服务名称")
+    (re.compile(_m("getByLabel", "get_by_label") + r"""\(\s*(['"])(.+?)\1"""), "label", 2),
+    # get_by_title("删除")
+    (re.compile(_m("getByTitle", "get_by_title") + r"""\(\s*(['"])(.+?)\1"""), "title", 2),
+    # get_by_text("登录", exact=True)
+    (re.compile(_m("getByText", "get_by_text") + r"""\(\s*(['"])(.+?)\1"""), "text", 2),
 ]
 
 # getByRole 的 role → 分类映射（其余 role 归 text）
