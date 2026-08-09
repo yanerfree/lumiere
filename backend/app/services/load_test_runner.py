@@ -50,7 +50,10 @@ class MetricsCollector:
                 self.success += 1
             else:
                 self.error += 1
-                key = f"{status_code}" if status_code else (error_msg or "unknown")[:60]
+                # 有 error_msg 就用它当分类键。之前只要拿到了状态码就用状态码顶包，
+                # 于是"断言没过"会被记成 `200`——页面上「错误分布: 200 × N」，
+                # 读起来像"服务器返回 200 也算错"，真实原因被丢掉了，根本没法查。
+                key = (error_msg or f"HTTP {status_code}" or "unknown")[:80]
                 self._error_breakdown[key] += 1
 
             if len(self._latencies) < self._reservoir_size:
@@ -263,9 +266,10 @@ class LoadTestRunner:
 
         if step.get("assertions"):
             for a in step["assertions"]:
-                if not self._check_assertion(a, status_code, response_text):
+                passed, why = self._check_assertion(a, status_code, response_text)
+                if not passed:
                     success = False
-                    error_msg = f"Assertion failed: {a.get('type', '')} {a.get('value', '')}"
+                    error_msg = why or f"断言未过：{a.get('type', '')}"
                     break
 
         await self.metrics.record(step_name, latency_ms, status_code, success, error_msg)
@@ -303,20 +307,43 @@ class LoadTestRunner:
         except Exception:
             return None
 
-    def _check_assertion(self, assertion: dict, status_code: int, body: str) -> bool:
+    @staticmethod
+    def _assertion_value(assertion: dict) -> str | None:
+        """取断言的比较值。None = 这条断言根本没给值，是配置坏了。
+
+        平台里断言值有两种写法：压测页面写 `value`，接口场景/回推那边写 `expected`
+        （见 tb_sync_orchestrated_scenario 的 steps.assertions）。两边都认，
+        否则从那边搬过来的场景会**每一发都判失败**，而失败原因还显示成状态码，没法查。
+        """
+        for k in ("value", "expected"):
+            if assertion.get(k) is not None and str(assertion[k]) != "":
+                return str(assertion[k])
+        return None
+
+    def _check_assertion(self, assertion: dict, status_code: int, body: str) -> tuple[bool, str | None]:
+        """返回 (是否通过, 失败原因)。原因要能直接读懂 —— 它会进错误分布当分类键。"""
         a_type = assertion.get("type", "")
-        a_value = str(assertion.get("value", ""))
+        a_value = self._assertion_value(assertion)
+
+        if a_type not in ("status", "body_contains", "body_regex"):
+            # 不认识的断言类型以前直接返回 True（静默放过）。放过比误判好，但要说出来。
+            return True, None
+        if a_value is None:
+            # 以前这里拿空串去比，结果是**每一发都失败**，而且原因显示成状态码。
+            # 配置坏了就直说是配置坏了，别让人以为是被测系统的问题。
+            return False, f"断言配置有问题：{a_type} 没有给比较值（value / expected 都是空的）"
 
         if a_type == "status":
-            return str(status_code) == a_value
-        elif a_type == "body_contains":
-            return a_value in body
-        elif a_type == "body_regex":
-            try:
-                return bool(re.search(a_value, body))
-            except re.error:
-                return False
-        return True
+            return (str(status_code) == a_value,
+                    None if str(status_code) == a_value else f"断言未过：期望状态码 {a_value}，实际 {status_code}")
+        if a_type == "body_contains":
+            return (a_value in body,
+                    None if a_value in body else f"断言未过：响应体里没有「{a_value[:40]}」")
+        try:
+            hit = bool(re.search(a_value, body))
+        except re.error:
+            return False, f"断言配置有问题：正则写错了「{a_value[:40]}」"
+        return hit, None if hit else f"断言未过：响应体不匹配正则「{a_value[:40]}」"
 
 
 async def start_run(scenario_id: uuid.UUID, overrides: dict | None = None) -> uuid.UUID:

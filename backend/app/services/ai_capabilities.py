@@ -57,7 +57,10 @@ CAPABILITY_REGISTRY = [
     # 这条"保留截图只重写文字"的路没有任何调用方。现在两个按钮并列，各说各的代价。
     {"key": "doc-optimize",            "label": "文档优化",             "category": "text",      "where": "文档管理 → 优化文字"},
     {"key": "exploratory-charter",     "label": "探索测试 Charter 生成","category": "text",      "where": "探索测试"},
-    {"key": "toolbox-regex",           "label": "工具箱-正则生成",      "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "后端无任何调用方"},
+    # 2026-08-09 实测：这条功能一直是通的（页面上「正则测试 → AI 生成」真能出结果），
+    # 之前标成"已下线"是因为端点直接 complete() 没带 capability —— 档位绑了模型也不生效。
+    # 现在走 resolve_ai_config，标签和现实对上了。
+    {"key": "toolbox-regex",           "label": "工具箱-正则生成",      "category": "text",      "where": "工具箱 → 正则测试 → AI 生成"},
     # ── UI 脚本型(agentic) ──
     {"key": "ui-script",               "label": "AI 生成 UI 自动化脚本","category": "ui_script", "where": "已封存",            "deprecated": True, "deprecatedNote": "改由外部 Claude Code 写好回推，见 docs/cc-platform-loop-spec.md 红线 1"},
     {"key": "ui-script-repair",        "label": "UI 脚本自动修复",      "category": "ui_script", "where": "已封存",            "deprecated": True, "deprecatedNote": "自愈归 CC，平台只出证据"},
