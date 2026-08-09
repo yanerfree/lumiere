@@ -225,7 +225,7 @@ export default function PlanList() {
                   </div>
 
                   {/* Case count */}
-                  <div style={{ width: 60, textAlign: 'center', fontSize: 13, color: '#4e5969', fontFamily: 'monospace' }}>
+                  <div style={{ width: 60, textAlign: 'center', fontSize: 13, color: '#4e5969', fontFamily: 'var(--font-mono)' }}>
                     {plan.caseCount}
                   </div>
 

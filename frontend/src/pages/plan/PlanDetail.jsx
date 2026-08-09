@@ -332,7 +332,7 @@ export default function PlanDetail() {
                       </span>
                     ) : '-'}
                   </div>
-                  <div style={{ flex: 2, textAlign: 'right', fontFamily: 'monospace', color: '#86909c' }}>
+                  <div style={{ flex: 2, textAlign: 'right', fontFamily: 'var(--font-mono)', color: '#86909c' }}>
                     {fmt(exec.totalDurationMs)}
                   </div>
                   <div style={{ flex: 2, textAlign: 'center' }}>

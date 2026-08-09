@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons'
 import { api, getValidToken } from '../../utils/request'
 
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 const ACCENT = '#e8453c'
 const MC = { GET: '#0ea5a0', POST: '#fa8c16', PUT: '#1677ff', DELETE: '#ff4d4f', PATCH: '#722ed1' }
 
@@ -385,7 +385,7 @@ export default function LoadTest() {
                 onChange={v => updateStepLocal(step.id, 'method', v)}
                 options={['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => ({ label: m, value: m }))}
               />
-              <Input
+              <Input spellCheck={false}
                 size="small"
                 style={{ flex: 1, fontFamily: MONO }}
                 placeholder="https://api.example.com/path  (支持 ${variable})"
@@ -439,7 +439,7 @@ export default function LoadTest() {
                         <Radio.Button value="text">Text</Radio.Button>
                       </Radio.Group>
                       {(step.bodyType && step.bodyType !== 'none') && (
-                        <Input.TextArea
+                        <Input.TextArea spellCheck={false}
                           rows={5}
                           style={{ fontFamily: MONO, fontSize: 12 }}
                           value={step.body}
@@ -462,7 +462,7 @@ export default function LoadTest() {
                               const arr = [...extractions]; arr[ei] = { ...arr[ei], variableName: e.target.value }
                               updateStepLocal(step.id, 'extractions', arr)
                             }} />
-                          <Input size="small" placeholder="$.data.token" value={ex.jsonpath} style={{ flex: 2, fontFamily: MONO }}
+                          <Input spellCheck={false} size="small" placeholder="$.data.token" value={ex.jsonpath} style={{ flex: 2, fontFamily: MONO }}
                             onChange={e => {
                               const arr = [...extractions]; arr[ei] = { ...arr[ei], jsonpath: e.target.value }
                               updateStepLocal(step.id, 'extractions', arr)
@@ -496,7 +496,7 @@ export default function LoadTest() {
                               { label: 'JSONPath', value: 'jsonpath' },
                             ]}
                           />
-                          <Input size="small" placeholder="期望值" value={a.value} style={{ flex: 1, fontFamily: MONO }}
+                          <Input spellCheck={false} size="small" placeholder="期望值" value={a.value} style={{ flex: 1, fontFamily: MONO }}
                             onChange={e => {
                               const arr = [...assertions]; arr[ai] = { ...arr[ai], value: e.target.value }
                               updateStepLocal(step.id, 'assertions', arr)

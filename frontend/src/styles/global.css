@@ -58,6 +58,20 @@ body {
   letter-spacing: 0.3px;
 }
 
+/* 等宽元素的兜底：<code>/<pre> 这些不走 inline style，用的是浏览器默认的
+   font-family: monospace —— 在没装等宽字体的机器上会落到中文字体（如文泉驿正黑
+   等宽）上，渲染 ASCII 毛糙。统一拉回自带的 JetBrains Mono。
+   letter-spacing 也要清掉：body 上的 0.3px 会让等宽字符不再等宽。 */
+code, kbd, samp, pre,
+/* antd 自己给 code/pre 定了 SFMono-Regular, Consolas, Liberation Mono… 那一套
+   （类选择器，优先级比裸标签高），不点名盖不住 */
+.ant-typography code, .ant-typography kbd,
+.ant-typography samp, .ant-typography pre,
+.ant-tag code, .ant-tooltip-inner code {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+}
+
 #root { min-height: 100vh; }
 
 .page-padded {

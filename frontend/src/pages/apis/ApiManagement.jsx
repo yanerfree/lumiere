@@ -118,7 +118,7 @@ function VarInsertBtn({ envVars, onInsert }) {
               style={{ padding: '6px 10px', cursor: 'pointer', borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
               onMouseEnter={e => e.currentTarget.style.background = 'rgba(14,165,160,0.06)'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-              <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#fa8c16', fontWeight: 600 }}>{`{{${v.key}}}`}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#fa8c16', fontWeight: 600 }}>{`{{${v.key}}}`}</span>
               <span style={{ fontSize: 10, color: '#86909c', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.value}</span>
             </div>
           ))}
@@ -126,7 +126,7 @@ function VarInsertBtn({ envVars, onInsert }) {
       }>
       <Tooltip title="插入环境变量">
         <Button type="text" size="small" style={{ color: '#fa8c16', fontSize: 12, padding: '0 4px' }}>
-          <span style={{ fontFamily: 'monospace', fontWeight: 700 }}>{'{x}'}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{'{x}'}</span>
         </Button>
       </Tooltip>
     </Popover>
@@ -163,7 +163,7 @@ function KvEditor({ items = [], onChange, keyPh = 'Key', valPh = 'Value' }) {
         <span style={{ fontSize: 11, color: '#4e5969' }}>格式: <code style={{ fontSize: 10, background: 'rgba(0,0,0,0.04)', padding: '1px 4px', borderRadius: 4 }}>key: value  // 描述</code></span>
         <Space size={4}><Button size="small" onClick={() => setBulkMode(false)}>取消</Button><Button size="small" type="primary" onClick={fromBulk}>确定</Button></Space>
       </div>
-      <Input.TextArea value={bulkText} onChange={e => setBulkText(e.target.value)} autoSize={{ minRows: 5, maxRows: 14 }} style={{ fontFamily: 'monospace', fontSize: 11 }} />
+      <Input.TextArea spellCheck={false} value={bulkText} onChange={e => setBulkText(e.target.value)} autoSize={{ minRows: 5, maxRows: 14 }} style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
     </div>
   )
   return (
@@ -183,11 +183,11 @@ function KvEditor({ items = [], onChange, keyPh = 'Key', valPh = 'Value' }) {
         <div key={i} style={{ display: 'flex', gap: 4, marginBottom: 3, alignItems: 'center', opacity: r.enabled === false ? 0.45 : 1 }}>
           <Checkbox checked={r.enabled !== false} onChange={e => up(i, 'enabled', e.target.checked)} style={{ marginRight: -2 }} />
           {isHeader ? (
-            <AutoComplete size="small" value={r.key} placeholder={keyPh} onChange={v => up(i, 'key', v)} options={headerOptions.filter(o => !r.key || o.value.toLowerCase().includes(r.key.toLowerCase()))} style={{ flex: 3, fontFamily: 'monospace', fontSize: 11 }} />
+            <AutoComplete size="small" value={r.key} placeholder={keyPh} onChange={v => up(i, 'key', v)} options={headerOptions.filter(o => !r.key || o.value.toLowerCase().includes(r.key.toLowerCase()))} style={{ flex: 3, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
           ) : (
-            <Input size="small" value={r.key} placeholder={keyPh} onChange={e => up(i, 'key', e.target.value)} style={{ flex: 3, fontFamily: 'monospace', fontSize: 11 }} />
+            <Input spellCheck={false} size="small" value={r.key} placeholder={keyPh} onChange={e => up(i, 'key', e.target.value)} style={{ flex: 3, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
           )}
-          <Input size="small" value={r.value} placeholder={valPh} onChange={e => up(i, 'value', e.target.value)} style={{ flex: 4, fontFamily: 'monospace', fontSize: 11 }} />
+          <Input spellCheck={false} size="small" value={r.value} placeholder={valPh} onChange={e => up(i, 'value', e.target.value)} style={{ flex: 4, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
           <Input size="small" value={r.desc || ''} placeholder="描述" onChange={e => up(i, 'desc', e.target.value)} style={{ flex: 3, fontSize: 11, color: '#4e5969' }} />
           <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={() => onChange(items.filter((_, j) => j !== i))} />
         </div>
@@ -205,9 +205,9 @@ function AuthEditor({ auth, onChange }) {
     <div>
       <Select size="small" value={a.type || 'none'} onChange={v => up('type', v)} style={{ width: 200, marginBottom: 12 }}
         options={[{ value: 'none', label: '无认证' }, { value: 'bearer', label: 'Bearer Token' }, { value: 'basic', label: 'Basic Auth' }, { value: 'apikey', label: 'API Key' }]} />
-      {a.type === 'bearer' && <div><div style={{ fontSize: 11, color: '#4e5969', marginBottom: 4 }}>Token</div><Input size="small" value={a.token || ''} onChange={e => up('token', e.target.value)} placeholder="输入 Token" style={{ fontFamily: 'monospace', fontSize: 11 }} /></div>}
+      {a.type === 'bearer' && <div><div style={{ fontSize: 11, color: '#4e5969', marginBottom: 4 }}>Token</div><Input spellCheck={false} size="small" value={a.token || ''} onChange={e => up('token', e.target.value)} placeholder="输入 Token" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} /></div>}
       {a.type === 'basic' && <div style={{ display: 'flex', gap: 8, flexDirection: 'column' }}><div><div style={{ fontSize: 11, color: '#4e5969', marginBottom: 4 }}>用户名</div><Input size="small" value={a.username || ''} onChange={e => up('username', e.target.value)} /></div><div><div style={{ fontSize: 11, color: '#4e5969', marginBottom: 4 }}>密码</div><Input.Password size="small" value={a.password || ''} onChange={e => up('password', e.target.value)} /></div></div>}
-      {a.type === 'apikey' && <div style={{ display: 'flex', gap: 8, flexDirection: 'column' }}><div style={{ display: 'flex', gap: 8 }}><div style={{ flex: 1 }}><div style={{ fontSize: 11, color: '#4e5969', marginBottom: 4 }}>Key</div><Input size="small" value={a.keyName || ''} onChange={e => up('keyName', e.target.value)} /></div><div style={{ flex: 1 }}><div style={{ fontSize: 11, color: '#4e5969', marginBottom: 4 }}>Value</div><Input size="small" value={a.keyValue || ''} onChange={e => up('keyValue', e.target.value)} style={{ fontFamily: 'monospace', fontSize: 11 }} /></div></div><div><div style={{ fontSize: 11, color: '#4e5969', marginBottom: 4 }}>添加到</div><Select size="small" value={a.keyIn || 'header'} onChange={v => up('keyIn', v)} style={{ width: 160 }} options={[{ value: 'header', label: 'Header' }, { value: 'query', label: 'Query Params' }]} /></div></div>}
+      {a.type === 'apikey' && <div style={{ display: 'flex', gap: 8, flexDirection: 'column' }}><div style={{ display: 'flex', gap: 8 }}><div style={{ flex: 1 }}><div style={{ fontSize: 11, color: '#4e5969', marginBottom: 4 }}>Key</div><Input size="small" value={a.keyName || ''} onChange={e => up('keyName', e.target.value)} /></div><div style={{ flex: 1 }}><div style={{ fontSize: 11, color: '#4e5969', marginBottom: 4 }}>Value</div><Input spellCheck={false} size="small" value={a.keyValue || ''} onChange={e => up('keyValue', e.target.value)} style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} /></div></div><div><div style={{ fontSize: 11, color: '#4e5969', marginBottom: 4 }}>添加到</div><Select size="small" value={a.keyIn || 'header'} onChange={v => up('keyIn', v)} style={{ width: 160 }} options={[{ value: 'header', label: 'Header' }, { value: 'query', label: 'Query Params' }]} /></div></div>}
       {a.type === 'none' && <div style={{ padding: '12px 0', textAlign: 'center', color: '#86909c', fontSize: 12 }}>不使用认证</div>}
     </div>
   )
@@ -262,7 +262,7 @@ function ResponsePanel({ response, onUseAsBody }) {
               {isJson && onUseAsBody && <Tooltip title="填入请求 Body"><Button size="small" icon={<SwapOutlined />} onClick={() => onUseAsBody(prettyBody)}>用作 Body</Button></Tooltip>}
             </Space>
           </div>
-          <pre style={{ margin: 0, padding: 12, background: 'rgba(255,255,255,0.35)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 12, fontFamily: 'monospace', fontSize: 11, lineHeight: 1.6, maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', cursor: isJson ? 'text' : 'default' }}>{displayBody}</pre>
+          <pre style={{ margin: 0, padding: 12, background: 'rgba(255,255,255,0.35)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 12, fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.6, maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all', cursor: isJson ? 'text' : 'default' }}>{displayBody}</pre>
         </div>
       )}
       {viewTab === 'headers' && respHeaders.map((h, i) => (
@@ -270,8 +270,8 @@ function ResponsePanel({ response, onUseAsBody }) {
           onClick={() => copyToClipboard(`${h.key}: ${h.value}`).then(() => message.success('已复制'))}
           onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,0,0,0.02)'}
           onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-          <span style={{ fontWeight: 600, color: '#4e5969', width: 200, flexShrink: 0, fontFamily: 'monospace' }}>{h.key}</span>
-          <span style={{ color: '#4e5969', fontFamily: 'monospace', wordBreak: 'break-all' }}>{h.value}</span>
+          <span style={{ fontWeight: 600, color: '#4e5969', width: 200, flexShrink: 0, fontFamily: 'var(--font-mono)' }}>{h.key}</span>
+          <span style={{ color: '#4e5969', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{h.value}</span>
         </div>
       ))}
     </div>
@@ -558,9 +558,9 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
           <Select size="middle" value={method} onChange={v => up('method', v)} style={{ width: 100 }} popupMatchSelectWidth={false}
             options={['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].map(m => ({ value: m, label: <span style={{ color: methodColors[m]?.color, fontWeight: 700, fontSize: 13 }}>{m}</span> }))} />
-          <Input value={data.url || ''} onChange={e => handleUrlChange(e.target.value)}
+          <Input spellCheck={false} value={data.url || ''} onChange={e => handleUrlChange(e.target.value)}
             placeholder="{{BASE_URL}}/api/users 或 https://example.com/api"
-            style={{ flex: 1, fontFamily: 'monospace', fontSize: 13 }}
+            style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 13 }}
             onPaste={e => {
               const text = e.clipboardData?.getData('text') || ''
               if (text.trimStart().toLowerCase().startsWith('curl ')) {
@@ -589,7 +589,7 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
           </Tooltip>
         </div>
         {urlHasVars && (
-          <div style={{ marginTop: 4, fontSize: 11, color: '#86909c', fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          <div style={{ marginTop: 4, fontSize: 11, color: '#86909c', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             <span style={{ color: '#0ea5a0', marginRight: 4 }}>→</span>{resolvedUrl}
           </div>
         )}
@@ -648,7 +648,7 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
                             onMouseEnter={e => e.currentTarget.style.background = 'rgba(14,165,160,0.06)'}
                             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                             <div style={{ fontSize: 12, fontWeight: 600, color: '#1d2129', marginBottom: 2 }}>{s.label}</div>
-                            <pre style={{ margin: 0, fontSize: 10, color: '#4e5969', fontFamily: 'monospace', lineHeight: 1.4, maxHeight: 60, overflow: 'hidden', whiteSpace: 'pre-wrap' }}>{s.code}</pre>
+                            <pre style={{ margin: 0, fontSize: 10, color: '#4e5969', fontFamily: 'var(--font-mono)', lineHeight: 1.4, maxHeight: 60, overflow: 'hidden', whiteSpace: 'pre-wrap' }}>{s.code}</pre>
                           </div>
                         ))}
                       </div>
@@ -663,7 +663,7 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
             {(data.bodyType || 'json') === 'none' && <div style={{ padding: '12px 0', textAlign: 'center', color: '#86909c', fontSize: 12 }}>无 Body</div>}
             {((data.bodyType || 'json') === 'json' || data.bodyType === 'raw') && (
               <>
-                <Input.TextArea ref={bodyRef} value={data.body || ''} onChange={e => up('body', e.target.value)} placeholder='{"key": "value"}' autoSize={{ minRows: 6, maxRows: 18 }} style={{ fontFamily: 'monospace', fontSize: 11 }} />
+                <Input.TextArea spellCheck={false} ref={bodyRef} value={data.body || ''} onChange={e => up('body', e.target.value)} placeholder='{"key": "value"}' autoSize={{ minRows: 6, maxRows: 18 }} style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                 {jsonError && <div style={{ marginTop: 4, fontSize: 11, color: '#e8453c', padding: '2px 8px', background: '#fff2f0', borderRadius: 12 }}>JSON 语法错误: {jsonError}</div>}
               </>
             )}
@@ -680,9 +680,9 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
       <Modal open={importCurlOpen} onCancel={() => { setImportCurlOpen(false); setCurlText('') }}
         title="导入 cURL" width={560} okText="导入" onOk={handleImportCurl} okButtonProps={{ disabled: !curlText.trim() }}>
         <div style={{ fontSize: 12, color: '#4e5969', marginBottom: 8 }}>粘贴 cURL 命令，自动解析为请求参数。也可以直接在 URL 栏粘贴 cURL 命令。</div>
-        <Input.TextArea value={curlText} onChange={e => setCurlText(e.target.value)}
+        <Input.TextArea spellCheck={false} value={curlText} onChange={e => setCurlText(e.target.value)}
           placeholder={'curl -X GET \'https://api.example.com/users\' \\\n  -H \'Authorization: Bearer token\' \\\n  -H \'Content-Type: application/json\''}
-          autoSize={{ minRows: 6, maxRows: 14 }} style={{ fontFamily: 'monospace', fontSize: 11 }} />
+          autoSize={{ minRows: 6, maxRows: 14 }} style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
       </Modal>
 
       {/* Code Generation Modal */}
@@ -696,7 +696,7 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
           <div style={{ flex: 1 }} />
           <Tooltip title="复制代码"><Button size="small" icon={<CopyOutlined />} onClick={() => copyToClipboard(generatedCode).then(() => message.success('代码已复制'))}>复制</Button></Tooltip>
         </div>
-        <pre style={{ margin: 0, padding: 16, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontFamily: 'monospace', fontSize: 12, lineHeight: 1.6, maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{generatedCode}</pre>
+        <pre style={{ margin: 0, padding: 16, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.6, maxHeight: 400, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{generatedCode}</pre>
       </Modal>
     </div>
   )
@@ -945,11 +945,11 @@ export default function ApiManagement() {
                   </div>
                   {envVars.map((v, i) => (
                     <div key={v.key || i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#fa8c16', fontWeight: 600, width: 100, flexShrink: 0 }}>{v.key}</span>
-                      <Input size="small" value={v.value} onChange={e => {
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#fa8c16', fontWeight: 600, width: 100, flexShrink: 0 }}>{v.key}</span>
+                      <Input spellCheck={false} size="small" value={v.value} onChange={e => {
                         const newVars = envVars.map((vv, j) => j === i ? { ...vv, value: e.target.value } : vv)
                         setEnvVars(newVars)
-                      }} style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }} />
+                      }} style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                     </div>
                   ))}
                   <Button size="small" type="primary" block style={{ marginTop: 8 }} onClick={async () => {

@@ -604,7 +604,7 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
         <HolderOutlined style={{ color: 'rgba(0,0,0,0.25)', cursor: 'grab', fontSize: 10, flexShrink: 0 }} />
         <span style={{ color: meta.color, fontSize: 11, flexShrink: 0 }}>{meta.icon}</span>
         <span style={{ fontSize: 11, color: meta.color, fontWeight: 500, flexShrink: 0 }}>{meta.label}</span>
-        <span style={{ fontSize: 12, color: '#4e5969', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: op.type === 'script' ? 'monospace' : 'inherit' }}>
+        <span style={{ fontSize: 12, color: '#4e5969', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: op.type === 'script' ? 'var(--font-mono)' : 'inherit' }}>
           {opSummary(op)}
         </span>
         <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ width: 20, height: 20 }} />

@@ -11,9 +11,10 @@ import {
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
+import { CODE_BLOCK_STYLE } from '../../components/MockCodeBlock'
 
 const { TextArea } = Input
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 const ACCENT = '#1890ff'
 
 export default function UdpMockPanel() {
@@ -302,7 +303,7 @@ export default function UdpMockPanel() {
           {/* Match pattern */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>匹配规则</div>
-            <TextArea
+            <TextArea spellCheck={false}
               value={form.matchPattern}
               onChange={e => setForm(f => ({ ...f, matchPattern: e.target.value }))}
               rows={3}
@@ -339,7 +340,7 @@ export default function UdpMockPanel() {
                   disabled={locked}
                 />
               </div>
-              <TextArea
+              <TextArea spellCheck={false}
                 value={form.responseData}
                 onChange={e => setForm(f => ({ ...f, responseData: e.target.value }))}
                 rows={5}
@@ -394,7 +395,7 @@ export default function UdpMockPanel() {
                 <Radio.Button value={true}>Hex</Radio.Button>
               </Radio.Group>
             </div>
-            <TextArea
+            <TextArea spellCheck={false}
               value={testMessage}
               onChange={e => setTestMessage(e.target.value)}
               rows={4}
@@ -502,9 +503,9 @@ export default function UdpMockPanel() {
                   <div style={{ padding: '10px 14px' }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: '#0ea5a0', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Response</div>
                     <pre style={{
-                      background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 10,
+                      ...CODE_BLOCK_STYLE, padding: 12, borderRadius: 10,
                       overflow: 'auto', fontSize: 11, lineHeight: 1.5, maxHeight: 150,
-                      fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0 0 6px 0',
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: '0 0 6px 0',
                     }}>{testResult.received ?? '(无响应 - UDP 无匹配 handler 时不回复)'}</pre>
                     {testResult.received_hex && (
                       <div>
@@ -629,7 +630,7 @@ export default function UdpMockPanel() {
           }}>
             <Badge status={serviceStatus.running ? 'success' : 'default'} />
             <span style={{
-              fontSize: 12, fontWeight: 600, fontFamily: 'monospace',
+              fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)',
               color: serviceStatus.running ? '#0ea5a0' : '#999',
             }}>
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}

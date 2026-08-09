@@ -88,7 +88,7 @@ export default function ChannelConfig() {
       title: 'Webhook URL', dataIndex: 'webhookUrl',
       render: (v, record) => (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#4e5969' }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#4e5969' }}>
             {revealedIds.has(record.id) ? v : maskUrl(v)}
           </span>
           <Button type="text" size="small" icon={revealedIds.has(record.id) ? <EyeInvisibleOutlined /> : <EyeOutlined />}
@@ -154,8 +154,8 @@ export default function ChannelConfig() {
           </Form.Item>
           <Form.Item name="webhookUrl" label="Webhook URL" rules={[{ required: true, message: '请输入 Webhook URL' }]}
             extra="钉钉群机器人的 Webhook 地址">
-            <Input.TextArea placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." rows={3}
-              style={{ fontFamily: 'monospace', fontSize: 12 }} />
+            <Input.TextArea spellCheck={false} placeholder="https://oapi.dingtalk.com/robot/send?access_token=..." rows={3}
+              style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
           </Form.Item>
         </Form>
       </Modal>

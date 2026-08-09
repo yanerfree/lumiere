@@ -13,7 +13,7 @@ import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
 
 const { TextArea } = Input
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 const MC = { GET: '#0ea5a0', POST: '#fa8c16', PUT: '#4e8af0', DELETE: '#e8453c', PATCH: '#7c5cbf', HEAD: '#8c8c8c', OPTIONS: '#8c8c8c' }
 
 // ── cURL 工具 ──
@@ -459,7 +459,7 @@ export default function HttpClient() {
                 <div style={{ display: 'flex', gap: 8 }}>
                   <Select value={activeItem.method} onChange={v => updateTabField(activeItem.id, 'method', v)} style={{ width: 110 }} size="small"
                     options={['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS'].map(m => ({ value: m, label: <span style={{ color: MC[m], fontWeight: 600, fontFamily: MONO }}>{m}</span> }))} />
-                  <Input value={activeItem.url} onChange={e => updateTabField(activeItem.id, 'url', e.target.value)}
+                  <Input spellCheck={false} value={activeItem.url} onChange={e => updateTabField(activeItem.id, 'url', e.target.value)}
                     placeholder="输入请求 URL" style={{ flex: 1, fontFamily: MONO, fontSize: 13 }} onPressEnter={handleSend} size="small" />
                   <Button size="small" disabled={!activeItem._dirty} onClick={() => autoSave(activeItem.id)} icon={<SaveOutlined />}>
                     {activeItem._dirty ? '保存' : '已保存'}
@@ -519,16 +519,16 @@ export default function HttpClient() {
                             <CheckOutlined style={{ fontSize: 10, color: h.enabled !== false ? '#0ea5a0' : '#d9d9d9', cursor: 'pointer' }}
                               onClick={() => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], enabled: !hs[i].enabled }; updateTabField(activeItem.id, 'headers', hs) }} />
                           </td>
-                          <td style={{ padding: '2px 4px' }}><Input size="small" variant="borderless" value={h.key} placeholder="Header name" style={{ fontFamily: MONO, fontSize: 11 }}
+                          <td style={{ padding: '2px 4px' }}><Input spellCheck={false} size="small" variant="borderless" value={h.key} placeholder="Header name" style={{ fontFamily: MONO, fontSize: 11 }}
                             onChange={e => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], key: e.target.value }; updateTabField(activeItem.id, 'headers', hs) }} /></td>
-                          <td style={{ padding: '2px 4px' }}><Input size="small" variant="borderless" value={h.value} placeholder="Value" style={{ fontFamily: MONO, fontSize: 11 }}
+                          <td style={{ padding: '2px 4px' }}><Input spellCheck={false} size="small" variant="borderless" value={h.value} placeholder="Value" style={{ fontFamily: MONO, fontSize: 11 }}
                             onChange={e => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], value: e.target.value }; updateTabField(activeItem.id, 'headers', hs) }} /></td>
                           <td><Button size="small" type="text" danger style={{ padding: '0 4px', fontSize: 10 }} onClick={() => updateTabField(activeItem.id, 'headers', activeItem.headers.filter((_, idx) => idx !== i))}>×</Button></td>
                         </tr>
                       ))}</tbody>
                     </table>
                   </>)}
-                  {reqTab === 'body' && <TextArea value={activeItem.body} onChange={e => updateTabField(activeItem.id, 'body', e.target.value)} rows={6} style={{ fontFamily: MONO, fontSize: 12 }} placeholder='{"key": "value"}' />}
+                  {reqTab === 'body' && <TextArea spellCheck={false} value={activeItem.body} onChange={e => updateTabField(activeItem.id, 'body', e.target.value)} rows={6} style={{ fontFamily: MONO, fontSize: 12 }} placeholder='{"key": "value"}' />}
                 </div>
               </div>
 
@@ -643,7 +643,7 @@ export default function HttpClient() {
       {/* 导入 cURL */}
       <Modal title="导入 cURL" open={importOpen} onCancel={() => setImportOpen(false)} onOk={handleImportCurl} okText="导入" cancelText="取消" width={600} okButtonProps={{ disabled: !importCurl.trim() }}>
         <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 8 }}>粘贴 cURL 命令，自动解析为请求</div>
-        <TextArea value={importCurl} onChange={e => setImportCurl(e.target.value)} rows={8} style={{ fontFamily: MONO, fontSize: 12 }}
+        <TextArea spellCheck={false} value={importCurl} onChange={e => setImportCurl(e.target.value)} rows={8} style={{ fontFamily: MONO, fontSize: 12 }}
           placeholder={`curl -X POST 'https://api.example.com/users' \\\n  -H 'Content-Type: application/json' \\\n  -H 'Authorization: Bearer token123' \\\n  -d '{"name":"test"}'`} />
       </Modal>
 

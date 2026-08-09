@@ -392,7 +392,7 @@ export default function CaseManagement() {
 
   // ---- 列表列（可配置） ----
   const allColumns = [
-    { key: 'caseCode', title: '用例ID', dataIndex: 'caseCode', width: 135, defaultVisible: true, render: v => <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#86909c' }}>{v}</span> },
+    { key: 'caseCode', title: '用例ID', dataIndex: 'caseCode', width: 135, defaultVisible: true, render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c' }}>{v}</span> },
     { key: 'title', title: '标题', dataIndex: 'title', ellipsis: true, defaultVisible: true, fixed: true, render: (v, row) => (
       <span
         onClick={() => navigate(`/projects/${projectId}/cases/${row.id}?branchId=${globalBranchId}`)}
@@ -423,18 +423,23 @@ export default function CaseManagement() {
     { key: 'module', title: '模块', dataIndex: 'module', width: 100, defaultVisible: false, render: v => <span style={{ fontSize: 12 }}>{v || '-'}</span> },
     { key: 'subModule', title: '子模块', dataIndex: 'subModule', width: 100, defaultVisible: false, render: v => <span style={{ fontSize: 12 }}>{v || '-'}</span> },
     { key: 'lifecycleStatus', title: '状态', dataIndex: 'lifecycleStatus', width: 68, defaultVisible: true, render: v => { const m = lifecycleMap[v] || lifecycleMap.draft; return <Tag style={{ background: m.bg, color: m.color, border: 'none', margin: 0, fontSize: 11 }}>{m.label}</Tag> } },
-    { key: 'dimStatus', title: '手动/UI/接口', dataIndex: 'manualStatus', width: 150, defaultVisible: true, render: (_, r) => (
-      <span style={{ display: 'inline-flex', gap: 4 }}>
-        {[['手', r.manualStatus], ['U', r.uiStatus], ['接', r.apiStatus]].map(([k, s]) => {
-          const m = dimStatusMap[s] || dimStatusMap.not_started
-          return <Tooltip key={k} title={`${k === '手' ? '手动' : k === 'U' ? 'UI' : '接口'}：${m.label}`}>
-            <span style={{ fontSize: 10, padding: '0 4px', borderRadius: 6, background: m.color + '1f', color: m.color, lineHeight: '16px' }}>{k}</span>
-          </Tooltip>
-        })}
-      </span>
-    ) },
+    // 三个维度挤成 10px 的小圆点，得逐个 hover 才知道是什么 —— 字号提到 11、
+    // 整组一个 tooltip 一次说清三维，不用挨个悬停
+    { key: 'dimStatus', title: '手动/UI/接口', dataIndex: 'manualStatus', width: 150, defaultVisible: true, render: (_, r) => {
+      const dims = [['手', '手动', r.manualStatus], ['U', 'UI', r.uiStatus], ['接', '接口', r.apiStatus]]
+      return (
+        <Tooltip title={dims.map(([, full, st]) => `${full}：${(dimStatusMap[st] || dimStatusMap.not_started).label}`).join('　')}>
+          <span style={{ display: 'inline-flex', gap: 5 }}>
+            {dims.map(([k, , st]) => {
+              const m = dimStatusMap[st] || dimStatusMap.not_started
+              return <span key={k} style={{ fontSize: 11, padding: '0 5px', borderRadius: 6, background: m.color + '1f', color: m.color, lineHeight: '18px' }}>{k}</span>
+            })}
+          </span>
+        </Tooltip>
+      )
+    } },
     { key: 'source', title: '来源', dataIndex: 'source', width: 48, align: 'center', defaultVisible: true, render: v => <span style={{ fontSize: 11, color: v === 'ai' ? '#7cacf8' : '#c9cdd4' }}>{v === 'imported' ? '导入' : v === 'ai' ? 'AI' : '手动'}</span> },
-    { key: 'isFlaky', title: 'Flaky', dataIndex: 'isFlaky', width: 40, align: 'center', defaultVisible: true, render: v => v ? <Tag color="#fff7e6" style={{ color: '#faad14', border: 'none', margin: 0 }}>F</Tag> : null },
+    { key: 'isFlaky', title: 'Flaky', dataIndex: 'isFlaky', width: 66, align: 'center', defaultVisible: true, render: v => v ? <Tag color="#fff7e6" style={{ color: '#faad14', border: 'none', margin: 0 }}>F</Tag> : null },
     { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 52, align: 'center', defaultVisible: true, render: v => {
       if (!v) return null
       if (v === 'approved') return <Tag style={{ fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none', margin: 0 }}>已审</Tag>
@@ -446,7 +451,7 @@ export default function CaseManagement() {
       const color = v.total >= 85 ? '#0ea5a0' : v.total >= 70 ? '#4e8af0' : '#faad14'
       return <span style={{ color, fontWeight: 600, fontSize: 12 }}>{v.total}</span>
     }},
-    { key: 'scriptRefFile', title: '脚本文件', dataIndex: 'scriptRefFile', width: 200, ellipsis: true, defaultVisible: false, render: v => <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c' }}>{v || '-'}</span> },
+    { key: 'scriptRefFile', title: '脚本文件', dataIndex: 'scriptRefFile', width: 200, ellipsis: true, defaultVisible: false, render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#86909c' }}>{v || '-'}</span> },
     { key: 'teaId', title: 'TEA ID', dataIndex: 'teaId', width: 150, defaultVisible: false, render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v || '-'}</span> },
     { key: 'createdAt', title: '创建时间', dataIndex: 'createdAt', width: 150, defaultVisible: false, render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v ? new Date(v).toLocaleString('zh-CN') : '-'}</span> },
     { key: 'updatedAt', title: '更新时间', dataIndex: 'updatedAt', width: 150, defaultVisible: false, render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v ? new Date(v).toLocaleString('zh-CN') : '-'}</span> },
