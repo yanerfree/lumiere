@@ -199,6 +199,17 @@ async def get_logs(
     }
 
 
+# ⚠ /logs/export 必须声明在 /logs/{log_id} **前面**。
+# FastAPI 按注册顺序匹配：先注册通配的话，"export" 会被当成 log_id 去解析 UUID，
+# 页面上「导出日志」点下去只会开出一个 422 —— 实测就是这样，而隔壁 api_mock.py
+# 的顺序恰好是对的，两个几乎一样的页面表现不同，所以一直没人发现。
+@router.get("/logs/export")
+async def export_logs(session: AsyncSession = Depends(get_db)):
+    logs, _ = await svc.list_logs(session, limit=10000)
+    data = [MockLogDetailResponse.model_validate(l, from_attributes=True).model_dump(mode="json") for l in logs]
+    return JSONResponse(data, headers={"Content-Disposition": "attachment; filename=mock-logs.json"})
+
+
 @router.get("/logs/{log_id}", response_model=MockLogDetailResponse)
 async def get_log_detail(log_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
     log = await svc.get_log(session, log_id)
@@ -211,13 +222,6 @@ async def get_log_detail(log_id: uuid.UUID, session: AsyncSession = Depends(get_
 async def clear_logs(session: AsyncSession = Depends(get_db)):
     count = await svc.clear_logs(session)
     return {"ok": True, "deleted": count}
-
-
-@router.get("/logs/export")
-async def export_logs(session: AsyncSession = Depends(get_db)):
-    logs, _ = await svc.list_logs(session, limit=10000)
-    data = [MockLogDetailResponse.model_validate(l, from_attributes=True).model_dump(mode="json") for l in logs]
-    return JSONResponse(data, headers={"Content-Disposition": "attachment; filename=mock-logs.json"})
 
 
 @router.post("/logs/{log_id}/replay")
