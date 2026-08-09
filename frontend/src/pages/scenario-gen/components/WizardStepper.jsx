@@ -30,20 +30,21 @@ export default function WizardStepper({ currentStage, onStageClick, taskStatus, 
   const currentIndex = STAGE_ORDER[currentStage] ?? 0
   const reachedIndex = getReachedIndex(taskStatus, hasModel)
 
+  // 切步骤走 Steps 的 onChange —— antd v5 的 items **不支持 onClick**，
+  // 原来给每个 item 挂 onClick，点一下直接抛 "onClick is not a function"，
+  // 步骤条也跳不过去。想回上一步看看（很自然的操作）就撞上。
   return (
     <Steps
       current={currentIndex}
       size="small"
       style={{ maxWidth: 700, margin: '0 auto' }}
+      onChange={(i) => {
+        if (i <= reachedIndex && onStageClick) onStageClick(STAGES[i].key)
+      }}
       items={STAGES.map((s, i) => ({
         title: s.title,
         status: i < reachedIndex ? 'finish' : i === currentIndex ? 'process' : 'wait',
-        style: { cursor: i <= reachedIndex ? 'pointer' : 'default' },
-        onClick: () => {
-          if (i <= reachedIndex && onStageClick) {
-            onStageClick(s.key)
-          }
-        },
+        disabled: i > reachedIndex,   // 没走到的那几步点不动，且鼠标是禁用样式
       }))}
     />
   )
