@@ -222,6 +222,20 @@ export default function AICapabilityBindings({ overview, onOverviewReload }) {
                     ? `这一个模型负责平台上全部 ${registry.length} 项 AI 能力`
                     : `${resolved.length} 个档位各用各的模型`}
                 </div>
+                {/* 429 降级通道 —— 顶栏「服务 N/17」里有它，但在这一页改模型的人
+                    不会去看顶栏。它挂了的话，换完模型跑生成会撞上莫名其妙的 429 失败。 */}
+                {overview.fallback.cliChannel && (
+                  <div style={{ fontSize: 12, marginTop: 6 }}>
+                    <span style={{ color: '#86909c' }}>限流降级通道　</span>
+                    {overview.fallback.cliChannel.alive ? (
+                      <Tag color="success" style={{ margin: 0 }}>正常</Tag>
+                    ) : (
+                      <Tooltip title={overview.fallback.cliChannel.hint}>
+                        <Tag color="error" style={{ margin: 0 }}>不可用</Tag>
+                      </Tooltip>
+                    )}
+                  </div>
+                )}
                 <div style={{ marginTop: 6 }}>
                   <Select
                     size="small" style={{ minWidth: 230 }}

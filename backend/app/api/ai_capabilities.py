@@ -215,6 +215,26 @@ async def delete_binding(
     return {"data": {"deleted": True}}
 
 
+async def _probe_cli_channel() -> dict:
+    """探 429 降级通道（claude-proxy）的死活。探不到不抛错，只如实报。"""
+    base = (settings.ai_proxy_base_url or settings.ai_ui_base_url or "").rstrip("/")
+    if not base:
+        return {"configured": False, "alive": False,
+                "hint": "没配 AI_PROXY_BASE_URL：网关一限流就只能靠重试，重试耗尽即失败"}
+    url = base[: -len("/v1")] if base.endswith("/v1") else base
+    try:
+        async with httpx.AsyncClient(timeout=3) as c:
+            r = await c.get(f"{url}/health")
+        alive = r.status_code == 200
+        return {
+            "configured": True, "alive": alive, "endpoint": url,
+            "hint": None if alive else f"探活返回 {r.status_code}，限流时降级会失败",
+        }
+    except Exception as e:  # noqa: BLE001
+        return {"configured": True, "alive": False, "endpoint": url,
+                "hint": f"连不上（{type(e).__name__}）：限流时降级会失败，用 deploy/start-ai-services.sh 起一下"}
+
+
 # ── 使用总览:兜底链 + 每个项目实际生效的 AI ─────────────
 
 @router.get("/overview")
@@ -269,6 +289,14 @@ async def get_overview(
         "envBaseUrlMasked": _mask_url(settings.ai_base_url) if (sysdef is None and settings.ai_base_url) else None,
         "resolved": resolved_fallback,
     }
+
+    # ①-b 429 降级通道（claude-proxy）的死活。
+    #
+    # 这条通道在顶栏「服务 N/17」里已经被探活，但**在 AI 配置页改模型的人不会去看顶栏**。
+    # 而 CLAUDE.md 写得很清楚：文本生成仍依赖它 —— 网关一限流，主路重试耗尽后就靠它兜。
+    # 它挂了的话，人在这里换完模型、回头跑生成时会撞上莫名其妙的 429 失败，
+    # 而这一页当时什么都不说。所以把状态摆到「平台当前在用」那张卡片上。
+    fallback["cliChannel"] = await _probe_cli_channel()
 
     # ② 兜底连接下拉的候选项(只列启用的)
     candidates = [
