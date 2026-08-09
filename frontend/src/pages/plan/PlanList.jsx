@@ -120,6 +120,44 @@ export default function PlanList() {
     }
   }
 
+  /**
+   * 计划生命周期动作。后端四条端点（pause/resume/abort/archive）一直都在，
+   * 页面上却一个都没接 —— 于是「已暂停」「已归档」这两个筛选页签永远是空的：
+   * 有筛选、有状态色、有标签，就是没有任何路径能走到那个状态。
+   * unarchive 是这次补的：archive 收 draft/completed，而 reopen 只认 completed，
+   * 归档点下去原本回不来。
+   */
+  const LIFECYCLE = {
+    pause: { label: '暂停', ok: '已暂停' },
+    resume: { label: '恢复', ok: '已恢复执行' },
+    abort: { label: '终止', ok: '已终止，未执行的记为跳过', confirm: '终止后未执行的用例会被记为「跳过」，确定？' },
+    archive: { label: '归档', ok: '已归档' },
+    unarchive: { label: '取消归档', ok: '已取消归档' },
+  }
+
+  const handleLifecycle = (e, planId, planName, action) => {
+    e.stopPropagation()
+    const cfg = LIFECYCLE[action]
+    const run = async () => {
+      try {
+        await api.post(`/projects/${projectId}/plans/${planId}/${action}`)
+        message.success(cfg.ok)
+        fetchPlans()
+      } catch (err) {
+        message.error(err?.response?.data?.error?.message || err?.message || `${cfg.label}失败`)
+      }
+    }
+    if (cfg.confirm) {
+      Modal.confirm({
+        title: `确认${cfg.label}`,
+        content: `计划「${planName}」：${cfg.confirm}`,
+        okText: cfg.label, cancelText: '取消', okButtonProps: { danger: true }, onOk: run,
+      })
+    } else {
+      run()
+    }
+  }
+
   const handleQuickDelete = (e, planId, planName) => {
     e.stopPropagation()
     Modal.confirm({
@@ -270,6 +308,27 @@ export default function PlanList() {
                             onOk: () => handleQuickExecute({ stopPropagation: () => {} }, plan.id),
                           })
                         }}>重新执行</Button>
+                    )}
+                    {/* 生命周期：状态决定能做什么，和后端的前置校验一一对应 */}
+                    {plan.status === 'executing' && (
+                      <Button type="text" size="small" style={{ fontSize: 12, color: '#faad14' }}
+                        onClick={e => handleLifecycle(e, plan.id, plan.name, 'pause')}>暂停</Button>
+                    )}
+                    {plan.status === 'paused' && (
+                      <Button type="text" size="small" style={{ fontSize: 12, color: '#0ea5a0' }}
+                        onClick={e => handleLifecycle(e, plan.id, plan.name, 'resume')}>恢复</Button>
+                    )}
+                    {['executing', 'paused'].includes(plan.status) && (
+                      <Button type="text" size="small" danger style={{ fontSize: 12 }}
+                        onClick={e => handleLifecycle(e, plan.id, plan.name, 'abort')}>终止</Button>
+                    )}
+                    {['draft', 'completed'].includes(plan.status) && (
+                      <Button type="text" size="small" style={{ fontSize: 12, color: '#86909c' }}
+                        onClick={e => handleLifecycle(e, plan.id, plan.name, 'archive')}>归档</Button>
+                    )}
+                    {plan.status === 'archived' && (
+                      <Button type="text" size="small" style={{ fontSize: 12, color: '#0ea5a0' }}
+                        onClick={e => handleLifecycle(e, plan.id, plan.name, 'unarchive')}>取消归档</Button>
                     )}
                     {plan.status !== 'executing' && (
                       <Button type="text" size="small" danger style={{ fontSize: 12 }}

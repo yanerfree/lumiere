@@ -171,3 +171,30 @@ async def reopen_plan(session: AsyncSession, plan_id: uuid.UUID) -> Plan:
     await session.flush()
     await session.refresh(plan)
     return plan
+
+
+async def unarchive_plan(session: AsyncSession, plan_id: uuid.UUID) -> Plan:
+    """取消归档 —— 归档必须有回头路。
+
+    `archive_plan` 收 draft / completed 两种状态，而 `reopen_plan` 只认 completed，
+    所以归档一旦点下去就**回不来了**（archived 不在任何一个入口的允许列表里）。
+    页面上给了「已归档」这个筛选页签却没有出口，等于一扇单向门。
+
+    回到哪个状态不需要额外存字段：**跑过就回 completed，没跑过就回 draft**
+    —— 有没有报告是可查的事实。
+    """
+    from sqlalchemy import func, select
+
+    from app.models.report import TestReport
+
+    plan = await get_plan(session, plan_id)
+    if plan.status != "archived":
+        raise ValidationError(code="INVALID_STATUS", message=f"当前状态「{plan.status}」不是已归档，不用取消归档")
+
+    ran = (await session.execute(
+        select(func.count()).select_from(TestReport).where(TestReport.plan_id == plan_id)
+    )).scalar() or 0
+    plan.status = "completed" if ran else "draft"
+    await session.flush()
+    await session.refresh(plan)
+    return plan

@@ -122,6 +122,23 @@ async def archive_plan(
     return {"data": PlanResponse.model_validate(plan, from_attributes=True).model_dump(by_alias=True)}
 
 
+@router.post("/{plan_id}/unarchive")
+async def unarchive_plan(
+    project_id: uuid.UUID,
+    plan_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin")),
+):
+    """取消归档 —— 归档不能是单向门。
+
+    跑过的回「已完成」，没跑过的回「草稿」。
+    """
+    plan = await plan_service.unarchive_plan(session, plan_id)
+    await write_audit_log(session, action="unarchive", target_type="plan",
+                          target_id=plan_id, target_name=plan.name)
+    return {"data": PlanResponse.model_validate(plan, from_attributes=True).model_dump(by_alias=True)}
+
+
 @router.delete("/{plan_id}")
 async def delete_plan(
     project_id: uuid.UUID,
@@ -538,8 +555,13 @@ async def abort_plan(
     # 汇总报告
     if report:
         await execution_service.complete_execution(session, plan_id)
-        await session.refresh(plan)
 
+    # refresh 必须无条件做，不能挂在 `if report` 里：`updated_at` 是库侧 onupdate，
+    # flush 之后它处于 expired 状态，pydantic 序列化时去读会触发一次惰性加载，
+    # 而那已经不在 async 上下文里 —— 直接 500（MissingGreenlet），事务回滚，
+    # 用户点了「终止」看到"服务内部错误"，计划纹丝不动。
+    # 没有报告的计划就会走进这条路（比如报告被删过），实测复现过。
+    await session.refresh(plan)
     return {"data": PlanResponse.model_validate(plan, from_attributes=True).model_dump(by_alias=True)}
 
 
