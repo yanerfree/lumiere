@@ -16,6 +16,35 @@ from app.services.scenario_gen.preprocessor import preprocess
 logger = logging.getLogger("scenario_gen.runner")
 
 
+async def _refresh_progress(session, task_id: uuid.UUID, total: int) -> None:
+    """把 task.progress 按 items 的**真实状态**重算一遍。
+
+    原来 progress 只在展开开始时写了一次 {"total": N, "succeeded": 0, ...}，
+    之后从头到尾没再动过 —— 成功数只加在内存变量里。结果任务跑完了，任务中心和
+    详情页显示的还是「0/11」，人以为一条都没生成（实测 11 条全成功、显示 0/11）。
+    统计以 DB 为准而不是内存计数：这里是 3 个协程各自的 session 并发写同一行，
+    内存计数在别的协程里看不见。
+    """
+    from sqlalchemy import func, select
+
+    from app.models.scenario_gen import GenerationItem, GenerationTask
+
+    rows = (await session.execute(
+        select(GenerationItem.status, func.count())
+        .where(GenerationItem.task_id == task_id)
+        .group_by(GenerationItem.status)
+    )).all()
+    counts = {s: n for s, n in rows}
+    task = await session.get(GenerationTask, task_id)
+    if task:
+        task.progress = {
+            "total": total,
+            "succeeded": counts.get("succeeded", 0),
+            "failed": counts.get("failed", 0),
+            "skipped": counts.get("skipped", 0),
+        }
+
+
 async def run_extraction(task_id: uuid.UUID, project_id: uuid.UUID):
     """后台执行需求点提取 + 质量检测"""
     try:
@@ -210,11 +239,14 @@ async def run_expansion(task_id: uuid.UUID, project_id: uuid.UUID):
                                 "ref": it.test_point_ref,
                                 "error_message": it.error_message[:200] if it.error_message else "展开失败",
                             })
+                        await _refresh_progress(s2, task_id, total)
                         await s2.commit()
 
             # 并发执行
             tasks_to_expand = [it for it in existing_items if it.status not in ("succeeded", "skipped")]
             await asyncio.gather(*[expand_one(it) for it in tasks_to_expand], return_exceptions=True)
+
+            await _refresh_progress(session, task_id, total)
 
             # 最终状态
             if failed == 0:

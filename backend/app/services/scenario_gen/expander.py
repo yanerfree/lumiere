@@ -42,7 +42,7 @@ EXPAND_SYSTEM_PROMPT = """你是一位资深测试用例设计师。根据提供
 
 用例必须包含：
 - title: 用例标题（中文，明确描述测试目的）
-- priority: P0（核心主流程/安全关键）/P1（重要功能/边界）/P2（次要场景/兼容性）/P3（锦上添花/极端边界）— 不要全部标 P1，根据业务重要性真实区分
+- priority: **原样沿用输入里给定的优先级**，不要自己重新判断（那是人已经确认过的）
 - preconditions: 前置条件（具体的数据准备和环境要求）
 - steps: 步骤数组 [{action: "操作描述", expected: "单步预期结果"}]，步骤 ≤8 个
 - expected_result: 整体预期结果（含可验证关键词，不用"操作成功/显示正常"等模糊词）
@@ -93,18 +93,25 @@ async def expand_single_test_point(
     cases_validated, warnings = validate_cases([case_data.model_dump()])
     case_dict = cases_validated[0]
 
+    # 优先级以**人在「确认场景模型」那一步确认过的**为准，不看模型这次怎么判。
+    # 实测：模型里 5 个 P0 展开完 P0 归零、全成 P1 —— 人确认的东西在这一步被
+    # 悄悄改掉了，那一步的确认就等于白做。优先级是已确认的事实，不是待推理的问题。
+    confirmed_priority = point_snapshot.get("priority")
+    if confirmed_priority in ("P0", "P1", "P2", "P3"):
+        case_dict["priority"] = confirmed_priority
+
     # 取号 + 归类文件夹
     module = task.settings.get("module", "GEN") if task.settings else "GEN"
     from app.services.scenario_gen.context_builder import get_or_create_folder
     folder_id = await get_or_create_folder(session, task.branch_id, module)
 
-    max_seq = (await session.execute(
-        select(func.count(Case.id)).where(
-            Case.branch_id == task.branch_id,
-            Case.case_code.like(f"TC-{module.upper()}-%"),
-        )
-    )).scalar_one() or 0
-    case_code = f"TC-{module.upper()}-{max_seq + 1:05d}"
+    # 取号走和别处同一份实现（MAX+1 + advisory lock），别在这儿自己算。
+    # 这里原来用 count(*) 当"最大序号"——删过任何一条用例，count 就小于真实 MAX，
+    # 下一条直接撞 uq_case_branch_code。实测这条分支的 TC-API- 缺 00015/00017 两号，
+    # 再往 API 模块生成就会挂。而且中文模块名在这儿会被 upper() 原样带进编号，
+    # 和 _next_case_code 的拼音首字母规则也对不上，同一个模块能出两种前缀。
+    from app.services.import_service import _next_case_code
+    case_code = await _next_case_code(session, task.branch_id, module)
 
     rp_code = point_snapshot.get("requirement_point_code", "")
 
