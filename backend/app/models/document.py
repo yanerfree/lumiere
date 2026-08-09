@@ -18,6 +18,8 @@ class Document(Base):
     doc_type: Mapped[str] = mapped_column(String(20), default="manual")  # manual | acceptance | training
     language: Mapped[str] = mapped_column(String(10), default="zh")  # zh | en
     content: Mapped[str | None] = mapped_column(Text, nullable=True)  # Markdown
+    # 「优化文字」覆盖前的正文，用来撤销。只留最近一版，不是版本管理。
+    previous_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     gen_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # 生成时的配置（地址/账号/范围等）
     source_case_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | published

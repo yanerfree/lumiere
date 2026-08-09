@@ -2,11 +2,12 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   Button, Card, Table, Tag, Space, Typography, Modal, Form, Input, Select,
-  message, Drawer, Popconfirm,
+  message, Drawer, Popconfirm, Tooltip,
 } from 'antd'
 import {
   PlusOutlined, FileTextOutlined, DeleteOutlined, EyeOutlined,
   RobotOutlined, LoadingOutlined, CopyOutlined, DownloadOutlined, CodeOutlined,
+  EditOutlined, UndoOutlined,
 } from '@ant-design/icons'
 import { marked } from 'marked'
 import { api, getValidToken } from '../../utils/request'
@@ -26,6 +27,9 @@ const LANG_LABELS = { zh: '中文', en: 'EN' }
 // marked 配置
 marked.setOptions({ breaks: true, gfm: true })
 
+// 数正文里有几张截图 —— 「优化文字保留截图」这句话得有个数字撑着
+const countImages = (md) => (md || '').match(/!\[[^\]]*\]\([^)]+\)/g)?.length || 0
+
 export default function Documents() {
   const { projectId } = useParams()
   const [docs, setDocs] = useState([])
@@ -44,6 +48,12 @@ export default function Documents() {
   // 文档预览抽屉
   const [previewDoc, setPreviewDoc] = useState(null)
   const [previewOpen, setPreviewOpen] = useState(false)
+
+  // 优化文字（保留截图，不碰被测系统）
+  const [optDoc, setOptDoc] = useState(null)
+  const [optFeedback, setOptFeedback] = useState('')
+  const [optRunning, setOptRunning] = useState(false)
+  const [optChars, setOptChars] = useState(0)
 
   const fetchDocs = useCallback(async () => {
     if (!projectId) return
@@ -105,6 +115,49 @@ export default function Documents() {
 
 
 
+  // 优化文字：保留原截图，只按修改意见重写正文。
+  // 和「重新生成」是两条路 —— 那条会拿账号真登录被测系统重新截一遍图。
+  const handleOptimize = async () => {
+    if (!optDoc) return
+    const docId = optDoc.id
+    setOptRunning(true); setOptChars(0)
+    api.stream(`/projects/${projectId}/documents/${docId}/optimize`, { feedback: optFeedback }, {
+      onChunk: (data) => {
+        if (data.type === 'chunk' && data.content) setOptChars(prev => prev + data.content.length)
+        if (data.type === 'error') { message.error(data.message); setOptRunning(false) }
+      },
+      onDone: async (data) => {
+        setOptRunning(false); setOptDoc(null); setOptFeedback('')
+        fetchDocs()
+        if (previewOpen && previewDoc?.id) loadDoc(previewDoc.id)
+        const lost = data?.imagesLost || 0
+        if (lost > 0) {
+          // 「保留截图」是这条路唯一的承诺。没兑现就得当面说，并且把撤销递到手上
+          Modal.confirm({
+            title: `优化后少了 ${lost} 张截图`,
+            content: `优化前 ${data.imagesBefore} 张，现在 ${data.imagesAfter} 张。截图是真登录系统截出来的，丢了只能走「重新生成」重截。`,
+            okText: '撤销这次优化',
+            okButtonProps: { danger: true },
+            cancelText: '先留着',
+            onOk: () => handleRevert(docId),
+          })
+        } else {
+          message.success(`已优化，${data?.imagesAfter ?? 0} 张截图都在`)
+        }
+      },
+      onError: (msg) => { message.error(msg); setOptRunning(false) },
+    })
+  }
+
+  const handleRevert = async (docId) => {
+    try {
+      await api.post(`/projects/${projectId}/documents/${docId}/revert-optimize`)
+      message.success('已退回优化前的版本')
+      fetchDocs()
+      if (previewOpen && previewDoc?.id === docId) loadDoc(docId)
+    } catch { /* 后端会给出原因 */ }
+  }
+
   const openRegen = async (docRecord) => {
     setGenOpen(true); setTaskResult(null); setRegenDocId(docRecord.id)
     setRegenFeedback('')
@@ -152,11 +205,22 @@ export default function Documents() {
     { title: '状态', dataIndex: 'status', width: 70, render: (s) => s === 'published' ? <Tag color="cyan">已生成</Tag> : <Tag>草稿</Tag> },
     { title: '生成时间', dataIndex: 'createdAt', width: 150, render: (t) => <Text type="secondary">{t?.slice(0, 16).replace('T', ' ')}</Text> },
     {
-      title: '操作', width: 180,
+      title: '操作', width: 320,
       render: (_, r) => (
         <Space size={4}>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => loadDoc(r.id)}>查看</Button>
-          <Button type="text" size="small" icon={<RobotOutlined />} onClick={() => openRegen(r)}>重新生成</Button>
+          {/* 两条路的代价差很多，按钮上就得能分出来，别让人靠猜 */}
+          <Tooltip title="保留现有截图，只按你的意见重写文字。不碰被测系统，不用再填账号">
+            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => { setOptDoc(r); setOptFeedback('') }}>优化文字</Button>
+          </Tooltip>
+          <Tooltip title="拿账号重新登录被测系统、重新截一遍图、整篇重做">
+            <Button type="text" size="small" icon={<RobotOutlined />} onClick={() => openRegen(r)}>重新生成</Button>
+          </Tooltip>
+          {r.canRevert && (
+            <Popconfirm title="退回上一次优化前的正文？" onConfirm={() => handleRevert(r.id)}>
+              <Tooltip title="撤销上一次「优化文字」"><Button type="text" size="small" icon={<UndoOutlined />} /></Tooltip>
+            </Popconfirm>
+          )}
           <Popconfirm title="确认删除此文档？" onConfirm={() => handleDelete(r.id)}>
             <Button type="text" size="small" danger icon={<DeleteOutlined />} />
           </Popconfirm>
@@ -291,11 +355,54 @@ export default function Documents() {
               <LoadingOutlined style={{ fontSize: 24 }} />
               <div style={{ marginTop: 8, fontWeight: 500 }}>正在生成文档...</div>
             </div>
+            {/* platContent 一直在攒流式正文，但从来没显示过 —— 一篇文档要写好几分钟，
+                进度只有几行 step，人看不出到底在不在动。至少把字数报出来。 */}
+            {platContent.length > 0 && (
+              <div style={{ textAlign: 'center', fontSize: 12.5, color: '#4e5969', marginBottom: 8 }}>
+                已生成 {platContent.length} 字
+              </div>
+            )}
             {platProgress.length > 0 && (
               <div style={{ padding: '8px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 12, maxHeight: 150, overflow: 'auto', marginBottom: 12 }}>
                 {platProgress.map((p, i) => <div key={i} style={{ fontSize: 12, color: '#4e5969', padding: '2px 0' }}>{p}</div>)}
               </div>
             )}
+          </div>
+        )}
+      </Modal>
+
+      {/* 优化文字 —— 保留截图那条路 */}
+      <Modal
+        title="优化文字"
+        open={!!optDoc}
+        onCancel={() => { if (!optRunning) { setOptDoc(null); setOptFeedback('') } }}
+        width={520}
+        okText="开始优化"
+        confirmLoading={optRunning}
+        onOk={handleOptimize}
+        cancelButtonProps={{ disabled: optRunning }}
+      >
+        <div style={{
+          margin: '4px 0 14px', padding: '8px 12px', borderRadius: 10, lineHeight: 1.8,
+          background: 'rgba(14,165,160,0.06)', border: '1px solid rgba(14,165,160,0.2)',
+          fontSize: 12.5, color: '#4e5969',
+        }}>
+          <b>不会碰被测系统</b>：沿用文档里现有的 {countImages(optDoc?.content)} 张截图，只重写文字，也不用再填账号。
+          <br />
+          要换截图（页面改版了、要补新模块）请走「重新生成」——那条会重新登录、重新截图。
+          <br />
+          改完可以一键撤销，退回优化前的正文。
+        </div>
+        <TextArea
+          rows={4}
+          value={optFeedback}
+          onChange={(e) => setOptFeedback(e.target.value)}
+          disabled={optRunning}
+          placeholder={'哪儿不对就直接说，例如：\n第 3 节步骤太笼统，把每个字段填什么写出来\n开头加一段这个系统是干什么的\n不填则按格式模板做通用润色'}
+        />
+        {optRunning && (
+          <div style={{ marginTop: 12, fontSize: 12.5, color: '#4e5969' }}>
+            <LoadingOutlined /> 正在重写…… 已生成 {optChars} 字（写完才会覆盖原文，中途关掉不影响原文档）
           </div>
         )}
       </Modal>
@@ -308,6 +415,13 @@ export default function Documents() {
         width={1100}
         extra={previewDoc?.content && (
           <Space>
+            {/* 读着读着发现哪句不对，就在这儿改 —— 不用退出去、更不用重新截一遍图 */}
+            <Button size="small" icon={<EditOutlined />} onClick={() => { setOptDoc(previewDoc); setOptFeedback('') }}>优化文字</Button>
+            {previewDoc?.canRevert && (
+              <Popconfirm title="退回上一次优化前的正文？" onConfirm={() => handleRevert(previewDoc.id)}>
+                <Button size="small" icon={<UndoOutlined />}>撤销优化</Button>
+              </Popconfirm>
+            )}
             <Button size="small" icon={<RobotOutlined />} onClick={() => {
               setPreviewOpen(false)
               openRegen(previewDoc)

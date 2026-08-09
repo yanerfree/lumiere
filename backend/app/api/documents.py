@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 
 from fastapi import APIRouter, Depends
@@ -43,6 +44,8 @@ def _doc_to_dict(d: Document) -> dict:
         "docType": d.doc_type,
         "language": d.language,
         "content": d.content,
+        # 只报有没有上一版可退，不把整篇旧正文塞进列表响应
+        "canRevert": bool(d.previous_content),
         "genConfig": d.gen_config,
         "sourceCaseIds": d.source_case_ids,
         "status": d.status,
@@ -341,6 +344,14 @@ async def generate_with_screenshots(
     )
 
 
+_IMG_RE = re.compile(r"!\[[^\]]*\]\([^)]+\)")
+
+
+def _count_images(md: str | None) -> int:
+    """数 Markdown 里的图片引用条数。用来核对「优化后截图有没有被 AI 弄丢」。"""
+    return len(_IMG_RE.findall(md or ""))
+
+
 class OptimizeDocRequest(BaseSchema):
     feedback: str = Field(default="", max_length=2000)
 
@@ -353,20 +364,31 @@ async def optimize_document(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    """基于修改意见优化已有文档 — 保留截图，AI 重写内容"""
+    """按修改意见优化已有文档 —— 保留截图，只重写文字。
+
+    和「重新生成」的区别（这是这条路存在的全部理由）：重新生成会拿账号真登录
+    被测系统、重新截一遍图、整篇重做；这里一个字节都不碰被测系统，截图沿用原来的。
+
+    覆盖前会把旧正文存进 previous_content，配套 `/revert-optimize` 可一键退回 ——
+    一篇文档是真跑一遍截图跑出来的，AI 改砸了不能没有回头路。
+    """
     from app.services.ai_config_resolver import resolve_ai_config
     from app.services.ai import llm_client
-    from app.core.exceptions import AppError
+    from app.core.exceptions import AppError, ValidationError
 
     doc = await session.get(Document, doc_id)
     if not doc or doc.project_id != project_id:
         raise NotFoundError(code="NOT_FOUND", message="文档不存在")
 
+    original_content = doc.content or ""
+    if not original_content.strip():
+        # 空文档没什么可优化的，让 AI 凭空写反而会编出一篇没有截图的假手册
+        raise ValidationError(code="DOC_EMPTY", message="这篇文档还没有正文，请先生成再优化")
+
     ai_config = await resolve_ai_config(project_id, session, capability="doc-optimize")
     if not ai_config:
         raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
 
-    original_content = doc.content or ""
     from app.services.doc_generator import _load_format_template
     format_template = _load_format_template(doc.doc_type or "manual")
 
@@ -396,6 +418,8 @@ async def optimize_document(
 请根据修改意见优化上面的文档，输出完整的优化后 Markdown 文档。"""},
     ]
 
+    before = _count_images(original_content)
+
     async def event_stream():
         full_content = ""
         try:
@@ -404,13 +428,28 @@ async def optimize_document(
                     full_content += chunk.delta
                     yield f"data: {json.dumps({'type': 'chunk', 'content': chunk.delta}, ensure_ascii=False)}\n\n"
 
-            if full_content:
-                doc.content = full_content
-                doc.status = "published"
-                await session.commit()
+            if not full_content.strip():
+                # 一个字都没回来就别去动原文 —— 覆盖成空等于把文档删了
+                yield f"data: {json.dumps({'type': 'error', 'message': 'AI 没有返回内容，原文档未改动'}, ensure_ascii=False)}\n\n"
+                return
 
-            yield f"data: {json.dumps({'type': 'done', 'docId': str(doc_id)}, ensure_ascii=False)}\n\n"
+            doc.previous_content = original_content
+            doc.content = full_content
+            doc.status = "published"
+            await session.commit()
+
+            after = _count_images(full_content)
+            yield "data: " + json.dumps({
+                "type": "done",
+                "docId": str(doc_id),
+                # 「保留截图」是这条路唯一的承诺，兑没兑现要报数，别让人自己去数
+                "imagesBefore": before,
+                "imagesAfter": after,
+                "imagesLost": max(0, before - after),
+                "canRevert": True,
+            }, ensure_ascii=False) + "\n\n"
         except Exception as e:
+            logger.exception("optimize_document failed")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:200]}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
@@ -418,6 +457,30 @@ async def optimize_document(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/{doc_id}/revert-optimize")
+async def revert_optimize(
+    project_id: uuid.UUID,
+    doc_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """撤销上一次「优化文字」，退回优化前的正文。
+
+    两版对调而不是丢弃 —— 撤销完还能再撤销回去，人不会因为点错一下就卡死。
+    """
+    from app.core.exceptions import ValidationError
+
+    doc = await session.get(Document, doc_id)
+    if not doc or doc.project_id != project_id:
+        raise NotFoundError(code="NOT_FOUND", message="文档不存在")
+    if not doc.previous_content:
+        raise ValidationError(code="NO_PREVIOUS", message="这篇文档没有可撤销的优化记录")
+
+    doc.content, doc.previous_content = doc.previous_content, doc.content
+    await session.commit()
+    return {"data": {"docId": str(doc_id), "canRevert": True}}
 
 
 @router.get("/{doc_id}/export-html")

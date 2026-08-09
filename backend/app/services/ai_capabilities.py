@@ -53,7 +53,9 @@ CAPABILITY_REGISTRY = [
     {"key": "pytest-script",           "label": "pytest 脚本生成",      "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "入口是已删除的 AIScriptModal"},
     {"key": "doc-generate",            "label": "文档生成",             "category": "text",      "where": "文档管理"},
     {"key": "doc-generate-screenshots","label": "文档带截图生成",       "category": "text",      "where": "文档管理"},
-    {"key": "doc-optimize",            "label": "文档优化",             "category": "text",      "where": "暂无入口",          "deprecated": True, "deprecatedNote": "实现还在（POST /documents/{id}/optimize，保留截图只重写文字），但页面上的「重新生成」走的是带截图那条、会重新登录重新截图 —— 这条路没有任何调用方"},
+    # 2026-08-09 接上入口：原来只有「重新生成」（会重新登录重新截图），
+    # 这条"保留截图只重写文字"的路没有任何调用方。现在两个按钮并列，各说各的代价。
+    {"key": "doc-optimize",            "label": "文档优化",             "category": "text",      "where": "文档管理 → 优化文字"},
     {"key": "exploratory-charter",     "label": "探索测试 Charter 生成","category": "text",      "where": "探索测试"},
     {"key": "toolbox-regex",           "label": "工具箱-正则生成",      "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "后端无任何调用方"},
     # ── UI 脚本型(agentic) ──
