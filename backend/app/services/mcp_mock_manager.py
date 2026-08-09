@@ -157,7 +157,8 @@ class McpMockServerManager:
         tool = {
             "name": tool_data["name"],
             "description": tool_data.get("description", ""),
-            "params": tool_data.get("params", {}),
+            # 不填参数时传进来的是 None，得落成 {} —— 否则起服务时迭代 None 会炸
+            "params": tool_data.get("params") or {},
             "mode": "success",
             "enabled": True,
             "locked": False,
@@ -312,6 +313,53 @@ class McpMockServerManager:
             logger.info("MCP Mock 服务已停止")
             self._save_state(False)
 
+    async def _port_free(self) -> bool:
+        """端口上还有没有人在听。连得上 = 旧实例还没收完尾。"""
+        try:
+            _, w = await asyncio.wait_for(
+                asyncio.open_connection("127.0.0.1", self.port), timeout=0.5
+            )
+            w.close()
+            return False
+        except Exception:  # noqa: BLE001
+            return True
+
+    async def reload(self) -> dict:
+        """工具增删改之后，让**已经跑着的**服务重新加载一遍。
+
+        FastMCP 的工具是在 `_create_app()` 里一次性注册进去的，改 `self._tools`
+        不会影响已经跑起来的那个实例。实测：页面上加一个工具，对面 CC 的
+        `tools/list` 里根本没有 —— 人看到的现象是"工具建了但用不了"，
+        而页面没有任何地方提示要重启。
+
+        重载 = 停 + 起。**停完立刻起会撞上端口还没释放**（实测踩过：一次重载之后
+        服务再也没起来，页面显示已停止）。所以重试几次；真起不回来要如实报出去，
+        不能悄悄留下一个停掉的服务 —— 那比不重载更糟。
+
+        返回 {"reloaded": bool, "error": str|None}。没在跑时 reloaded=False
+        且无错（下次 start 自然是新的）。
+        """
+        if not self.running:
+            return {"reloaded": False, "error": None}
+        await self.stop()
+        # stop() 返回时旧监听 socket 未必已经彻底放开：SO_REUSEADDR 会让新的 bind
+        # 直接成功，而新连接仍被路由到正在收尾的旧实例 —— 表现是 initialize 打过去
+        # 连接被对端掐断（incomplete chunked read）。等端口真的空出来再起。
+        for _ in range(20):
+            if await self._port_free():
+                break
+            await asyncio.sleep(0.15)
+        last = ""
+        for _ in range(6):
+            try:
+                await self.start()
+                return {"reloaded": True, "error": None}
+            except RuntimeError as e:
+                last = str(e)
+                await asyncio.sleep(0.4)
+        logger.error("MCP Mock 重载失败，服务当前是停的: %s", last)
+        return {"reloaded": False, "error": f"改动已保存，但 Mock 服务没能重启（{last}）。请手动启动。"}
+
     def _on_task_done(self, task: asyncio.Task) -> None:
         if task.cancelled():
             return
@@ -350,7 +398,11 @@ class McpMockServerManager:
                 continue
             tool_name = tool_cfg["name"]
             tool_desc = f"[Mock] {tool_cfg.get('description', tool_name)}"
-            tool_params = tool_cfg.get("params", {})
+            # `.get("params", {})` 不够：建工具时不填参数会**把 params 存成 None**
+            # （键在、值是 None，默认值用不上），迭代 None 直接 TypeError，
+            # 于是整个 MCP Mock 再也起不来 —— 页面上只显示"已停止"，没人知道为什么。
+            # 实测踩过：建一个不带参数的工具，服务就此永久起不来。
+            tool_params = tool_cfg.get("params") or {}
 
             # 安全：函数 def 名/参数名只允许合法标识符（非法则降级为占位名/剔除），
             # 避免带连字符等的工具名产生 SyntaxError 把整个 MCP Mock 启动永久打死，
@@ -360,10 +412,15 @@ class McpMockServerManager:
             param_str = ", ".join(f'{k}: str = ""' for k in valid_params)
             func_code = f"async def {safe_name}({param_str}):\n    return _dispatch(_tn)\n"
             ns = {"_dispatch": _dispatch, "_tn": tool_name}
-            exec(func_code, ns)
-            fn = ns[safe_name]
-            fn.__doc__ = tool_desc
-            mcp.tool(name=tool_name, description=tool_desc)(fn)
+            try:
+                exec(func_code, ns)
+                fn = ns[safe_name]
+                fn.__doc__ = tool_desc
+                mcp.tool(name=tool_name, description=tool_desc)(fn)
+            except Exception:  # noqa: BLE001
+                # 上面已经把已知的两种脏数据挡掉了，但兜底仍然要有：
+                # **一个工具配坏了，代价应该是这一个用不了，不是整个 Mock 服务起不来**。
+                logger.exception("MCP Mock 工具 %s 注册失败，跳过它继续起服务", tool_name)
 
         return mcp.http_app(path="/", transport=self.transport)
 

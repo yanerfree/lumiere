@@ -60,7 +60,9 @@ async def create_tool(body: ToolCreate):
     if mgr.get_tool(body.name):
         return {"error": f"工具 {body.name} 已存在"}
     tool = mgr.add_tool(body.model_dump())
-    return {"data": tool}
+    # 工具是建 app 时注册进 FastMCP 的，不重载的话对面 CC 的 tools/list 里根本没有
+    rl = await mgr.reload()
+    return {"data": {**tool, **rl}}
 
 
 @router.patch("/tools/{tool_name}/lock")
@@ -94,7 +96,8 @@ async def update_tool(tool_name: str, body: ToolUpdate):
     if body.params is not None:
         update["params"] = body.params
     result = mgr.update_tool(tool_name, update)
-    return {"data": {"name": tool_name, "mode": result["mode"]}}
+    rl = await mgr.reload()
+    return {"data": {"name": tool_name, "mode": result["mode"], **rl}}
 
 
 @router.delete("/tools/{tool_name}")
@@ -108,7 +111,8 @@ async def delete_tool(tool_name: str):
     if tool.get("locked", False):
         return JSONResponse({"error": "工具已锁定，请先解锁后再删除"}, status_code=423)
     mgr.delete_tool(tool_name)
-    return {"ok": True}
+    rl = await mgr.reload()
+    return {"ok": True, **rl}
 
 
 @router.patch("/tools/{tool_name}/toggle")
@@ -119,7 +123,8 @@ async def toggle_tool(tool_name: str):
     if tool.get("locked", False):
         return JSONResponse({"error": "工具已锁定，请先解锁后再操作"}, status_code=423)
     mgr.update_tool(tool_name, {"enabled": not tool.get("enabled", True)})
-    return {"data": {"name": tool_name, "enabled": not tool.get("enabled", True)}}
+    rl = await mgr.reload()
+    return {"data": {"name": tool_name, "enabled": not tool.get("enabled", True), **rl}}
 
 
 # ── 服务控制 ──
