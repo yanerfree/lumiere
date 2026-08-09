@@ -956,6 +956,20 @@ def _scan_ui_script(content: str, language: str) -> tuple[list[str], list[str]]:
             errors.append("没找到 def test_ 开头的测试函数 —— 平台用 pytest 跑它，必须有。")
         if "os" not in content.split("\n")[0] and "import os" not in content:
             warns.append("没 import os，那就没法读环境变量；除非这条用例真的不需要任何外部取值。")
+        # 自己 sync_playwright() 起浏览器，在平台上**必挂**：平台用 pytest 跑，
+        # 而仓库的 pytest 配置是 asyncio_mode=auto，每个用例都被包进事件循环，
+        # 此时调 sync API 会抛 "Playwright Sync API inside the asyncio loop"。
+        # 这条错误信息完全看不出该怎么改，所以在入库时就说清楚 —— 不然要等到
+        # 执行那一步才发现，中间还隔着一次排队和几十秒（实测踩过）。
+        if "sync_playwright(" in content:
+            errors.append(
+                "别自己 sync_playwright() 起浏览器 —— 平台用 pytest 跑，"
+                "每个用例都在事件循环里，自己起 sync API 会抛"
+                "「Playwright Sync API inside the asyncio loop」。"
+                "改成用 pytest-playwright 的 page fixture："
+                "`from playwright.sync_api import Page, expect` + "
+                "`def test_xxx(page: Page):`，浏览器由平台管。"
+            )
     else:
         if "test(" not in content:
             errors.append("没找到 test(...) 用例 —— 平台用 npx playwright test 跑它，必须有。")
