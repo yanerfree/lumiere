@@ -16,6 +16,7 @@ from app.schemas.variable import (
     CreateChannelRequest,
     CreateEnvRequest,
     CreateVarRequest,
+    EnvReorderRequest,
     EnvResponse,
     EnvVarItem,
     EnvVarResponse,
@@ -75,6 +76,13 @@ async def create_environment(body: CreateEnvRequest, session: AsyncSession = Dep
     env = await environment_service.create_environment(session, body.name, body.description)
     await write_audit_log(session, action="create", target_type="environment", target_id=env.id, target_name=env.name)
     return {"data": EnvResponse.model_validate(env, from_attributes=True).model_dump(by_alias=True)}
+
+@router.put("/api/environments/reorder")
+async def reorder_environments(body: EnvReorderRequest, session: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
+    # 必须声明在 /api/environments/{env_id} 之前，否则 "reorder" 会被当作 env_id 解析
+    await environment_service.reorder_environments(session, [i.model_dump() for i in body.items])
+    await write_audit_log(session, action="reorder", target_type="environment", changes={"count": len(body.items)})
+    return MessageResponse(message="排序已保存").model_dump()
 
 @router.delete("/api/environments/{env_id}")
 async def delete_environment(env_id: uuid.UUID, session: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
