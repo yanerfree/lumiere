@@ -29,6 +29,10 @@ class TestReport(Base):
     failed: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     error: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     skipped: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # flaky = 重试之后才通过的（算"跑过但不可信"，要进通过率分母）
+    # xfail = pytest 的预期失败（跑了、按预期失败，和 skipped 一样不进分母）
+    flaky: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    xfail: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     pass_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), nullable=True)
     total_duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     manual_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")

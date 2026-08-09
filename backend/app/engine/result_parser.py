@@ -11,7 +11,7 @@ def parse_junit_xml(xml_path: str) -> list[dict]:
     """
     解析 JUnit XML 文件。
 
-    返回: [{"name": str, "status": "passed"|"failed"|"error", "duration_s": float, "message": str|None}]
+    返回: [{"name": str, "status": "passed"|"failed"|"error"|"skipped"|"xfail", ...}]
     """
     results = []
     path = Path(xml_path)
@@ -38,7 +38,11 @@ def parse_junit_xml(xml_path: str) -> list[dict]:
                 status = "error"
                 message = error.get("message", "") or error.text or ""
             elif skipped is not None:
-                status = "skipped"
+                # pytest 的预期失败在 junit 里也是 <skipped>，靠 type 区分：
+                #   type="pytest.xfail" → 它**跑了**而且按预期失败，不是"没跑"
+                # 都不进通过率分母，但报告上不能都写成"跳过"
+                kind = (skipped.get("type") or "").lower()
+                status = "xfail" if "xfail" in kind else "skipped"
                 message = skipped.get("message", "")
             else:
                 status = "passed"

@@ -156,6 +156,8 @@ async def record_manual_result(
     report.failed = status_counts.get("failed", 0)
     report.error = status_counts.get("error", 0)
     report.skipped = status_counts.get("skipped", 0)
+    report.flaky = status_counts.get("flaky", 0)
+    report.xfail = status_counts.get("xfail", 0)
 
     duration_result = await session.execute(
         select(func.sum(TestReportScenario.duration_ms))
@@ -163,7 +165,8 @@ async def record_manual_result(
     )
     report.total_duration_ms = duration_result.scalar_one() or 0
 
-    denominator = report.passed + report.failed + report.error
+    # 规范口径：flaky 进分母（它跑了，只是不可信），skipped / xfail 不进
+    denominator = report.passed + report.failed + report.error + report.flaky
     if denominator > 0:
         report.pass_rate = Decimal(str(round(report.passed / denominator * 100, 2)))
 
@@ -208,6 +211,8 @@ async def complete_execution(session: AsyncSession, plan_id: uuid.UUID) -> Plan:
     report.failed = status_counts.get("failed", 0)
     report.error = status_counts.get("error", 0)
     report.skipped = status_counts.get("skipped", 0)
+    report.flaky = status_counts.get("flaky", 0)
+    report.xfail = status_counts.get("xfail", 0)
 
     duration_result = await session.execute(
         select(func.sum(TestReportScenario.duration_ms))
@@ -215,7 +220,8 @@ async def complete_execution(session: AsyncSession, plan_id: uuid.UUID) -> Plan:
     )
     report.total_duration_ms = duration_result.scalar_one() or 0
 
-    denominator = report.passed + report.failed + report.error
+    # 规范口径：flaky 进分母（它跑了，只是不可信），skipped / xfail 不进
+    denominator = report.passed + report.failed + report.error + report.flaky
     if denominator > 0:
         report.pass_rate = Decimal(str(round(report.passed / denominator * 100, 2)))
 

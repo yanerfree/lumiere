@@ -35,6 +35,11 @@ const statusCfg = {
   failed: { label: '失败', color: '#e8453c', dot: '#e8453c' },
   error: { label: '错误', color: '#faad14', dot: '#faad14' },
   skipped: { label: '跳过', color: '#c9cdd4', dot: '#c9cdd4' },
+  // 重试之后才通过的 —— 一次就过和试了三次才过不是一回事，所以单独一档，
+  // 而且它进通过率分母（见 execution_service）
+  flaky: { label: '重试后通过', color: '#fa8c16', dot: '#fa8c16' },
+  // pytest 的预期失败：跑了、按预期失败。以前被并进"跳过"，读起来像没跑
+  xfail: { label: '预期失败', color: '#7c5cbf', dot: '#7c5cbf' },
   running: { label: '执行中', color: '#0ea5a0', dot: '#0ea5a0' },
   pending: { label: '待执行', color: '#c9cdd4', dot: '#c9cdd4' },
 }
@@ -595,9 +600,16 @@ export default function ReportDetail() {
   const liveFailed = isRunning ? ((counts.failed || 0) + (counts.error || 0)) : (summary.failed + summary.error)
   const liveError = isRunning ? (counts.error || 0) : summary.error
   const liveSkipped = isRunning ? (counts.skipped || 0) : summary.skipped
+  const liveFlaky = isRunning ? (counts.flaky || 0) : (summary.flaky || 0)
+  const liveXfail = isRunning ? (counts.xfail || 0) : (summary.xfail || 0)
   const liveTotal = summary.totalScenarios
-  const liveRate = doneCount > 0 ? (livePassed / (livePassed + liveFailed) * 100).toFixed(1) : null
-  const failRate = liveTotal > 0 ? (liveFailed / liveTotal * 100).toFixed(1) : '0.0'
+  // 两个百分比以前用的是**两个不同的分母**：通过率按 passed+failed+error 算、
+  // 失败率按 totalScenarios 算，于是卡片上会出现「通过 2 (50.0%) / 失败 2 (28.6%)」
+  // 这种加不到一起的数（实测截图为证），而且都和后端算的 passRate 对不上。
+  // 统一成规范口径：passed + failed + error + flaky；skipped 和 xfail 不进分母。
+  const denom = livePassed + liveFailed + liveFlaky
+  const liveRate = doneCount > 0 && denom > 0 ? (livePassed / denom * 100).toFixed(1) : null
+  const failRate = denom > 0 ? (liveFailed / denom * 100).toFixed(1) : '0.0'
 
   const renderScenarioRow = (s) => {
     const cfg = statusCfg[s.status] || statusCfg.pending
@@ -820,6 +832,20 @@ export default function ReportDetail() {
               <div style={{ color: '#86909c', fontSize: 13, marginBottom: 4 }}>跳过</div>
               <div style={{ fontSize: 18, fontWeight: 600, color: '#c9cdd4' }}>{liveSkipped}</div>
             </div>
+            {/* 有才显示 —— 平时不占地方，出现了就必须看见：
+                「重试后通过」算进通过率分母（它跑过但不可信），「预期失败」不算 */}
+            {liveFlaky > 0 && (
+              <div>
+                <div style={{ color: '#86909c', fontSize: 13, marginBottom: 4 }}>重试后通过</div>
+                <div style={{ fontSize: 18, fontWeight: 600, color: '#fa8c16' }}>{liveFlaky}</div>
+              </div>
+            )}
+            {liveXfail > 0 && (
+              <div>
+                <div style={{ color: '#86909c', fontSize: 13, marginBottom: 4 }}>预期失败</div>
+                <div style={{ fontSize: 18, fontWeight: 600, color: '#7c5cbf' }}>{liveXfail}</div>
+              </div>
+            )}
           </div>
         </div>
       </Card>

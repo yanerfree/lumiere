@@ -304,13 +304,21 @@ async def _execute(
                 )
 
             # 更新 scenario
-            scenario.status = case_result["status"]
+            #
+            # **重试之后才通过的记成 flaky，不记成 passed**。
+            # 原来最终状态直接写 passed，只在备注里写一句"重试 2 次，最终通过" ——
+            # 于是通过率照样算 100%，而这正是"假通过"：一次就过和试了三次才过，
+            # 对使用者是完全不同的两件事。flaky 进通过率分母（见 execution_service）。
+            final_status = case_result["status"]
+            if final_status == "passed" and actual_attempts > 1:
+                final_status = "flaky"
+            scenario.status = final_status
             scenario.duration_ms = case_result["duration_ms"]
             scenario.error_summary = case_result.get("error_summary")
             scenario.execution_log = final_log[:10000]
             scenario.completed_at = case_completed
             if actual_attempts > 1:
-                retry_note = f"重试 {actual_attempts - 1} 次，最终{('通过' if case_result['status'] == 'passed' else '失败')}"
+                retry_note = f"重试 {actual_attempts - 1} 次，最终{('通过（记为 flaky）' if case_result['status'] == 'passed' else '失败')}"
                 scenario.remark = retry_note
             scenario.execution_type = "automated"
             await session.flush()

@@ -28,7 +28,7 @@ def execute_single_case(
     在沙箱中执行单条 pytest 用例。
 
     返回: {
-        "status": "passed"|"failed"|"error"|"skipped",
+        "status": "passed"|"failed"|"error"|"skipped"|"xfail",
         "duration_ms": int,
         "error_summary": str|None,
         "stdout": str,
@@ -160,6 +160,9 @@ def execute_single_case(
             status = "failed"
         elif all(s == "skipped" for s in statuses):
             status = "skipped"
+        elif all(s in ("xfail", "skipped") for s in statuses):
+            # 全是预期失败/跳过：跑了但没有一条真通过，不能记成 passed
+            status = "xfail" if "xfail" in statuses else "skipped"
         else:
             status = "passed"
 

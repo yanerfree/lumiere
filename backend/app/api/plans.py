@@ -242,6 +242,8 @@ class ReportResponse(BaseSchema):
     failed: int
     error: int
     skipped: int
+    flaky: int = 0
+    xfail: int = 0
     pass_rate: float | None
     manual_count: int
 
@@ -343,6 +345,8 @@ async def list_plan_executions(
                 "failed": r.failed,
                 "error": r.error,
                 "skipped": r.skipped,
+                "flaky": r.flaky,
+                "xfail": r.xfail,
                 "passRate": float(r.pass_rate) if r.pass_rate is not None else None,
                 "totalDurationMs": r.total_duration_ms,
             }
@@ -623,6 +627,8 @@ async def list_reports(
             "failed": report.failed,
             "error": report.error,
             "skipped": report.skipped,
+            "flaky": report.flaky,
+            "xfail": report.xfail,
             "passRate": float(report.pass_rate) if report.pass_rate is not None else None,
             "totalDurationMs": report.total_duration_ms,
         })
