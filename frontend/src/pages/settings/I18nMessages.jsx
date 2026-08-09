@@ -70,7 +70,13 @@ export default function I18nMessages() {
     try {
       const res = await api.post(`${base}/harvest`)
       const { added = 0, scanned = 0 } = res.data || {}
-      message.success(`采集完成：新增 ${added} 条文案（扫描 ${scanned} 个脚本）`)
+      // 一个脚本都没扫到时别报"采集完成"——那是个空转，绿色 toast 会让人以为
+      // 采集器坏了。直接说清楚下一步该干什么。
+      if (scanned === 0) {
+        message.warning('这个项目还没有 UI 脚本，没什么可采集的。先把脚本回推上来再来扫。')
+      } else {
+        message.success(`采集完成：新增 ${added} 条文案（扫描 ${scanned} 个脚本）`)
+      }
       load()
     } catch {
       message.error('采集失败')
