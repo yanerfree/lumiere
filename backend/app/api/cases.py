@@ -306,6 +306,30 @@ async def export_cases_excel(
         headers={"Content-Disposition": f"attachment; filename=cases-export.xlsx"},
     )
 
+@router.post("/{case_id}/release-quarantine")
+async def release_quarantine(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    case_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """人工解除 flaky 自动隔离 —— 脚本修好了、环境稳了，不用干等 14 天。
+
+    判定依据（flaky_evidence）保留备查：解除是"我看过依据、认为不必再隔离"，
+    不是"把这段历史抹掉"。
+    """
+    from app.services import flaky_service
+
+    case = await flaky_service.release(session, case_id)
+    if case is None:
+        raise NotFoundError(code="CASE_NOT_FOUND", message="用例不存在")
+    await session.commit()
+    await write_audit_log(session, action="release_quarantine", target_type="case",
+                          target_id=case.id, target_name=case.title)
+    return {"data": {"caseId": str(case.id), "quarantinedUntil": None}}
+
+
 @router.post("/{case_id}/copy", status_code=HTTP_201_CREATED)
 async def copy_case(
     project_id: uuid.UUID,

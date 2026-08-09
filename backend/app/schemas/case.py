@@ -108,6 +108,9 @@ class CaseResponse(BaseSchema):
     script_ref_file: str | None
     script_ref_func: str | None
     is_flaky: bool
+    # 自动隔离：非空且未过期 = 还在隔离中；evidence 是判定依据，人要能复核
+    quarantined_until: datetime | None = None
+    flaky_evidence: dict | None = None
     remark: str | None
     # AI 审核扩展
     review_status: str | None = None

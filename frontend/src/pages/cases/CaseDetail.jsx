@@ -1637,6 +1637,19 @@ export default function CaseDetail() {
   const [apiStatus, setApiStatus] = useState('not_started')
   const [isCore, setIsCore] = useState(false)
   const [flaky, setFlaky] = useState(false)
+
+  // 隔离态直接从 quarantinedUntil 算 —— 到期即失效，不需要谁去清标记
+  const quarantined = !!caseData?.quarantinedUntil && new Date(caseData.quarantinedUntil) > new Date()
+
+  const releaseQuarantine = async () => {
+    try {
+      await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/release-quarantine`)
+      message.success('已解除隔离，下次执行会正常跑')
+      loadData()
+    } catch (e) {
+      message.error(e?.response?.data?.error?.message || '解除失败')
+    }
+  }
   const [preconditions, setPreconditions] = useState('')
   const [expectedResult, setExpectedResult] = useState('')
   const [scriptRefFile, setScriptRefFile] = useState('')
@@ -1889,10 +1902,42 @@ export default function CaseDetail() {
                 items={DIM_STATUS_KEYS.map(s => ({ key: s, label: dimStatusMap[s].label, dot: 'circle', color: dimStatusMap[s].color }))} />
             </InlineProp>
           ))}
-          <InlineProp icon={<WarningOutlined />} value={flaky ? 'Flaky' : '正常'} color={flaky ? '#faad14' : '#86909c'} bg={flaky ? '#fffbe6' : 'rgba(0,0,0,0.02)'}>
-            <div style={{ padding: '4px 8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-              <span style={{ fontSize: 13 }}>Flaky 标记</span>
-              <Switch size="small" checked={flaky} onChange={v => setFlaky(v)} />
+          <InlineProp icon={<WarningOutlined />}
+            value={quarantined ? '隔离中' : flaky ? 'Flaky' : '正常'}
+            color={quarantined ? '#e8453c' : flaky ? '#faad14' : '#86909c'}
+            bg={quarantined ? '#fff1f0' : flaky ? '#fffbe6' : 'rgba(0,0,0,0.02)'}>
+            <div style={{ padding: '4px 8px', minWidth: 300 }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                <span style={{ fontSize: 13 }}>Flaky 标记（人工）</span>
+                <Switch size="small" checked={flaky} onChange={v => setFlaky(v)} />
+              </div>
+              {/* 自动隔离要能复核：凭什么说它 flaky、什么时候回来、怎么提前放出来。
+                  只给一个红标不给依据的话，等于平台单方面判了一条用例不跑。 */}
+              {quarantined && (
+                <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+                  <div style={{ fontSize: 12.5, color: '#e8453c', fontWeight: 600, marginBottom: 4 }}>
+                    自动隔离中，执行时会被跳过
+                  </div>
+                  <div style={{ fontSize: 12, color: '#4e5969', lineHeight: 1.8 }}>
+                    {caseData.flakyEvidence?.note || '结果反复翻转'}
+                    <br />
+                    到期：{new Date(caseData.quarantinedUntil).toLocaleString('zh-CN')}（到期自动恢复）
+                  </div>
+                  {(caseData.flakyEvidence?.runs || []).length > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      {caseData.flakyEvidence.runs.map((r, i) => (
+                        <div key={i} style={{ fontSize: 11.5, color: '#86909c', fontFamily: 'var(--font-mono)' }}>
+                          {r.status === 'passed' ? '✓' : '✗'} {(r.at || '').slice(0, 16).replace('T', ' ')}
+                          {r.error ? ` — ${String(r.error).slice(0, 40)}` : ''}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <Button size="small" style={{ marginTop: 8 }} onClick={releaseQuarantine}>
+                    解除隔离（脚本已修好）
+                  </Button>
+                </div>
+              )}
             </div>
           </InlineProp>
           <ReadonlyProp label="来源" value={caseData.source || 'manual'} />

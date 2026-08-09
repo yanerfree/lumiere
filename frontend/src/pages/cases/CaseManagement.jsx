@@ -439,7 +439,20 @@ export default function CaseManagement() {
       )
     } },
     { key: 'source', title: '来源', dataIndex: 'source', width: 48, align: 'center', defaultVisible: true, render: v => <span style={{ fontSize: 11, color: v === 'ai' ? '#7cacf8' : '#c9cdd4' }}>{v === 'imported' ? '导入' : v === 'ai' ? 'AI' : '手动'}</span> },
-    { key: 'isFlaky', title: 'Flaky', dataIndex: 'isFlaky', width: 66, align: 'center', defaultVisible: true, render: v => v ? <Tag color="#fff7e6" style={{ color: '#faad14', border: 'none', margin: 0 }}>F</Tag> : null },
+    // 「人工标的」和「自动隔离到 X」是两回事：前者要人自己撤，后者到期自己回来。
+    // 只画一个 F 的话，看到的人不知道这条为什么不跑了、也不知道等到哪天。
+    { key: 'isFlaky', title: 'Flaky', dataIndex: 'isFlaky', width: 66, align: 'center', defaultVisible: true,
+      render: (v, r) => {
+        const until = r.quarantinedUntil ? new Date(r.quarantinedUntil) : null
+        const quarantined = until && until > new Date()
+        if (v) return <Tooltip title="人工标记为 Flaky，执行时跳过；要恢复请在用例详情里取消标记"><Tag color="#fff7e6" style={{ color: '#faad14', border: 'none', margin: 0 }}>F</Tag></Tooltip>
+        if (quarantined) return (
+          <Tooltip title={`${r.flakyEvidence?.note || '结果反复翻转'}；${until.toLocaleString('zh-CN')} 到期后自动恢复执行`}>
+            <Tag color="#fff1f0" style={{ color: '#e8453c', border: 'none', margin: 0 }}>隔离</Tag>
+          </Tooltip>
+        )
+        return null
+      } },
     { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 52, align: 'center', defaultVisible: true, render: v => {
       if (!v) return null
       if (v === 'approved') return <Tag style={{ fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none', margin: 0 }}>已审</Tag>

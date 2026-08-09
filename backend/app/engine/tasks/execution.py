@@ -210,10 +210,20 @@ async def _execute(
             else:
                 continue
 
-            # Flaky 用例跳过
-            if case.is_flaky:
+            # Flaky 用例跳过 —— 要说清是"人工标的"还是"自动隔离、什么时候回来"，
+            # 否则一条用例悄悄不跑了，没人知道为什么、也不知道等到哪天
+            from app.services import flaky_service
+            if flaky_service.should_skip(case):
                 scenario.status = "skipped"
-                scenario.error_summary = "Flaky 用例已跳过"
+                if case.is_flaky:
+                    scenario.error_summary = "人工标记为 Flaky，本次跳过"
+                else:
+                    until = case.quarantined_until.strftime("%Y-%m-%d %H:%M") if case.quarantined_until else "?"
+                    ev = case.flaky_evidence or {}
+                    scenario.error_summary = (
+                        f"自动隔离中（{ev.get('note', '结果反复翻转')}），"
+                        f"{until} 到期后自动恢复执行"
+                    )
                 await session.flush()
                 continue
 

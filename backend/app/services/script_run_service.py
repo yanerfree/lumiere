@@ -115,6 +115,17 @@ async def record_run(
             failure_phenomenon=phenomenon,
         )
         session.add(run)
+        await session.flush()
+
+        # 记完账立刻判一次 flaky —— 挂在这个唯一写入点上，任何执行路径
+        # （单条调试 / 计划回归 / 批量）都自动过一遍，不用各自记得去调。
+        # 判定只看同一脚本版本，见 flaky_service 的说明。
+        try:
+            from app.services import flaky_service
+            await flaky_service.evaluate(session, case_id, script_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("flaky 判定失败（不影响这次执行记账）")
+
         await (session.commit() if commit else session.flush())
         return run
     except Exception:  # noqa: BLE001

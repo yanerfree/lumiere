@@ -108,6 +108,10 @@ class Case(Base):
     script_ref_file: Mapped[str | None] = mapped_column(String(500), nullable=True)
     script_ref_func: Mapped[str | None] = mapped_column(String(200), nullable=True)
     is_flaky: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # 自动隔离：非空且未过期 = 隔离中，到期自动回执行队列（不需要定时任务）。
+    # 判定依据落在 flaky_evidence 里，人要能复核"凭什么说它 flaky"。
+    quarantined_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    flaky_evidence: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     # —— AI 生成用例扩展（功能场景测试模块，仅 source=ai 使用；旧数据全部为 NULL）——
     # pending_review / approved / rejected

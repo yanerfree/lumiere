@@ -19,7 +19,9 @@ async def _will_run_automated(session: AsyncSession, plan, case) -> bool:
     优先，兼容旧式（automation_status=automated + script_ref_file）。
     Flaky 用例被执行器跳过，这里也不算自动。
     """
-    if plan.plan_type != "automated" or case.is_flaky:
+    from app.services import flaky_service
+
+    if plan.plan_type != "automated" or flaky_service.should_skip(case):
         return False
     from app.engine.tasks.adhoc_execution import _has_new_style_script
 
@@ -88,7 +90,7 @@ async def start_execution(
         if auto_flags.get(case.id):
             exec_type = "automated"
             status = "pending"
-        elif plan.plan_type == "automated" and case.is_flaky:
+        elif plan.plan_type == "automated" and flaky_service.should_skip(case):
             exec_type = "manual"
             status = "skipped"  # Flaky 跳过
         else:
