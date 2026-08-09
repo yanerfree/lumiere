@@ -617,10 +617,13 @@ async def create_doc_task(
     # 保存到内存（生产环境应存 DB 或 Redis）
     if not hasattr(create_doc_task, '_tasks'):
         create_doc_task._tasks = {}
+    import time
+
     create_doc_task._tasks[task_id] = {
         "projectId": str(project_id),
         "config": body,
         "createdBy": str(current_user.id),
+        "createdAt": time.time(),      # 配 TTL 用，见 get_doc_task
     }
 
     host = body.get("_host", "localhost:8756")
@@ -640,14 +643,36 @@ async def create_doc_task(
     }}
 
 
+_DOC_TASK_TTL_SECONDS = 30 * 60
+
+
 @router.get("/tasks/{task_id}")
 async def get_doc_task(
     project_id: uuid.UUID,
     task_id: str,
 ):
-    """获取任务配置（Claude Code 通过 URL 读取）"""
-    tasks = getattr(create_doc_task, '_tasks', {})
+    """获取任务配置（Claude Code 通过 URL 读取）。
+
+    **这条必须不带鉴权**：平台给的是一行"粘到 Claude Code 里"的命令，
+    对面那个 CC 没有平台 token，加鉴权等于把这条路堵死。
+    安全性靠的是 task_id 是 uuid4（capability URL）。
+
+    但配置里带着被测系统的**账号密码**，所以两条收口，缺一不可：
+      · **一次性**：读完即删。CC 只需要读一次；URL 万一落进日志/聊天记录里也失效了。
+      · **30 分钟过期**：没人来读也不会永远留在内存里。
+    以前两条都没有 —— 任务建出来就一直在，谁拿到 URL 都能反复读出密码。
+    """
+    import time
+
+    tasks = getattr(create_doc_task, "_tasks", {})
     task = tasks.get(task_id)
+    if task and time.time() - task.get("createdAt", 0) > _DOC_TASK_TTL_SECONDS:
+        tasks.pop(task_id, None)
+        task = None
     if not task:
-        raise NotFoundError(code="NOT_FOUND", message="任务不存在或已过期")
+        raise NotFoundError(
+            code="NOT_FOUND",
+            message="任务不存在、已被读取过或已过期（任务链接是一次性的，30 分钟内有效）。回页面重新生成一条。",
+        )
+    tasks.pop(task_id, None)      # 一次性：读完即删
     return {"data": task["config"]}

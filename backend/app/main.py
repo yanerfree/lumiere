@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.exceptions import HTTPException
 from starlette.middleware.cors import CORSMiddleware
 
@@ -46,6 +46,7 @@ from app.api.scenario_gen import router as scenario_gen_router
 from app.api.mcp_keys import router as mcp_keys_router
 from app.api.system_services import router as system_services_router
 from app.core.middleware import CamelCaseResponse, TraceIdMiddleware
+from app.deps.auth import get_current_user
 
 # --- MCP Server ---
 from app.mcp import mcp
@@ -254,6 +255,24 @@ app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
 # --- 路由 ---
+#
+# ⚠ Mock / 测试工具这一族的鉴权是**挂在这里**的，不在各自的函数签名里。
+#
+# 起因：不带 Authorization 把全部端点打了一遍，发现 74 个未认证可达，全集中在
+# Mock 和测试工具这一族 —— 平台主体（项目/用例/计划/用户）都老老实实 401，
+# 只有这一族当初漏了。实测后果按严重程度排：
+#   · POST /api/toolbox/http-request 和 /api/http-client/send —— **SSRF**：
+#     不用登录就能让服务器去请求任意地址，包括内网。平台监听 0.0.0.0:8756，
+#     同一个局域网里谁都能用它当跳板。
+#   · PUT /api/proxy-probe/config、POST /api/*-mock/... —— 改代理配置、
+#     增删 Mock 路由，等于替别人改测试环境的行为。
+#   · DELETE /api/*/logs —— 清空各类 Mock 请求日志。
+#
+# 为什么统一加在 include_router 而不是逐个函数：这一族有 74 个端点分散在 13 个
+# 文件里，逐个加必漏，而且下次新增端点又会漏。挂在挂载点上，**新加的路由自动就有**。
+# 对应的封样在 tests/test_endpoint_auth.py。
+_AUTHED = [Depends(get_current_user)]
+
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(users_router)
@@ -272,34 +291,34 @@ app.include_router(automation_resources_router)
 app.include_router(i18n_messages_router)
 app.include_router(scripts_export_router)
 app.include_router(testforge_router)
-app.include_router(debug_router)
+app.include_router(debug_router, dependencies=_AUTHED)
 app.include_router(api_collections_router)
-app.include_router(llm_mock_router)
-app.include_router(api_mock_router)
-app.include_router(proxy_probe_router)
+app.include_router(llm_mock_router, dependencies=_AUTHED)
+app.include_router(api_mock_router, dependencies=_AUTHED)
+app.include_router(proxy_probe_router, dependencies=_AUTHED)
 app.include_router(ai_router)
-app.include_router(ai_config_router)
+app.include_router(ai_config_router, dependencies=_AUTHED)
 app.include_router(ai_provider_router)
 app.include_router(project_ai_config_router)
 app.include_router(ai_capabilities_router)
 app.include_router(skill_run_router)
-app.include_router(mcp_mock_router)
-app.include_router(protocol_mock_router)
-app.include_router(oauth2_mock_router)
-app.include_router(load_test_router)
+app.include_router(mcp_mock_router, dependencies=_AUTHED)
+app.include_router(protocol_mock_router, dependencies=_AUTHED)
+app.include_router(oauth2_mock_router, dependencies=_AUTHED)
+app.include_router(load_test_router, dependencies=_AUTHED)
 app.include_router(exploratory_router)
 app.include_router(documents_router)
 app.include_router(api_test_router)
 app.include_router(scenario_gen_router)
 app.include_router(case_file_router)
-app.include_router(skill_manage_router)
+app.include_router(skill_manage_router, dependencies=_AUTHED)
 app.include_router(project_skills_router)
 app.include_router(knowledge_router)
 app.include_router(screenshots_router)
-app.include_router(toolbox_router)
-app.include_router(http_client_router)
+app.include_router(toolbox_router, dependencies=_AUTHED)
+app.include_router(http_client_router, dependencies=_AUTHED)
 app.include_router(mcp_keys_router)
-app.include_router(system_services_router)
+app.include_router(system_services_router, dependencies=_AUTHED)
 
 # --- MCP Server ---
 # 只在独立端口（MCP_PORT，默认 18800）暴露，见 _start_standalone_mcp_server()。
