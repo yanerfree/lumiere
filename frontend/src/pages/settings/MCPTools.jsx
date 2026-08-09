@@ -19,34 +19,12 @@ const CAT_COLORS = {
 }
 
 /**
- * 预设档位 —— 只是勾选的快捷方式，落库存的仍是展开后的显式工具列表，
- * 这样语义可审计，也不会因为日后改了档位定义导致已有 Key 的范围悄悄变化。
+ * 预设档位从后端取（app/mcp/profiles.py）——和工具注册表同一个进程，
+ * 才不会重演"前端写死 20 条、后端实际 32 条"那种漂移。
+ * 档位只是勾选的快捷方式，落库存的仍是展开后的显式工具名列表：
+ * 语义可审计，日后改档位定义也不会让已有 Key 的范围悄悄变。
  */
-const PROFILES = {
-  live: {
-    label: '用例：步骤 + 接口场景',
-    task: '在被测系统里真跑一遍，把测试步骤和接口链回写成用例',
-    hint: '刻意排除 tb_generate_api_test（凭文档造，与活体验证冲突）；不含 UI 脚本、报告、文档流水线',
-    tools: [
-      'tb_list_projects', 'tb_list_branches', 'tb_list_cases', 'tb_get_case', 'tb_get_folder_tree',
-      'tb_create_case', 'tb_list_api_tree', 'tb_get_api_node', 'tb_list_environments',
-      'tb_get_merged_variables', 'tb_get_sync_spec', 'tb_list_global_data',
-      'tb_upsert_scenario_variables', 'tb_list_scenario_variables', 'tb_upsert_automation_resource',
-      'tb_sync_orchestrated_scenario', 'tb_list_api_tests', 'tb_get_api_test', 'tb_run_api_test',
-    ],
-  },
-  docgen: {
-    label: '需求文档批量生成用例',
-    task: '喂一份需求文档，走 AI 流水线批量产出用例',
-    hint: '不含回推、执行 —— 这条路不碰被测系统',
-    tools: [
-      'tb_list_projects', 'tb_list_branches', 'tb_list_cases',
-      'tb_create_scenario_task', 'tb_confirm_and_generate', 'tb_get_scenario_task',
-      'tb_query_coverage_matrix', 'tb_get_generation_stats',
-    ],
-  },
-  all: { label: '全量（不限制）', task: '开放所有工具', hint: '调试用；工具太多会干扰 AI 选型，日常别用', tools: null },
-}
+const EMPTY_PROFILE = { label: '', task: '', hint: '', tools: null }
 
 const cardStyle = { borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)', boxShadow: 'none' }
 const sectionTitle = { fontSize: 14, fontWeight: 600, color: '#2e3138', marginBottom: 4 }
@@ -92,13 +70,13 @@ function ToolPicker({ tools, byCategory, value, onChange }) {
 }
 
 /**
- * 工具目录：按「我要干的活」看，而不是 36 条平铺。
+ * 工具目录：按「我要干的活」看，而不是几十条平铺。
  * 选一个场景 → 该场景要调哪些工具直接高亮，其余灰掉，一眼能数清。
  */
-function ToolCatalog({ tools, byCategory, onUseProfile }) {
+function ToolCatalog({ tools, byCategory, profiles, onUseProfile }) {
   const [scene, setScene] = useState('live')
   const [onlyScene, setOnlyScene] = useState(true)
-  const prof = PROFILES[scene]
+  const prof = profiles.find(p => p.key === scene) || profiles[0] || EMPTY_PROFILE
   const inScene = (n) => !prof.tools || prof.tools.includes(n)
   const usedCount = prof.tools ? prof.tools.length : tools.length
 
@@ -106,8 +84,9 @@ function ToolCatalog({ tools, byCategory, onUseProfile }) {
     <div>
       <Card size="small" style={{ ...cardStyle, marginBottom: 16, background: 'rgba(14,165,160,0.03)' }}>
         <div style={{ fontSize: 12, color: '#8c919e', marginBottom: 8 }}>我要干的活</div>
-        <Radio.Group value={scene} onChange={e => setScene(e.target.value)} optionType="button" buttonStyle="solid" size="small">
-          {Object.entries(PROFILES).map(([k, p]) => <Radio.Button key={k} value={k}>{p.label}</Radio.Button>)}
+        <Radio.Group value={scene} onChange={e => setScene(e.target.value)} optionType="button" buttonStyle="solid" size="small"
+          style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {profiles.map(p => <Radio.Button key={p.key} value={p.key}>{p.label}</Radio.Button>)}
         </Radio.Group>
         <div style={{ marginTop: 10, fontSize: 13, color: '#4e5969' }}>{prof.task}</div>
         <div style={{ marginTop: 4, fontSize: 12, color: '#8c919e' }}>{prof.hint}</div>
@@ -169,13 +148,25 @@ export default function MCPTools() {
   const [newKeyResult, setNewKeyResult] = useState(null)
   const [creating, setCreating] = useState(false)
   const [profile, setProfile] = useState('live')
-  const [picked, setPicked] = useState(PROFILES.live.tools)
+  const [picked, setPicked] = useState(null)
+  const [profiles, setProfiles] = useState([])
   const [scopeEditing, setScopeEditing] = useState(null)   // 正在编辑范围的 Key
 
-  useEffect(() => { fetchKeys(); fetchTools() }, [])
-  const fetchKeys = async () => { try { setApiKeys((await api.get('/mcp-keys')).data || []) } catch {} }
+  useEffect(() => { fetchKeys(); fetchTools(); fetchProfiles() }, [])
+  const fetchKeys = async () => { try { setApiKeys((await api.get('/mcp-keys')).data || []) } catch { /* 拦截器已弹错，这里不重复报 */ } }
   // 工具目录来自后端注册表，不再前端硬编码（曾经写死 20 条、后端实际 32 条）
-  const fetchTools = async () => { try { setTools((await api.get('/mcp-keys/tools')).data || []) } catch {} }
+  const fetchTools = async () => { try { setTools((await api.get('/mcp-keys/tools')).data || []) } catch { /* 同上 */ } }
+  const fetchProfiles = async () => {
+    try {
+      const d = (await api.get('/mcp-keys/profiles')).data || {}
+      const list = d.profiles || []
+      setProfiles(list)
+      // 默认档位的工具作为初始勾选 —— 建 Key 弹窗直接就是收敛过的范围
+      const first = list.find(p => p.key === 'live') || list[0]
+      if (first) setPicked(first.tools)
+    } catch { /* 拉不到就只剩自定义勾选，不至于开天窗 */ }
+  }
+  const profileOf = (key) => profiles.find(p => p.key === key)
 
   const byCategory = useMemo(() => {
     const m = new Map()
@@ -185,8 +176,8 @@ export default function MCPTools() {
 
   const applyProfile = (key) => {
     setProfile(key)
-    // custom 不在 PROFILES 里：沿用当前勾选（从档位切过去时正好作为起点）
-    if (key !== 'custom') setPicked(PROFILES[key].tools)
+    // custom 不是后端档位：沿用当前勾选（从档位切过去时正好作为起点）
+    if (key !== 'custom') setPicked(profileOf(key)?.tools ?? null)
     else if (picked === null) setPicked(tools.map(t => t.name))
   }
 
@@ -325,7 +316,7 @@ export default function MCPTools() {
           key: 'tools',
           label: <span><ThunderboltOutlined /> 工具列表 ({tools.length})</span>,
           children: (
-            <ToolCatalog tools={tools} byCategory={byCategory}
+            <ToolCatalog tools={tools} byCategory={byCategory} profiles={profiles}
               onUseProfile={(key) => { applyProfile(key); setCreateModalOpen(true); setNewKeyResult(null); setNewKeyName('') }} />
           ),
         },
@@ -405,8 +396,8 @@ export default function MCPTools() {
             </Text>
             <Radio.Group value={profile} onChange={e => applyProfile(e.target.value)}
               style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {Object.entries(PROFILES).map(([k, p]) => (
-                <Radio key={k} value={k}>
+              {profiles.map(p => (
+                <Radio key={p.key} value={p.key}>
                   <span style={{ fontSize: 13 }}>{p.label}</span>
                   <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
                     {p.tools ? `${p.tools.length} 个` : `${tools.length} 个`} · {p.hint}
@@ -455,7 +446,7 @@ export default function MCPTools() {
             <Radio.Group
               value={scopeEditing.tools === null ? 'all' : 'custom'}
               onChange={e => setScopeEditing(s => ({
-                ...s, tools: e.target.value === 'all' ? null : (PROFILES.live.tools),
+                ...s, tools: e.target.value === 'all' ? null : (profileOf('live')?.tools || []),
               }))}
               style={{ display: 'flex', gap: 16, marginBottom: 12 }}
             >
@@ -467,8 +458,8 @@ export default function MCPTools() {
               <>
                 <Space wrap size={6} style={{ marginBottom: 4 }}>
                   <Text type="secondary" style={{ fontSize: 12 }}>快速套用：</Text>
-                  {Object.entries(PROFILES).filter(([, p]) => p.tools).map(([k, p]) => (
-                    <Button key={k} size="small"
+                  {profiles.filter(p => p.tools).map(p => (
+                    <Button key={p.key} size="small"
                       onClick={() => setScopeEditing(s => ({ ...s, tools: p.tools }))}>{p.label}</Button>
                   ))}
                 </Space>

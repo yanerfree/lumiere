@@ -59,6 +59,26 @@ async def list_available_tools(_: User = Depends(get_current_user)):
     return {"data": TOOL_CATALOG}
 
 
+@router.get("/profiles")
+async def list_tool_profiles(_: User = Depends(get_current_user)):
+    """按「活」分的工具档位。
+
+    档位定义放后端，和 TOOL_CATALOG 同一个进程 —— 之前工具列表就是因为
+    前端硬编码而漂移过（写死 20 条、后端实际 32 条）。这里顺带把校验结果
+    一起回给前端：档位里写了但没注册的工具名，不该等到 Key 建出来才发现。
+    """
+    from app.mcp import TOOL_CATALOG
+    from app.mcp.profiles import PROFILES, uncovered_tools, unknown_tools
+
+    names = {t["name"] for t in TOOL_CATALOG}
+    return {"data": {
+        "profiles": PROFILES,
+        "totalTools": len(names),
+        "uncovered": uncovered_tools(names),
+        "unknown": [{"profile": k, "tool": n} for k, n in unknown_tools(names)],
+    }}
+
+
 @router.post("")
 async def create_api_key(
     body: CreateKeyRequest,
