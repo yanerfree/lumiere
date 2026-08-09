@@ -1,19 +1,21 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react'
 import {
   Button, Space, Input, Tag, Radio, Popconfirm, Tooltip, Badge, Pagination,
-  Empty, Typography, Switch, message, Drawer, Modal
+  Empty, Typography, Switch, message, Drawer, Modal, Alert
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, PlayCircleOutlined, PauseCircleOutlined,
   ReloadOutlined, ClearOutlined, CopyOutlined, ApiOutlined, EditOutlined,
+  LockOutlined, LockFilled, UnlockOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
+import { CODE_BLOCK_STYLE } from '../../components/MockCodeBlock'
 
 const { Text } = Typography
 const { TextArea } = Input
 
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 
 const MODE_LABEL = { success: '成功', error: '失败', custom: '自定义' }
 const MODE_COLOR = { success: '#0ea5a0', error: '#e8453c', custom: '#4e8af0' }
@@ -123,6 +125,18 @@ export default function McpMock() {
     } catch {}
   }
 
+  const handleToggleLock = async () => {
+    if (!toolForm) return
+    try {
+      const r = await api.patch(`/mcp-mock/tools/${toolForm.name}/lock`)
+      const d = r.data || r
+      message.success(d.locked ? '工具已锁定，需解锁后才能编辑' : '工具已解锁')
+      setToolForm(f => ({ ...f, locked: d.locked }))
+      setOriginalForm(f => ({ ...f, locked: d.locked }))
+      await fetchTools()
+    } catch {}
+  }
+
   const handleModeSwitch = (mode) => {
     setToolForm(f => ({ ...f, mode }))
   }
@@ -182,6 +196,8 @@ export default function McpMock() {
     ? `http://${window.location.hostname}:${serviceStatus.port}/`
     : null
 
+  const locked = !!toolForm?.locked
+
   // ─── 工具配置 Tab ───
   const renderConfigTab = () => {
     if (!toolForm) {
@@ -197,13 +213,28 @@ export default function McpMock() {
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {locked && <Tag color="orange" icon={<LockFilled />} style={{ margin: 0, fontSize: 11 }}>已锁定</Tag>}
             <Text code style={{ fontSize: 13 }}>{toolForm.name}</Text>
           </div>
           <Space size={8}>
-            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSaveTool} loading={saving} disabled={!isDirty}>保存</Button>
+            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSaveTool} loading={saving} disabled={!isDirty || locked}>保存</Button>
             <Switch checked={toolForm.enabled} onChange={v => handleToggle(toolForm.name, v)}
+              disabled={locked}
               checkedChildren="启用" unCheckedChildren="禁用" size="small" />
-            {tools.length > 1 ? (
+            <Tooltip title={locked ? '解锁后可编辑' : '锁定后不可编辑，需先解锁'}>
+              <Button
+                size="small"
+                icon={locked ? <UnlockOutlined /> : <LockOutlined />}
+                onClick={handleToggleLock}
+                type={locked ? 'primary' : 'default'}
+                ghost={locked}
+              >
+                {locked ? '解锁' : '锁定'}
+              </Button>
+            </Tooltip>
+            {locked ? (
+              <Tooltip title="已锁定，请先解锁"><Button icon={<DeleteOutlined />} size="small" danger disabled /></Tooltip>
+            ) : tools.length > 1 ? (
               <Popconfirm title="确认删除该工具？" onConfirm={() => handleDeleteTool(toolForm.name)}>
                 <Button icon={<DeleteOutlined />} size="small" danger />
               </Popconfirm>
@@ -215,11 +246,17 @@ export default function McpMock() {
 
         {/* 可滚动配置区 */}
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
+          {locked && (
+            <Alert
+              type="warning" showIcon style={{ marginBottom: 12, fontSize: 12 }}
+              message="此工具已锁定，配置为只读。点击右上角「解锁」后才能编辑。"
+            />
+          )}
           {/* 描述 */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>工具描述</div>
             <Input value={toolForm.description} onChange={e => setToolForm(f => ({ ...f, description: e.target.value }))}
-              placeholder="工具描述..." size="small" />
+              placeholder="工具描述..." size="small" disabled={locked} />
           </div>
 
           {/* MCP 地址 */}
@@ -244,7 +281,7 @@ export default function McpMock() {
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应模式</div>
             <Radio.Group value={toolForm.mode} onChange={e => handleModeSwitch(e.target.value)}
-              buttonStyle="solid" size="small">
+              buttonStyle="solid" size="small" disabled={locked}>
               <Radio.Button value="success"><span style={{ color: toolForm.mode === 'success' ? '#fff' : '#0ea5a0' }}>成功</span></Radio.Button>
               <Radio.Button value="error"><span style={{ color: toolForm.mode === 'error' ? '#fff' : '#e8453c' }}>失败</span></Radio.Button>
               <Radio.Button value="custom"><span style={{ color: toolForm.mode === 'custom' ? '#fff' : '#4e8af0' }}>自定义</span></Radio.Button>
@@ -255,21 +292,22 @@ export default function McpMock() {
           {toolForm.mode === 'custom' && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>自定义响应 (JSON)</div>
-              <TextArea
+              <TextArea spellCheck={false}
                 rows={8}
                 value={typeof toolForm.customData === 'string' ? toolForm.customData : JSON.stringify(toolForm.customData, null, 2) || ''}
                 onChange={e => setToolForm(f => ({ ...f, customData: e.target.value }))}
+                disabled={locked}
                 style={{ fontFamily: MONO, fontSize: 12, borderRadius: 12 }}
                 placeholder='{"result": "custom data"}'
               />
               <div style={{ marginTop: 8 }}>
-                <Radio.Group value={toolForm.customIsError || false}
+                <Radio.Group value={toolForm.customIsError || false} disabled={locked}
                   onChange={e => setToolForm(f => ({ ...f, customIsError: e.target.value }))} size="small">
                   <Radio value={false}><Tag color="cyan" style={{ margin: 0 }}>isError: false</Tag></Radio>
                   <Radio value={true}><Tag color="error" style={{ margin: 0 }}>isError: true</Tag></Radio>
                 </Radio.Group>
               </div>
-              <Button type="primary" size="small" style={{ marginTop: 8 }} onClick={async () => {
+              <Button type="primary" size="small" style={{ marginTop: 8 }} disabled={locked} onClick={async () => {
                 let customData = null
                 const raw = toolForm.customData
                 if (raw && typeof raw === 'string' && raw.trim()) {
@@ -311,7 +349,7 @@ export default function McpMock() {
           {/* 调用测试 */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>调用测试</div>
-            <TextArea rows={3} value={callArgs} onChange={e => setCallArgs(e.target.value)}
+            <TextArea spellCheck={false} rows={3} value={callArgs} onChange={e => setCallArgs(e.target.value)}
               style={{ fontFamily: MONO, fontSize: 12, borderRadius: 12, marginBottom: 8 }}
               placeholder='{"branch_id": "xxx"}' />
             <Button type="primary" icon={calling ? null : <PlayCircleOutlined />}
@@ -327,9 +365,9 @@ export default function McpMock() {
                   {callResult.source === 'mock' ? 'Mock' : '真实'}</Tag>}
               </div>
               <pre style={{
-                background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 12,
+                ...CODE_BLOCK_STYLE, padding: 12, borderRadius: 12,
                 overflow: 'auto', fontSize: 11, lineHeight: 1.5, maxHeight: 200,
-                fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                whiteSpace: 'pre-wrap', wordBreak: 'break-all',
               }}>{JSON.stringify(callResult.data || callResult.error || callResult, null, 2)}</pre>
             </div>
           )}
@@ -452,7 +490,7 @@ export default function McpMock() {
             border: `1px solid ${serviceStatus.running ? 'rgba(14,165,160,0.3)' : 'rgba(0,0,0,0.1)'}`,
           }}>
             <span style={{ width: 6, height: 6, borderRadius: '50%', background: serviceStatus.running ? '#0ea5a0' : '#bfbfbf' }} />
-            <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'monospace', color: serviceStatus.running ? '#0ea5a0' : '#999' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)', color: serviceStatus.running ? '#0ea5a0' : '#999' }}>
               {serviceStatus.running ? 'LIVE' : 'STOPPED'}
             </span>
           </div>
@@ -517,7 +555,14 @@ export default function McpMock() {
                   transition: 'all 0.15s',
                 }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 2 }}>
-                    <Text code style={{ fontSize: 11, maxWidth: 160 }} ellipsis>{t.name}</Text>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                      {t.locked && (
+                        <Tooltip title="已锁定，不可编辑">
+                          <LockFilled style={{ fontSize: 11, color: '#fa8c16', flexShrink: 0 }} />
+                        </Tooltip>
+                      )}
+                      <Text code style={{ fontSize: 11, maxWidth: 150 }} ellipsis>{t.name}</Text>
+                    </div>
                     <Tag color={MODE_COLOR[t.mode]} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', borderRadius: 8 }}>
                       {MODE_LABEL[t.mode]}
                     </Tag>
@@ -570,7 +615,7 @@ export default function McpMock() {
         onOk={handleCreateTool} okText="创建" cancelText="取消" width={480}>
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>工具名称 *</div>
-          <Input value={newToolName} onChange={e => setNewToolName(e.target.value)}
+          <Input spellCheck={false} value={newToolName} onChange={e => setNewToolName(e.target.value)}
             placeholder="如 tb_search_users" style={{ fontFamily: MONO }} />
         </div>
         <div>

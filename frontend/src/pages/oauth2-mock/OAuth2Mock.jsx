@@ -1,17 +1,17 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import {
   Button, Space, Input, Tag, Popconfirm, Tooltip, Badge, Pagination,
-  Empty, Switch, message, Modal, InputNumber,
+  Empty, Switch, message, Modal, InputNumber, Alert,
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, PlayCircleOutlined, PauseCircleOutlined,
   ReloadOutlined, ClearOutlined, CopyOutlined, SafetyCertificateOutlined, EditOutlined,
-  CheckCircleFilled, CloseCircleFilled,
+  CheckCircleFilled, CloseCircleFilled, LockOutlined, LockFilled, UnlockOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
 
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 
 export default function OAuth2Mock() {
   const [clients, setClients] = useState([])
@@ -60,6 +60,7 @@ export default function OAuth2Mock() {
   }, [])
 
   const isDirty = clientForm && originalForm && JSON.stringify(clientForm) !== JSON.stringify(originalForm)
+  const locked = !!clientForm?.locked
 
   const handleSave = async () => {
     if (!clientForm || !selectedId) return
@@ -101,6 +102,18 @@ export default function OAuth2Mock() {
 
   const handleToggle = async (clientId) => {
     try { await api.patch(`/oauth2-mock/clients/${clientId}/toggle`); fetchClients() } catch {}
+  }
+
+  const handleToggleLock = async () => {
+    if (!clientForm || !selectedId) return
+    try {
+      const r = await api.patch(`/oauth2-mock/clients/${selectedId}/lock`)
+      const d = r.data || r
+      message.success(d.locked ? 'Client 已锁定，需解锁后才能编辑' : 'Client 已解锁')
+      setClientForm(f => ({ ...f, locked: d.locked }))
+      setOriginalForm(f => ({ ...f, locked: d.locked }))
+      fetchClients()
+    } catch {}
   }
 
   const handleFetchToken = async () => {
@@ -190,7 +203,14 @@ export default function OAuth2Mock() {
                 }}>
                 <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.enabled ? '#52c41a' : '#d9d9d9', flexShrink: 0 }} />
                 <div style={{ flex: 1, overflow: 'hidden' }}>
-                  <div style={{ fontWeight: 500, color: '#262626', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || c.clientId}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+                    {c.locked && (
+                      <Tooltip title="已锁定，不可编辑">
+                        <LockFilled style={{ fontSize: 11, color: '#fa8c16', flexShrink: 0 }} />
+                      </Tooltip>
+                    )}
+                    <span style={{ fontWeight: 500, color: '#262626', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || c.clientId}</span>
+                  </div>
                   <div style={{ fontSize: 11, color: '#8c8c8c', fontFamily: MONO }}>{c.clientId}</div>
                 </div>
               </div>
@@ -219,30 +239,53 @@ export default function OAuth2Mock() {
               <div style={{ maxWidth: 600 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
                   <span style={{ fontWeight: 600, fontSize: 15 }}>{clientForm.name || clientForm.clientId}</span>
-                  <Switch checked={clientForm.enabled} onChange={() => handleToggle(clientForm.clientId)} checkedChildren="启用" unCheckedChildren="禁用" />
+                  {locked && <Tag color="orange" icon={<LockFilled />} style={{ margin: 0, fontSize: 11 }}>已锁定</Tag>}
+                  <Switch checked={clientForm.enabled} onChange={() => handleToggle(clientForm.clientId)}
+                    disabled={locked} checkedChildren="启用" unCheckedChildren="禁用" />
                 </div>
+
+                {locked && (
+                  <Alert
+                    type="warning" showIcon style={{ marginBottom: 14, fontSize: 12 }}
+                    message="此 Client 已锁定，配置为只读。点击下方「解锁」后才能编辑。"
+                  />
+                )}
 
                 <Field label="Client ID" value={clientForm.clientId} disabled mono />
                 <Field label="Client Secret" value={clientForm.clientSecret}
                   onChange={v => setClientForm(f => ({ ...f, clientSecret: v }))}
-                  mono copyable />
-                <Field label="名称" value={clientForm.name}
+                  disabled={locked} mono copyable />
+                <Field label="名称" value={clientForm.name} disabled={locked}
                   onChange={v => setClientForm(f => ({ ...f, name: v }))} />
-                <Field label="Scope" value={clientForm.scope}
+                <Field label="Scope" value={clientForm.scope} disabled={locked}
                   onChange={v => setClientForm(f => ({ ...f, scope: v }))} mono />
-                <Field label="Audience" value={clientForm.audience}
+                <Field label="Audience" value={clientForm.audience} disabled={locked}
                   onChange={v => setClientForm(f => ({ ...f, audience: v }))} mono />
                 <div style={{ marginBottom: 14 }}>
                   <div style={{ fontSize: 12, color: '#595959', fontWeight: 500, marginBottom: 4 }}>Token 有效期（秒）</div>
                   <InputNumber value={clientForm.tokenTtl} onChange={v => setClientForm(f => ({ ...f, tokenTtl: v }))}
-                    min={5} max={86400} style={{ width: '100%' }} />
+                    min={5} max={86400} style={{ width: '100%' }} disabled={locked} />
                 </div>
 
                 <Space style={{ marginTop: 8 }}>
-                  <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving} disabled={!isDirty}>保存</Button>
-                  <Popconfirm title="确认删除？" onConfirm={() => handleDelete(clientForm.clientId)}>
-                    <Button danger icon={<DeleteOutlined />}>删除</Button>
-                  </Popconfirm>
+                  <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving} disabled={!isDirty || locked}>保存</Button>
+                  <Tooltip title={locked ? '解锁后可编辑' : '锁定后不可编辑，需先解锁'}>
+                    <Button
+                      icon={locked ? <UnlockOutlined /> : <LockOutlined />}
+                      onClick={handleToggleLock}
+                      type={locked ? 'primary' : 'default'}
+                      ghost={locked}
+                    >
+                      {locked ? '解锁' : '锁定'}
+                    </Button>
+                  </Tooltip>
+                  {locked ? (
+                    <Tooltip title="已锁定，请先解锁"><Button danger icon={<DeleteOutlined />} disabled>删除</Button></Tooltip>
+                  ) : (
+                    <Popconfirm title="确认删除？" onConfirm={() => handleDelete(clientForm.clientId)}>
+                      <Button danger icon={<DeleteOutlined />}>删除</Button>
+                    </Popconfirm>
+                  )}
                 </Space>
 
                 {/* 获取 Token */}
@@ -375,7 +418,7 @@ export default function OAuth2Mock() {
           </div>
           <div>
             <div style={{ fontSize: 12, fontWeight: 500, marginBottom: 4 }}>Client ID *</div>
-            <Input value={newClient.client_id} onChange={e => setNewClient(n => ({ ...n, client_id: e.target.value }))}
+            <Input spellCheck={false} value={newClient.client_id} onChange={e => setNewClient(n => ({ ...n, client_id: e.target.value }))}
               placeholder="从 Stoa 复制的 client_id" style={{ fontFamily: MONO }} />
           </div>
           <div>
@@ -405,7 +448,8 @@ function Field({ label, value, onChange, disabled, mono, copyable }) {
       <div style={{ fontSize: 12, color: '#595959', fontWeight: 500, marginBottom: 4 }}>{label}</div>
       <div style={{ display: 'flex', gap: 4 }}>
         <Input value={value} onChange={onChange ? e => onChange(e.target.value) : undefined}
-          disabled={disabled} style={{ fontFamily: mono ? MONO : undefined, fontSize: 12 }} />
+          disabled={disabled} spellCheck={!mono}
+          style={{ fontFamily: mono ? MONO : undefined, fontSize: 12 }} />
         {copyable && <Tooltip title="复制"><Button icon={<CopyOutlined />} size="small"
           onClick={() => { copyToClipboard(value); message.success('已复制') }} /></Tooltip>}
       </div>

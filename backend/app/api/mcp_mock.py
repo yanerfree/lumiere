@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 
 from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.services.mcp_mock_manager import mcp_mock_server as mgr
@@ -46,6 +47,7 @@ async def list_tools():
             "description": t.get("description", ""),
             "mode": t["mode"],
             "enabled": t.get("enabled", True),
+            "locked": t.get("locked", False),
             "hasCustomData": t.get("customData") is not None,
             "params": t.get("params", {}),
         }
@@ -61,10 +63,21 @@ async def create_tool(body: ToolCreate):
     return {"data": tool}
 
 
+@router.patch("/tools/{tool_name}/lock")
+async def lock_tool(tool_name: str):
+    tool = mgr.toggle_lock(tool_name)
+    if not tool:
+        return JSONResponse({"error": f"工具 {tool_name} 不存在"}, status_code=404)
+    return {"data": {"name": tool_name, "locked": tool["locked"]}}
+
+
 @router.put("/tools/{tool_name}")
 async def update_tool(tool_name: str, body: ToolUpdate):
-    if not mgr.get_tool(tool_name):
+    existing = mgr.get_tool(tool_name)
+    if not existing:
         return {"error": f"工具 {tool_name} 不存在"}
+    if existing.get("locked", False):
+        return JSONResponse({"error": "工具已锁定，请先解锁后再编辑"}, status_code=423)
     update = {}
     if body.description is not None:
         update["description"] = body.description
@@ -89,8 +102,12 @@ async def delete_tool(tool_name: str):
     tools = mgr.get_tools()
     if len(tools) <= 1:
         return {"error": "至少保留一个工具"}
-    if not mgr.delete_tool(tool_name):
+    tool = mgr.get_tool(tool_name)
+    if not tool:
         return {"error": f"工具 {tool_name} 不存在"}
+    if tool.get("locked", False):
+        return JSONResponse({"error": "工具已锁定，请先解锁后再删除"}, status_code=423)
+    mgr.delete_tool(tool_name)
     return {"ok": True}
 
 
@@ -99,6 +116,8 @@ async def toggle_tool(tool_name: str):
     tool = mgr.get_tool(tool_name)
     if not tool:
         return {"error": f"工具 {tool_name} 不存在"}
+    if tool.get("locked", False):
+        return JSONResponse({"error": "工具已锁定，请先解锁后再操作"}, status_code=423)
     mgr.update_tool(tool_name, {"enabled": not tool.get("enabled", True)})
     return {"data": {"name": tool_name, "enabled": not tool.get("enabled", True)}}
 
