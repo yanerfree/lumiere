@@ -42,16 +42,18 @@ CATEGORY_META = {
 # 冒出一个绑不上模型的空档位。前端只渲染非 deprecated。
 CAPABILITY_REGISTRY = [
     # ── 文本生成型 ──
-    {"key": "tb-case-generate",        "label": "AI 生成接口用例",      "category": "text",      "where": "用例管理 / AI 侧栏"},
+    # where 原来写「AI 侧栏」—— AISidebar.jsx 早就没有任何页面引用了（已随本次删除）。
+    # 真实入口是用例管理工具栏的「从接口生成」→ TestForgeModal → POST /ai/generate-cases。
+    {"key": "tb-case-generate",        "label": "AI 生成接口用例",      "category": "text",      "where": "用例管理 → 从接口生成"},
     {"key": "tb-quality-review",       "label": "用例质量评审",         "category": "text",      "where": "用例管理"},
     {"key": "tb-diagnose",             "label": "失败诊断",             "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "归因归外部 Claude Code（tb_submit_analysis），平台只按规则出现象、由人确认结论。前端从来没有调用入口"},
     {"key": "scenario-gen",            "label": "功能场景测试生成",     "category": "text",      "where": "场景生成 Stage1-4"},
     {"key": "api-test-generate",       "label": "接口测试场景生成",     "category": "text",      "where": "接口测试"},
-    {"key": "api-test-optimize",       "label": "接口场景 AI 优化",     "category": "text",      "where": "接口测试步骤"},
+    {"key": "api-test-optimize",       "label": "接口场景 AI 优化",     "category": "text",      "where": "接口测试 → 选中场景 → AI 优化"},
     {"key": "pytest-script",           "label": "pytest 脚本生成",      "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "入口是已删除的 AIScriptModal"},
     {"key": "doc-generate",            "label": "文档生成",             "category": "text",      "where": "文档管理"},
     {"key": "doc-generate-screenshots","label": "文档带截图生成",       "category": "text",      "where": "文档管理"},
-    {"key": "doc-optimize",            "label": "文档优化",             "category": "text",      "where": "文档管理"},
+    {"key": "doc-optimize",            "label": "文档优化",             "category": "text",      "where": "暂无入口",          "deprecated": True, "deprecatedNote": "实现还在（POST /documents/{id}/optimize，保留截图只重写文字），但页面上的「重新生成」走的是带截图那条、会重新登录重新截图 —— 这条路没有任何调用方"},
     {"key": "exploratory-charter",     "label": "探索测试 Charter 生成","category": "text",      "where": "探索测试"},
     {"key": "toolbox-regex",           "label": "工具箱-正则生成",      "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "后端无任何调用方"},
     # ── UI 脚本型(agentic) ──
