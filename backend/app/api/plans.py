@@ -190,6 +190,29 @@ class ScenarioResponse(BaseSchema):
     script_ref_file: str | None = None
     script_ref_func: str | None = None
 
+
+def _scenario_payload(s) -> dict:
+    """报告场景 → 前端。带上最后一次执行的三层失败判断，报告页才有得下钻。
+
+    branchId/runId 是前端调 /scripts/runs/{id}/analysis|confirm 的入口，
+    缺一个人就只能回用例详情页绕一圈。
+    """
+    run = getattr(s, "_run", None)
+    return {
+        **ScenarioResponse.model_validate(s, from_attributes=True).model_dump(by_alias=True),
+        "scriptRefFile": getattr(s, "_script_ref_file", None),
+        "scriptRefFunc": getattr(s, "_script_ref_func", None),
+        "caseSteps": getattr(s, "_case_steps", None),
+        "preconditions": getattr(s, "_preconditions", None),
+        "expectedResult": getattr(s, "_expected_result", None),
+        "branchId": str(getattr(s, "_branch_id", None)) if getattr(s, "_branch_id", None) else None,
+        "runId": str(run.id) if run else None,
+        "phenomenon": run.failure_phenomenon if run else None,
+        "ccAnalysis": run.cc_analysis if run else None,
+        "confirmedCause": run.confirmed_cause if run else None,
+    }
+
+
 class ReportResponse(BaseSchema):
     id: uuid.UUID
     plan_id: uuid.UUID | None = None
@@ -325,17 +348,7 @@ async def get_results(
     return {
         "data": {
             "report": ReportResponse.model_validate(data["report"], from_attributes=True).model_dump(by_alias=True),
-            "scenarios": [
-                {
-                    **ScenarioResponse.model_validate(s, from_attributes=True).model_dump(by_alias=True),
-                    "scriptRefFile": getattr(s, '_script_ref_file', None),
-                    "scriptRefFunc": getattr(s, '_script_ref_func', None),
-                    "caseSteps": getattr(s, '_case_steps', None),
-                    "preconditions": getattr(s, '_preconditions', None),
-                    "expectedResult": getattr(s, '_expected_result', None),
-                }
-                for s in data["scenarios"]
-            ],
+            "scenarios": [_scenario_payload(s) for s in data["scenarios"]],
         }
     }
 
@@ -764,17 +777,7 @@ async def get_results_by_report_id(
     return {
         "data": {
             "report": ReportResponse.model_validate(data["report"], from_attributes=True).model_dump(by_alias=True),
-            "scenarios": [
-                {
-                    **ScenarioResponse.model_validate(s, from_attributes=True).model_dump(by_alias=True),
-                    "scriptRefFile": getattr(s, '_script_ref_file', None),
-                    "scriptRefFunc": getattr(s, '_script_ref_func', None),
-                    "caseSteps": getattr(s, '_case_steps', None),
-                    "preconditions": getattr(s, '_preconditions', None),
-                    "expectedResult": getattr(s, '_expected_result', None),
-                }
-                for s in data["scenarios"]
-            ],
+            "scenarios": [_scenario_payload(s) for s in data["scenarios"]],
         }
     }
 

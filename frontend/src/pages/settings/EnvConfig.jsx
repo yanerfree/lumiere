@@ -3,7 +3,7 @@ import { Button, Input, Tabs, Modal, Form, message, Popconfirm, Tag, Tooltip, Sp
 import {
   PlusOutlined, DeleteOutlined, CopyOutlined, EditOutlined,
   GlobalOutlined, CloudServerOutlined,
-  UnorderedListOutlined, CheckOutlined, CloseOutlined,
+  UnorderedListOutlined, CheckOutlined, CloseOutlined, HolderOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 
@@ -37,6 +37,7 @@ function EnvironmentPanel() {
   const [envVars, setEnvVars] = useState([])
   const [loading, setLoading] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
+  const [dragIdx, setDragIdx] = useState(null)
   const [form] = Form.useForm()
 
   // 环境名称/描述编辑
@@ -53,9 +54,10 @@ function EnvironmentPanel() {
       const res = await api.get('/environments')
       const list = res.data || []
       setEnvs(list)
-      if (list.length > 0 && !list.find(e => e.id === selectedId)) {
-        setSelectedId(list[0].id)
-      }
+      // 函数式更新才拿得到最新的 selectedId：这个 useCallback 依赖是 []，
+      // 直接读闭包里的 selectedId 永远是初始的 null，于是每次刷新列表
+      // （改名、改描述、拖拽排序之后都会刷）都把选中项重置回第一个。
+      setSelectedId(prev => (prev && list.some(e => e.id === prev)) ? prev : (list[0]?.id ?? null))
     } catch { /* */ } finally { setLoading(false) }
   }, [])
 
@@ -81,6 +83,23 @@ function EnvironmentPanel() {
       fetchEnvs()
       setSelectedId(res.data.id)
     } catch { /* */ }
+  }
+
+  // 拖动调整环境顺序：本地乐观更新 + 持久化 sort_order
+  const handleDropEnv = async (targetIdx) => {
+    const from = dragIdx
+    setDragIdx(null)
+    if (from === null || from === targetIdx) return
+    const next = [...envs]
+    const [moved] = next.splice(from, 1)
+    next.splice(targetIdx, 0, moved)
+    setEnvs(next)
+    try {
+      await api.put('/environments/reorder', {
+        items: next.map((e, i) => ({ id: e.id, sortOrder: i })),
+      })
+      fetchEnvs()
+    } catch { fetchEnvs() }
   }
 
   const handleClone = async () => {
@@ -147,16 +166,40 @@ function EnvironmentPanel() {
       <div style={{ width: 200, background: 'rgba(255,255,255,0.5)', borderRadius: 14, border: 'none', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
         <div style={{ flex: 1, overflow: 'auto' }}>
           {loading ? <div style={{ textAlign: 'center', padding: 20 }}><Spin size="small" /></div> :
-            envs.map(env => (
-              <div key={env.id} onClick={() => setSelectedId(env.id)}
+            envs.map((env, i) => (
+              <div key={env.id}
+                draggable
+                onClick={() => setSelectedId(env.id)}
+                onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; setDragIdx(i) }}
+                onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid #0ea5a0' }}
+                onDragLeave={e => { e.currentTarget.style.borderTop = '2px solid transparent' }}
+                onDrop={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid transparent'; handleDropEnv(i) }}
+                onDragEnd={() => setDragIdx(null)}
                 style={{
-                  padding: '10px 14px', cursor: 'pointer',
+                  padding: '8px 14px', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 8,
                   background: selectedId === env.id ? '#e0f7f6' : 'transparent',
                   borderLeft: selectedId === env.id ? '3px solid #0ea5a0' : '3px solid transparent',
-                  borderBottom: '1px solid rgba(0,0,0,0.04)',
+                  // 最后一项的下边框留透明：下面是 flex 剩余空间 + 按钮区的上边框，
+                  // 画实线会夹出一个"空条目"的错觉；用 none 则少 1px 盒高，
+                  // 最后一项会比其它项矮一点点
+                  borderBottom: `1px solid ${i < envs.length - 1 ? 'rgba(0,0,0,0.04)' : 'transparent'}`,
+                  borderTop: '2px solid transparent',
+                  opacity: dragIdx === i ? 0.4 : 1,
+                  transition: 'opacity .15s',
                 }}>
-                <div style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>{env.name}</div>
-                {env.description && <div style={{ fontSize: 11, color: '#86909c', marginTop: 2 }}>{env.description}</div>}
+                <Tooltip title="拖动调整顺序">
+                  <HolderOutlined style={{ fontSize: 11, color: '#c9cdd4', cursor: 'grab', flexShrink: 0 }} />
+                </Tooltip>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{env.name}</div>
+                  {/* 描述行始终占位、且限单行 —— 否则「无描述」和「描述换行」两种环境
+                      会撑出三种不同高度（实测 41 / 60 / 78px），列表看着参差不齐 */}
+                  <div title={env.description || ''}
+                    style={{ fontSize: 11, color: '#86909c', marginTop: 2, height: 16, lineHeight: '16px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {env.description || ''}
+                  </div>
+                </div>
               </div>
             ))
           }
@@ -341,12 +384,12 @@ function VariableTable({ variables, onSave }) {
     )}
     {editVars.map(v => (
       <div key={v._uid} style={{ display: 'flex', gap: 8, padding: '3px 8px', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.03)' }}>
-        <Input value={v.key} onChange={e => updateVar(v._uid, 'key', e.target.value)}
+        <Input spellCheck={false} value={v.key} onChange={e => updateVar(v._uid, 'key', e.target.value)}
           placeholder="KEY" variant="borderless" size="small"
-          style={{ width: '25%', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px' }} />
-        <Input value={v.value} onChange={e => updateVar(v._uid, 'value', e.target.value)}
+          style={{ width: '25%', fontSize: 12, fontFamily: 'var(--font-mono)', padding: '2px 4px' }} />
+        <Input spellCheck={false} value={v.value} onChange={e => updateVar(v._uid, 'value', e.target.value)}
           placeholder="VALUE" variant="borderless" size="small"
-          style={{ width: '35%', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px' }} />
+          style={{ width: '35%', fontSize: 12, fontFamily: 'var(--font-mono)', padding: '2px 4px' }} />
         <Input value={v.description} onChange={e => updateVar(v._uid, 'description', e.target.value)}
           placeholder="变量用途说明" variant="borderless" size="small"
           style={{ flex: 1, fontSize: 12, color: '#86909c', padding: '2px 4px' }} />
@@ -363,10 +406,10 @@ function VariableTable({ variables, onSave }) {
     </div>
 
     <Modal title="批量编辑" open={bulkOpen} onOk={handleBulkConfirm} onCancel={() => setBulkOpen(false)} okText="确定" cancelText="取消" width={560}>
-      <div style={{ fontSize: 13, color: '#86909c', marginBottom: 10 }}>格式: <span style={{ color: '#4e5969', fontFamily: 'monospace' }}>变量名,值,备注</span></div>
+      <div style={{ fontSize: 13, color: '#86909c', marginBottom: 10 }}>格式: <span style={{ color: '#4e5969', fontFamily: 'var(--font-mono)' }}>变量名,值,备注</span></div>
       <Input.TextArea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={10}
         placeholder={'BASE_URL,https://staging.example.com,测试目标地址\nDB_HOST,10.0.1.100,数据库主机'}
-        style={{ fontFamily: "'JetBrains Mono', 'Fira Code', Consolas, monospace", fontSize: 13 }} />
+        style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }} />
     </Modal>
   </>)
 }

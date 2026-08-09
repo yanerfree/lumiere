@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons'
 import { api, getValidToken } from '../../utils/request'
 
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 const ACCENT = '#e8453c'
 const MC = { GET: '#0ea5a0', POST: '#fa8c16', PUT: '#1677ff', DELETE: '#ff4d4f', PATCH: '#722ed1' }
 
@@ -99,7 +99,14 @@ export default function LoadTest() {
   /* ─────── create scenario ─────── */
   const createScenario = async () => {
     try {
-      const res = await api.post('/load-test/scenarios', { ...emptyScenario, name: '新场景' })
+      // 带序号，别让列表里堆一排一模一样的「新场景」—— 建三个就分不清谁是谁了。
+      // 取现有同名里的最大序号 +1，删掉中间某个也不会撞名。
+      const used = scenarios
+        .map(s => /^新场景(?:\s*(\d+))?$/.exec((s.name || '').trim()))
+        .filter(Boolean)
+        .map(m => Number(m[1] || 1))
+      const nextNo = used.length ? Math.max(...used) + 1 : 1
+      const res = await api.post('/load-test/scenarios', { ...emptyScenario, name: `新场景 ${nextNo}` })
       message.success('场景已创建')
       await loadScenarios()
       const id = res.data?.id || res.id
@@ -385,7 +392,7 @@ export default function LoadTest() {
                 onChange={v => updateStepLocal(step.id, 'method', v)}
                 options={['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => ({ label: m, value: m }))}
               />
-              <Input
+              <Input spellCheck={false}
                 size="small"
                 style={{ flex: 1, fontFamily: MONO }}
                 placeholder="https://api.example.com/path  (支持 ${variable})"
@@ -439,7 +446,7 @@ export default function LoadTest() {
                         <Radio.Button value="text">Text</Radio.Button>
                       </Radio.Group>
                       {(step.bodyType && step.bodyType !== 'none') && (
-                        <Input.TextArea
+                        <Input.TextArea spellCheck={false}
                           rows={5}
                           style={{ fontFamily: MONO, fontSize: 12 }}
                           value={step.body}
@@ -462,7 +469,7 @@ export default function LoadTest() {
                               const arr = [...extractions]; arr[ei] = { ...arr[ei], variableName: e.target.value }
                               updateStepLocal(step.id, 'extractions', arr)
                             }} />
-                          <Input size="small" placeholder="$.data.token" value={ex.jsonpath} style={{ flex: 2, fontFamily: MONO }}
+                          <Input spellCheck={false} size="small" placeholder="$.data.token" value={ex.jsonpath} style={{ flex: 2, fontFamily: MONO }}
                             onChange={e => {
                               const arr = [...extractions]; arr[ei] = { ...arr[ei], jsonpath: e.target.value }
                               updateStepLocal(step.id, 'extractions', arr)
@@ -496,7 +503,7 @@ export default function LoadTest() {
                               { label: 'JSONPath', value: 'jsonpath' },
                             ]}
                           />
-                          <Input size="small" placeholder="期望值" value={a.value} style={{ flex: 1, fontFamily: MONO }}
+                          <Input spellCheck={false} size="small" placeholder="期望值" value={a.value} style={{ flex: 1, fontFamily: MONO }}
                             onChange={e => {
                               const arr = [...assertions]; arr[ai] = { ...arr[ai], value: e.target.value }
                               updateStepLocal(step.id, 'assertions', arr)
@@ -930,11 +937,13 @@ export default function LoadTest() {
                       />
                     </Popconfirm>
                   </div>
-                  {s.description && (
-                    <div style={{ fontSize: 11, color: '#999', marginTop: 2, marginLeft: 22, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {s.description}
-                    </div>
-                  )}
+                  {/* 副行始终显示压测参数 —— 原来只在有描述时才出现，而描述默认是空的，
+                      于是列表里一排「新场景」除了名字什么都没有，得一个个点进去才知道谁是谁。 */}
+                  <div style={{ fontSize: 11, color: '#999', marginTop: 2, marginLeft: 22, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {s.description
+                      ? s.description
+                      : `${s.concurrentUsers ?? '—'} 并发 · ${s.durationSeconds ? `${s.durationSeconds}s` : `${s.totalIterations ?? '—'} 次`}`}
+                  </div>
                 </div>
               ))
             )}

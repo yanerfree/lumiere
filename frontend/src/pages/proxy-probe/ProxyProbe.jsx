@@ -18,7 +18,7 @@ import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
 
 const { Text } = Typography
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 
 // 形态用颜色区分：CONNECT 隧道(Node/undici) vs 转发(Go/http.Transport)
 const KIND_COLOR = {
@@ -234,7 +234,7 @@ function ProxyProbeInner() {
 
         <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
           <Text type="secondary" style={{ fontSize: 12 }}>代理地址（复制给被测系统填「出站代理」）</Text>
-          <Input readOnly value={proxyAddr} style={{ width: 300, fontFamily: MONO }} size="small" />
+          <Input spellCheck={false} readOnly value={proxyAddr} style={{ width: 300, fontFamily: MONO }} size="small" />
           <Button size="small" icon={<CopyOutlined />}
             onClick={() => { copyToClipboard(proxyAddr); message.success('已复制：' + proxyAddr) }}>
             复制

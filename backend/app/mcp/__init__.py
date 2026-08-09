@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis
 
 mcp = FastMCP(
     name="testBench",
@@ -134,11 +134,13 @@ mcp = FastMCP(
 - 基于第二步获取的真实 UI 信息，生成用例步骤
 - 每条用例调用 tb_create_case 入库
 
-第五步：生成 UI 自动化脚本（可选，用户要求时执行）
-- 对生成的用例，调用 tb_generate_ui_script 自动生成 Playwright 脚本
-- 需要指定 env_id（环境ID，包含 BASE_URL 等配置）
-- 脚本通过 Playwright MCP 逐步操作真实浏览器生成，基于页面真实元素
-- 生成后自动执行验证，通过的脚本保存到用例
+第五步：UI 自动化脚本（可选，用户要求时执行）
+- **平台不生成脚本**。你在自己机器上用 Playwright 写、本地真跑通，再调
+  tb_sync_ui_script 回推；入库前会硬拦截写死的服务地址和凭据。
+- 写之前先调 tb_get_sync_spec(kind='ui_script') 对齐写法（变量必须走
+  os.getenv 顶格声明，平台执行时把所选环境的真值替换进默认值）。
+- 回推后调 tb_run_ui_script(case_id, env_id) 让**平台**在标准环境上跑一遍确认——
+  你本机跑通不算数（本机有 dev server、有残留数据、有 cookie）。
 
 用例质量规范：
 - 步骤必须是页面操作（点击按钮、填写输入框），禁止接口调用风格
@@ -237,93 +239,147 @@ def _register(func, name: str, description: str):
 
 # ── 测试用例工具 ─────────────────────────────────
 
-_section("用例")
+_section("用例·手工步骤")
 
 _register(
     test_cases.list_cases,
     name="tb_list_cases",
-    description="列出分支下的测试用例，支持分页和筛选。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, priority(P0/P1/P2/P3), case_type(api/e2e)",
+    description="列出分支下的用例（手工步骤那一层）。找已有用例、确认编号、看某模块测了哪些时用。**断点续跑靠它**：传 pending_only=true 只返回还欠着的那些 —— target_level 说这条要做到哪一步（spec 只要步骤 / spec_api 步骤+接口 / full 三件套），三个维度状态说已经做到哪一步，差集就是待办；返回里的 owes 直接列出还欠哪几维。中断之后重跑不用从头来，也不会把做完的又捡回来重做。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, module(按模块名，省得先查folder_id), priority(P0/P1/P2/P3), case_type(api/e2e), target_level(spec/spec_api/full), ui_status/api_status/manual_status(not_started/draft/debugging/pending_review/executable/needs_fix), pending_only(默认false)",
 )
 
 _register(
     test_cases.get_case,
     name="tb_get_case",
-    description="获取单条测试用例的完整详情。参数: case_id(用例UUID)",
+    description="读一条用例的全部内容：手工步骤、前置条件、预期结果、模块归属。改它或给它挂接口场景之前先读一遍。参数: case_id(用例UUID)",
 )
 
 _register(
     test_cases.create_case,
     name="tb_create_case",
-    description="创建一条功能测试用例，自动生成编号和目录。参数: branch_id, title, module(中文如'服务管理'), case_type(e2e/api), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result",
+    description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。**入库要过门禁**：标题完全同名硬拒、标题含模糊词（操作成功/显示正常/无报错/符合预期）硬拒、P0 用例不许一次性直出三件套（同源生成的三份产物必然互相一致，而一致会被当成已经验证过；P0 先只回推 target_level=spec，人确认预期结果那一列之后再补接口和 UI）。标题相似只提醒不拦。参数: branch_id, title, module(中文如'服务管理'), case_type(e2e/api), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result, target_level(这条要做到什么程度: spec只要步骤/spec_api步骤+接口/full三件套，默认spec)",
 )
 
 _register(
     test_cases.get_folder_tree,
     name="tb_get_folder_tree",
-    description="获取用例文件夹树形结构，含每层用例数量。参数: branch_id(分支UUID)",
+    description="用例目录树 + 每层用例数。决定新用例该放哪个模块时用。参数: branch_id(分支UUID)",
 )
 
 
 # ── API 接口工具 ──────────────────────────────────
 
-_section("API 接口")
+_section("接口库·只记怎么调")
 
 _register(
     api_endpoints.list_api_tree,
     name="tb_list_api_tree",
-    description="获取项目下所有 API 接口的树形结构（文件夹和端点）。参数: project_id(项目UUID)",
+    description="列出项目的**接口库**目录树。接口库只记「系统有哪些接口、怎么调」，没有断言、不能执行——编排接口场景之前来这里查接口长什么样。参数: project_id(项目UUID)",
 )
 
 _register(
     api_endpoints.get_api_node,
     name="tb_get_api_node",
-    description="获取单个 API 节点详情（含 method, url, headers, body, auth 等）。参数: node_id(节点UUID)",
+    description="读单个接口的调用方式：method / url / params / headers / body / auth。拿它去拼接口场景的步骤。参数: node_id(节点UUID)",
 )
 
 _register(
     api_endpoints.create_api_node,
     name="tb_create_api_node",
-    description="创建 API 接口节点（endpoint 或 folder）。参数: project_id(项目UUID), name(名称), node_type(endpoint/folder,默认endpoint), method(GET/POST/PUT/DELETE等), url(接口路径), parent_id(可选,父文件夹UUID), params(可选,查询参数[{key,value,desc}]), headers(可选,[{key,value,desc}]), body(可选,请求体), body_type(可选,json/form/raw/none), auth(可选,{type,token}), description(可选), sort_order(排序,默认0)",
+    description="往**接口库**里加一个接口或文件夹。这是在维护接口文档，不产生可执行的测试——要可执行的用 tb_sync_orchestrated_scenario。参数: project_id(项目UUID), name(名称), node_type(endpoint/folder,默认endpoint), method(GET/POST/PUT/DELETE等), url(接口路径), parent_id(可选,父文件夹UUID), params(可选,查询参数[{key,value,desc}]), headers(可选,[{key,value,desc}]), body(可选,请求体), body_type(可选,json/form/raw/none), auth(可选,{type,token}), description(可选), sort_order(排序,默认0)",
 )
 
 
 # ── 环境变量工具 ──────────────────────────────────
 
-_section("环境变量")
+_section("环境与变量")
 
 _register(
     environments.list_environments,
     name="tb_list_environments",
-    description="列出所有测试环境。",
+    description="列出所有测试环境（环境名 + envId）。跑任何场景前都得先选一个，拿到的 envId 传给 tb_run_api_test。",
 )
 
 _register(
     environments.get_merged_variables,
     name="tb_get_merged_variables",
-    description="获取合并后的变量（全局变量 + 环境变量，环境优先）。参数: env_id(环境UUID)",
+    description="看某个环境执行时实际会注入哪些变量（全局变量 + 该环境变量，同名以环境为准）。排查「变量未解析」先查这里。参数: env_id(环境UUID)",
 )
 
 
 # ── 测试报告工具 ──────────────────────────────────
 
-_section("测试报告")
+_section("失败归因")
+
+_register(
+    analysis.submit_analysis,
+    name="tb_submit_analysis",
+    description=(
+        "【失败归因】把你对某次失败的**原因**判断写回平台。先调 tb_get_ui_script_result 拿证据包和 run_id，"
+        "看完截图、流量再来判。"
+        "⚠ 这条**不会改任何状态**：不动用例状态、不进通过率、不改报告结论 —— 它进「待确认」队列，人拍板才算数。"
+        "⚠ evidence 必须**指向平台侧证据的具体位置**（哪条请求 / 哪句 error_summary / 第几张截图），"
+        "只有你自己的推理会被直接拒收；引用的东西这次执行里必须真有，否则也拒。"
+        "⚠ 拿不准就 cause=unknown + confidence=low。低置信配一个具体 cause 会被拒 —— "
+        "一个看起来很有道理的错答案，比一句「我不知道」有害得多。"
+        "参数: run_id(执行记录UUID), "
+        "cause(product_defect被测系统缺陷/test_defect脚本自己写错/case_expired需求变了用例过期/"
+        "env_issue环境依赖问题/data_issue数据问题/flaky不稳定/unknown看不出来), "
+        "confidence(high/medium/low), reasoning(为什么是这个原因而不是别的，写不出因果的归因基本是瞎猜), "
+        "evidence([{type:error_summary|request|screenshot|stdout|phenomenon, ref:具体位置}]), "
+        "proposed_fix_target(script/product/data/case/env/none)"
+    ),
+)
+
+_register(
+    analysis.list_pending_confirm,
+    name="tb_list_pending_confirm",
+    description="【失败归因】列出「已归因、还没人确认」的失败 —— 你交上去还没被拍板的那些。参数: project_id(可选), limit(默认20)",
+)
+
+_section("执行报告")
+
+_section("执行报告")
+
+_register(
+    plans.list_plans,
+    name="tb_list_plans",
+    description="【执行报告】列出项目下的测试计划，拿 planId。**这是入口** —— tb_get_report_summary / tb_get_failed_scenarios 都要 planId，没有它那两个工具根本用不了。返回含用例数、最近一次 reportId。参数: project_id(项目UUID), status(可选: draft/executing/completed), limit(默认20)",
+)
+
+_register(
+    plans.create_plan,
+    name="tb_create_plan",
+    description="【执行报告】新建一个自动化测试计划（只建不跑，触发要另调 tb_run_plan）。参数: project_id, branch_id, name(计划名), case_ids(逗号分隔的用例UUID), test_type(e2e跑UI脚本/api跑接口脚本，默认e2e), environment_id(强烈建议传，不传执行时拿不到 BASE_URL 和账号), retry_count(默认0)",
+)
+
+_register(
+    plans.run_plan,
+    name="tb_run_plan",
+    description="【执行报告】触发计划在**平台执行器**上跑（这一跑算回归、进通过率口径）。立刻返回 taskId 和 reportId，执行是异步的 —— 拿 reportId 轮询 tb_get_report_summary。注意：你只是按了按钮，结果由平台执行器写；你不能写执行结果、也不能改用例通过状态。参数: plan_id(计划UUID)",
+)
+
+_register(
+    plans.list_reports,
+    name="tb_list_reports",
+    description="【执行报告】列出测试报告，拿 reportId + 通过率。参数: project_id(项目UUID), plan_id(可选，按计划过滤), limit(默认20)",
+)
 
 _register(
     test_reports.get_report_summary,
     name="tb_get_report_summary",
-    description="获取测试报告摘要（通过/失败/跳过/通过率 + 模块级分布）。参数: plan_id, report_id(可选)",
+    description="一次执行的总览：通过 / 失败 / 跳过 / 通过率，以及按模块的分布。参数: plan_id, report_id(可选)",
 )
 
 _register(
     test_reports.get_failed_scenarios,
     name="tb_get_failed_scenarios",
-    description="获取报告中失败的用例（含步骤、错误信息）。参数: plan_id, report_id(可选)",
+    description="【执行报告】拿这次报告里所有失败的用例，**每条带 runId** —— 用它调 tb_get_ui_script_result 看证据包（截图路径 / 流量 / 平台的现象初判），判完再调 tb_submit_analysis 回填归因。参数: plan_id(计划UUID), report_id(可选，不传取最近一次)",
 )
 
 
 # ── 接口测试工具 ──────────────────────────────────
 
-_section("接口测试")
+_section("接口场景·可执行")
 
 _register(
     api_tests.generate_api_test,
@@ -334,25 +390,25 @@ _register(
 _register(
     api_tests.list_api_test_scenarios,
     name="tb_list_api_tests",
-    description="列出接口测试场景。参数: branch_id(分支UUID), folder_id(可选), status(可选: draft/published/deprecated)",
+    description="列出分支下的**接口场景**（可执行的那种：多步 + 断言 + 变量提取）。参数: branch_id(分支UUID), folder_id(可选), status(可选: draft/published/deprecated)",
 )
 
 _register(
     api_tests.get_api_test_scenario,
     name="tb_get_api_test",
-    description="获取接口测试场景详情（含所有步骤、断言、变量提取）。参数: scenario_id(场景UUID)",
+    description="读一条接口场景的全部内容：每一步的请求、断言、提取了什么变量。想知道它到底怎么测的就读这个。参数: scenario_id(场景UUID)",
 )
 
 _register(
     api_tests.run_api_test,
     name="tb_run_api_test",
-    description="执行接口测试场景并返回结果汇总。参数: scenario_ids(逗号分隔的场景UUID列表), env_id(可选但强烈建议：传了才注入该环境的 BASE_URL/账号/token，${BASE_URL} 这类引用才能解析)",
+    description="**真的跑一遍**接口场景，返回每步的状态码和断言结果。参数: scenario_ids(逗号分隔的场景UUID列表), env_id(可选但强烈建议：传了才注入该环境的 BASE_URL/账号/token，${BASE_URL} 这类引用才能解析)",
 )
 
 
 # ── 功能场景测试工具 ──────────────────────────────
 
-_section("功能场景生成")
+_section("需求→用例流水线")
 
 _register(
     scenario_gen.create_scenario_task,
@@ -383,36 +439,30 @@ _register(
 
 # ── 项目与分支查询工具 ──────────────────────────────
 
-_section("项目与分支")
+_section("定位项目/分支")
 
 _register(
     projects.list_projects,
     name="tb_list_projects",
-    description="列出所有项目（名称、ID、描述）。用于确定要操作的目标项目。",
+    description="列出所有项目。几乎每个工具都要 project_id，一般从这里起步。",
 )
 
 _register(
     projects.list_branches,
     name="tb_list_branches",
-    description="列出项目下所有活跃分支。参数: project_id(项目UUID)",
+    description="列出项目下的活跃分支。用例和接口场景都挂在分支上，branch_id 从这里拿。参数: project_id(项目UUID)",
 )
 
 _register(
     scenario_gen.get_generation_stats,
     name="tb_get_generation_stats",
-    description="查询 AI 生成质量统计：通过率/拒绝率/总数。参数: branch_id(分支UUID)",
+    description="AI 生成用例的质量统计：通过率 / 拒绝率 / 总数。看流水线产出质量用。参数: branch_id(分支UUID)",
 )
 
 
 # ── UI 脚本工具 ──────────────────────────────────
 
 _section("UI 脚本")
-
-_register(
-    ui_scripts.generate_ui_script,
-    name="tb_generate_ui_script",
-    description="AI 生成 Playwright UI 测试脚本。读取用例步骤，调用 LLM 生成可执行的 Playwright Python 脚本并保存。参数: case_id(用例UUID), env_id(可选，环境UUID，用于获取 BASE_URL)",
-)
 
 _register(
     ui_scripts.run_ui_script,
@@ -429,13 +479,13 @@ _register(
 _register(
     ui_scripts.get_ui_script_result,
     name="tb_get_ui_script_result",
-    description="获取用例最近一次 UI 脚本执行结果（状态、耗时、错误摘要、截图数）。参数: case_id(用例UUID)",
+    description="【失败证据包】拿这条用例最近一次 UI 执行的**完整证据**，用来判断为什么挂：截图（返回**文件路径**，和平台同机，直接 Read 打开看图）、网络流量摘要（按状态码分桶 + 展开非 2xx 和写操作那几条，其余页面自身的 GET 已折叠）、stdout 尾部、以及平台按确定性规则给的**现象**初判 failure_phenomenon（timeout / element_not_found / assertion_mismatch / http_5xx / script_error / dependency_unresolved / unknown）。⚠ 现象不是归因 —— 平台判「是什么」，「为什么」由你判断。参数: case_id(用例UUID)",
 )
 
 
 # ── 文档生成规范工具 ──────────────────────────────
 
-_section("文档生成")
+_section("文档规范")
 
 _register(
     documents.get_doc_spec,
@@ -446,7 +496,7 @@ _register(
 
 # ── 回推同步工具（活体验证成果写回）──────────────────
 
-_section("回推同步")
+_section("回推入库")
 
 
 _register(
@@ -476,13 +526,26 @@ _register(
 _register(
     sync.upsert_automation_resource,
     name="tb_upsert_automation_resource",
-    description="【共享基础数据·登记怎么找到它】路线B专用：多条用例共用、反复重建代价大的底座(上游/负载、隔离上下文、长期存在的应用)。用法=先 tb_list_global_data 查有没有 → 没有就**你自己调接口造出来且不清理** → 再用本工具登记 exists_check。之后每次跑，平台在第一步之前自动探测并注入 ${资源名}，换环境也能找到对应资源。注意 match 要用 name/code 这类稳定标识，不能用 id(等于换个地方写死)；探不到不会自动补建，只会报「变量未解析」。只属于本条用例的数据别用这个，那种该在场景开头自建、末尾清理。参数: project_id, name(引用名), exists_check(必填,{method,url,match,extract}), create_def(可选,登记备查当初怎么造的), description, keep(默认true)",
+    description="【共享基础数据·登记怎么找到它】路线B专用：多条用例共用、反复重建代价大的底座(上游/负载、隔离上下文、长期存在的应用)。用法=先 tb_list_global_data 查有没有 → 没有就**你自己调接口造出来且不清理** → 再用本工具登记 exists_check。之后每次跑，平台在第一步之前自动探测并注入 ${资源名}，换环境也能找到对应资源。注意 match 要用 name/code 这类稳定标识，不能用 id(等于换个地方写死)；探不到时平台**不会**替你补建（create_def 只登记备查、不执行），只会报「变量未解析」——要补就调 tb_list_global_data(probe=true, env_id=...) 看哪条 state=missing，然后你自己按它的 createDef 造。只属于本条用例的数据别用这个，那种该在场景开头自建、末尾清理。参数: project_id, name(引用名), exists_check(必填,{method,url,match,extract}), create_def(可选,登记备查当初怎么造的), description, keep(默认true)",
+)
+
+_register(
+    sync.sync_ui_script,
+    name="tb_sync_ui_script",
+    description=(
+        "【用例·UI 脚本】把你在本地写好并**跑通过**的 Playwright 脚本回推到某条用例的「UI 测试」页签。"
+        "入库前硬拦截写死的服务地址和凭据（换环境必挂），并检查有没有 pytest/playwright 认得的测试函数。"
+        "写之前先调 tb_get_sync_spec(kind='ui_script') 看变量怎么取、模板长什么样。"
+        "回推后用 tb_run_ui_script(case_id, env_id) 在目标环境上真跑一遍确认。"
+        "参数: case_id(用例UUID), content(脚本正文，不是路径), "
+        "language(可选 python/typescript，不传自动判), file_name(可选)"
+    ),
 )
 
 _register(
     sync.list_global_data,
     name="tb_list_global_data",
-    description="【回推前查】汇总项目级**可引用**全局数据（全局变量+各环境变量键+自动化共享资源，凭证脱敏），帮你判断哪些走 global_ref、哪些别写死。参数: project_id(项目UUID)",
+    description="【回推前查】汇总项目级**可引用**全局数据（全局变量+各环境变量键+自动化共享资源，凭证脱敏），帮你判断哪些走 global_ref、哪些别写死。**传 probe=true + env_id 会在该环境上真探测一遍共享资源**，每条给出 state：exists=探到了(附 extract 抽出的 values) / missing=确实没有，照它的 createDef 你自己调接口造出来（造完不用改配置，existsCheck 下次自然探得到）/ unknown=平台没查成(401、5xx、超时)，**别动它**——一次 token 过期就照 createDef 补建，会在被测环境造出一堆重复底座且 keep=true 没人清理。平台**不执行** createDef，只告诉你缺了什么、当初怎么造的。参数: project_id(项目UUID), env_id(可选，probe=true 时必填), probe(默认false)",
 )
 
 

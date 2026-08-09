@@ -43,7 +43,7 @@ function EditableHeadersTable({ headers, onSave, readonly }) {
                   onBlur={() => save(rows)} />
               </td>
               <td style={cellStyle}>
-                <Input size="small" variant="borderless" value={row.value} disabled={readonly} style={{ fontFamily: 'monospace', color: '#4e5969' }}
+                <Input spellCheck={false} size="small" variant="borderless" value={row.value} disabled={readonly} style={{ fontFamily: 'var(--font-mono)', color: '#4e5969' }}
                   onChange={e => { const r = [...rows]; r[i] = { ...r[i], value: e.target.value }; setRows(r) }}
                   onBlur={() => save(rows)} />
               </td>
@@ -111,7 +111,7 @@ function EditableAssertionsTable({ assertions, onSave, readonly }) {
                   onChange={v => { const r = [...rows]; r[j] = { ...r[j], type: v }; setRows(r); save(r) }} />
               </td>
               <td style={cellStyle}>
-                <Input size="small" variant="borderless" value={a.field || ''} style={{ fontFamily: 'monospace', color: '#4e5969' }}
+                <Input spellCheck={false} size="small" variant="borderless" value={a.field || ''} style={{ fontFamily: 'var(--font-mono)', color: '#4e5969' }}
                   disabled={readonly}
                   placeholder={a.type === 'status' ? '-' : 'data.id'}
                   onChange={e => { const r = [...rows]; r[j] = { ...r[j], field: e.target.value }; setRows(r) }}
@@ -195,17 +195,17 @@ function EditableVariablesTable({ variables, onSave, readonly }) {
           {rows.map((row, i) => (
             <tr key={i}>
               <td style={cellStyle}>
-                <Input size="small" variant="borderless" value={row.key}
+                <Input spellCheck={false} size="small" variant="borderless" value={row.key}
                   disabled={readonly}
-                  style={{ color: '#d46b08', fontWeight: 500, fontFamily: 'monospace' }}
+                  style={{ color: '#d46b08', fontWeight: 500, fontFamily: 'var(--font-mono)' }}
                   placeholder="变量名"
                   onChange={e => { const r = [...rows]; r[i] = { ...r[i], key: e.target.value }; setRows(r) }}
                   onBlur={() => save(rows)} />
               </td>
               <td style={cellStyle}>
-                <Input size="small" variant="borderless" value={row.value}
+                <Input spellCheck={false} size="small" variant="borderless" value={row.value}
                   disabled={readonly}
-                  style={{ fontFamily: 'monospace' }}
+                  style={{ fontFamily: 'var(--font-mono)' }}
                   placeholder="data.token"
                   onChange={e => { const r = [...rows]; r[i] = { ...r[i], value: e.target.value }; setRows(r) }}
                   onBlur={() => save(rows)} />
@@ -312,7 +312,7 @@ export default function StepEditor({
           value={step.url}
           variant="borderless"
           disabled={readonly}
-          style={{ fontFamily: "'SF Mono', Monaco, Consolas, monospace", fontSize: 13, color: '#1d2129' }}
+          style={{ fontFamily: 'var(--font-mono)', fontSize: 13, color: '#1d2129' }}
           onChange={e => onStepChange({ ...step, url: e.target.value })}
           onBlur={e => onSaveStep(step.id, { url: e.target.value })}
         />
@@ -341,7 +341,7 @@ export default function StepEditor({
                     readOnly={readonly}
                     style={{
                       width: '100%', border: 'none', outline: 'none', resize: 'vertical',
-                      padding: 16, fontSize: 13, fontFamily: "'SF Mono', Monaco, Consolas, monospace",
+                      padding: 16, fontSize: 13, fontFamily: 'var(--font-mono)',
                       lineHeight: 1.6, minHeight: 100, maxHeight: 400, color: '#1d2129', background: 'transparent',
                     }}
                   />
@@ -408,7 +408,7 @@ export default function StepEditor({
                           <Tag color={step._runResponse.statusCode < 400 ? 'cyan' : 'error'}>{step._runResponse.statusCode}</Tag>
                           <span style={{ color: '#8c8c8c' }}>{step._runResponse.duration}ms</span>
                         </div>
-                        <pre style={{ margin: 0, padding: 16, fontSize: 12, fontFamily: "'SF Mono', Monaco, Consolas, monospace", lineHeight: 1.5, overflow: 'auto', maxHeight: 400 }}>
+                        <pre style={{ margin: 0, padding: 16, fontSize: 12, fontFamily: 'var(--font-mono)', lineHeight: 1.5, overflow: 'auto', maxHeight: 400 }}>
                           {JSON.stringify(step._runResponse.body, null, 2)}
                         </pre>
                       </>

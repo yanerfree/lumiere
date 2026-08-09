@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.services.oauth2_mock_manager import oauth2_mock_server as mgr
@@ -49,19 +50,33 @@ async def create_client(body: ClientCreate):
         return {"error": str(e)}
 
 
+@router.patch("/clients/{client_id}/lock")
+async def lock_client(client_id: str):
+    client = mgr.toggle_lock(client_id)
+    if not client:
+        return JSONResponse({"error": f"Client '{client_id}' 不存在"}, status_code=404)
+    return {"data": {"client_id": client_id, "locked": client["locked"]}}
+
+
 @router.put("/clients/{client_id}")
 async def update_client(client_id: str, body: ClientUpdate):
-    update = body.model_dump(exclude_unset=True)
-    result = mgr.update_client(client_id, update)
-    if not result:
+    existing = mgr.get_client(client_id)
+    if not existing:
         return {"error": f"Client '{client_id}' 不存在"}
+    if existing.get("locked", False):
+        return JSONResponse({"error": "Client 已锁定，请先解锁后再编辑"}, status_code=423)
+    result = mgr.update_client(client_id, body.model_dump(exclude_unset=True))
     return {"data": result}
 
 
 @router.delete("/clients/{client_id}")
 async def delete_client(client_id: str):
-    if not mgr.delete_client(client_id):
+    client = mgr.get_client(client_id)
+    if not client:
         return {"error": f"Client '{client_id}' 不存在"}
+    if client.get("locked", False):
+        return JSONResponse({"error": "Client 已锁定，请先解锁后再删除"}, status_code=423)
+    mgr.delete_client(client_id)
     return {"ok": True}
 
 
@@ -70,6 +85,8 @@ async def toggle_client(client_id: str):
     client = mgr.get_client(client_id)
     if not client:
         return {"error": f"Client '{client_id}' 不存在"}
+    if client.get("locked", False):
+        return JSONResponse({"error": "Client 已锁定，请先解锁后再操作"}, status_code=423)
     mgr.update_client(client_id, {"enabled": not client.get("enabled", True)})
     return {"data": {"client_id": client_id, "enabled": not client.get("enabled", True)}}
 

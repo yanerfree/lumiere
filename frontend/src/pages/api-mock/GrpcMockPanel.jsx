@@ -11,9 +11,10 @@ import {
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
+import { CODE_BLOCK_STYLE } from '../../components/MockCodeBlock'
 
 const { TextArea } = Input
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 const ACCENT = '#7c5cbf'
 
 const GRPC_CODES = [
@@ -314,12 +315,12 @@ export default function GrpcMockPanel() {
           <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Service 名称</div>
-              <Input value={form.serviceName} onChange={e => setForm(f => ({ ...f, serviceName: e.target.value }))}
+              <Input spellCheck={false} value={form.serviceName} onChange={e => setForm(f => ({ ...f, serviceName: e.target.value }))}
                 placeholder="helloworld.Greeter" disabled={locked} style={{ fontFamily: MONO, fontSize: 12 }} />
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Method 名称</div>
-              <Input value={form.methodName} onChange={e => setForm(f => ({ ...f, methodName: e.target.value }))}
+              <Input spellCheck={false} value={form.methodName} onChange={e => setForm(f => ({ ...f, methodName: e.target.value }))}
                 placeholder="SayHello" disabled={locked} style={{ fontFamily: MONO, fontSize: 12 }} />
             </div>
           </div>
@@ -362,7 +363,7 @@ export default function GrpcMockPanel() {
           {/* Request sample */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Request Sample (JSON, 仅文档参考)</div>
-            <TextArea
+            <TextArea spellCheck={false}
               value={form.requestSample}
               onChange={e => setForm(f => ({ ...f, requestSample: e.target.value }))}
               rows={3}
@@ -375,7 +376,7 @@ export default function GrpcMockPanel() {
           {/* Response body */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Response Body (JSON)</div>
-            <TextArea
+            <TextArea spellCheck={false}
               value={form.responseBody}
               onChange={e => setForm(f => ({ ...f, responseBody: e.target.value }))}
               rows={5}
@@ -389,7 +390,7 @@ export default function GrpcMockPanel() {
           {form.methodType === 'server_stream' && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Stream Items (JSON Array)</div>
-              <TextArea
+              <TextArea spellCheck={false}
                 value={form.streamItems}
                 onChange={e => setForm(f => ({ ...f, streamItems: e.target.value }))}
                 rows={5}
@@ -450,7 +451,7 @@ export default function GrpcMockPanel() {
           {/* Request body */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Request Body (JSON)</div>
-            <TextArea
+            <TextArea spellCheck={false}
               value={testBody}
               onChange={e => setTestBody(e.target.value)}
               rows={5}
@@ -569,9 +570,9 @@ export default function GrpcMockPanel() {
                   <div style={{ padding: '10px 14px' }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: '#0ea5a0', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Response</div>
                     <pre style={{
-                      background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 10,
+                      ...CODE_BLOCK_STYLE, padding: 12, borderRadius: 10,
                       overflow: 'auto', fontSize: 11, lineHeight: 1.5, maxHeight: 250,
-                      fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
                     }}>{formatJson(testResult.received) || '(empty)'}</pre>
                   </div>
                 </div>
@@ -715,7 +716,7 @@ export default function GrpcMockPanel() {
           }}>
             <Badge status={serviceStatus.running ? 'success' : 'default'} />
             <span style={{
-              fontSize: 12, fontWeight: 600, fontFamily: 'monospace',
+              fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)',
               color: serviceStatus.running ? '#0ea5a0' : '#999',
             }}>
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}

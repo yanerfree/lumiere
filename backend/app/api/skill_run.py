@@ -116,44 +116,12 @@ async def run_quality_review(
     )
 
 
-class RunDiagnoseRequest(BaseSchema):
-    plan_id: str = Field(..., min_length=1)
-    report_id: str | None = None
-    case_ids: list[str] | None = None
-
-
-@router.post("/tb-diagnose")
-async def run_diagnose(
-    project_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    body: RunDiagnoseRequest,
-    session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
-):
-    ai_config = await resolve_ai_config(project_id, session, capability="tb-diagnose")
-    if not ai_config:
-        raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
-
-    from app.services.ai.skill_executor import execute_diagnose
-
-    async def event_stream():
-        try:
-            async for event in execute_diagnose(
-                project_id=project_id,
-                branch_id=branch_id,
-                plan_id=body.plan_id,
-                report_id=body.report_id,
-                case_ids=body.case_ids,
-                ai_config=ai_config,
-                session=session,
-            ):
-                yield f"data: {json.dumps({'type': event.type, **event.data}, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            logger.exception("Diagnose failed")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:200]}, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-    )
+# ── 平台侧「AI 失败诊断」已下线（2026-08-08）────────────────────────
+# 原 POST /tb-diagnose 在此摘掉。三个理由：
+#   1. 前端从来没有调用方 —— 能力总览页写着"测试报告 → 失败用例旁「AI 诊断」按钮"，
+#      那个按钮不存在，是一条只在文案里活着的能力。
+#   2. 和已定的三层失败判断直接冲突：现象由平台按规则算，归因由外部 Claude Code
+#      提（tb_submit_analysis），结论由人确认。平台自己再诊断一份就是第四个声音。
+#   3. 留着路由 = 留一条"平台也能归因"的暗路，和 docs/cc-platform-loop-spec.md
+#      红线 3 是同一条纪律。
+# skill_executor.execute_diagnose 暂留（已无调用方），要复活先改红线再说。

@@ -74,13 +74,14 @@ const SKILLS = [
     name: 'tb-diagnose',
     title: '失败诊断',
     icon: <FileSearchOutlined style={{ fontSize: 20, color: '#bfbfbf' }} />,
-    status: 'planned',
-    phase: 'Phase 2',
-    description: '分析测试失败原因，3 分类仲裁（脚本Bug / 系统Bug / 环境问题）+ 修复建议',
-    input: '失败的用例 + 执行日志 + 错误截图',
-    output: '诊断结论 + 置信度 + 可行动修复方案',
-    where: '计划入口：测试报告 → 失败用例旁「AI 诊断」',
-    mcpTools: ['tb_get_case', 'tb_list_cases'],
+    status: 'retired',
+    description: '已下线。失败归因改由外部 Claude Code 做（tb_get_failed_scenarios 拿现象和证据 → '
+      + 'tb_submit_analysis 提归因），平台只按规则算"现象"、由人确认"原因"。'
+      + '平台自己再诊断一份，等于在同一件事上给出第四个声音。',
+    input: '—',
+    output: '—',
+    where: '入口从未存在过（页面上写的那个「AI 诊断」按钮是不存在的）',
+    mcpTools: ['tb_get_failed_scenarios', 'tb_submit_analysis'],
   },
   {
     name: 'tb-doc-generate',
@@ -174,7 +175,9 @@ export default function SkillManage() {
                 )}
                 {skill.status === 'available'
                   ? <Tag color="cyan" icon={<CheckCircleOutlined />}>可用</Tag>
-                  : <Tag icon={<ClockCircleOutlined />}>{skill.phase} 规划中</Tag>
+                  : skill.status === 'retired'
+                    ? <Tag color="default">已下线</Tag>
+                    : <Tag icon={<ClockCircleOutlined />}>{skill.phase} 规划中</Tag>
                 }
               </Space>
             </div>
@@ -248,7 +251,7 @@ export default function SkillManage() {
           value={editContent}
           onChange={e => setEditContent(e.target.value)}
           rows={28}
-          style={{ fontFamily: "'SF Mono', Monaco, Menlo, monospace", fontSize: 13, lineHeight: 1.6 }}
+          style={{ fontFamily: 'var(--font-mono)', fontSize: 13, lineHeight: 1.6 }}
         />
       </Drawer>
     </div>

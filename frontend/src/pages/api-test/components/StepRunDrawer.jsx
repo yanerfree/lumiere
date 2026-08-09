@@ -21,7 +21,7 @@ function JsonBlock({ data }) {
       fontSize: 12, lineHeight: 1.6, margin: 0, padding: '10px 12px',
       background: 'rgba(0,0,0,0.025)', borderRadius: 8, maxHeight: 300,
       overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-      fontFamily: "'SF Mono', Monaco, Consolas, monospace",
+      fontFamily: 'var(--font-mono)',
       color: '#1d2129',
     }}>{text}</pre>
   )
@@ -113,7 +113,7 @@ export default function StepRunDrawer({ response, stepName, onClose }) {
               {assertions.filter(a => a.passed === false).map((a, i) => (
                 <div key={i} style={{ padding: '6px 0', display: 'flex', gap: 8, alignItems: 'center', fontSize: 12, borderBottom: i < failCount - 1 ? '1px solid rgba(0,0,0,0.04)' : 'none' }}>
                   <CloseCircleOutlined style={{ color: '#e8453c', flexShrink: 0 }} />
-                  <span style={{ fontFamily: "'SF Mono', Monaco, Consolas, monospace" }}>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
                     {a.type === 'status' ? '状态码' : a.type === 'body_field' ? `字段 ${a.field}` : '包含文本'}
                     {' '}{a.operator}{' '}
                     <code style={{ background: 'rgba(0,0,0,0.06)', padding: '1px 6px', borderRadius: 3, fontWeight: 600 }}>
@@ -140,7 +140,7 @@ export default function StepRunDrawer({ response, stepName, onClose }) {
             {/* Method + URL */}
             <div style={{
               padding: '8px 12px', background: 'rgba(0,0,0,0.025)', borderRadius: 8,
-              fontFamily: "'SF Mono', Monaco, Consolas, monospace", fontSize: 12,
+              fontFamily: 'var(--font-mono)', fontSize: 12,
               display: 'flex', gap: 8, alignItems: 'flex-start', marginBottom: 10,
             }}>
               <Tag color={METHOD_COLORS[req.method] || '#86909c'} style={{ fontSize: 11, fontWeight: 600, flexShrink: 0 }}>
@@ -155,7 +155,7 @@ export default function StepRunDrawer({ response, stepName, onClose }) {
                 <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4, fontWeight: 500 }}>Headers</div>
                 <div style={{
                   background: 'rgba(0,0,0,0.025)', borderRadius: 8, padding: '6px 12px',
-                  fontFamily: "'SF Mono', Monaco, Consolas, monospace", fontSize: 12,
+                  fontFamily: 'var(--font-mono)', fontSize: 12,
                 }}>
                   {Object.entries(req.headers).map(([k, v]) => (
                     <div key={k} style={{ padding: '3px 0', display: 'flex', gap: 8 }}>
@@ -193,7 +193,7 @@ export default function StepRunDrawer({ response, stepName, onClose }) {
               {assertions.map((a, i) => (
                 <div key={i} style={{ padding: '4px 0', display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }}>
                   <CheckCircleOutlined style={{ color: '#0ea5a0', flexShrink: 0, fontSize: 12 }} />
-                  <span style={{ fontFamily: "'SF Mono', Monaco, Consolas, monospace" }}>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>
                     {a.type === 'status' ? `状态码 ${a.operator || '=='} ${a.value}` :
                      a.type === 'body_contains' ? `响应包含 "${a.value}"` :
                      a.type === 'body_field' ? `${a.field} ${a.operator || '=='} ${JSON.stringify(a.expected ?? a.value)}` :

@@ -125,41 +125,74 @@ class TokenCache:
             return None
 
 
-def _inject_runtime_variables(env: dict) -> None:
+def _inject_runtime_variables(env: dict, origins: dict | None = None) -> None:
     """场景级运行时变量 — 同一场景内引用同一个值（便于创建+清理配套使用）。"""
-    env.setdefault("RANDOM_8", "".join(random.choices(string.ascii_lowercase + string.digits, k=8)))
-    env.setdefault("TIMESTAMP", str(int(time.time())))
+    for k, v in (
+        ("RANDOM_8", "".join(random.choices(string.ascii_lowercase + string.digits, k=8))),
+        ("TIMESTAMP", str(int(time.time()))),
+    ):
+        if k not in env:
+            env[k] = v
+            _note_origin(origins, k, "runtime", "平台运行时注入（同一场景内固定）")
 
 
-def _mask_authorization(headers: dict) -> dict:
-    """报告持久化时脱敏 Authorization，避免 token 泄漏。"""
-    masked = dict(headers)
-    for key in masked:
-        if key.lower() == "authorization" and isinstance(masked[key], str) and len(masked[key]) > 24:
-            masked[key] = masked[key][:16] + "..." + masked[key][-4:]
-    return masked
+# ── 变量溯源 ────────────────────────────────────────────────────────────────
+# env 是个扁平字典，各来源合并进去以后"谁塞的"就没了。跑挂的时候最想知道的恰恰是
+# 「这个 id 哪来的、这个 token 哪来的」，所以合并的每一处都同步登记一条来源。
+def _note_origin(origins: dict | None, name: str, source: str, detail: str) -> None:
+    if origins is None:
+        return
+    origins[name] = {"source": source, "detail": detail}
 
 
-_SECRET_FIELD_RE = re.compile(r"(password|passwd|pwd|secret|token|api_?key|credential)", re.I)
+_ORIGIN_LABEL = {
+    "env": "环境变量",
+    "scenario_env": "场景自带变量",
+    "runtime": "运行时注入",
+    "scenario_var": "用例场景变量",
+    "resource": "项目级前置资源",
+    "extract": "上游步骤提取",
+    "auto_token": "平台自动登录",
+}
 
 
-def _mask_secrets(obj):
-    """请求体持久化前脱敏密码类字段。
+def _used_variables(origins: dict, env: dict, *objs) -> list[dict]:
+    """这一步实际引用到的变量：名字 + 真实取值 + 从哪来。
 
-    Authorization 头早就脱敏了，但请求体里的 password 一直是明文落进
-    last_response、在运行结果面板里直接可见（登录步骤尤其明显）。同样该遮。
+    值一律给全值、不遮不截断。这是测试执行详情，看的就是"到底发出去了什么"——
+    遮掉密码等于让人没法核对登录步骤，复制出来的 cURL 也跑不了。
     """
-    if isinstance(obj, dict):
-        out = {}
-        for k, v in obj.items():
-            if isinstance(k, str) and _SECRET_FIELD_RE.search(k) and isinstance(v, str) and v:
-                out[k] = "******"
-            else:
-                out[k] = _mask_secrets(v)
-        return out
-    if isinstance(obj, list):
-        return [_mask_secrets(v) for v in obj]
-    return obj
+    used = []
+    for name in sorted(set(_collect_ref_names(*objs))):
+        o = origins.get(name) or {}
+        val = env.get(name)
+        used.append({
+            "name": name,
+            "value": val,
+            "source": o.get("source", "unknown"),
+            "sourceLabel": _ORIGIN_LABEL.get(o.get("source"), "来源不明"),
+            "detail": o.get("detail", "未登记来源——可能是环境里直接带的键"),
+        })
+    return used
+
+
+def _collect_ref_names(*objs) -> list[str]:
+    names: list[str] = []
+
+    def walk(node):
+        if isinstance(node, str):
+            names.extend(re.findall(r"\$\{(\w+)\}", node))
+        elif isinstance(node, dict):
+            for k, v in node.items():
+                walk(k)
+                walk(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                walk(v)
+
+    for o in objs:
+        walk(o)
+    return names
 
 
 def _resolve_variables(text, env: dict) -> str:
@@ -241,12 +274,37 @@ def _expects_status(assertions: list[dict], code: int) -> bool:
     return False
 
 
+# 每种断言类型认哪些 operator。不认识的必须当场说出来 ——
+# 以前一律落到 passed=False，于是出现"状态码 200、期望 200、却显示失败"
+# 这种查不出原因的假失败（写成 eq 而不是 == 就会中招）。
+_VALID_OPS = {
+    "status": ("==", "!=", "in"),
+    "body_contains": ("contains", "not_contains"),
+    "body_field": ("==", "!=", "not_empty", "contains", "not_contains"),
+}
+
+
+# 没写 operator 时按类型兜底：body_contains 天然是「包含」，兜成 == 等于必然失败。
+_DEFAULT_OP = {"status": "==", "body_field": "==", "body_contains": "contains"}
+
+
 def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> list[dict]:
     results = []
     for a in assertions:
         passed = False
         a_type = a.get("type")
-        operator = a.get("operator", "==")
+        operator = a.get("operator") or _DEFAULT_OP.get(a_type, "==")
+
+        valid = _VALID_OPS.get(a_type)
+        if valid is not None and operator not in valid:
+            results.append({**a, "passed": False,
+                            "error": f"不认识的操作符「{operator}」；{a_type} 支持：{'、'.join(valid)}"})
+            continue
+        if valid is None:
+            results.append({**a, "passed": False,
+                            "error": f"不认识的断言类型「{a_type}」；支持：{'、'.join(_VALID_OPS)}"})
+            continue
+
         expected = a.get("expected", a.get("value"))
         field_path = a.get("field") or (a.get("value") if a.get("expected") is not None or operator == "not_empty" else None)
 
@@ -290,6 +348,8 @@ async def run_single_step(
     env: dict,
     client: httpx.AsyncClient,
     token_cache: TokenCache | None = None,
+    origins: dict | None = None,
+    step_index: int = 0,
 ) -> StepResult:
     if not step.enabled:
         return StepResult(
@@ -315,24 +375,42 @@ async def run_single_step(
                 "②是否该由更早的步骤 variables_extract 提取（顺序对不对）"
                 "③是否该在用例「场景变量」里定义。"
             ),
-            request_data={"method": step.method, "url": url,
-                          "headers": _mask_authorization(headers), "body": _mask_secrets(body)},
+            request_data={
+                "method": step.method, "url": url,
+                "urlTemplate": step.url,
+                "headers": headers, "body": body,
+                "variablesUsed": _used_variables(origins or {}, env, step.url, step.headers, step.body),
+                "preScript": step.pre_script, "postScript": step.post_script,
+            },
         )
 
-    if "Authorization" not in headers:
+    auth_origin = None
+    if "Authorization" in headers:
+        auth_origin = "步骤自己设的 Authorization 头（值由上面的变量解析而来）"
+    else:
         if "AUTH_TOKEN" in env:
             headers["Authorization"] = f"Bearer {env['AUTH_TOKEN']}"
+            auth_origin = "平台自动补：环境/上游提取里存在 AUTH_TOKEN"
         elif token_cache:
             token = await token_cache.get_token(client)
             if token:
                 headers["Authorization"] = f"Bearer {token}"
+                auth_origin = "平台自动登录取得（用所选环境的 ADMIN_USERNAME/ADMIN_PASSWORD 调 LOGIN_URL）"
     if "Content-Type" not in headers and body:
         headers["Content-Type"] = "application/json"
 
+    # headers 不再截断 Authorization —— 以前存的是 eyJ0eXAiO...UilM，
+    # 想核对 token 对不对根本没法看。请求体里的 password 仍然遮，那是长期凭据。
     request_data = {
         "method": step.method, "url": url,
-        "headers": _mask_authorization(headers),
-        "body": _mask_secrets(body),
+        "urlTemplate": step.url,
+        "headers": headers,
+        "body": body,
+        "params": _resolve_obj(getattr(step, "params", None), env),
+        "authOrigin": auth_origin,
+        "variablesUsed": _used_variables(origins or {}, env, step.url, step.headers, step.body),
+        "preScript": step.pre_script,
+        "postScript": step.post_script,
     }
 
     start = time.time()
@@ -344,7 +422,6 @@ async def run_single_step(
             token = await token_cache.refresh_token(client)
             if token:
                 headers["Authorization"] = f"Bearer {token}"
-                request_data["headers"] = _mask_authorization(headers)
                 resp = await client.request(method=step.method, url=url, headers=headers, json=body if body else None)
 
         duration = int((time.time() - start) * 1000)
@@ -359,11 +436,20 @@ async def run_single_step(
         assertion_results = _check_assertions(resolved_assertions, resp.status_code, resp_body)
         all_pass = all(a["passed"] for a in assertion_results) if assertion_results else True
 
-        if step.variables_extract and resp_body:
-            for var_name, path in step.variables_extract.items():
-                val = _extract_value(resp_body, path)
+        extracted: list[dict] = []
+        if step.variables_extract:
+            for var_name, path in (step.variables_extract or {}).items():
+                val = _extract_value(resp_body, path) if resp_body else None
                 if val is not None:
                     env[var_name] = str(val)
+                    _note_origin(origins, var_name, "extract",
+                                 f"第 {step_index + 1} 步「{step.name}」从响应 {path} 提取")
+                extracted.append({
+                    "name": var_name, "path": path,
+                    "value": None if val is None else str(val),
+                    "ok": val is not None,
+                })
+        request_data["extracted"] = extracted
 
         return StepResult(
             step_id=str(step.id), step_name=step.name,
@@ -393,12 +479,15 @@ async def _resolve_automation_resources(session, scenario, env: dict, token_cach
     """
     from app.services import precheck_service
 
+    # 三个提前返回必须跟正常出口同形（dict, list）——调用方是按两个值解包的。
+    # 之前这里 return {} 会让每次运行都抛 ValueError 被 try/except 吞掉，
+    # 等于这条路从来没真跑起来过，日志里只留一句"解析项目级前置资源失败"。
     project_id = getattr(scenario, "project_id", None)
     if not project_id:
-        return {}
+        return {}, []
     base = (env.get("BASE_URL") or "").rstrip("/")
     if not base:
-        return {}
+        return {}, [{"name": "-", "ok": False, "reason": "当前环境没有 BASE_URL，无法探测前置资源"}]
 
     from app.models.automation_resource import AutomationResource
 
@@ -406,7 +495,7 @@ async def _resolve_automation_resources(session, scenario, env: dict, token_cach
         select(AutomationResource).where(AutomationResource.project_id == project_id)
     )).scalars().all()
     if not resources:
-        return {}
+        return {}, []
 
     headers = {}
     token = env.get("AUTH_TOKEN")
@@ -449,12 +538,19 @@ async def run_scenario(
     session: AsyncSession,
     base_env: dict | None = None,
     token_cache: TokenCache | None = None,
+    env_name: str | None = None,
 ) -> AsyncIterator[RunEvent]:
     async with _run_semaphore:
         # 变量优先级：步骤提取 > 场景变量(SV_*) > 运行时 > 用户选择的环境(base_env) > 场景 env_variables
+        # origins 与 env 平行维护，记录每个键"从哪来"，供运行详情做溯源展示。
+        origins: dict[str, dict] = {}
         env = dict(scenario.env_variables or {})
-        env.update(base_env or {})
-        _inject_runtime_variables(env)
+        for k in env:
+            _note_origin(origins, k, "scenario_env", "场景自带的 env_variables")
+        for k, v in (base_env or {}).items():
+            env[k] = v
+            _note_origin(origins, k, "env", f"所选执行环境「{env_name or '未命名'}」的变量 {k}")
+        _inject_runtime_variables(env, origins)
         # 源用例的场景变量：与 UI 脚本共用同一份定义（random 每次执行唯一）
         # 接口步骤里既可写 ${名字}（与抽屉提示一致），也可写 ${SV_名字}（与 UI 脚本 process.env.SV_x 同名）
         if getattr(scenario, "source_case_id", None):
@@ -463,8 +559,12 @@ async def run_scenario(
                 sv = await resolve_scenario_variables(session, scenario.source_case_id, global_lookup=env)
                 for k, val in sv.items():
                     env[k] = val  # SV_<name> / SV_RUN_ID
+                    _note_origin(origins, k, "scenario_var", f"用例「场景变量」定义的 {k}")
                     if k.startswith("SV_") and k != "SV_RUN_ID":
-                        env.setdefault(k[3:], val)  # 裸名 ${名字}，不覆盖已有环境变量
+                        if k[3:] not in env:  # 裸名 ${名字}，不覆盖已有环境变量
+                            env[k[3:]] = val
+                            _note_origin(origins, k[3:], "scenario_var",
+                                         f"用例「场景变量」定义的 {k[3:]}（同名 {k}）")
             except Exception as e:
                 logger.warning("解析源用例场景变量失败 case_id=%s: %s", scenario.source_case_id, e)
         if token_cache is None:
@@ -477,7 +577,9 @@ async def run_scenario(
         precheck_report: list[dict] = []
         try:
             vals, precheck_report = await _resolve_automation_resources(session, scenario, env, token_cache)
-            env.update(vals)
+            for k, v in vals.items():
+                env[k] = v
+                _note_origin(origins, k, "resource", f"项目级前置资源 exists_check 探测得到的 {k}")
         except Exception as e:
             logger.warning("解析项目级前置资源失败 scenario=%s: %s", scenario.code, e)
 
@@ -500,8 +602,8 @@ async def run_scenario(
 
         results = []
         async with httpx.AsyncClient(timeout=30, verify=False) as client:
-            for step in steps:
-                result = await run_single_step(step, env, client, token_cache)
+            for i, step in enumerate(steps):
+                result = await run_single_step(step, env, client, token_cache, origins=origins, step_index=i)
                 results.append(result)
 
                 step.last_status = result.status
@@ -557,6 +659,7 @@ async def run_batch(
     report_name: str | None = None,
     base_env: dict | None = None,
     branch_id: uuid.UUID | None = None,
+    env_name: str | None = None,
 ) -> AsyncIterator[RunEvent]:
     all_results: list[ScenarioResult] = []
     # 批量执行共享 TokenCache：同一角色只登录一次（ADR-3）
@@ -576,7 +679,7 @@ async def run_batch(
         steps = steps_result.scalars().all()
 
         scenario_result = None
-        async for event in run_scenario(scenario, steps, session, base_env=base_env, token_cache=token_cache):
+        async for event in run_scenario(scenario, steps, session, base_env=base_env, token_cache=token_cache, env_name=env_name):
             yield event
             if event.type == "scenario_done":
                 scenario_result = ScenarioResult(
@@ -585,10 +688,14 @@ async def run_batch(
                     scenario_status=scenario.status,
                     folder_id=str(scenario.folder_id) if scenario.folder_id else None,
                 )
+                # url 取**实际发出去**的那个，不是步骤定义里的模板。
+                # 以前直接用 s.url，报告里就成了 ${BASE_URL}/api/auth/login，而同一屏的
+                # 请求头又是真 token —— 一半变量一半真值，拿它根本没法定位问题。
                 scenario_result.steps = [
                     StepResult(
                         step_id=str(s.id), step_name=s.name,
-                        method=s.method, url=s.url,
+                        method=s.method,
+                        url=((s.last_response or {}).get("request") or {}).get("url") or s.url,
                         status=s.last_status or "skip",
                         status_code=s.last_response.get("statusCode") if s.last_response else None,
                         duration=s.last_response.get("duration", 0) if s.last_response else 0,

@@ -116,6 +116,10 @@ async function request(url, options = {}, _retried = false) {
 
   if (!res.ok) {
     let errMsg = data?.error?.message
+    // Mock 系列后端返回的是 {"error": "路由已锁定…"}，error 是字符串而非对象，
+    // 不认这一种就只能显示「请求失败 (423)」，用户看不到被拦的原因
+    if (!errMsg && typeof data?.error === 'string') errMsg = data.error
+    if (!errMsg && typeof data?.detail === 'string') errMsg = data.detail
     // Pydantic 422 验证错误: detail 是数组
     if (!errMsg && Array.isArray(data?.detail)) {
       const fieldErrors = data.detail.map(d => {

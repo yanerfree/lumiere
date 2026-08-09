@@ -12,6 +12,23 @@ from app.models.plan import Plan, PlanCase
 from app.models.report import TestReport, TestReportScenario
 
 
+async def _will_run_automated(session: AsyncSession, plan, case) -> bool:
+    """这条用例在这次计划里会不会被自动执行。
+
+    判据和执行器保持同一份：新式（scripts 表有该维度活跃脚本 + 该维度已 executable）
+    优先，兼容旧式（automation_status=automated + script_ref_file）。
+    Flaky 用例被执行器跳过，这里也不算自动。
+    """
+    if plan.plan_type != "automated" or case.is_flaky:
+        return False
+    from app.engine.tasks.adhoc_execution import _has_new_style_script
+
+    dim = case.api_status if plan.test_type == "api" else case.ui_status
+    if dim == "executable" and await _has_new_style_script(session, case.id, plan.test_type):
+        return True
+    return case.automation_status == "automated" and bool(case.script_ref_file)
+
+
 async def start_execution(
     session: AsyncSession, plan_id: uuid.UUID, executed_by: uuid.UUID
 ) -> TestReport:
@@ -40,17 +57,22 @@ async def start_execution(
 
     now = datetime.now(timezone.utc)
 
-    # 统计自动化/手动用例数
-    automated_count = 0
-    manual_count = 0
+    # 谁会被自动跑，判据必须和执行器（engine/tasks/execution.py:204-211）**完全一致**。
+    # 此前这里只认旧字段 automation_status=='automated'，而执行器认的是
+    # 「该维度 executable + scripts 表有活跃脚本」——CC 回推的用例两个字段一个都不沾
+    # 旧的，于是报告开头把它们全算成"手动"，进度条和手动数从一开始就是错的。
+    auto_flags = {}
     for _, case in plan_cases:
-        if plan.plan_type == "automated" and case.automation_status == "automated" and not case.is_flaky:
-            automated_count += 1
-        else:
-            manual_count += 1
+        auto_flags[case.id] = await _will_run_automated(session, plan, case)
+
+    automated_count = sum(1 for v in auto_flags.values() if v)
+    manual_count = len(plan_cases) - automated_count
 
     report = TestReport(
         plan_id=plan_id,
+        # project_id 此前漏了 —— 库里 21/89 条报告是 NULL，导致按项目查报告
+        # （tb_list_reports、以及任何项目维度的报告列表）一条都查不到计划报告。
+        project_id=plan.project_id,
         branch_id=plan.branch_id,
         environment_id=plan.environment_id,
         executed_by=executed_by,
@@ -63,7 +85,7 @@ async def start_execution(
 
     for i, (pc, case) in enumerate(plan_cases):
         # 确定 execution_type
-        if plan.plan_type == "automated" and case.automation_status == "automated" and not case.is_flaky:
+        if auto_flags.get(case.id):
             exec_type = "automated"
             status = "pending"
         elif plan.plan_type == "automated" and case.is_flaky:
@@ -234,6 +256,7 @@ async def get_report_with_scenarios(
             TestReportScenario,
             Case.script_ref_file, Case.script_ref_func,
             Case.steps, Case.preconditions, Case.expected_result,
+            Case.branch_id,
         )
         .outerjoin(Case, TestReportScenario.case_id == Case.id)
         .where(TestReportScenario.report_id == report.id)
@@ -241,12 +264,40 @@ async def get_report_with_scenarios(
     )
     rows = scenarios_result.all()
     scenarios = []
-    for scenario, script_file, script_func, case_steps, preconditions, expected_result in rows:
+    for (scenario, script_file, script_func, case_steps,
+         preconditions, expected_result, branch_id) in rows:
         scenario._script_ref_file = script_file
         scenario._script_ref_func = script_func
         scenario._case_steps = case_steps
         scenario._preconditions = preconditions
         scenario._expected_result = expected_result
+        scenario._branch_id = branch_id
         scenarios.append(scenario)
 
+    # 挂上每条场景最后一次执行的三层失败判断。
+    # QA 看失败是在报告页，不是用例详情页 —— 现象/CC 归因/人工确认只做在用例详情里
+    # 等于没做。一次查完再按场景分组，不走 N+1。
+    await _attach_triage(session, scenarios)
+
     return {"report": report, "scenarios": scenarios}
+
+
+async def _attach_triage(session: AsyncSession, scenarios: list) -> None:
+    """给场景挂 _run（最后一次 attempt 的 ScriptRun）。没有执行记录的场景挂 None。"""
+    from app.models.script import ScriptRun
+
+    ids = [s.id for s in scenarios]
+    for s in scenarios:
+        s._run = None
+    if not ids:
+        return
+    runs = (await session.execute(
+        select(ScriptRun)
+        .where(ScriptRun.report_scenario_id.in_(ids))
+        .order_by(ScriptRun.report_scenario_id, ScriptRun.attempt.asc())
+    )).scalars().all()
+    by_scenario = {}
+    for r in runs:  # 升序遍历，后写的覆盖前面的 → 留下 attempt 最大的那次
+        by_scenario[r.report_scenario_id] = r
+    for s in scenarios:
+        s._run = by_scenario.get(s.id)

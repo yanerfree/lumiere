@@ -76,7 +76,7 @@ export default function CasePicker({ open, projectId, selectedIds = [], onOk, on
   const columns = [
     {
       title: '编号', dataIndex: 'caseCode', width: 140,
-      render: v => <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#86909c' }}>{v}</span>,
+      render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c' }}>{v}</span>,
     },
     {
       title: '标题', dataIndex: 'title', ellipsis: true,

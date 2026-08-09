@@ -15,8 +15,15 @@ const ASSERT_TYPE_OUT = { status: 'status', jsonPath: 'body_field', contains: 'b
 // 操作符：后端 → 编辑器
 // in 必须原样保留：以前映射成 eq，往返一次就把 in [200,204] 改成 == "200,204"，
 // 步骤明明返回 200 却判失败 —— 打开编辑器保存一下就把 CC 写对的断言改坏了。
-const OP_IN = { '==': 'eq', '!=': 'ne', '>': 'gt', '<': 'lt', contains: 'contains', not_contains: 'contains', not_empty: 'notEmpty', in: 'in' }
-const OP_OUT = { eq: '==', ne: '!=', gt: '>', lt: '<', contains: 'contains', notEmpty: 'not_empty', in: 'in' }
+// not_contains 同理：以前也映射成 contains，往返一次「删后列表里不再出现」就变成
+// 「删后列表里还在」—— 断言反了、还判失败，人看半天以为是被测系统的问题。
+// 编辑器只要动任何一步，saveNodes 会把**所有**步骤回写一遍，所以一次误映射
+// 会波及整条链，不止你改的那一步。
+const OP_IN = { '==': 'eq', '!=': 'ne', '>': 'gt', '<': 'lt', contains: 'contains', not_contains: 'notContains', not_empty: 'notEmpty', in: 'in' }
+const OP_OUT = { eq: '==', ne: '!=', gt: '>', lt: '<', contains: 'contains', notContains: 'not_contains', notEmpty: 'not_empty', in: 'in' }
+
+// 断言没带 operator 时，按类型给默认值（编辑器侧的写法）
+const DEFAULT_OP = { status: 'eq', body_field: 'eq', body_contains: 'contains', header: 'eq' }
 
 const toText = (v) => {
   if (v == null) return ''
@@ -32,7 +39,9 @@ export function stepToNode(st, i) {
       type: 'assertion',
       assertType: ASSERT_TYPE_IN[a.type] || a.type,
       path: a.field || '',
-      operator: OP_IN[a.operator] || 'eq',
+      // 兜底必须按断言类型分：body_contains 没写 operator 时是「包含」，
+      // 一律兜成 eq 会在回写时变成 ==，而 body_contains 根本不认 == —— 直接假失败。
+      operator: OP_IN[a.operator] || DEFAULT_OP[a.type] || 'eq',
       // status 用 value，body_field 用 expected —— 两种都收
       // in 的值是数组，输入框只能放字符串 → 逗号串展示，回写时再拆回数组
       expected: Array.isArray(a.value ?? a.expected)

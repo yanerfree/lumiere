@@ -44,11 +44,29 @@ async def create_route(body: MockRouteCreate, session: AsyncSession = Depends(ge
     return MockRouteResponse.model_validate(route, from_attributes=True)
 
 
-@router.put("/routes/{route_id}", response_model=MockRouteResponse)
-async def update_route(route_id: uuid.UUID, body: MockRouteUpdate, session: AsyncSession = Depends(get_db)):
-    route = await svc.update_route(session, route_id, body)
+@router.put("/routes/reorder")
+async def reorder_routes(body: ReorderRequest, session: AsyncSession = Depends(get_db)):
+    # 必须声明在 /routes/{route_id} 之前，否则 "reorder" 会被当作 route_id 解析
+    await svc.reorder_routes(session, [item.model_dump() for item in body.items])
+    return {"ok": True}
+
+
+@router.patch("/routes/{route_id}/lock", response_model=MockRouteResponse)
+async def lock_route(route_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
+    route = await svc.toggle_lock(session, route_id)
     if not route:
         return JSONResponse({"error": "Route not found"}, status_code=404)
+    return MockRouteResponse.model_validate(route, from_attributes=True)
+
+
+@router.put("/routes/{route_id}", response_model=MockRouteResponse)
+async def update_route(route_id: uuid.UUID, body: MockRouteUpdate, session: AsyncSession = Depends(get_db)):
+    existing = await svc.get_route(session, route_id)
+    if not existing:
+        return JSONResponse({"error": "Route not found"}, status_code=404)
+    if existing.locked:
+        return JSONResponse({"error": "路由已锁定，请先解锁后再编辑"}, status_code=423)
+    route = await svc.update_route(session, route_id, body)
     return MockRouteResponse.model_validate(route, from_attributes=True)
 
 
@@ -57,6 +75,8 @@ async def delete_route(route_id: uuid.UUID, session: AsyncSession = Depends(get_
     route = await svc.get_route(session, route_id)
     if not route:
         return JSONResponse({"error": "Route not found"}, status_code=404)
+    if route.locked:
+        return JSONResponse({"error": "路由已锁定，请先解锁后再删除"}, status_code=423)
     routes = await svc.list_routes(session)
     if len(routes) <= 1:
         return JSONResponse({"error": "至少保留一条路由"}, status_code=400)
@@ -69,16 +89,13 @@ async def delete_route(route_id: uuid.UUID, session: AsyncSession = Depends(get_
 
 @router.patch("/routes/{route_id}/toggle", response_model=MockRouteResponse)
 async def toggle_route(route_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
-    route = await svc.toggle_route(session, route_id)
-    if not route:
+    existing = await svc.get_route(session, route_id)
+    if not existing:
         return JSONResponse({"error": "Route not found"}, status_code=404)
+    if existing.locked:
+        return JSONResponse({"error": "路由已锁定，请先解锁后再操作"}, status_code=423)
+    route = await svc.toggle_route(session, route_id)
     return MockRouteResponse.model_validate(route, from_attributes=True)
-
-
-@router.put("/routes/reorder")
-async def reorder_routes(body: ReorderRequest, session: AsyncSession = Depends(get_db)):
-    await svc.reorder_routes(session, [item.model_dump() for item in body.items])
-    return {"ok": True}
 
 
 # ───── 预设模式 ─────

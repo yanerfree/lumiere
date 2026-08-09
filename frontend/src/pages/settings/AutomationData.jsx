@@ -144,11 +144,18 @@ export default function AutomationData() {
       },
     },
     {
-      title: '缺失可自动创建',
+      // 平台不执行 create_def，只登记备查。原来这列叫「缺失可自动创建」+「支持」，
+      // 是在承诺代码做不到的事 —— 用户照着理解，跑起来只会拿到「变量未解析」。
+      title: '缺失时怎么办',
       dataIndex: 'createDef',
-      width: 130,
-      align: 'center',
-      render: (v) => v ? <Tag color="blue">支持</Tag> : <Tag>仅确认</Tag>,
+      width: 190,
+      render: (v) => v
+        ? <Tooltip title="平台不会替你建。Claude Code 调 tb_list_global_data(probe=true) 看到 missing 后，照这份定义自己调接口造出来">
+            <Tag color="blue">CC 按定义自建</Tag>
+          </Tooltip>
+        : <Tooltip title="没登记创建方式，缺失时只能人工处理">
+            <Tag>未登记创建方式</Tag>
+          </Tooltip>,
     },
     {
       title: '长期保留',
@@ -219,7 +226,8 @@ export default function AutomationData() {
         <DatabaseOutlined /> 自动化数据
       </Typography.Title>
       <Paragraph type="secondary" style={{ marginBottom: 20 }}>
-        项目级自动化测试所需的全局数据。<Text strong>共享资源</Text>在跑自动化前会被预检是否存在（缺则按定义确认/补建，长期保留、绝不被用例删除）；
+        项目级自动化测试所需的全局数据。<Text strong>共享资源</Text>由 Claude Code 活体验证时自动登记，跑自动化前平台会预检它在当前环境存不存在——
+        <Text strong>探到就注入成变量；探不到只报「变量未解析」，平台不会替你补建</Text>（登记的 createDef 只备查、不执行，由 CC 自己照着造）。长期保留、绝不被用例删除；
         <Text strong>凭证</Text>沿用各环境的环境变量（多角色账号/密码/Token），此处仅聚合展示。
       </Paragraph>
 
@@ -240,7 +248,7 @@ export default function AutomationData() {
           columns={resourceCols}
           dataSource={resources}
           pagination={false}
-          locale={{ emptyText: <Empty description="暂无共享资源，点击「新增资源」添加全局数据（如默认上游/共享服务）" /> }}
+          locale={{ emptyText: <Empty description="暂无共享资源。主入口不是人手填 —— Claude Code 活体验证时遇到多条用例共用、重建代价大的底座（上游/负载、隔离上下文），会自己调 tb_upsert_automation_resource 登记到这里。也可点「新增资源」手工补。" /> }}
         />
       </Card>
 
@@ -286,16 +294,16 @@ export default function AutomationData() {
           <Form.Item
             name="existsCheckText"
             label="存在性检查 (JSON)"
-            tooltip='跑自动化前如何判断它已存在。如 {"method":"GET","url":"/api/v1/upstreams","match":{"field":"name","equals":"default-upstream"}}'
+            tooltip='跑自动化前如何判断它已存在，以及抽哪个字段当变量。extract 的路径相对 match 命中的那一条写（直接 "id"），不要写 "data[0].id" —— 下标是另一种写死，列表顺序一变就抽到别的资源。不写 extract 就只判断存在、不注入任何变量。'
           >
-            <Input.TextArea rows={5} placeholder='{"method":"GET","url":"/api/v1/upstreams","match":{"field":"name","equals":"default-upstream"}}' style={{ fontFamily: 'monospace', fontSize: 12 }} />
+            <Input.TextArea spellCheck={false} rows={5} placeholder={'{"method":"GET","url":"/api/v1/upstreams",\n "match":{"field":"name","equals":"default-upstream"},\n "extract":{"upstreamId":"id"}}'} style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
           </Form.Item>
           <Form.Item
             name="createDefText"
             label="创建定义 (JSON，可选)"
             tooltip="缺失时如何创建（仅在用户确认后使用）；留空表示缺失时只提示确认、不自动建"
           >
-            <Input.TextArea rows={5} placeholder='留空=仅确认；或 {"method":"POST","url":"/api/v1/upstreams","body":{...}}' style={{ fontFamily: 'monospace', fontSize: 12 }} />
+            <Input.TextArea spellCheck={false} rows={5} placeholder='留空=仅确认；或 {"method":"POST","url":"/api/v1/upstreams","body":{...}}' style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }} />
           </Form.Item>
           <Form.Item name="keep" label="长期保留（绝不被测试删除）" valuePropName="checked">
             <Switch />

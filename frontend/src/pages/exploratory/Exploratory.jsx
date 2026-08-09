@@ -7,7 +7,7 @@ import {
 import {
   PlusOutlined, BugOutlined, ExclamationCircleOutlined, BulbOutlined,
   CheckCircleOutlined, ClockCircleOutlined, RobotOutlined, LoadingOutlined,
-  PlayCircleOutlined, StopOutlined,
+  PlayCircleOutlined, StopOutlined, FileTextOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 
@@ -102,11 +102,23 @@ export default function Exploratory() {
     openSession(activeSession.id)
   }
 
+  // 结束会话 = 收尾 + 出报告。页面顶部承诺的最后一步「输出报告」原来是空的：
+  // complete 只改状态，summary 字段建表就有、库里一直是 NULL。
+  const [summarizing, setSummarizing] = useState(false)
   const handleComplete = async () => {
-    await api.post(`/projects/${projectId}/exploratory/sessions/${activeSession.id}/complete`)
-    message.success('会话已结束')
-    openSession(activeSession.id)
-    fetchSessions()
+    setSummarizing(true)
+    try {
+      await api.post(`/projects/${projectId}/exploratory/sessions/${activeSession.id}/complete`)
+      message.success('会话已结束，正在生成报告…')
+      await api.post(`/projects/${projectId}/exploratory/sessions/${activeSession.id}/summary`)
+      message.success('报告已生成')
+    } catch (e) {
+      message.error(e?.response?.data?.error?.message || '报告生成失败，会话已结束')
+    } finally {
+      setSummarizing(false)
+      openSession(activeSession.id)
+      fetchSessions()
+    }
   }
 
   const sessionColumns = [
@@ -158,7 +170,10 @@ export default function Exploratory() {
         {activeSession && (
           <div>
             {/* 章程区 */}
-            {!activeSession.charter ? (
+            {/* 判据必须是"有检查点"而不是"有 charter" —— charter 存成 {} 时
+                !charter 为 false，页面就把空壳当成章程渲染，人看到「检查点 (0/0)」、
+                按钮全禁用、还找不回生成入口（实测踩到）。 */}
+            {!activeSession.charter?.checkpoints?.length ? (
               <Card size="small" style={{ marginBottom: 16, borderColor: '#4e8af0' }}>
                 <Space direction="vertical" style={{ width: '100%' }}>
                   <Text strong>还没有章程，让 AI 生成一份？</Text>
@@ -198,7 +213,9 @@ export default function Exploratory() {
                         disabled={activeSession.completedCheckpoints >= activeSession.totalCheckpoints}>
                         完成当前检查点
                       </Button>
-                      <Button size="small" danger onClick={handleComplete}>结束会话</Button>
+                      <Button size="small" danger loading={summarizing} onClick={handleComplete}>
+                        结束会话并出报告
+                      </Button>
                     </Space>
                   )}
                 </div>
@@ -206,6 +223,50 @@ export default function Exploratory() {
                   <Alert type="info" showIcon style={{ marginTop: 12 }}
                     message="AI 探索建议"
                     description={activeSession.charter.explorationHints.map((h, i) => <div key={i}>• {h}</div>)} />
+                )}
+              </Card>
+            )}
+
+            {/* 探索报告 —— 页面顶部承诺的第四步。只讲已有事实：覆盖到哪、发现什么、
+                哪些风险还悬着。没查的检查点要点名，不然"探索完了"是句空话。 */}
+            {activeSession.summary && (
+              <Card size="small" style={{ marginBottom: 16 }}
+                title={<span><FileTextOutlined style={{ marginRight: 6 }} />探索报告</span>}>
+                <div style={{ fontSize: 13, lineHeight: 1.9, color: '#4e5969', marginBottom: 12 }}>
+                  {activeSession.summary.conclusion}
+                </div>
+                {activeSession.summary.coverage && (
+                  <div style={{ marginBottom: 12 }}>
+                    <Tag color="cyan">
+                      覆盖 {activeSession.summary.coverage.done}/{activeSession.summary.coverage.total} 检查点
+                    </Tag>
+                    {(activeSession.summary.coverage.uncovered || []).map((u, i) => (
+                      <Tag key={i} style={{ marginTop: 4 }}>未查：{u}</Tag>
+                    ))}
+                  </div>
+                )}
+                {(activeSession.summary.keyFindings || []).length > 0 && (
+                  <div style={{ marginBottom: 12 }}>
+                    <b style={{ fontSize: 13 }}>关键发现</b>
+                    {activeSession.summary.keyFindings.map((f, i) => (
+                      <div key={i} style={{ fontSize: 12.5, color: '#4e5969', marginTop: 4 }}>
+                        • <b>{f.title}</b> —— {f.impact}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {(activeSession.summary.residualRisks || []).length > 0 && (
+                  <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+                    message="还悬着的风险"
+                    description={activeSession.summary.residualRisks.map((r, i) => <div key={i}>• {r}</div>)} />
+                )}
+                {(activeSession.summary.nextSteps || []).length > 0 && (
+                  <div>
+                    <b style={{ fontSize: 13 }}>下一步</b>
+                    {activeSession.summary.nextSteps.map((s, i) => (
+                      <div key={i} style={{ fontSize: 12.5, color: '#4e5969', marginTop: 4 }}>• {s}</div>
+                    ))}
+                  </div>
                 )}
               </Card>
             )}

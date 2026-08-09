@@ -62,6 +62,7 @@ class MockRouteResponse(BaseSchema):
     method: str
     path: str
     enabled: bool
+    locked: bool
     sort_order: int
     delay_ms: int
     status_code: int

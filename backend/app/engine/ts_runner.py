@@ -150,6 +150,7 @@ def run_typescript_playwright(
     baseURL: '{base_url}',
     headless: true,
     screenshot: 'on',
+    recordHar: {{ path: './test-results/network.har', content: 'embed' }},
     locale: 'zh-CN',
     viewport: {{ width: 1280, height: 720 }},
   }},
@@ -200,7 +201,9 @@ def run_typescript_playwright(
             if not error_summary:
                 error_summary = (stdout or "")[-2000:]
 
+        from app.engine.har import har_path_for, parse_har
         screenshots = _collect_screenshots(str(output_dir))
+        captured_requests = parse_har(har_path_for(output_dir))
 
         return {
             "status": status,
@@ -209,6 +212,7 @@ def run_typescript_playwright(
             "stdout": (stdout or "")[:10000],
             "steps": [],
             "screenshots": screenshots,
+            "captured_requests": captured_requests,
         }
     except FileNotFoundError:
         return {"status": "error", "duration_ms": 0,

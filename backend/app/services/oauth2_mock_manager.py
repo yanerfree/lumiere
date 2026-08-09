@@ -94,7 +94,12 @@ class OAuth2MockServerManager:
         return [self._safe_client(c) for c in self._clients]
 
     def _safe_client(self, c: dict) -> dict:
-        return {**c, "client_secret_masked": c["client_secret"][:4] + "****" if c.get("client_secret") else ""}
+        # locked 是后加的字段，老 JSON 里没有 —— 补默认值，别让前端拿到 undefined
+        return {
+            **c,
+            "locked": c.get("locked", False),
+            "client_secret_masked": c["client_secret"][:4] + "****" if c.get("client_secret") else "",
+        }
 
     def get_client(self, client_id: str) -> dict | None:
         return next((c for c in self._clients if c["client_id"] == client_id), None)
@@ -108,6 +113,7 @@ class OAuth2MockServerManager:
             "audience": data.get("audience", "api"),
             "token_ttl": data.get("token_ttl", 3600),
             "enabled": True,
+            "locked": False,
         }
         if self.get_client(client["client_id"]):
             raise ValueError(f"Client '{client['client_id']}' already exists")
@@ -119,9 +125,18 @@ class OAuth2MockServerManager:
         client = self.get_client(client_id)
         if not client:
             return None
-        for k in ("name", "scope", "audience", "token_ttl", "enabled", "client_secret"):
+        for k in ("name", "scope", "audience", "token_ttl", "enabled", "locked", "client_secret"):
             if k in data:
                 client[k] = data[k]
+        self._save_clients()
+        return client
+
+    def toggle_lock(self, client_id: str) -> dict | None:
+        client = self.get_client(client_id)
+        if not client:
+            return None
+        # 老的 oauth2_mock_clients.json 里没有 locked 键，取默认值再翻转
+        client["locked"] = not client.get("locked", False)
         self._save_clients()
         return client
 

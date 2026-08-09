@@ -18,6 +18,7 @@ class MockRoute(Base):
     method: Mapped[str] = mapped_column(String(10), nullable=False, default="POST")
     path: Mapped[str] = mapped_column(String(500), nullable=False, default="/v1/chat/completions")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     # 基础配置

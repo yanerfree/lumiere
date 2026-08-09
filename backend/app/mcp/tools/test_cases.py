@@ -34,24 +34,99 @@ async def list_cases(
     folder_id: str | None = None,
     priority: str | None = None,
     case_type: str | None = None,
+    module: str | None = None,
+    target_level: str | None = None,
+    ui_status: str | None = None,
+    api_status: str | None = None,
+    manual_status: str | None = None,
+    pending_only: bool = False,
 ) -> dict:
-    """列出分支下的测试用例，支持分页和筛选。"""
-    cases, total = await case_service.list_cases(
-        session,
-        uuid.UUID(branch_id),
-        page=page,
-        page_size=min(page_size, 100),
-        keyword=keyword,
-        folder_id=uuid.UUID(folder_id) if folder_id else None,
-        priority=priority,
-        case_type=case_type,
-    )
+    """列出分支下的测试用例，支持分页和筛选。
+
+    **断点续跑就靠这个**（C2）：传 pending_only=true 只返回"还欠着的" ——
+    target_level 说要做到哪一步，三个维度状态说已经做到哪一步，差集就是待办。
+    中断之后重跑不用从头来，也不会把做完的又捡回来重做一遍。
+    """
+    from sqlalchemy import and_, cast, or_, select
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    from app.models.case import Case
+
+    stmt = select(Case).where(Case.branch_id == uuid.UUID(branch_id), Case.deleted_at.is_(None))
+    if keyword:
+        stmt = stmt.where(Case.title.ilike(f"%{keyword}%"))
+    if folder_id:
+        stmt = stmt.where(Case.folder_id == uuid.UUID(folder_id))
+    if priority:
+        stmt = stmt.where(Case.priority == priority)
+    if case_type:
+        stmt = stmt.where(Case.type == case_type)
+    if module:
+        # 模块名存在目录上，这里按目录名匹配，省得调用方先去查 folder_id
+        from app.models.case import CaseFolder
+        stmt = stmt.where(Case.folder_id.in_(
+            select(CaseFolder.id).where(CaseFolder.name == module)
+        ))
+    if target_level:
+        stmt = stmt.where(Case.target_level == target_level)
+    if ui_status:
+        stmt = stmt.where(Case.ui_status == ui_status)
+    if api_status:
+        stmt = stmt.where(Case.api_status == api_status)
+    if manual_status:
+        stmt = stmt.where(Case.manual_status == manual_status)
+    if pending_only:
+        # 「还欠着」= **CC 还有活要干**，不是"人审没审过"。
+        #
+        # 正常流程是：回推 → debugging → 平台跑通 → pending_review → 人审 → executable。
+        # 用 `!= executable` 当判据，等人审的用例会被 CC 一遍遍捡回来重做，**这个循环
+        # 永远不收敛**（dogfood 实测踩到：UI 都跑通了 owes 还挂着）。
+        # pending_review / executable 都是"轮到人了"，CC 该放手。
+        todo = ("not_started", "draft", "debugging", "needs_fix")
+        stmt = stmt.where(or_(
+            # 手工步骤按"有没有写"判 —— 步骤是内容不是执行物，没有"跑通"这回事，
+            # manual_status 只有人工在页面上才会推进，拿它当判据同样不收敛。
+            or_(Case.steps.is_(None), Case.steps == cast("[]", JSONB)),
+            and_(Case.target_level.in_(("spec_api", "full")), Case.api_status.in_(todo)),
+            and_(Case.target_level == "full", Case.ui_status.in_(todo)),
+        ))
+
+    from sqlalchemy import func as sa_func
+    total = (await session.execute(
+        select(sa_func.count()).select_from(stmt.subquery())
+    )).scalar_one()
+    rows = (await session.execute(
+        stmt.order_by(Case.case_code).offset((page - 1) * min(page_size, 100)).limit(min(page_size, 100))
+    )).scalars().all()
+
     return {
-        "cases": [_case_to_dict(c) for c in cases],
+        "cases": [{**_case_to_dict(c), "targetLevel": c.target_level,
+                   "owes": _owes(c)} for c in rows],
         "total": total,
         "page": page,
         "pageSize": page_size,
+        "usage": "owes 列出这条还欠哪几维。断点续跑：pending_only=true 只拿还欠着的，"
+                 "做完一维就回推一维，对应维度状态会自己往前走。",
     }
+
+
+_CC_TODO = ("not_started", "draft", "debugging", "needs_fix")
+
+
+def _owes(c) -> list[str]:
+    """这条用例**CC 还欠哪几维**（按 target_level 判）。
+
+    判据是"CC 还有活要干"，不是"人审没审过" —— pending_review / executable
+    都轮到人了，CC 该放手。手工步骤按有没有写判，它不是执行物、没有跑通这回事。
+    """
+    owes = []
+    if not (c.steps or []):
+        owes.append("manual")
+    if c.target_level in ("spec_api", "full") and c.api_status in _CC_TODO:
+        owes.append("api")
+    if c.target_level == "full" and c.ui_status in _CC_TODO:
+        owes.append("ui")
+    return owes
 
 
 async def get_case(session: AsyncSession, case_id: str) -> dict | None:
@@ -73,10 +148,31 @@ async def create_case(
     preconditions: str | None = None,
     steps: list | None = None,
     expected_result: str | None = None,
+    target_level: str = "spec",
 ) -> dict:
-    """创建一条测试用例。自动生成 case_code 和目录。创建前会做质量校验，不合格时返回 warnings。"""
+    """创建一条测试用例。自动生成 case_code 和目录。
+
+    入库前过门禁（C3/C4）：完全同名硬拒、模糊词硬拒、P0 不许一次性直出三件套；
+    相似标题只提醒不拦 —— 字符串相似度分不清"同一测试点换说法"和"不同测试点用词像"，
+    误拦会逼你把标题改得看不出关系来绕过，比多一条重复用例有害得多。
+    """
+    from app.services import intake_gate
 
     warnings = _validate_case_quality(title, module, priority, preconditions, steps, expected_result)
+
+    if target_level not in ("spec", "spec_api", "full"):
+        return {"error": "target_level 只能是 spec / spec_api / full"}
+
+    gate_errors, gate_warns = await intake_gate.check_one(
+        session, uuid.UUID(branch_id), title, module, priority
+    )
+    gate_errors.extend(intake_gate.check_p0_two_phase(priority, target_level, False))
+    if gate_errors:
+        return {
+            "error": "用例没通过入库门禁，改完再传：",
+            "problems": gate_errors,
+        }
+    warnings = list(warnings or []) + gate_warns
 
     if steps:
         # 自动拆分粒度过粗的步骤（"一步一动作"规范）
@@ -103,7 +199,9 @@ async def create_case(
         expected_result=expected_result,
     )
     case = await case_service.create_case(session, uuid.UUID(branch_id), data, source="ai")
-    result = _case_to_dict(case)
+    case.target_level = target_level
+    await session.commit()
+    result = {**_case_to_dict(case), "targetLevel": case.target_level}
     if warnings:
         result["_qualityWarnings"] = warnings
     return result

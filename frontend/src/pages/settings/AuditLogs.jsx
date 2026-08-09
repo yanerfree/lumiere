@@ -72,7 +72,7 @@ export default function AuditLogs() {
   const columns = [
     {
       title: '时间', dataIndex: 'createdAt', width: 170,
-      render: v => <span style={{ fontSize: 13, color: '#86909c', fontFamily: 'monospace' }}>
+      render: v => <span style={{ fontSize: 13, color: '#86909c', fontFamily: 'var(--font-mono)' }}>
         {v ? new Date(v).toLocaleString('zh-CN', { hour12: false }) : '-'}
       </span>,
     },
@@ -228,7 +228,7 @@ export default function AuditLogs() {
                   margin: 0, padding: '12px 14px', background: 'transparent', borderRadius: 12,
                   fontSize: 12, lineHeight: 1.8, overflow: 'auto', maxHeight: 400,
                   whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                  fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+                  fontFamily: 'var(--font-mono)',
                   border: '1px solid rgba(0,0,0,0.04)',
                 }}>
                   {typeof detailLog.changes === 'string' ? detailLog.changes : JSON.stringify(detailLog.changes, null, 2)}
@@ -238,7 +238,7 @@ export default function AuditLogs() {
             {detailLog.traceId && (
               <div>
                 <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Trace ID</div>
-                <div style={{ fontSize: 12, fontFamily: 'monospace', color: '#86909c' }}>{detailLog.traceId}</div>
+                <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#86909c' }}>{detailLog.traceId}</div>
               </div>
             )}
           </div>

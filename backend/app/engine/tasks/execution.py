@@ -52,7 +52,7 @@ async def _run_execution_inner(task_id: str, plan_id: str, report_id: str, user_
 
     try:
         async with session_factory() as session:
-            result = await _execute(session, task_id, plan_id, report_id)
+            result = await _execute(session, task_id, plan_id, report_id, user_id)
             await session.commit()
             return result
     except Exception as e:
@@ -63,11 +63,14 @@ async def _run_execution_inner(task_id: str, plan_id: str, report_id: str, user_
         await engine.dispose()
 
 
-async def _execute(session: AsyncSession, task_id: str, plan_id: str, report_id: str) -> dict:
+async def _execute(
+    session: AsyncSession, task_id: str, plan_id: str, report_id: str, user_id: str | None = None
+) -> dict:
     """执行核心逻辑。"""
     from app.engine.executor import execute_single_case
     from app.engine.tasks.adhoc_execution import _has_new_style_script, _run_new_style_script
     from app.engine.sandbox import cleanup_sandbox, create_sandbox
+    from app.services import script_run_service
     from app.services.environment_service import get_merged_variables
 
     pid = uuid.UUID(plan_id)
@@ -103,8 +106,13 @@ async def _execute(session: AsyncSession, task_id: str, plan_id: str, report_id:
         await session.flush()
 
     # 3. 创建沙箱（仅旧式 script_ref_file 用例需要；AI 生成脚本走各自 tempdir，不依赖 git 脚本库）
+    #
+    # 必须先判"这批里有没有人真需要沙箱"：项目上留着一个过期的 script_base_path，
+    # 就会让整个计划在这里 return error，哪怕计划里每一条都是新式脚本、压根用不着它。
+    # 症状是全部 scenario 停在 pending，报告永远不 complete，日志里只有一句"不是有效的 Git 仓库"。
+    needs_sandbox = any(c.script_ref_file for _, c in plan_cases)
     sandbox_dir = None
-    if project.script_base_path and branch.last_commit_sha:
+    if needs_sandbox and project.script_base_path and branch.last_commit_sha:
         bare_repo = Path(project.script_base_path) / ".repos" / "repo.git"
         execution_id = str(rid)
         sandbox_dir = Path(project.script_base_path) / ".sandboxes" / execution_id
@@ -243,6 +251,21 @@ async def _execute(session: AsyncSession, task_id: str, plan_id: str, report_id:
                 )
                 attempt_end = datetime.now(timezone.utc)
                 attempt_duration = f"{(attempt_end - attempt_start).total_seconds():.1f}s"
+
+                # 每次尝试单独记一行 —— 只记最后一次的话，flaky 判定要的
+                # "同一版本多次结果翻转"就永远攒不到。
+                await script_run_service.record_run(
+                    session,
+                    case_id=case.id,
+                    script_id=new_script.id if new_script else None,
+                    script_type="api" if plan.test_type == "api" else "ui",
+                    result=case_result,
+                    executed_by=user_id,
+                    run_mode=script_run_service.REGRESSION,
+                    attempt=actual_attempts,
+                    report_scenario_id=scenario.id,
+                    base_url=env_vars.get("BASE_URL"),
+                )
 
                 if case_result["status"] == "passed" or attempt == retry_count:
                     break

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
-import { Button, Table, Tag, Space, Empty, message } from 'antd'
+import { Button, Table, Tag, Space, Empty, Spin, message } from 'antd'
 import { PlusOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import WizardStepper from './components/WizardStepper'
@@ -151,10 +151,12 @@ function TaskDetail({ projectId, taskId }) {
 
   const [task, setTask] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [loadError, setLoadError] = useState(null)
 
   useEffect(() => {
     if (taskId === 'new' || !branchId) return
     setLoading(true)
+    setLoadError(null)
     api.get(`/projects/${projectId}/branches/${branchId}/scenario-gen/tasks/${taskId}`)
       .then(res => {
         setTask(res.data)
@@ -166,9 +168,25 @@ function TaskDetail({ projectId, taskId }) {
           setSearchParams({ taskId, stage: autoStage }, { replace: true })
         }
       })
-      .catch(() => message.error('任务不存在或加载失败'))
+      .catch(() => {
+        setLoadError('任务不存在，或它属于别的分支')
+        message.error('任务不存在或加载失败')
+      })
       .finally(() => setLoading(false))
   }, [taskId, branchId])
+
+  // 下面这三种情况原来都渲染成**一片空白**：没有任何一个 stage 分支匹配，也没有提示。
+  // 实测踩到的是第一种 —— 直接粘 URL 进来（新设备、清了缓存、同事转发的链接），
+  // localStorage 里没有 branch_<projectId>，effect 直接 return，task 永远是 null，
+  // stage 永远兜底成 'input'，而 'input' 只对 taskId==='new' 有分支。
+  // 后端明明已经把需求点和场景模型都跑出来了，人看到的是白板。
+  const fallback = (title, hint) => (
+    <div style={{ textAlign: 'center', padding: '60px 20px', color: '#8c919e' }}>
+      <div style={{ fontSize: 15, color: '#2e3138', marginBottom: 8 }}>{title}</div>
+      <div style={{ fontSize: 13, marginBottom: 16 }}>{hint}</div>
+      <Button onClick={() => navigate(`/projects/${projectId}/scenario-gen`)}>返回任务中心</Button>
+    </div>
+  )
 
   const handleStageChange = (newStage) => {
     setSearchParams({ taskId, stage: newStage }, { replace: true })
@@ -240,6 +258,20 @@ function TaskDetail({ projectId, taskId }) {
             branchId={branchId}
             taskId={taskId}
           />
+        )}
+
+        {/* 兜底：任何一种"没有分支能渲染"的情况，都要说一句人话，不能白屏 */}
+        {taskId !== 'new' && !branchId && fallback(
+          '没有选中分支',
+          '这条任务挂在某个分支下。回任务中心（或先在顶栏选好分支）再进来。',
+        )}
+        {taskId !== 'new' && branchId && loading && (
+          <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div>
+        )}
+        {taskId !== 'new' && branchId && !loading && loadError && fallback('打不开这条任务', loadError)}
+        {taskId !== 'new' && branchId && !loading && !loadError && task && stage === 'input' && fallback(
+          '这条任务已经过了"输入需求"这一步',
+          `当前状态：${STATUS_MAP[task.status]?.label || task.status}。点上面的步骤条挑一步进去。`,
         )}
       </div>
     </div>

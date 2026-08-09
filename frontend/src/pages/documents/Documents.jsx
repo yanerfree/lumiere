@@ -232,6 +232,20 @@ export default function Documents() {
             <Form.Item name="systemUrl" label="系统地址" rules={[{ required: true, message: '请输入' }]}>
               <Input placeholder="http://192.168.51.108:5173" />
             </Form.Item>
+            {/* 「平台直接生成」会拿这组账号真登录被测系统、点侧栏导航、还会点主内容区
+                的「新增/创建/添加/新建」按钮把弹窗截下来（截完点取消关掉，不填不提交）。
+                原来这里只管要账号密码，一个字没说要去点什么 —— 人把生产账号填进来
+                之前，有权知道平台会在他的系统上做哪些动作。 */}
+            <div style={{
+              margin: '-8px 0 16px', padding: '8px 12px', borderRadius: 10, lineHeight: 1.8,
+              background: 'rgba(250,140,22,0.06)', border: '1px solid rgba(250,140,22,0.2)',
+              fontSize: 12.5, color: '#4e5969',
+            }}>
+              「平台直接生成」会用这组账号<b>真登录这个系统</b>：点侧栏各模块截图，
+              并点主内容区的「新增/创建」按钮把弹窗截下来（截完即取消，<b>不填表、不提交</b>）。
+              <br />
+              别用生产账号；要完全不碰系统就走「Claude Code 命令」，由你本地掌控每一步。
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
               <Form.Item name="username" label="账号" rules={[{ required: true, message: '请输入' }]}>
                 <Input placeholder="admin" />
@@ -264,7 +278,7 @@ export default function Documents() {
             {taskResult.instructions?.map((step, i) => <div key={i} style={{ fontSize: 13, lineHeight: 2 }}>{step}</div>)}
             <div style={{ margin: '16px 0', padding: '12px 16px', background: '#1e1e1e', borderRadius: 12 }}>
               <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>复制到 Claude Code：</div>
-              <div style={{ color: '#d4d4d4', fontFamily: 'monospace', fontSize: 13 }}>{taskResult.command}</div>
+              <div style={{ color: '#d4d4d4', fontFamily: 'var(--font-mono)', fontSize: 13 }}>{taskResult.command}</div>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
               <Button onClick={() => setTaskResult(null)}>返回修改</Button>
@@ -386,7 +400,7 @@ export default function Documents() {
           .markdown-body code {
             background: #eff1f3; padding: 2px 7px;
             border-radius: 4px; font-size: 0.9em;
-            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-family: var(--font-mono);
           }
           /* Code block */
           .markdown-body pre {

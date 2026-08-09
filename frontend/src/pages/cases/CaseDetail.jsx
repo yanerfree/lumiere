@@ -1,5 +1,4 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { createPortal } from 'react-dom'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table, Alert } from 'antd'
 import {
@@ -18,6 +17,7 @@ import ScenarioVariables from '../../components/ScenarioVariables'
 import ApiStepList, { generateApiCodeFromSteps } from '../../components/ApiStepList'
 import { scenarioToNodes, nodeToStepPatch } from './apiStepAdapter'
 import RunResultPanel from '../api-test/components/RunResultPanel'
+import FailureTriagePanel from '../../components/FailureTriagePanel'
 
 const priorityColors = { P0: '#fff', P1: '#fff', P2: '#fff', P3: '#fff' }
 const priorityBg = { P0: '#e8453c', P1: '#ff7d00', P2: '#4e8af0', P3: 'rgba(0,0,0,0.08)' }
@@ -286,7 +286,7 @@ function ScenarioStepsView({ steps, extraCol, extraColLabel, extraPlaceholder, e
           ) : <span style={{ width: 52, flexShrink: 0 }} />}
           <span style={{ flex: 2 }}>{s.action || '-'}</span>
           {extraCol && (
-            <span style={{ flex: 1, fontSize: 12, fontFamily: 'monospace', color: extraColor || '#0ea5a0' }}>
+            <span style={{ flex: 1, fontSize: 12, fontFamily: 'var(--font-mono)', color: extraColor || '#0ea5a0' }}>
               {s[extraCol] || ''}
             </span>
           )}
@@ -314,11 +314,11 @@ function ScriptViewer({ scriptData, loading, error, onRetry }) {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <FileTextOutlined style={{ color: '#86909c' }} />
-          <span style={{ fontFamily: 'monospace', color: '#4e5969' }}>{scriptData.filePath}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', color: '#4e5969' }}>{scriptData.filePath}</span>
           {scriptData.funcName && <Tag color="blue" style={{ fontSize: 11, margin: 0 }}>{scriptData.funcName}</Tag>}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Tag style={{ fontSize: 11, margin: 0, fontFamily: 'monospace' }}>{scriptData.commitSha?.substring(0, 8)}</Tag>
+          <Tag style={{ fontSize: 11, margin: 0, fontFamily: 'var(--font-mono)' }}>{scriptData.commitSha?.substring(0, 8)}</Tag>
           <Tooltip title="复制脚本内容">
             <Button type="text" size="small" icon={<CopyOutlined />} onClick={() => {
               copyToClipboard(scriptData.content)
@@ -330,7 +330,7 @@ function ScriptViewer({ scriptData, loading, error, onRetry }) {
       <div style={{ maxHeight: 500, overflow: 'auto', background: '#1e1e1e' }}>
         <pre style={{
           margin: 0, padding: '12px 0', fontSize: 13, lineHeight: 1.6,
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace", color: '#d4d4d4',
+          fontFamily: 'var(--font-mono)', color: '#d4d4d4',
         }}>
           {scriptData.content.split('\n').map((line, i) => {
             const fn = scriptData.funcName
@@ -370,7 +370,7 @@ function ScenarioCard({ scenario, type, accentColor, icon, scriptContent, script
       {scenario.scriptRefFile && (
         <div style={{ marginBottom: 16, padding: '8px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
           <CodeOutlined style={{ color: '#86909c' }} />
-          <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#4e5969' }}>{scenario.scriptRefFile}</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#4e5969' }}>{scenario.scriptRefFile}</span>
           {scenario.scriptRefFunc && <Tag color={accentColor} style={{ fontSize: 11, margin: 0 }}>{scenario.scriptRefFunc}</Tag>}
         </div>
       )}
@@ -387,7 +387,7 @@ function ScenarioCard({ scenario, type, accentColor, icon, scriptContent, script
           <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>依赖参数</h4>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {scenario.variablesUsed.map((v, i) => (
-              <Tag key={i} style={{ fontFamily: 'monospace', fontSize: 12, background: '#edf3ff', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '2px 8px' }}>{v}</Tag>
+              <Tag key={i} style={{ fontFamily: 'var(--font-mono)', fontSize: 12, background: '#edf3ff', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '2px 8px' }}>{v}</Tag>
             ))}
           </div>
         </div>
@@ -447,24 +447,6 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   const [reportId, setReportId] = useState(null)
   const [precheck, setPrecheck] = useState(null)   // 跑前前置资源预检结论
 
-  // 运行结果面板要吸在视口底部（见下方 render 处的说明）。fixed 需要自己算左边界，
-  // 否则会盖住左侧导航；宽度跟着卡片走，侧边栏收起/窗口缩放都能跟上。
-  const cardRef = useRef(null)
-  const [panelBox, setPanelBox] = useState(null)
-  useEffect(() => {
-    if (!showPanel) return
-    const measure = () => {
-      const el = cardRef.current
-      if (!el) return
-      const r = el.getBoundingClientRect()
-      setPanelBox({ left: r.left, width: r.width })
-    }
-    measure()
-    window.addEventListener('resize', measure)
-    const ro = new ResizeObserver(measure)
-    if (cardRef.current) ro.observe(cardRef.current)
-    return () => { window.removeEventListener('resize', measure); ro.disconnect() }
-  }, [showPanel])
 
   const base = `/projects/${projectId}/branches/${branchId}/api-tests`
 
@@ -534,12 +516,12 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   }
 
   return (
-    <Card ref={cardRef} styles={{ body: { padding: '14px 16px' } }} style={{ marginBottom: 12, border: '1px solid rgba(14,165,160,0.25)' }}>
+    <Card styles={{ body: { padding: '14px 16px' } }} style={{ marginBottom: 12, border: '1px solid rgba(14,165,160,0.25)' }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ApiOutlined style={{ color: '#0ea5a0' }} />
           <span style={{ fontSize: 13, fontWeight: 600, color: '#1d2129' }}>接口场景</span>
-          {scenario && <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#86909c' }}>{scenario.code}</span>}
+          {scenario && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#86909c' }}>{scenario.code}</span>}
           {scenario && <span style={{ fontSize: 12, color: '#86909c' }}>{(scenario.steps || []).length} 个请求</span>}
           {result && (
             <Tag color={result.passed ? 'success' : 'error'} style={{ margin: 0, cursor: 'pointer' }}
@@ -593,34 +575,28 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           } />
       )}
 
-      {/* 吸底。上面的步骤编辑区很高，面板要是跟着文档流排在后面，点完「运行全部」
-          结果就落在屏幕外，看着像没反应 —— 得滚到底才发现它一直在那。
-          三个坑依次踩过：
-          1) sticky 不行 —— 面板是卡片的最后一个孩子，父盒子到它就结束了，没有可粘的余量；
-          2) fixed 直接写也不行 —— 卡片自己带 backdrop-filter: blur(12px)（清新风的毛玻璃），
-             有 backdrop-filter 的元素会成为 fixed 后代的包含块，left 被又叠加了一次卡片左边距；
-          3) 所以挂到 body 上，位置用卡片实测的 left/width，既真吸视口又不盖左侧导航。 */}
-      {showPanel && (stepResults.length > 0 || running) && createPortal(
-        <div style={{
-          position: 'fixed', bottom: 0, zIndex: 900,
-          left: panelBox?.left ?? 0, width: panelBox?.width ?? '100%',
-          maxHeight: '46vh', display: 'flex', flexDirection: 'column',
-          background: '#fff', borderTop: '1px solid rgba(0,0,0,0.08)',
-          borderRadius: '10px 10px 0 0', overflow: 'hidden',
-          boxShadow: '0 -6px 24px rgba(0,0,0,0.14)',
-        }}>
-          <RunResultPanel
-            results={stepResults}
-            scenario={scenario}
-            running={running}
-            reportId={reportId}
-            projectId={projectId}
-            envName={(environments.find(e => e.id === runEnv) || {}).name}
-            onClose={() => setShowPanel(false)}
-          />
-        </div>,
-        document.body,
-      )}
+      {/* 右侧抽屉。跟「接口测试」模块页保持同一种呈现，那边一直就是右侧 Drawer。
+          曾经试过排在文档流里（步骤编辑区很高，结果落到屏幕外，像没反应）和吸底
+          （能看见但形态跟另一个页面不一致），都不对，回到 Drawer。 */}
+      <Drawer
+        open={showPanel && (stepResults.length > 0 || running)}
+        onClose={() => setShowPanel(false)}
+        placement="right"
+        width={560}
+        mask={false}
+        closable={false}
+        styles={{ body: { padding: 0, display: 'flex', flexDirection: 'column', height: '100%' } }}
+      >
+        <RunResultPanel
+          results={stepResults}
+          scenario={scenario}
+          running={running}
+          reportId={reportId}
+          projectId={projectId}
+          envName={(environments.find(e => e.id === runEnv) || {}).name}
+          onClose={() => setShowPanel(false)}
+        />
+      </Drawer>
     </Card>
   )
 }
@@ -639,9 +615,7 @@ function ScenarioEditor({
   const [newVarInput, setNewVarInput] = useState('')
   const [debugRunning, setDebugRunning] = useState(false)
   const [debugResult, setDebugResult] = useState(null)
-  const [aiGenerating, setAiGenerating] = useState(false)
   const [previewScreenshot, setPreviewScreenshot] = useState(null)
-  const [stepHints, setStepHints] = useState({})
   const [showNoiseSteps, setShowNoiseSteps] = useState(false)
   const [selectedApis, setSelectedApis] = useState([])
   const [apiArranging, setApiArranging] = useState(false)
@@ -658,86 +632,6 @@ function ScenarioEditor({
     } catch { /* ignore */ }
   }
 
-  const handleAiGenerate = async () => {
-    if (type === 'api') return
-    if (!runEnv) { message.warning('请先选择执行环境（需要 BASE_URL）'); return }
-    const genStart = Date.now()
-    setAiGenerating(true)
-    setDebugResult({ status: 'running', _drawerOpen: true, steps: [] })
-    setLiveSteps([])
-    liveStepsRef.current = []
-
-    const token = await getValidToken()
-    const url = `/api/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/generate-stream?type=ui`
-    const controller = new AbortController()
-    abortRef.current = controller
-
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ envId: runEnv, stepHints: Object.keys(stepHints).length ? stepHints : undefined }),
-        signal: controller.signal,
-      })
-      const reader = response.body.getReader()
-      const decoder = new TextDecoder()
-      let buffer = ''
-      let currentEvent = null
-
-      const processChunk = async () => {
-        const { done, value } = await reader.read()
-        if (done) return
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('event: ')) { currentEvent = line.slice(7).trim(); continue }
-          if (line.startsWith('data: ') && currentEvent) {
-            try {
-              const data = JSON.parse(line.slice(6))
-              if (currentEvent === 'step_start') {
-                setLiveSteps(prev => { const n = [...prev, { ...data, status: 'running' }]; liveStepsRef.current = n; return n })
-              } else if (currentEvent === 'step_done') {
-                setLiveSteps(prev => {
-                  const existing = prev.find(s => s.seq === data.seq)
-                  const n = existing
-                    ? prev.map(s => s.seq === data.seq ? { ...s, ...data } : s)
-                    : [...prev, data]
-                  liveStepsRef.current = n; return n
-                })
-              } else if (currentEvent === 'done') {
-                const live = liveStepsRef.current;
-                const screenshots = (data.results || [])
-                  .filter(r => r.screenshot && r.status === 'failed')
-                  .map((r, i) => ({ base64: r.screenshot, name: `步骤失败: ${r.step?.substring(0,30) || '未知'}` }));
-                setDebugResult({ ...data, durationMs: data.durationMs ?? data.duration_ms ?? (Date.now() - genStart), steps: live.length > 0 ? live : data.results || [], screenshots, _drawerOpen: true });
-                if (!scenario) {
-                  setScenario({ steps: (manualSteps || []).map((s, i) => ({ seq: i + 1, action: s.action || '', expected: s.expected || '' })), variablesUsed: [] })
-                }
-                if (onScriptSaved) onScriptSaved()
-                setTimeout(() => scriptEditorRef.current?.refresh(), 300)
-                setAiGenerating(false)
-                setLiveSteps([]); liveStepsRef.current = []
-                if (data.all_passed) message.success('生成并验证全部通过！')
-                else message.warning('部分步骤失败，查看详情')
-                return
-              }
-            } catch {}
-            currentEvent = null
-          }
-        }
-        await processChunk()
-      }
-      await processChunk()
-    } catch (e) {
-      if (e.name !== 'AbortError') {
-        message.error(e?.message || 'AI 生成失败')
-      }
-      setAiGenerating(false)
-    }
-  }
-
   // 流式运行脚本 — 实时推送步骤进度
   const [liveSteps, setLiveSteps] = useState([])
   const liveStepsRef = useRef([])
@@ -749,7 +643,6 @@ function ScenarioEditor({
       abortRef.current = null
     }
     setDebugRunning(false)
-    setAiGenerating(false)
     setLiveSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'cancelled', error: '用户取消' } : s))
     setDebugResult(prev => prev ? { ...prev, status: 'cancelled' } : prev)
     message.info('已停止执行')
@@ -871,26 +764,27 @@ function ScenarioEditor({
   if (!scenario) return (
     <Card styles={{ body: { padding: '24px 20px' } }}>
       {type !== 'api' && manualSteps?.length > 0 ? (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 16, padding: '32px 0' }}>
+        /* 平台侧「AI 生成脚本」入口已下线：实测几十次没跑通过，弱模型 + 管道崩 + 执行器精分。
+           脚本改由外部 Claude Code 在本地写好、跑通，再经 tb_sync_ui_script 回推进来。
+           平台只负责存、跑、留痕——它擅长的部分。 */
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '32px 0' }}>
           <DesktopOutlined style={{ fontSize: 40, color: 'rgba(124,92,191,0.25)' }} />
           <div style={{ fontSize: 14, color: '#4e5969', fontWeight: 500 }}>
-            基于手动测试步骤（{manualSteps.length} 步）生成 Playwright 自动化脚本
+            该用例还没有 UI 脚本（手动测试步骤 {manualSteps.length} 步）
           </div>
-          <div style={{ fontSize: 12, color: '#86909c', maxWidth: 400, textAlign: 'center' }}>
-            AI 将分析用例的操作步骤和预期结果，生成可执行的 Playwright Python 测试脚本，并在目标系统上运行验证
+          <div style={{ fontSize: 12, color: '#86909c', maxWidth: 460, textAlign: 'center', lineHeight: 1.7 }}>
+            UI 脚本由 Claude Code 在本地写好并跑通后回推进来，平台负责存、跑、留痕。<br />
+            在连了本平台 MCP 的 Claude Code 里说：<br />
+            <span style={{
+              display: 'inline-block', marginTop: 6, padding: '4px 10px', borderRadius: 6,
+              background: 'rgba(0,0,0,0.04)', fontFamily: 'var(--font-mono)', fontSize: 11, color: '#4e5969',
+            }}>
+              把用例「{caseTitle}」的 UI 脚本写出来并回推（case_id={caseId}）
+            </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-            <Select size="middle" value={runEnv} onChange={onEnvChange} style={{ width: 220 }}
-              popupMatchSelectWidth={false}
-              placeholder="选择执行环境" options={buildEnvOptions(environments)} />
-            <Button type="primary" size="middle" icon={<ThunderboltOutlined />}
-              loading={aiGenerating} disabled={!runEnv}
-              onClick={handleAiGenerate}
-              style={{ background: '#7c5cbf', borderColor: '#7c5cbf', height: 36 }}>
-              AI 生成脚本
-            </Button>
+          <div style={{ fontSize: 12, color: '#c9cdd4' }}>
+            它会先调 tb_get_sync_spec(kind='ui_script') 对齐写法，再用 tb_sync_ui_script 入库
           </div>
-          {!runEnv && <div style={{ fontSize: 12, color: '#c9cdd4' }}>请先选择环境（需要配置 BASE_URL 变量）</div>}
         </div>
       ) : type !== 'api' ? (
         <Empty description="该用例没有手动测试步骤，请先在「手动测试步骤」Tab 添加步骤" image={Empty.PRESENTED_IMAGE_SIMPLE} />
@@ -938,9 +832,6 @@ function ScenarioEditor({
     if (type !== 'api' && caseId) {
       // 从 ui_scenario 恢复上次生成的步骤和接口数据
       const uiData = scenario || {}
-      if (uiData.stepHints && Object.keys(uiData.stepHints).length) {
-        setStepHints(uiData.stepHints)
-      }
       if (uiData.lastResults?.length > 0 && !debugResult) {
         const allPassed = uiData.lastResults.every(r => r.status === 'passed')
         setDebugResult({
@@ -973,12 +864,6 @@ function ScenarioEditor({
             <Select size="small" value={runEnv} onChange={onEnvChange} style={{ width: 180 }}
               popupMatchSelectWidth={false}
               placeholder="选择环境" options={buildEnvOptions(environments)} />
-            <Button size="small" icon={<ThunderboltOutlined />}
-              loading={aiGenerating} disabled={!runEnv}
-              onClick={handleAiGenerate}
-              style={{ borderColor: '#7c5cbf', color: '#7c5cbf' }}>
-              {aiGenerating ? '生成中...' : 'AI 生成'}
-            </Button>
             <Button size="small" type="primary" icon={<PlayCircleOutlined />}
               loading={debugRunning} disabled={!runEnv}
               onClick={handleDebugRun}
@@ -1092,15 +977,6 @@ function ScenarioEditor({
                                 {script_bug: '脚本问题', system_bug: '系统Bug', case_expired: '用例过期', dependency: '缺少依赖'}[s.failure_type] || s.failure_type
                               }</Tag>
                             )}
-                            {!ok && !isRunning && (
-                              <div style={{ marginTop: 4 }}>
-                                <Input size="small" placeholder="输入指导（如：改成验证运行中）"
-                                  value={stepHints[i] || ''} onChange={e => setStepHints(prev => ({ ...prev, [i]: e.target.value }))}
-                                  style={{ width: '100%', fontSize: 12 }}
-                                  suffix={stepHints[i] ? <span style={{ fontSize: 11, color: '#7c5cbf', cursor: 'pointer' }} onClick={() => message.info('指导已记录，重新生成时将应用')}>已记录</span> : null}
-                                />
-                              </div>
-                            )}
                           </div>
                           {s.duration_ms != null && <span style={{ fontSize: 11, color: '#c9cdd4', flexShrink: 0 }}>{s.duration_ms >= 1000 ? `${(s.duration_ms / 1000).toFixed(1)}s` : `${s.duration_ms}ms`}</span>}
                         </div>
@@ -1108,22 +984,12 @@ function ScenarioEditor({
                     })}
                   </div>
                   )})() : (
-                  <div style={{ padding: 32, textAlign: 'center', color: '#c9cdd4' }}>点击「AI 生成」生成脚本后查看执行步骤</div>
+                  <div style={{ padding: 32, textAlign: 'center', color: '#c9cdd4' }}>点击「运行验证」后查看执行步骤</div>
                 )}
               </div>
             )},
             { key: 'script', label: '脚本视图', children: (
               <div style={{ position: 'relative' }}>
-                {aiGenerating && (
-                  <div style={{
-                    position: 'absolute', inset: 0, zIndex: 10,
-                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12,
-                    background: 'rgba(30,30,46,0.9)', borderRadius: 8,
-                  }}>
-                    <Spin size="large" />
-                    <div style={{ color: '#cdd6f4', fontSize: 14 }}>AI 正在逐步生成脚本...</div>
-                  </div>
-                )}
                 <ScriptEditor
                   ref={scriptEditorRef}
                   projectId={projectId} branchId={branchId} caseId={caseId}
@@ -1257,11 +1123,11 @@ function ScenarioEditor({
                           )
                         })()}
                         <div style={{ flex: 1, marginLeft: 8, minWidth: 0 }}>
-                          <div style={{ fontFamily: 'monospace', fontSize: 11, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <div style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {(r.path || r.url || '').replace(/^https?:\/\/[^/]+/, '')}
                           </div>
                           {reqBody && (
-                            <div style={{ fontSize: 10, color: '#86909c', fontFamily: 'monospace', marginTop: 2, maxHeight: 40, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            <div style={{ fontSize: 10, color: '#86909c', fontFamily: 'var(--font-mono)', marginTop: 2, maxHeight: 40, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {String(reqBody).substring(0, 120)}{String(reqBody).length > 120 ? '...' : ''}
                             </div>
                           )}
@@ -1276,7 +1142,7 @@ function ScenarioEditor({
                       </div>
                       {expanded && (
                         <div style={{ padding: '10px 12px 12px 44px', background: 'rgba(14,165,160,0.03)', borderBottom: '1px solid rgba(0,0,0,0.04)', fontSize: 12 }}>
-                          <div style={{ color: '#4e5969', wordBreak: 'break-all', marginBottom: 6, fontFamily: 'monospace', fontSize: 11 }}>
+                          <div style={{ color: '#4e5969', wordBreak: 'break-all', marginBottom: 6, fontFamily: 'var(--font-mono)', fontSize: 11 }}>
                             <b style={{ color: '#1d2129' }}>{r.method}</b> {r.url}
                           </div>
                           {r.queryParams && Object.keys(r.queryParams).length > 0 && (
@@ -1460,7 +1326,7 @@ function ScenarioEditor({
                   <div style={{ padding: '0 24px 16px' }}>
                     <pre style={{
                       margin: 0, padding: 14, borderRadius: 8, fontSize: 11, lineHeight: 1.5,
-                      fontFamily: "'JetBrains Mono', monospace", background: '#1e1e2e', color: '#cdd6f4',
+                      fontFamily: 'var(--font-mono)', background: '#1e1e2e', color: '#cdd6f4',
                       maxHeight: 350, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                     }}>
                       {debugResult.stdout}
@@ -1484,7 +1350,7 @@ function ScenarioEditor({
                           <span style={{ fontSize: 11, color: '#c9cdd4' }}>{run.durationMs ? `${(run.durationMs / 1000).toFixed(1)}s` : ''}</span>
                         </div>
                         {run.errorSummary && (
-                          <div style={{ fontSize: 11, color: '#e8453c', fontFamily: 'monospace', lineHeight: 1.4, wordBreak: 'break-all' }}>
+                          <div style={{ fontSize: 11, color: '#e8453c', fontFamily: 'var(--font-mono)', lineHeight: 1.4, wordBreak: 'break-all' }}>
                             {run.errorSummary.substring(0, 200)}{run.errorSummary.length > 200 ? '...' : ''}
                           </div>
                         )}
@@ -1602,9 +1468,9 @@ function ScenarioEditor({
                     }}>{s.seq}</span>
                     <Input value={s.action || ''} onChange={e => updateStepField(i, 'action', e.target.value)}
                       placeholder="描述操作步骤..." variant="borderless" style={{ flex: 2, fontSize: 13 }} />
-                    <Input value={s.uiTarget || ''} onChange={e => updateStepField(i, 'uiTarget', e.target.value)}
+                    <Input spellCheck={false} value={s.uiTarget || ''} onChange={e => updateStepField(i, 'uiTarget', e.target.value)}
                       placeholder="页面URL或元素选择器" variant="borderless"
-                      style={{ flex: 1, fontSize: 12, fontFamily: 'monospace', color: accentColor }} />
+                      style={{ flex: 1, fontSize: 12, fontFamily: 'var(--font-mono)', color: accentColor }} />
                     <Input value={s.expected || ''} onChange={e => updateStepField(i, 'expected', e.target.value)}
                       placeholder="预期结果..." variant="borderless" style={{ flex: 1, fontSize: 13, color: '#86909c' }} />
                     <Button type="text" danger size="small" icon={<DeleteOutlined />}
@@ -1650,10 +1516,10 @@ function ScenarioEditor({
             <Button type="text" size="small" onClick={() => setDebugResult(null)} style={{ color: '#c9cdd4' }}>关闭</Button>
           </div>
           {debugResult.errorSummary && (
-            <div style={{ padding: '8px 14px', fontSize: 12, color: '#e8453c', fontFamily: 'monospace' }}>{debugResult.errorSummary}</div>
+            <div style={{ padding: '8px 14px', fontSize: 12, color: '#e8453c', fontFamily: 'var(--font-mono)' }}>{debugResult.errorSummary}</div>
           )}
           {debugResult.stdout && (
-            <pre style={{ margin: 0, padding: 14, fontSize: 11, fontFamily: 'monospace', background: '#1e1e2e', color: '#cdd6f4', maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+            <pre style={{ margin: 0, padding: 14, fontSize: 11, fontFamily: 'var(--font-mono)', background: '#1e1e2e', color: '#cdd6f4', maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
               {debugResult.stdout}
             </pre>
           )}
@@ -1723,8 +1589,8 @@ function TemplateModal({ open, onClose, projectId, branchId, scenarioType, onSel
                     <Tag color="blue" style={{ fontSize: 11 }}>{sc?.steps?.length || 0} 步</Tag>
                   </div>
                   <div style={{ fontSize: 12, color: '#86909c' }}>
-                    <span style={{ fontFamily: 'monospace' }}>{t.caseCode}</span>
-                    {sc?.scriptRefFile && <span style={{ marginLeft: 8, fontFamily: 'monospace' }}>{sc.scriptRefFile}</span>}
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>{t.caseCode}</span>
+                    {sc?.scriptRefFile && <span style={{ marginLeft: 8, fontFamily: 'var(--font-mono)' }}>{sc.scriptRefFile}</span>}
                   </div>
                 </div>
               )
@@ -1874,7 +1740,7 @@ export default function CaseDetail() {
 
       // Check if there's an active script in the scripts table
       try {
-        const scriptRes = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/active?type=${vals.type}`)
+        const scriptRes = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/active?type=${vals.type === 'e2e' ? 'ui' : 'api'}`)
         setHasActiveScript(!!scriptRes.data)
       } catch { setHasActiveScript(false) }
 
@@ -1924,7 +1790,9 @@ export default function CaseDetail() {
   async function loadScriptRuns() {
     setScriptRunsLoading(true)
     try {
-      const res = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/runs?type=${type}`)
+      // 不传 type —— 用例的 type 是 api/e2e，脚本的 type 是 api/ui，两者不是一回事。
+      // 原先直接把用例 type 当脚本 type 传，e2e 用例永远查不到，api 用例也看不到自己的 UI 执行。
+      const res = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/runs`)
       setScriptRuns(res.data || [])
     } catch { setScriptRuns([]) }
     finally { setScriptRunsLoading(false) }
@@ -1977,7 +1845,7 @@ export default function CaseDetail() {
         <Button type="text" icon={<ArrowLeftOutlined />} size="small" onClick={handleBack} style={{ color: '#86909c' }} />
         <span style={{ fontSize: 12, color: '#c9cdd4' }}>用例管理</span>
         <span style={{ color: 'rgba(0,0,0,0.15)', fontSize: 12 }}>/</span>
-        <span style={{ fontSize: 12, color: '#86909c', fontFamily: 'monospace' }}>{caseCode}</span>
+        <span style={{ fontSize: 12, color: '#86909c', fontFamily: 'var(--font-mono)' }}>{caseCode}</span>
       </div>
 
       <Card styles={{ body: { padding: '16px 20px' } }} style={{ marginBottom: 16 }}>
@@ -2115,15 +1983,15 @@ export default function CaseDetail() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                     {variablesUsed.map((v, i) => (
                       <Tag key={i} closable onClose={() => setVariablesUsed(prev => prev.filter((_, j) => j !== i))}
-                        style={{ fontFamily: 'monospace', fontSize: 11, background: '#edf3ff', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '1px 6px' }}>
+                        style={{ fontFamily: 'var(--font-mono)', fontSize: 11, background: '#edf3ff', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '1px 6px' }}>
                         {v}
                       </Tag>
                     ))}
                     {variablesUsed.length === 0 && <span style={{ fontSize: 12, color: '#c9cdd4' }}>暂无</span>}
                   </div>
                   <div style={{ display: 'flex', gap: 4 }}>
-                    <Input value={newVarInput} onChange={e => setNewVarInput(e.target.value)} size="small"
-                      placeholder="参数名" style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }}
+                    <Input spellCheck={false} value={newVarInput} onChange={e => setNewVarInput(e.target.value)} size="small"
+                      placeholder="参数名" style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 11 }}
                       onKeyDown={e => { if (e.key === 'Enter' && newVarInput.trim()) { setVariablesUsed(prev => [...prev, newVarInput.trim()]); setNewVarInput('') } }} />
                     <Button size="small" icon={<PlusOutlined />} disabled={!newVarInput.trim()}
                       onClick={() => { setVariablesUsed(prev => [...prev, newVarInput.trim()]); setNewVarInput('') }} />
@@ -2185,8 +2053,14 @@ export default function CaseDetail() {
                   expandable={{
                     expandedRowRender: r => (
                       <div>
+                        {r.status !== 'passed' && (
+                          <FailureTriagePanel
+                            projectId={projectId} branchId={branchId} caseId={caseId} run={r}
+                            onConfirmed={loadScriptRuns}
+                          />
+                        )}
                         {r.stdout ? (
-                          <pre style={{ margin: 0, padding: 12, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontSize: 12, fontFamily: 'monospace', maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{r.stdout}</pre>
+                          <pre style={{ margin: 0, padding: 12, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontSize: 12, fontFamily: 'var(--font-mono)', maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{r.stdout}</pre>
                         ) : <span style={{ color: '#c9cdd4' }}>无输出日志</span>}
                         {r.screenshots?.length > 0 && (
                           <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -2210,6 +2084,20 @@ export default function CaseDetail() {
                       render: v => v ? new Date(v).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'
                     },
                     {
+                      title: '类型', dataIndex: 'scriptType', width: 70,
+                      render: v => <Tag style={{ margin: 0, fontSize: 11 }} color={v === 'ui' ? 'purple' : 'cyan'}>{v === 'ui' ? 'UI' : '接口'}</Tag>
+                    },
+                    {
+                      // 回归=计划/批量跑，算通过率；调试=即席跑，不算
+                      title: '模式', dataIndex: 'runMode', width: 90,
+                      render: (v, row) => (
+                        <span style={{ fontSize: 12, color: v === 'regression' ? '#0ea5a0' : '#86909c' }}>
+                          {v === 'regression' ? '回归' : '调试'}
+                          {row.attempt > 1 && <span style={{ marginLeft: 4, color: '#fa8c16' }}>第{row.attempt}次</span>}
+                        </span>
+                      )
+                    },
+                    {
                       title: '状态', dataIndex: 'status', width: 100,
                       render: v => <Tag color={v === 'passed' ? undefined : v === 'failed' ? 'error' : 'warning'} style={{ fontWeight: 600, ...(v === 'passed' ? { background: '#e0f7f6', color: '#0ea5a0', border: 'none' } : {}) }}>{(v || 'unknown').toUpperCase()}</Tag>
                     },
@@ -2219,44 +2107,14 @@ export default function CaseDetail() {
                     },
                     {
                       title: '错误摘要', dataIndex: 'errorSummary', ellipsis: true,
-                      render: v => v ? <span style={{ color: '#e8453c', fontFamily: 'monospace', fontSize: 12 }}>{v}</span> : '-'
+                      render: v => v ? <span style={{ color: '#e8453c', fontFamily: 'var(--font-mono)', fontSize: 12 }}>{v}</span> : '-'
                     },
                   ]}
                 />
               </Card>
             )},
 
-            { key: 'casefile', label: '病历', children: <CaseFileTab caseId={caseId} /> },
-            ...(caseData.source === 'ai' || caseData.reviewStatus ? [
-              { key: 'trace', label: '需求溯源', children: (
-                <Card styles={{ body: { padding: 16 } }}>
-                  {caseData.requirementPointIds?.length > 0 ? (
-                    <div>
-                      <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>关联需求点</h4>
-                      {caseData.requirementPointIds.map((rp, i) => (
-                        <Tag key={i} color="blue" style={{ marginBottom: 4 }}>{rp}</Tag>
-                      ))}
-                    </div>
-                  ) : (
-                    <Empty description="无关联需求点" />
-                  )}
-                  {caseData.generationTaskId && (
-                    <div style={{ marginTop: 12 }}>
-                      <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 4 }}>生成任务</h4>
-                      <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{caseData.generationTaskId}</span>
-                    </div>
-                  )}
-                </Card>
-              )},
-              { key: 'archive', label: '生成档案', children: (
-                <Card styles={{ body: { padding: 16 } }}>
-                  <div style={{ textAlign: 'center', padding: 40, color: '#bfc4cd' }}>
-                    <p>生成档案时间线 — 基于 case_gen_events 的事件序列</p>
-                    <p style={{ fontSize: 12 }}>（generated/scored/reviewed/rejected/regenerated 事件将在此展示）</p>
-                  </div>
-                </Card>
-              )},
-            ] : []),
+            { key: 'provenance', label: '来源', children: <ProvenanceTab caseId={caseId} /> },
           ]} />
         </div>
       </div>
@@ -2294,7 +2152,7 @@ export default function CaseDetail() {
         <div style={{ padding: '12px 0' }}>
           <div style={{ padding: '12px 16px', background: 'rgba(0,0,0,0.02)', borderRadius: 12, marginBottom: 20 }}>
             <div style={{ fontWeight: 600, marginBottom: 4 }}>{title}</div>
-            <div style={{ fontSize: 12, color: '#86909c', fontFamily: 'monospace' }}>{caseCode}</div>
+            <div style={{ fontSize: 12, color: '#86909c', fontFamily: 'var(--font-mono)' }}>{caseCode}</div>
           </div>
           <div style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>选择执行环境</div>
@@ -2305,7 +2163,7 @@ export default function CaseDetail() {
             <div>
               {scriptRefFile && (
                 <div style={{ fontSize: 12, color: '#86909c', marginBottom: 12, textAlign: 'center' }}>
-                  脚本: <span style={{ fontFamily: 'monospace', color: '#4e5969' }}>{scriptRefFile}</span>
+                  脚本: <span style={{ fontFamily: 'var(--font-mono)', color: '#4e5969' }}>{scriptRefFile}</span>
                 </div>
               )}
               <div style={{ textAlign: 'center', marginBottom: runResult ? 16 : 0 }}>
@@ -2314,7 +2172,7 @@ export default function CaseDetail() {
                     if (!runEnv) { message.warning('请先选择执行环境'); return }
                     setRunStatus('running'); setRunResult(null)
                     try {
-                      const res = await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/run?type=${type}`, { envId: runEnv })
+                      const res = await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/run?type=${type === 'e2e' ? 'ui' : 'api'}`, { envId: runEnv })
                       setRunStatus('done')
                       setRunResult(res.data)
                     } catch (e) {
@@ -2342,14 +2200,14 @@ export default function CaseDetail() {
                   {runResult.errorSummary && (
                     <div style={{ padding: '10px 14px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 12, marginBottom: 12 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: '#e8453c', marginBottom: 4 }}>错误信息</div>
-                      <pre style={{ margin: 0, fontSize: 12, color: '#434343', fontFamily: 'monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 150, overflow: 'auto' }}>{runResult.errorSummary}</pre>
+                      <pre style={{ margin: 0, fontSize: 12, color: '#434343', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 150, overflow: 'auto' }}>{runResult.errorSummary}</pre>
                     </div>
                   )}
 
                   {runResult.stdout && (
                     <details>
                       <summary style={{ cursor: 'pointer', fontSize: 12, color: '#86909c', marginBottom: 6, userSelect: 'none' }}>执行日志</summary>
-                      <pre style={{ margin: 0, padding: 12, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontSize: 11, fontFamily: 'monospace', maxHeight: 250, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{runResult.stdout}</pre>
+                      <pre style={{ margin: 0, padding: 12, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontSize: 11, fontFamily: 'var(--font-mono)', maxHeight: 250, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{runResult.stdout}</pre>
                     </details>
                   )}
                 </div>
@@ -2367,6 +2225,124 @@ export default function CaseDetail() {
   )
 }
 
+
+
+// 这条用例从哪来：关联的需求点（带原文引用）+ 生成事件时间线。
+// 替代原来的「需求溯源」和「生成档案」——
+//   需求溯源只渲染一个裸编号 "R3"，而 requirement_points 里有标题、原文引用和
+//   字符偏移锚点，107 条数据一直在，只是最后一公里没接；
+//   生成档案是一句写死的占位文案（"xxx 事件将在此展示"），而 case_gen_events
+//   里有 49 条真事件。产品里出现开发者写给自己的备忘录，是最直接的可信度损失。
+const GEN_EVENT_LABEL = {
+  generated: { label: '生成', color: 'blue' },
+  scored: { label: '评分', color: 'purple' },
+  reviewed: { label: '评审', color: 'cyan' },
+  rejected: { label: '打回', color: 'red' },
+  regenerated: { label: '重生成', color: 'orange' },
+}
+
+function ProvenanceTab({ caseId }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    if (!caseId) return
+    setLoading(true)
+    api.get(`/cases/${caseId}/provenance`)
+      .then(res => setData(res.data)).catch(() => {}).finally(() => setLoading(false))
+  }, [caseId])
+
+  if (loading) return <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+  if (!data) return <Empty description="加载失败" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+
+  const pts = data.requirementPoints || []
+  const evs = data.events || []
+
+  return (
+    <Card styles={{ body: { padding: '16px 24px' } }}>
+      <div style={{ marginBottom: 18 }}>
+        <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>
+          关联需求点 {pts.length > 0 && <span style={{ color: '#c9cdd4' }}>（{pts.length}）</span>}
+        </h4>
+        {pts.length === 0 ? (
+          <span style={{ fontSize: 12, color: '#c9cdd4' }}>
+            没有关联需求点。用「AI 生成用例」从需求文档产出的用例才会带需求点。
+          </span>
+        ) : pts.map(p => (
+          <div key={p.code} style={{
+            marginBottom: 10, padding: '10px 12px', borderRadius: 10,
+            background: p.missing ? '#fff2f0' : 'rgba(0,0,0,0.02)',
+            border: p.missing ? '1px solid #ffccc7' : '1px solid rgba(0,0,0,0.04)',
+          }}>
+            <Space size={8} style={{ marginBottom: p.quoteText ? 6 : 0 }}>
+              <Tag color={p.missing ? 'error' : 'blue'} style={{ margin: 0, fontFamily: 'var(--font-mono)' }}>{p.code}</Tag>
+              <span style={{ fontSize: 13, fontWeight: 500 }}>
+                {p.title || '需求点已不存在'}
+              </span>
+              {p.missing && (
+                <Tooltip title="用例上记着这个编号，但需求文档里已经查不到它 —— 需求可能改过，这条用例也许该更新">
+                  <Tag color="error" style={{ margin: 0, fontSize: 11 }}>需求已变更？</Tag>
+                </Tooltip>
+              )}
+              {p.status && p.status !== 'active' && <Tag style={{ margin: 0, fontSize: 11 }}>{p.status}</Tag>}
+            </Space>
+            {p.quoteText && (
+              <div style={{
+                fontSize: 12.5, color: '#4e5969', lineHeight: 1.7,
+                paddingLeft: 10, borderLeft: '3px solid rgba(78,138,240,0.35)',
+              }}>
+                {p.quoteText}
+                {p.quoteOffset != null && (
+                  <span style={{ marginLeft: 8, fontSize: 11, color: '#c9cdd4' }}>
+                    原文第 {p.quoteOffset} 字
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div>
+        <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>
+          生成事件 {evs.length > 0 && <span style={{ color: '#c9cdd4' }}>（{evs.length}）</span>}
+        </h4>
+        {evs.length === 0 ? (
+          <span style={{ fontSize: 12, color: '#c9cdd4' }}>
+            这条是{data.source === 'ai' ? 'AI 生成的，但没有留下事件记录' : '手工建的，没有生成事件'}
+          </span>
+        ) : (
+          <div style={{ borderLeft: '2px solid rgba(0,0,0,0.05)', paddingLeft: 14, marginLeft: 6 }}>
+            {evs.map((e, i) => {
+              const cfg = GEN_EVENT_LABEL[e.eventType] || { label: e.eventType, color: 'default' }
+              return (
+                <div key={i} style={{ paddingBottom: 12, position: 'relative' }}>
+                  <span style={{
+                    position: 'absolute', left: -19, top: 5, width: 7, height: 7,
+                    borderRadius: '50%', background: '#c9cdd4', display: 'block',
+                  }} />
+                  <Space size={8}>
+                    <Tag color={cfg.color} style={{ margin: 0, fontSize: 11 }}>{cfg.label}</Tag>
+                    <span style={{ fontSize: 12, color: '#86909c' }}>
+                      {(e.createdAt || '').slice(0, 16).replace('T', ' ')}
+                    </span>
+                    {e.actor && <span style={{ fontSize: 12, color: '#c9cdd4' }}>by {e.actor}</span>}
+                  </Space>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </div>
+
+      {data.generationTaskId && (
+        <div style={{ marginTop: 14, fontSize: 11, color: '#c9cdd4' }}>
+          生成任务 <span style={{ fontFamily: 'var(--font-mono)' }}>{data.generationTaskId}</span>
+        </div>
+      )}
+    </Card>
+  )
+}
 
 function CaseFileTab({ caseId }) {
   const [data, setData] = useState(null)

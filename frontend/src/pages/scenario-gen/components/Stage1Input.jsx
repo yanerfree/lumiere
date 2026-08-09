@@ -79,12 +79,12 @@ export default function Stage1Input({ projectId, branchId, onTaskCreated }) {
             <Button size="small" icon={<UploadOutlined />}>上传 .md</Button>
           </Upload>
         </div>
-        <TextArea
+        <TextArea spellCheck={false}
           placeholder="粘贴需求文档内容（支持 Markdown 和纯文本）&#10;&#10;示例：&#10;# 用户登录功能&#10;&#10;## 正常登录&#10;用户输入用户名和密码，点击登录按钮，系统验证成功后跳转到首页。&#10;&#10;## 密码错误&#10;密码错误时显示「用户名或密码错误」提示。"
           value={content}
           onChange={e => { setContent(e.target.value); if (source === 'upload') setSource('paste') }}
           rows={12}
-          style={{ fontFamily: 'monospace', fontSize: 13 }}
+          style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}
         />
         {filename && source === 'upload' && (
           <div style={{ marginTop: 4 }}>

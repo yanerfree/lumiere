@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.api_test import ApiTestScenario, ApiTestStep
 from app.models.api_test_folder import ApiTestFolder
 from app.models.case import Case
+from app.services import script_service
 from app.models.environment import EnvironmentVariable, GlobalVariable
 from app.models.scenario_variable import ScenarioVariable
 from app.models.user import User
@@ -51,7 +52,11 @@ _ENV_MIRROR_KEYS = {
     "ADMIN_USERNAME", "ADMIN_PASSWORD", "TENANT_USERNAME", "TENANT_PASSWORD",
     "ADMIN_USER", "ADMIN_PASS",
 }
-_SECRET_RE = re.compile(r"(PASSWORD|PWD|TOKEN|SECRET|KEY)", re.I)
+# AUTH/AUTHORIZATION/CREDENTIAL/COOKIE 也得算 —— create_def 里最常见的凭证
+# 恰恰是 headers.Authorization，漏了它等于白脱敏。
+# 含 PASS：ADMIN_PASS 这种写法此前漏网，明文进了 CC 的上下文。
+# 脱敏这件事误报是安全方向（多盖一个值无所谓），漏报不是。
+_SECRET_RE = re.compile(r"(PASSWORD|PASSWD|PASS|PWD|TOKEN|SECRET|KEY|AUTH|CREDENTIAL|COOKIE|SESSION)", re.I)
 # 明显是结构值/枚举/路径，不该被当成「写死的业务数据」误报
 _STRUCT_ENUM = {
     "true", "false", "null", "none", "yes", "no", "on", "off",
@@ -113,7 +118,28 @@ def _looks_hardcoded(value: str) -> bool:
 
 
 async def _active_user_id(session: AsyncSession) -> uuid.UUID | None:
-    """MCP 无登录上下文：created_by 取一个真实 active 用户（优先 admin），避免外键失败。"""
+    """回推落库时的 created_by —— **优先用调用方自己的身份**。
+
+    MCP 请求没有登录会话，但 API Key 上绑着 user_id，中间件已经按 key_hash 查出来了。
+    此前这里直接取"第一个 active 用户"，于是多人一起用时所有人的回推都记成同一个
+    admin：操作日志失去意义，「CC归因 vs 人确认」没法按人分桶，而且**这段历史事后
+    补不回来**（行里永久写着 admin）。
+
+    拿不到调用方身份（环境变量 key / 匿名放行）才退回兜底 —— executed_by 是
+    NOT NULL FK，宁可记成兜底用户也不能让"脚本明明跑通了却存不下结果"。
+    """
+    try:
+        from app.mcp.middleware import current_caller_user_id
+        caller = await current_caller_user_id()
+        if caller:
+            uid = uuid.UUID(caller)
+            exists = (await session.execute(
+                select(User.id).where(User.id == uid, User.is_active.is_(True))
+            )).scalar_one_or_none()
+            if exists:
+                return exists
+    except Exception:  # noqa: BLE001
+        pass
     return (
         await session.execute(
             select(User.id).where(User.is_active.is_(True))
@@ -195,10 +221,14 @@ _SPEC_VARIABLES = """## 变量分层（回推纪律的基准，务必分清）
 ⚠ `exists_check` 的 `match` 必须用**稳定标识**（name / code 这类），**不要用 id** ——
 用 id 去 match 等于换个地方写死，换环境照样匹配不上。
 
+⚠ `extract` 的路径**相对 match 命中的那一条**写，直接写 `"id"`，不要写
+`"data.items[0].id"`。下标是另一种写死：match 找的是 name==X、extract 抽的却是第 0 条，
+列表顺序一变就静默注入别的资源的 id，步骤照跑不报错，最难查。
+
 ```json
 {"method":"GET","url":"${BASE_URL}/api/v1/upstreams?page_size=100",
  "match":{"field":"name","equals":"autotest-default-upstream"},
- "extract":{"upstreamId":"data.items[0].id"}}
+ "extract":{"upstreamId":"id"}}
 ```
 
 自检：这条链换到一个**干净环境**还能不能跑通？跑不通就是 A 没造全，或 B 漏了第 2 步。
@@ -243,13 +273,67 @@ _SPEC_CASE = """## 步骤用例（tb_create_case，非本模块，但一并说�
 steps 每项含 seq/action/expected；多角色加 [管理员]/[租户] 标记。"""
 
 
+_SPEC_UI_SCRIPT = """## 用例的 UI 脚本（tb_sync_ui_script）
+
+把你在本地**写好并真跑通过**的 Playwright 脚本回推到某条用例的「UI 测试」页签。
+平台不再自己生成脚本——生成这件事由你（外部 Claude Code）做，平台负责存、跑、留痕。
+
+### 变量怎么取（这是硬检查，写死会被拒绝入库）
+
+外部取值一律从环境变量读，**在模块顶部声明一次**，后面全用变量拼：
+
+```python
+import os
+from playwright.sync_api import Page, expect
+
+BASE_URL = os.getenv("BASE_URL", "")
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+SVC_NAME = os.getenv("SV_svcName", "")        # 场景变量前缀 SV_
+
+def test_创建服务后列表可见(page: Page):
+    page.goto(f"{BASE_URL}/login")
+    page.get_by_placeholder("用户名").fill(ADMIN_USERNAME)
+    page.get_by_placeholder("密码").fill(ADMIN_PASSWORD)
+    page.get_by_role("button", name="登 录").click()
+    ...
+    expect(page.get_by_text(SVC_NAME)).to_be_visible()
+```
+
+- ❌ `page.goto("http://192.168.51.108:5173/login")` —— 写死服务地址，换环境必挂，**拒绝入库**
+- ❌ `fill("admin123")` —— 写死凭据，**拒绝入库**
+- ✅ `page.goto(f"{BASE_URL}/login")`
+
+平台执行时会把该环境的变量注入进程环境，并把 `NAME = os.getenv("NAME", "默认值")`
+这一行的默认值替换成真值——所以**必须写成这个形状**，写 `os.environ["X"]` 拿不到替换。
+
+可用的键：环境变量（BASE_URL / 各角色账号密码 / LOGIN_URL，见 tb_list_global_data）、
+场景变量（`SV_` + 变量名，跟接口场景共用同一份，见 tb_list_scenario_variables）、
+`TEST_TOKEN`（平台按用例前置条件自动登录拿到的 token，造数/清理用）。
+
+### 形状要求
+
+- Python：必须有 `def test_xxx` —— 平台用 pytest 跑它。默认文件名 test_ui.py
+- TypeScript：必须有 `test(...)` —— 平台用 `npx playwright test` 跑它。默认文件名 ui.spec.ts
+- 两种都支持，按内容/文件名自动判，也可以显式传 language
+
+### 流程
+
+1. 本地写脚本，**先自己跑通**（别回推没验证过的东西）
+2. `tb_sync_ui_script(case_id, content)` 入库
+3. `tb_run_ui_script(case_id, env_id)` 在目标环境上再跑一遍——平台跑通了才算通
+4. 失败看 `tb_get_ui_script_result(case_id)`：状态、耗时、错误摘要、截图数
+"""
+
+
 async def get_sync_spec(kind: str = "all") -> dict:
-    """获取回推规范。kind: case(步骤用例) / api_scenario(编排接口场景) / variables(变量纪律) / all。
+    """获取回推规范。kind: case(步骤用例) / api_scenario(编排接口场景) / ui_script(UI 脚本) / variables(变量纪律) / all。
 
     回推前先调它对齐口径：怎么选变量层、步骤/断言/提取物 JSON 形状、禁止写死的正反例。"""
     parts = {
         "variables": _SPEC_VARIABLES,
         "api_scenario": _SPEC_API_SCENARIO,
+        "ui_script": _SPEC_UI_SCRIPT,
         "case": _SPEC_CASE,
     }
     if kind in parts:
@@ -264,7 +348,8 @@ async def get_sync_spec(kind: str = "all") -> dict:
         "2. tb_upsert_scenario_variables 建/更新该用例的场景变量（部分固定+部分随机用 kind=template）。\n"
         "3. tb_sync_orchestrated_scenario 回推接口链——步骤里**只用 ${var}，零写死**；"
         "悬空引用会被硬拦截，疑似写死会软警告。\n"
-        "4. tb_run_api_test 执行，确认变量都被正确解析。\n\n"
+        "4. tb_run_api_test 执行，确认变量都被正确解析。\n"
+        "5. 要顺带补 UI 脚本：本地写好跑通 → tb_sync_ui_script 入库 → tb_run_ui_script 在目标环境再跑一遍。\n\n"
         + "\n\n".join(selected.values())
     )
     return {"kind": kind, "playbook": playbook, "sections": selected}
@@ -596,11 +681,44 @@ async def list_scenario_variables(session: AsyncSession, case_id: str) -> dict:
 # 4. 只读：项目级可引用数据
 # ─────────────────────────────────────────────────────────────
 
-async def list_global_data(session: AsyncSession, project_id: str) -> dict:
+def _mask_deep(obj, depth: int = 0):
+    """递归脱敏 create_def —— 它记着"当初怎么造的"，大概率带 Authorization 头和账号。"""
+    if depth > 6:
+        return obj
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            if _SECRET_RE.search(str(k)):
+                out[k] = "***"
+            else:
+                out[k] = _mask_deep(v, depth + 1)
+        return out
+    if isinstance(obj, list):
+        return [_mask_deep(v, depth + 1) for v in obj[:20]]
+    if isinstance(obj, str) and len(obj) > 300:
+        return obj[:300] + "…"
+    return obj
+
+
+async def list_global_data(
+    session: AsyncSession,
+    project_id: str,
+    env_id: str | None = None,
+    probe: bool = False,
+) -> dict:
     """汇总项目级**可引用**的全局数据，帮你判断哪些该走 global_ref、哪些不该写死。
 
     含：全局变量、各环境变量键（凭证类脱敏）、项目自动化共享资源。返回的键名可用于
-    场景变量 kind=global_ref（value_template 填该键名），或步骤里 ${键名} 直接引用。"""
+    场景变量 kind=global_ref（value_template 填该键名），或步骤里 ${键名} 直接引用。
+
+    probe=True 时**在指定环境上真探测一遍**共享资源（需要 env_id），每条返回：
+      state=exists   探到了，附 values（extract 抽出来的 id 等）
+      state=missing  确实没有 —— 照它的 createDef 自己调接口造出来，造完不用改任何
+                     配置，existsCheck 下次自然探得到
+      state=unknown  **我没查成**（401/5xx/超时/没配 url）—— 别动它。一次 token 过期
+                     就照 createDef 补建，会在被测环境造出一堆重复底座，而且 keep=true
+                     没人清理
+    平台**不执行** createDef，只告诉你缺了什么、当初怎么造的。"""
     from app.models.automation_resource import AutomationResource
     from app.models.environment import Environment
 
@@ -633,23 +751,47 @@ async def list_global_data(session: AsyncSession, project_id: str) -> dict:
             "variables": [{"key": ev.key, "value": _mask(ev.key, ev.value)} for ev in evs],
         })
 
+    rows = (await session.execute(
+        select(AutomationResource).where(AutomationResource.project_id == pid)
+        .order_by(AutomationResource.name)
+    )).scalars().all()
     resources = [{
         "name": r.name,
         "description": r.description,
         "keep": r.keep,
         "existsCheck": r.exists_check,
-    } for r in (await session.execute(
-        select(AutomationResource).where(AutomationResource.project_id == pid)
-        .order_by(AutomationResource.name)
-    )).scalars().all()]
+        # 缺失时照这个自己造（平台不执行它）。带凭证的字段已脱敏。
+        "createDef": _mask_deep(r.create_def) if r.create_def else None,
+    } for r in rows]
+
+    probe_note = None
+    if probe:
+        if not env_id:
+            probe_note = "probe=true 需要 env_id —— 探测要拿该环境的 BASE_URL 和 token。先调 tb_list_environments。"
+        else:
+            from app.services import precheck_service
+            rep = await precheck_service.check_resources(session, pid, env_id)
+            by_name = {i["name"]: i for i in
+                       (rep.get("satisfied", []) + rep.get("missing", []) + rep.get("unknown", []))}
+            for item in resources:
+                hit = by_name.get(item["name"])
+                if hit:
+                    item["state"] = hit.get("state")
+                    item["reason"] = hit.get("reason")
+                    item["values"] = hit.get("values")
+            probe_note = (f"已在环境 {env_id} 上探测：存在 {len(rep.get('satisfied', []))} / "
+                          f"缺失 {len(rep.get('missing', []))} / 没查成 {len(rep.get('unknown', []))}")
 
     return {
         "projectId": project_id,
         "globalVariables": global_vars,
         "environments": env_data,
         "automationResources": resources,
+        "probed": bool(probe and env_id),
+        "probeNote": probe_note,
         "usage": "键名可用于：场景变量 kind=global_ref(value_template=键名)，或步骤 ${键名}。"
-                 "凭证类值已脱敏(***)，运行时由平台按所选环境真实注入。",
+                 "凭证类值已脱敏(***)，运行时由平台按所选环境真实注入。"
+                 " 想知道某个共享资源在某环境上现在到底有没有，传 probe=true + env_id。",
     }
 
 
@@ -682,12 +824,15 @@ async def upsert_automation_resource(
 
     ⚠ match 必须用**稳定标识**（name/code 这类），**不要用 id** —— 用 id 去 match
       等于换个地方写死，换环境照样匹配不上。
+    ⚠ extract 路径**相对 match 命中的那一条**写，直接 "id"，别写 "data.items[0].id" ——
+      下标是另一种写死，列表顺序一变就静默抽到别的资源，步骤照跑不报错。
+      （绝对路径仍兼容：命中项上取不到时会退回整包解析。）
     ⚠ 探不到时不会自动补建（create_def 暂只登记备查、不执行），只会让引用它的步骤报
       「变量未解析」，并在运行结果顶部提示缺哪个。所以第 2 步不能省。
 
     exists_check 形如 {"method":"GET","url":"${BASE_URL}/api/v1/upstreams?page_size=100",
                       "match":{"field":"name","equals":"autotest-default-upstream"},
-                      "extract":{"upstreamId":"data.items[0].id"}}
+                      "extract":{"upstreamId":"id"}}
     create_def   形如 {"method":"POST","url":"${BASE_URL}/api/v1/upstreams","body":{...}}
                  （登记备查，说明这资源当初是怎么造的；平台暂不自动执行）
     """
@@ -747,4 +892,158 @@ async def upsert_automation_resource(
                    f"场景开跑前会自动探测并注入，步骤里用 ${{{res.name}}} 引用，别再写死 UUID。"
                    " ⚠ 探不到时不会自动补建（create_def 暂只登记不执行），"
                    "只会让引用它的步骤报「变量未解析」——请确认该资源在目标环境确实存在。",
+    }
+
+
+# ── UI 脚本回推 ──────────────────────────────────────────────────────────────
+
+_UI_ENV_HINT = 'BASE_URL = os.getenv("BASE_URL", "")'
+
+# 服务地址/凭据写死是硬伤：换环境就全挂，而且挂得很隐蔽（脚本还在跑，只是打了别的系统）。
+_URL_LITERAL_RE = re.compile(r"""["'`](https?://[^"'`\s]+)["'`]""")
+_CRED_LITERAL_RE = re.compile(
+    r"""(password|passwd|pwd|token|secret|api_?key)\s*[:=]\s*["'`]([^"'`\s]{4,})["'`]""",
+    re.I,
+)
+
+
+def _detect_language(content: str, file_name: str | None) -> str:
+    name = (file_name or "").lower()
+    if name.endswith((".ts", ".tsx", ".js", ".mjs")):
+        return "typescript"
+    if name.endswith(".py"):
+        return "python"
+    if "import { test" in content or "@playwright/test" in content:
+        return "typescript"
+    return "python"
+
+
+def _scan_ui_script(content: str, language: str) -> tuple[list[str], list[str]]:
+    """返回 (硬错误, 软警告)。规矩跟接口回推一致：外部取值一律走变量，不许写死。"""
+    errors: list[str] = []
+    warns: list[str] = []
+    reader = "process.env" if language == "typescript" else "os.getenv"
+
+    for line in content.splitlines():
+        if reader in line:
+            continue  # 这一行本身就是在读变量，允许它带默认值
+        for m in _URL_LITERAL_RE.finditer(line):
+            errors.append(
+                f'写死了服务地址 {m.group(1)[:60]} —— 换环境必挂。'
+                f'改成从变量取：{_UI_ENV_HINT}，再用 f"{{BASE_URL}}/xxx" 拼。'
+            )
+        for m in _CRED_LITERAL_RE.finditer(line):
+            errors.append(
+                f'写死了凭据 {m.group(1)} —— 凭据只能来自环境变量。'
+                f'改成 {reader}("ADMIN_PASSWORD"{"" if language == "typescript" else ", \'\'"})。'
+            )
+
+    if language == "python":
+        if "def test_" not in content:
+            errors.append("没找到 def test_ 开头的测试函数 —— 平台用 pytest 跑它，必须有。")
+        if "os" not in content.split("\n")[0] and "import os" not in content:
+            warns.append("没 import os，那就没法读环境变量；除非这条用例真的不需要任何外部取值。")
+    else:
+        if "test(" not in content:
+            errors.append("没找到 test(...) 用例 —— 平台用 npx playwright test 跑它，必须有。")
+
+    return errors, warns
+
+
+def _first_test_func(content: str) -> str | None:
+    m = re.search(r"^\s*(?:async\s+)?def\s+(test_\w+)", content, re.M)
+    return m.group(1) if m else None
+
+
+async def sync_ui_script(
+    session: AsyncSession,
+    case_id: str,
+    content: str,
+    language: str | None = None,
+    file_name: str | None = None,
+) -> dict:
+    """把你在本地写好并跑通的 Playwright 脚本回推到用例上。"""
+    try:
+        cid = uuid.UUID(case_id)
+    except (ValueError, AttributeError):
+        return {"error": f"case_id 不是合法 UUID: {case_id}"}
+
+    content = (content or "").strip()
+    if not content:
+        return {"error": "content 是空的——要回推的是脚本正文，不是文件路径。"}
+
+    case = await session.get(Case, cid)
+    if not case:
+        return {"error": f"用例不存在: {case_id}"}
+
+    lang = (language or "").lower() or _detect_language(content, file_name)
+    if lang not in ("python", "typescript"):
+        return {"error": f"language 只支持 python / typescript，收到 {language}"}
+
+    errors, warns = _scan_ui_script(content, lang)
+
+    # ── 断言门禁（B5）──
+    # 唯一的硬拦截：一条断言都没有。"跑通了但什么都不验证"是最常见的作弊路径，
+    # 而且 100% 可判。强度变化只给软警告 —— 强度做不到可靠硬判，误拦会逼你
+    # 拆断言凑数，比不拦更糟。
+    from app.services import assertion_profile as ap
+    profile = ap.build(content)
+    if profile["total"] == 0:
+        errors.append(
+            "整个脚本一条断言都没有 —— 这样它只能证明流程跑完了没报错，"
+            "证明不了结果是对的。至少断言一个具体结果（页面文案 / 数量 / 状态码）。"
+        )
+
+    if errors:
+        return {
+            "error": "脚本没通过入库检查，先改掉下面这些再传（这些问题换个环境就会挂）：",
+            "problems": errors,
+            "spec": "调 tb_get_sync_spec(kind='ui_script') 看完整规矩和可抄的模板。",
+        }
+
+    # 和上一版比，把退化说出来。不拦，但让它**可见** —— 看得见就治得住。
+    prev = await script_service.get_active_script(session, cid, "ui")
+    warns.extend(ap.diff_warnings(prev.assertion_profile if prev else None, profile))
+
+    fname = file_name or ("test_ui.py" if lang == "python" else "ui.spec.ts")
+    func = _first_test_func(content) if lang == "python" else None
+
+    script = await script_service.create_script(
+        session, case_id=cid, script_type="ui", content=content,
+        file_name=fname, func_name=func, language=lang,
+        source="cc_synced", created_by=await _active_user_id(session),
+    )
+    script.assertion_profile = profile
+
+    # 页面的「UI 测试」页签是看 cases.ui_scenario 决定渲不渲染的，脚本存在 scripts 表 ——
+    # 两个数据源。只写脚本不建场景，页面会一直显示「还没有 UI 脚本」，
+    # 明明已经回推成功、也能跑通。所以这里顺带按手工步骤把场景壳建出来。
+    if not case.ui_scenario:
+        manual = case.steps or []
+        steps = [
+            {
+                "seq": i + 1,
+                "phase": "setup" if i == 0 else ("verify" if i == len(manual) - 1 else "action"),
+                "action": (st or {}).get("action", ""),
+                "expected": (st or {}).get("expected", ""),
+                "uiTarget": "",
+            }
+            for i, st in enumerate(manual)
+        ] or [{"seq": 1, "phase": "action", "action": "见脚本", "expected": "", "uiTarget": ""}]
+        case.ui_scenario = {"steps": steps, "variablesUsed": []}
+    case.ui_scenario_status = "debugging"
+    await session.commit()
+
+    return {
+        "status": "ok",
+        "scriptId": str(script.id),
+        "version": script.version,
+        "language": lang,
+        "fileName": fname,
+        "funcName": func,
+        "warnings": warns,
+        "message": (
+            f"已回推到用例「{case.case_code} {case.title}」的 UI 测试页签（v{script.version}）。"
+            f"下一步用 tb_run_ui_script(case_id, env_id) 在目标环境上真跑一遍确认。"
+        ),
     }

@@ -11,9 +11,10 @@ import {
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
+import { CODE_BLOCK_STYLE } from '../../components/MockCodeBlock'
 
 const { TextArea } = Input
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 const ACCENT = '#52c41a'
 
 const MODE_COLOR = { echo: 'green', fixed: 'blue', custom: 'cyan', error: 'red' }
@@ -294,7 +295,7 @@ export default function WsMockPanel() {
           {/* Path */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>路径</div>
-            <Input
+            <Input spellCheck={false}
               value={form.path}
               onChange={e => setForm(f => ({ ...f, path: e.target.value }))}
               style={{ fontFamily: MONO, fontSize: 13, borderRadius: 12 }}
@@ -340,7 +341,7 @@ export default function WsMockPanel() {
           {responseModeValue === 'fixed' && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>固定响应内容</div>
-              <TextArea
+              <TextArea spellCheck={false}
                 value={form.fixedResponse || ''}
                 onChange={e => setForm(f => ({ ...f, fixedResponse: e.target.value }))}
                 style={{ fontFamily: MONO, fontSize: 12, minHeight: 160, borderRadius: 12 }}
@@ -356,7 +357,7 @@ export default function WsMockPanel() {
                 <span style={{ fontSize: 12, color: '#8c8c8c' }}>自定义规则 (JSON)</span>
                 <span style={{ fontSize: 11, color: '#bfbfbf' }}>patterns: [{'{'} match, response {'}'}]</span>
               </div>
-              <TextArea
+              <TextArea spellCheck={false}
                 value={form.customConfig || ''}
                 onChange={e => setForm(f => ({ ...f, customConfig: e.target.value }))}
                 style={{ fontFamily: MONO, fontSize: 12, minHeight: 200, borderRadius: 12 }}
@@ -424,7 +425,7 @@ export default function WsMockPanel() {
           {/* Message input */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>发送消息</div>
-            <TextArea
+            <TextArea spellCheck={false}
               value={testMessage}
               onChange={e => setTestMessage(e.target.value)}
               rows={4}
@@ -514,9 +515,9 @@ export default function WsMockPanel() {
                   <div style={{ padding: '10px 14px' }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: '#0ea5a0', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Response</div>
                     <pre style={{
-                      background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 10,
+                      ...CODE_BLOCK_STYLE, padding: 12, borderRadius: 10,
                       overflow: 'auto', fontSize: 11, lineHeight: 1.5, maxHeight: 200,
-                      fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
                     }}>{testResult.received ?? '(无响应)'}</pre>
                   </div>
                 </div>
@@ -643,7 +644,7 @@ export default function WsMockPanel() {
           }}>
             <Badge status={serviceStatus.running ? 'success' : 'default'} />
             <span style={{
-              fontSize: 12, fontWeight: 600, fontFamily: 'monospace',
+              fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)',
               color: serviceStatus.running ? ACCENT : '#999',
             }}>
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}

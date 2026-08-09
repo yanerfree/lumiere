@@ -183,8 +183,8 @@ const ScriptEditor = forwardRef(function ScriptEditor({
       </Empty>
       <Modal title="粘贴脚本代码" open={showPaste} onCancel={() => setShowPaste(false)}
         onOk={() => { if (pasteContent.trim()) { handleCreate(pasteContent); setShowPaste(false); setPasteContent('') } }}>
-        <Input.TextArea rows={12} value={pasteContent} onChange={e => setPasteContent(e.target.value)}
-          placeholder="在此粘贴 Python / TypeScript 测试脚本..." style={{ fontFamily: 'monospace', fontSize: 13 }} />
+        <Input.TextArea spellCheck={false} rows={12} value={pasteContent} onChange={e => setPasteContent(e.target.value)}
+          placeholder="在此粘贴 Python / TypeScript 测试脚本..." style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }} />
       </Modal>
     </div>
     )
@@ -200,7 +200,7 @@ const ScriptEditor = forwardRef(function ScriptEditor({
           padding: '4px 12px', background: '#1e1e1e', borderBottom: '1px solid #333',
         }}>
           <Tag color={accentColor} style={{ fontSize: 11, margin: 0 }}>{language}</Tag>
-          {script?.fileName && <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#aaa' }}>{script.fileName}</span>}
+          {script?.fileName && <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#aaa' }}>{script.fileName}</span>}
           {script?.version && <Tag style={{ fontSize: 10, margin: 0, background: '#333', color: '#aaa', border: 'none' }}>v{script.version}</Tag>}
         </div>
         <Editor
@@ -234,7 +234,7 @@ const ScriptEditor = forwardRef(function ScriptEditor({
       }}>
         <Space size={8}>
           <Tag color={accentColor} style={{ fontSize: 11, margin: 0 }}>{language}</Tag>
-          {script?.fileName && <span style={{ fontSize: 12, fontFamily: 'monospace', color: '#aaa' }}>{script.fileName}</span>}
+          {script?.fileName && <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#aaa' }}>{script.fileName}</span>}
           {dirty && <Tag color="orange" style={{ fontSize: 10, margin: 0 }}>未保存</Tag>}
           {script?.version && <Tag style={{ fontSize: 10, margin: 0, background: '#333', color: '#aaa', border: 'none' }}>v{script.version}</Tag>}
         </Space>
@@ -309,7 +309,7 @@ const ScriptEditor = forwardRef(function ScriptEditor({
                   onClick={() => setRunResult(null)}>关闭</Button>
               </div>
               {runResult.errorSummary && (
-                <div style={{ padding: '8px 12px', background: '#2d1215', borderRadius: 6, marginBottom: 8, fontSize: 12, color: '#ff7875', fontFamily: 'monospace', whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto' }}>
+                <div style={{ padding: '8px 12px', background: '#2d1215', borderRadius: 6, marginBottom: 8, fontSize: 12, color: '#ff7875', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', maxHeight: 120, overflow: 'auto' }}>
                   {runResult.errorSummary}
                 </div>
               )}
@@ -329,8 +329,8 @@ const ScriptEditor = forwardRef(function ScriptEditor({
       {/* 粘贴弹窗 */}
       <Modal title="粘贴脚本代码" open={showPaste} onCancel={() => setShowPaste(false)}
         onOk={() => { if (pasteContent.trim()) { setContent(pasteContent); setDirty(true); setShowPaste(false); setPasteContent('') } }}>
-        <Input.TextArea rows={12} value={pasteContent} onChange={e => setPasteContent(e.target.value)}
-          placeholder="在此粘贴代码..." style={{ fontFamily: 'monospace', fontSize: 13 }} />
+        <Input.TextArea spellCheck={false} rows={12} value={pasteContent} onChange={e => setPasteContent(e.target.value)}
+          placeholder="在此粘贴代码..." style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }} />
       </Modal>
     </div>
   )

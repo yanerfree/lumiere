@@ -5,6 +5,12 @@ import zhCNRaw from 'antd/locale/zh_CN'
 import enUSRaw from 'antd/locale/en_US'
 import App from './App.jsx'
 import { LangProvider, useLang } from './utils/i18n.jsx'
+// 等宽字体自带，不指望使用者的系统里装了什么：实测常见等宽字体（JetBrains Mono /
+// Fira Code / Consolas / DejaVu Sans Mono…）一个都没有时，monospace 会落到
+// 文泉驿正黑等宽这类中文字体上，渲染 ASCII 笔画粗细不均、看久了眼花。
+// 只要 latin 子集（等宽文本都是 URL / JSON / 变量名，用不到中文），两个字重共 43KB。
+import '@fontsource/jetbrains-mono/latin-400.css'
+import '@fontsource/jetbrains-mono/latin-500.css'
 import './styles/global.css'
 
 // antd/locale/* 是 CJS 转发（module.exports = require('../lib/locale/xx')），

@@ -11,7 +11,7 @@ import { copyToClipboard } from '../../utils/clipboard'
 
 const { TextArea } = Input
 const FONT = "'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif"
-const MONO = "'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 
 const THEMES = {
   json:      { primary: '#43a047', light: '#e8f5e9', bg: 'rgba(232,245,233,0.5)', pale: 'rgba(232,245,233,0.25)', border: 'rgba(67,160,71,0.25)' },
@@ -189,7 +189,7 @@ function JsonTool({ theme }) {
             <Button type="link" size="small" style={{ padding: 0, fontSize: 11, height: 'auto', color: theme.primary }}
               onClick={() => setInput('')}>清空</Button>
           </div>
-          <TextArea value={input} onChange={e => { setInput(e.target.value); setError('') }}
+          <TextArea spellCheck={false} value={input} onChange={e => { setInput(e.target.value); setError('') }}
             style={{ flex: 1, fontFamily: MONO, fontSize: 12, resize: 'none', borderColor: theme.border }}
             placeholder={'粘贴 JSON 试试看 ~\n\n支持：对象、数组、转义字符串 "{\\"key\\":\\"val\\"}"'} />
         </div>
@@ -201,7 +201,7 @@ function JsonTool({ theme }) {
             <Button type="link" size="small" icon={<CopyOutlined />} style={{ padding: 0, fontSize: 11, height: 'auto', color: theme.primary }}
               disabled={!output} onClick={() => copy(output)}>复制</Button>
           </div>
-          <TextArea value={output} readOnly
+          <TextArea spellCheck={false} value={output} readOnly
             style={{ flex: 1, fontFamily: MONO, fontSize: 12, resize: 'none', background: theme.pale, borderColor: theme.border }}
             placeholder="结果会出现在这里 ✨" />
         </div>
@@ -268,7 +268,7 @@ function CodecTool({ theme }) {
           <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
             <Dot color={theme.primary} />输入
           </div>
-          <TextArea value={input} onChange={e => setInput(e.target.value)}
+          <TextArea spellCheck={false} value={input} onChange={e => setInput(e.target.value)}
             style={{ flex: 1, fontFamily: MONO, fontSize: 12, resize: 'none', borderColor: theme.border }}
             placeholder="输入要处理的内容 ~" />
         </div>
@@ -276,7 +276,7 @@ function CodecTool({ theme }) {
           <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
             <Dot color={theme.primary} />输出
           </div>
-          <TextArea value={output} readOnly
+          <TextArea spellCheck={false} value={output} readOnly
             style={{ flex: 1, fontFamily: MONO, fontSize: 12, resize: 'none', background: theme.pale, borderColor: theme.border }} />
         </div>
       </div>
@@ -342,7 +342,7 @@ function TimestampTool({ theme }) {
           <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
             <Dot color={theme.primary} />时间戳（秒/毫秒）
           </div>
-          <Input value={ts} onChange={e => setTs(e.target.value)} placeholder="1719820800"
+          <Input spellCheck={false} value={ts} onChange={e => setTs(e.target.value)} placeholder="1719820800"
             style={{ fontFamily: MONO, borderColor: theme.border }} onPressEnter={tsToDate} allowClear />
         </div>
         <Button type="primary" onClick={tsToDate}>→ 转日期</Button>
@@ -450,10 +450,10 @@ function RegexTool({ theme }) {
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 20 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 10 }}>
         <span style={{ fontSize: 15, color: theme.primary, flexShrink: 0, fontWeight: 300, fontFamily: MONO }}>/</span>
-        <Input value={pattern} onChange={e => setPattern(e.target.value)}
+        <Input spellCheck={false} value={pattern} onChange={e => setPattern(e.target.value)}
           style={{ flex: 1, fontFamily: MONO, borderColor: theme.border }} placeholder="输入正则表达式..." />
         <span style={{ fontSize: 15, color: theme.primary, flexShrink: 0, fontWeight: 300, fontFamily: MONO }}>/</span>
-        <Input value={flags} onChange={e => setFlags(e.target.value)}
+        <Input spellCheck={false} value={flags} onChange={e => setFlags(e.target.value)}
           style={{ width: 54, fontFamily: MONO, textAlign: 'center', borderColor: theme.border }} placeholder="g" />
         {matchCount > 0 && <Tag color="cyan" style={{ borderRadius: 12 }}>{matchCount} 个匹配</Tag>}
         {pattern && matchCount === 0 && !regexError && text && <Tag color="orange" style={{ borderRadius: 12 }}>无匹配</Tag>}
@@ -492,7 +492,7 @@ function RegexTool({ theme }) {
           <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
             <Dot color={theme.primary} />测试文本
           </div>
-          <TextArea value={text} onChange={e => setText(e.target.value)}
+          <TextArea spellCheck={false} value={text} onChange={e => setText(e.target.value)}
             style={{ flex: 1, fontFamily: MONO, fontSize: 12, resize: 'none', borderColor: theme.border }}
             placeholder="输入要匹配的文本 ~" />
         </div>
@@ -677,7 +677,7 @@ function DiffTool({ theme }) {
             <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
               <Dot color={theme.primary} />文本 A
             </div>
-            <TextArea value={left} onChange={e => setLeft(e.target.value)}
+            <TextArea spellCheck={false} value={left} onChange={e => setLeft(e.target.value)}
               style={{ flex: 1, fontFamily: MONO, fontSize: 12, resize: 'none', borderColor: theme.border }}
               placeholder="粘贴文本 A ~" />
           </div>
@@ -685,7 +685,7 @@ function DiffTool({ theme }) {
             <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
               <Dot color={theme.primary} />文本 B
             </div>
-            <TextArea value={right} onChange={e => setRight(e.target.value)}
+            <TextArea spellCheck={false} value={right} onChange={e => setRight(e.target.value)}
               style={{ flex: 1, fontFamily: MONO, fontSize: 12, resize: 'none', borderColor: theme.border }}
               placeholder="粘贴文本 B ~" />
           </div>
@@ -948,7 +948,7 @@ function JwtPanel({ theme }) {
           </div>
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>自定义 Claims（可选）</div>
-            <TextArea value={customClaims} onChange={e => setCustomClaims(e.target.value)} rows={3}
+            <TextArea spellCheck={false} value={customClaims} onChange={e => setCustomClaims(e.target.value)} rows={3}
               style={{ fontFamily: MONO, fontSize: 12, borderColor: theme.border }}
               placeholder='{"sub": "user123", "role": "admin"}' />
           </div>
@@ -1011,7 +1011,7 @@ function JwtPanel({ theme }) {
         <div style={{ flex: 1, display: 'flex', gap: 14, minHeight: 0 }}>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>粘贴 Token</div>
-            <TextArea value={decodeInput} onChange={e => setDecodeInput(e.target.value)}
+            <TextArea spellCheck={false} value={decodeInput} onChange={e => setDecodeInput(e.target.value)}
               style={{ flex: 1, fontFamily: MONO, fontSize: 12, resize: 'none', borderColor: theme.border }}
               placeholder="粘贴 JWT Token 自动解码..." />
           </div>
@@ -1148,13 +1148,13 @@ function HmacPanel({ theme }) {
       <div style={{ display: 'flex', gap: 14, marginBottom: 14 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>待签名消息</div>
-          <TextArea value={message_} onChange={e => setMessage_(e.target.value)} rows={4}
+          <TextArea spellCheck={false} value={message_} onChange={e => setMessage_(e.target.value)} rows={4}
             style={{ fontFamily: MONO, fontSize: 12, borderColor: theme.border }}
             placeholder={'输入要签名的内容，例如：\nGET\\n/api/users\\ntimestamp=1234567890'} />
         </div>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>密钥 (Secret Key)</div>
-          <Input value={secret} onChange={e => setSecret(e.target.value)}
+          <Input spellCheck={false} value={secret} onChange={e => setSecret(e.target.value)}
             style={{ fontFamily: MONO, fontSize: 12, borderColor: theme.border, marginBottom: 12 }} placeholder="your-secret-key" />
           <Button type="primary" onClick={handleSign} loading={signing} block>生成签名</Button>
         </div>
@@ -1252,7 +1252,7 @@ function AkSkPanel({ theme }) {
       <div style={{ display: 'flex', gap: 14, marginBottom: 16 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>Access Key (AK)</div>
-          <Input value={accessKey} onChange={e => setAccessKey(e.target.value)} style={{ fontFamily: MONO, fontSize: 12 }} placeholder="输入 Access Key" />
+          <Input spellCheck={false} value={accessKey} onChange={e => setAccessKey(e.target.value)} style={{ fontFamily: MONO, fontSize: 12 }} placeholder="输入 Access Key" />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>Secret Key (SK)</div>
@@ -1269,7 +1269,7 @@ function AkSkPanel({ theme }) {
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>请求路径</div>
-          <Input value={path} onChange={e => setPath(e.target.value)} style={{ fontFamily: MONO, fontSize: 12 }} placeholder="/api/resource" />
+          <Input spellCheck={false} value={path} onChange={e => setPath(e.target.value)} style={{ fontFamily: MONO, fontSize: 12 }} placeholder="/api/resource" />
         </div>
         <div style={{ width: 200 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
@@ -1392,13 +1392,13 @@ function OAuth2Panel({ theme }) {
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>Token URL *</div>
-            <Input value={tokenUrl} onChange={e => setTokenUrl(e.target.value)} placeholder="https://auth.example.com/oauth/token" style={{ fontFamily: MONO, fontSize: 12 }} />
+            <Input spellCheck={false} value={tokenUrl} onChange={e => setTokenUrl(e.target.value)} placeholder="https://auth.example.com/oauth/token" style={{ fontFamily: MONO, fontSize: 12 }} />
           </div>
         </div>
         <div style={{ display: 'flex', gap: 14, marginBottom: 14 }}>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>Client ID *</div>
-            <Input value={clientId} onChange={e => setClientId(e.target.value)} style={{ fontFamily: MONO, fontSize: 12 }} placeholder="your-client-id" />
+            <Input spellCheck={false} value={clientId} onChange={e => setClientId(e.target.value)} style={{ fontFamily: MONO, fontSize: 12 }} placeholder="your-client-id" />
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>Client Secret</div>
@@ -1406,7 +1406,7 @@ function OAuth2Panel({ theme }) {
           </div>
           <div style={{ flex: 1 }}>
             <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>Scope（可选）</div>
-            <Input value={scope} onChange={e => setScope(e.target.value)} placeholder="read write" style={{ fontFamily: MONO, fontSize: 12 }} />
+            <Input spellCheck={false} value={scope} onChange={e => setScope(e.target.value)} placeholder="read write" style={{ fontFamily: MONO, fontSize: 12 }} />
           </div>
         </div>
         <Button type="primary" loading={fetching} onClick={handleFetch}>获取 Token</Button>

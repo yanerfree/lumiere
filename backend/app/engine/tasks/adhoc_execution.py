@@ -119,6 +119,7 @@ async def _run_adhoc_inner(
         async with session_factory() as session:
             result = await _execute_adhoc(
                 session, task_id, report_id, case_ids, env_id, test_type, project_id, branch_id,
+                user_id,
             )
             await session.commit()
             return result
@@ -133,10 +134,11 @@ async def _run_adhoc_inner(
 async def _execute_adhoc(
     session: AsyncSession, task_id: str, report_id: str,
     case_ids: list[str], env_id: str, test_type: str,
-    project_id: str, branch_id: str,
+    project_id: str, branch_id: str, user_id: str | None = None,
 ) -> dict:
     from app.engine.executor import execute_single_case
     from app.engine.sandbox import cleanup_sandbox, create_sandbox
+    from app.services import script_run_service
     from app.services.environment_service import get_merged_variables
 
     rid = uuid.UUID(report_id)
@@ -175,7 +177,12 @@ async def _execute_adhoc(
     # 创建沙箱（如果有可执行用例且项目配置了脚本路径）
     sandbox_dir = None
     bare_repo = None
-    use_sandbox = bool(project.script_base_path and branch.last_commit_sha and executable)
+    # 同 execution.py：先判这批里有没有旧式(script_ref_file)用例真需要沙箱。
+    # 否则项目上一个过期的 script_base_path 会把整批打死，而这批可能全是新式脚本。
+    use_sandbox = bool(
+        project.script_base_path and branch.last_commit_sha
+        and any(c.script_ref_file for c in executable)
+    )
 
     if use_sandbox:
         bare_repo = Path(project.script_base_path) / ".repos" / "repo.git"
@@ -244,6 +251,19 @@ async def _execute_adhoc(
             scenario.completed_at = case_completed
             scenario.execution_type = "automated"
             await session.flush()
+
+            # 批量回归也要记账 —— 失败证据挂在 script_runs 上，这条路不记就看不到
+            await script_run_service.record_run(
+                session,
+                case_id=case.id,
+                script_id=new_scripts[case.id].id if case.id in new_scripts else None,
+                script_type="api" if test_type == "api" else "ui",
+                result=case_result,
+                executed_by=user_id,
+                run_mode=script_run_service.REGRESSION,
+                report_scenario_id=scenario.id,
+                base_url=env_vars.get("BASE_URL"),
+            )
 
             for j, step in enumerate(case_result.get("steps", [])):
                 session.add(TestReportStep(

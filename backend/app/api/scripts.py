@@ -104,85 +104,18 @@ async def create_script(
     }
 
 
-@router.post("/generate")
-async def generate_script_ai(
-    project_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    case_id: uuid.UUID,
-    script_type: str = Query(alias="type", default="ui"),
-    env_id: uuid.UUID | None = Body(default=None, alias="envId", embed=True),
-    step_hints: dict | None = Body(default=None, alias="stepHints", embed=True),
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
-):
-    """AI 生成 Playwright 测试脚本"""
-    if script_type != "ui":
-        raise AppError(code="INVALID_TYPE", message="AI 生成仅支持 UI 脚本类型")
-
-    from app.services.ai.ui_script_gen_service import generate_ui_script
-    result = await generate_ui_script(
-        case_id=str(case_id),
-        session=session,
-        env_id=str(env_id) if env_id else None,
-    )
-    await session.commit()
-    return {"data": result}
-
-
-@router.post("/generate-stream")
-async def generate_script_ai_stream(
-    project_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    case_id: uuid.UUID,
-    script_type: str = Query(alias="type", default="ui"),
-    env_id: uuid.UUID | None = Body(default=None, alias="envId", embed=True),
-    step_hints: dict | None = Body(default=None, alias="stepHints", embed=True),
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
-):
-    """SSE 流式 AI 生成 — MCP Agent 探索式脚本生成"""
-    if script_type != "ui":
-        raise AppError(code="INVALID_TYPE", message="仅支持 UI 脚本")
-
-    case = await session.get(Case, case_id)
-    if not case:
-        raise NotFoundError(code="CASE_NOT_FOUND", message="用例不存在")
-
-    from app.services.ai.ui_script_gen_service import generate_ui_script_stream
-
-    async def event_generator():
-        async for chunk in generate_ui_script_stream(
-            case_id=str(case_id),
-            session=session,
-            env_id=str(env_id) if env_id else None,
-            step_hints=step_hints,
-        ):
-            yield chunk
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-
-@router.post("/repair")
-async def repair_script_ai(
-    project_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    case_id: uuid.UUID,
-    error_summary: str = Body(default="", alias="errorSummary"),
-    stdout: str = Body(default=""),
-    session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
-):
-    """AI 分析执行失败原因并修复脚本"""
-    from app.services.ai.ui_script_gen_service import repair_ui_script
-    result = await repair_ui_script(
-        case_id=str(case_id),
-        session=session,
-        error_summary=error_summary,
-        stdout=stdout,
-    )
-    await session.commit()
-    return {"data": result}
-
+# ── 平台侧 AI 生成/自愈已封存（2026-08-08）─────────────────────────────
+# 原有三个路由 /generate、/generate-stream、/repair 在此下线：页面入口已全部
+# 摘掉，留着路由就是留一条"平台也能生成"的暗路，与 docs/cc-platform-loop-spec.md
+# 红线 1（平台侧生成能力归零，不是降权）直接冲突。
+#
+# 服务层代码没删（ui_script_gen_service / cli_agent，ui_agent_engine=cli 仍在），
+# 重新启用的三条判据见该文档红线 1：①探索期数据隔离 ②跑满 20 条测广度
+# ③两条都过了再评估作为「批量首稿」通道回来。
+#
+# 现在的通道：外部 Claude Code 本地写好跑通 → tb_sync_ui_script 回推 →
+# tb_run_ui_script 让平台在标准环境执行确认。
+# ────────────────────────────────────────────────────────────────────
 
 @router.get("/preflight")
 async def preflight_run(
@@ -267,31 +200,23 @@ async def run_script(
     finally:
         shutil.rmtree(sandbox_dir, ignore_errors=True)
 
-    run_record = ScriptRun(
-        case_id=case_id,
-        script_id=script.id,
-        script_type=script_type,
-        status=result.get("status", "error"),
-        duration_ms=result.get("duration_ms"),
-        error_summary=result.get("error_summary"),
-        stdout=result.get("stdout"),
-        screenshots=result.get("screenshots") or None,
-        executed_by=user.id,
+    from app.services import script_run_service
+    run_record = await script_run_service.record_run(
+        session,
+        case_id=case_id, script_id=script.id, script_type=script_type,
+        result=result, executed_by=user.id,
+        run_mode=script_run_service.DEBUG,
+        base_url=env_vars.get("BASE_URL"),
     )
-    session.add(run_record)
 
-    # 更新用例 UI 场景状态
+    # 更新用例 UI 场景状态（debug 只许向前推进，失败不打回——见 apply_case_status）
     if script_type == "ui":
         case = await session.get(Case, case_id)
-        if case:
-            case.ui_scenario_status = "completed" if result.get("status") == "passed" else "debugging"
-            if result.get("status") == "passed":
-                if case.ui_status in ("debugging", "not_started", "draft", "needs_fix"):
-                    case.ui_status = "pending_review"
-            else:
-                case.ui_status = "debugging"
+        script_run_service.apply_case_status(case, "ui", result.get("status"), script_run_service.DEBUG)
 
     await session.commit()
+    if run_record is None:
+        return {"data": result}
     await session.refresh(run_record)
 
     result["id"] = str(run_record.id)
@@ -378,6 +303,7 @@ async def _run_typescript_stream(script, case_id, env_vars, user, session):
     baseURL: '{base_url}',
     headless: true,
     screenshot: 'on',
+    recordHar: { path: './test-results/network.har', content: 'embed' },
     video: 'on',
     locale: 'zh-CN',
   }},
@@ -438,28 +364,34 @@ async def _run_typescript_stream(script, case_id, env_vars, user, session):
             if not error_summary:
                 error_summary = (stderr_text + stdout_text)[-2000:]
 
-        run_record = ScriptRun(
+        from app.engine.executor import _collect_screenshots
+        from app.engine.har import har_path_for, parse_har
+        ts_out = Path(sandbox_dir) / "test-results"
+        screenshots = _collect_screenshots(str(ts_out))
+        captured_requests = parse_har(har_path_for(ts_out))
+
+        from app.services import script_run_service
+        await script_run_service.record_run(
+            session,
             case_id=case_id, script_id=script.id, script_type="ui",
-            status=status, duration_ms=duration_ms,
-            error_summary=error_summary,
-            stdout=(stdout_text + stderr_text)[-5000:],
+            result={
+                "status": status, "duration_ms": duration_ms,
+                "error_summary": error_summary,
+                "stdout": (stdout_text + stderr_text)[-5000:],
+                "screenshots": screenshots,
+                "captured_requests": captured_requests,
+            },
             executed_by=user.id,
+            run_mode=script_run_service.DEBUG,
         )
-        session.add(run_record)
 
         case = await session.get(Case, case_id)
-        if case:
-            case.ui_scenario_status = "completed" if status == "passed" else "debugging"
-            if status == "passed":
-                if case.ui_status in ("debugging", "not_started", "draft", "needs_fix"):
-                    case.ui_status = "pending_review"
-            else:
-                case.ui_status = "debugging"
+        script_run_service.apply_case_status(case, "ui", status, script_run_service.DEBUG)
         await session.commit()
 
         final = json.dumps({
             "status": status, "duration_ms": duration_ms,
-            "error_summary": error_summary, "steps": [], "screenshots": [],
+            "error_summary": error_summary, "steps": [], "screenshots": screenshots,
         }, ensure_ascii=False, default=str)
         yield f"event: done\ndata: {final}\n\n"
 
@@ -494,8 +426,9 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
     if is_playwright_script(content):
         pw_output_dir = str(Path(sandbox_dir) / ".pw_results")
         Path(pw_output_dir).mkdir(parents=True, exist_ok=True)
+        from app.engine.har import har_path_for
         from app.engine.pw_conftest import write_playwright_conftest
-        write_playwright_conftest(sandbox_dir, env_vars)
+        write_playwright_conftest(sandbox_dir, env_vars, har_path=har_path_for(pw_output_dir))
 
     plugin_src = Path(__file__).resolve().parent.parent / "engine" / "plugins" / "tea_capture.py"
     step_src = Path(__file__).resolve().parent.parent / "engine" / "plugins" / "tea_step.py"
@@ -523,6 +456,8 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
         cwd=sandbox_dir, env=run_env,
     )
     stderr_chunks = []
+    # stdout 原本是逐行消费掉只转发步骤标记，不留存 —— 于是执行历史展开后是空日志。
+    stdout_chunks = []
 
     async def drain_stderr():
         async for line in proc.stderr:
@@ -533,6 +468,7 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
     try:
         async for line in proc.stdout:
             text = line.decode("utf-8", errors="ignore").rstrip()
+            stdout_chunks.append(text)
             if text.startswith("##STEP_START##"):
                 data = text[len("##STEP_START##"):]
                 yield f"event: step_start\ndata: {data}\n\n"
@@ -571,7 +507,29 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
             if steps: break
 
         from app.engine.executor import _collect_screenshots
+        from app.engine.har import har_path_for, parse_har
         screenshots = _collect_screenshots(pw_output_dir) if pw_output_dir else []
+        captured_requests = parse_har(har_path_for(pw_output_dir)) if pw_output_dir else []
+
+        # 页面「运行验证」走的就是这条路，此前一行都不记 —— 用户跑完，
+        # 执行历史纹丝不动，看起来像执行没生效。
+        from app.services import script_run_service
+        await script_run_service.record_run(
+            session,
+            case_id=case_id, script_id=script.id, script_type="ui",
+            result={
+                "status": status, "duration_ms": duration_ms,
+                "error_summary": error_summary,
+                "stdout": ("\n".join(stdout_chunks) + ("\n--- STDERR ---\n" + stderr if stderr else ""))[-10000:],
+                "screenshots": screenshots,
+                "captured_requests": captured_requests,
+            },
+            executed_by=user.id,
+            run_mode=script_run_service.DEBUG,
+        )
+        case = await session.get(Case, case_id)
+        script_run_service.apply_case_status(case, "ui", status, script_run_service.DEBUG)
+        await session.commit()
 
         final = json.dumps({
             "status": status, "duration_ms": duration_ms, "error_summary": error_summary,
@@ -595,17 +553,23 @@ async def list_script_runs(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
-    script_type: str = Query(alias="type", default="api"),
+    script_type: str | None = Query(alias="type", default=None),
     limit: int = Query(default=20, le=100),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
 ):
-    """获取用例的脚本执行历史列表。"""
+    """获取用例的脚本执行历史列表。
+
+    不传 type 就返回该用例的全部执行记录。一条用例可以同时挂接口脚本和 UI 脚本
+    （用例的 type 是 api/e2e，脚本的 type 是 api/ui，两者不是一回事），
+    页面按单一类型过滤会看不全——原先前端把用例 type 直接当脚本 type 传，
+    e2e 用例永远查不到任何记录。
+    """
+    stmt = select(ScriptRun).where(ScriptRun.case_id == case_id)
+    if script_type:
+        stmt = stmt.where(ScriptRun.script_type == script_type)
     result = await session.execute(
-        select(ScriptRun)
-        .where(ScriptRun.case_id == case_id, ScriptRun.script_type == script_type)
-        .order_by(ScriptRun.created_at.desc())
-        .limit(limit)
+        stmt.order_by(ScriptRun.created_at.desc()).limit(limit)
     )
     runs = result.scalars().all()
     return {
@@ -614,6 +578,8 @@ async def list_script_runs(
                 "id": str(r.id),
                 "case_id": str(r.case_id),
                 "script_type": r.script_type,
+                "run_mode": r.run_mode,
+                "attempt": r.attempt,
                 "status": r.status,
                 "duration_ms": r.duration_ms,
                 "error_summary": r.error_summary,
@@ -625,6 +591,56 @@ async def list_script_runs(
             for r in runs
         ]
     }
+
+
+@router.get("/runs/{run_id}/analysis")
+async def get_run_analysis(
+    project_id: uuid.UUID, branch_id: uuid.UUID, case_id: uuid.UUID, run_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    """一次执行的三层失败判断：平台现象 / CC 归因 / 人工确认。"""
+    from app.services.analysis_service import CAUSES
+    run = (await session.execute(
+        select(ScriptRun).where(ScriptRun.id == run_id, ScriptRun.case_id == case_id)
+    )).scalar_one_or_none()
+    if not run:
+        raise NotFoundError(code="RUN_NOT_FOUND", message="执行记录不存在")
+    return {"data": {
+        "runId": str(run.id),
+        "status": run.status,
+        "phenomenon": run.failure_phenomenon,
+        "ccAnalysis": run.cc_analysis,
+        "confirmedCause": run.confirmed_cause,
+        "confirmedNote": run.confirmed_note,
+        "confirmedAt": run.confirmed_at.isoformat() if run.confirmed_at else None,
+        "causeOptions": [{"value": k, "label": v} for k, v in CAUSES.items()],
+    }}
+
+
+@router.post("/runs/{run_id}/confirm")
+async def confirm_run_cause(
+    project_id: uuid.UUID, branch_id: uuid.UUID, case_id: uuid.UUID, run_id: uuid.UUID,
+    cause: str = Body(..., embed=True),
+    note: str = Body(default="", embed=True),
+    session: AsyncSession = Depends(get_db),
+    user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """人工确认失败原因 —— **这是结论的唯一写入口**。
+
+    CC 的归因只是建议，进待确认队列；确认之后才算数。
+    """
+    from app.services import analysis_service
+    try:
+        run = await analysis_service.confirm(session, run_id, cause, note, user.id)
+    except ValueError as e:
+        raise AppError(code="INVALID_CONFIRM", message=str(e)) from e
+    return {"data": {
+        "runId": str(run.id),
+        "confirmedCause": run.confirmed_cause,
+        "confirmedNote": run.confirmed_note,
+        "confirmedAt": run.confirmed_at.isoformat() if run.confirmed_at else None,
+    }}
 
 
 @router.post("/{script_id}/activate")

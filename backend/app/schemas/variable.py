@@ -35,6 +35,13 @@ class EnvResponse(BaseSchema):
     description: str | None
     base_url: str | None = None
 
+class EnvReorderItem(BaseSchema):
+    id: uuid.UUID
+    sort_order: int
+
+class EnvReorderRequest(BaseSchema):
+    items: list[EnvReorderItem]
+
 class EnvVarItem(BaseSchema):
     key: str
     value: str

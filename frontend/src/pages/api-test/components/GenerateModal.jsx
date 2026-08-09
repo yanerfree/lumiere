@@ -94,7 +94,7 @@ export default function GenerateModal({
                 <div style={{ position: 'relative' }}>
                   <pre style={{
                     background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6,
-                    padding: '10px 14px', fontSize: 11, fontFamily: "'SF Mono', Monaco, Consolas, monospace",
+                    padding: '10px 14px', fontSize: 11, fontFamily: 'var(--font-mono)',
                     overflow: 'auto', maxHeight: 140, margin: 0,
                   }}>{mcpConfig}</pre>
                   <Button size="small" icon={<CopyOutlined />}
@@ -117,7 +117,7 @@ export default function GenerateModal({
                   <div key={i} style={{
                     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                     padding: '6px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 6, marginBottom: 4,
-                    fontFamily: 'monospace', fontSize: 12,
+                    fontFamily: 'var(--font-mono)', fontSize: 12,
                   }}>
                     <span style={{ flex: 1 }}>{cmd}</span>
                     <Button type="text" size="small" icon={<CopyOutlined />}

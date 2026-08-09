@@ -190,7 +190,7 @@ export default function ReportList() {
                   </div>
 
                   {/* Results */}
-                  <div style={{ width: 130, textAlign: 'center', fontSize: 12, fontFamily: 'monospace' }}>
+                  <div style={{ width: 130, textAlign: 'center', fontSize: 12, fontFamily: 'var(--font-mono)' }}>
                     <span style={{ color: '#0ea5a0' }}>{r.passed}</span>
                     <span style={{ color: '#c9cdd4' }}> / </span>
                     <span style={{ color: '#e8453c' }}>{r.failed + r.error}</span>
@@ -202,14 +202,14 @@ export default function ReportList() {
                   {/* Pass rate */}
                   <div style={{ width: 70, textAlign: 'center' }}>
                     {r.passRate != null ? (
-                      <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'monospace', color: rateColor(r.passRate) }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'var(--font-mono)', color: rateColor(r.passRate) }}>
                         {r.passRate}%
                       </span>
                     ) : <span style={{ fontSize: 11, color: '#c9cdd4' }}>-</span>}
                   </div>
 
                   {/* Duration */}
-                  <div style={{ width: 60, textAlign: 'right', fontSize: 12, fontFamily: 'monospace', color: '#86909c' }}>
+                  <div style={{ width: 60, textAlign: 'right', fontSize: 12, fontFamily: 'var(--font-mono)', color: '#86909c' }}>
                     {fmt(r.totalDurationMs)}
                   </div>
 

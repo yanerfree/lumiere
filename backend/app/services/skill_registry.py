@@ -344,7 +344,21 @@ async def upsert_skill(
     一次手滑覆盖必须能翻回来。
     """
     content = validate_content(content)
-    name = validate_name(name or str(parse_frontmatter(content).get("name") or ""))
+    meta = parse_frontmatter(content)
+
+    # 名字缺失和名字非法是两种错，报错也得是两种 —— 粘贴入口最常见的失误就是
+    # 忘了写 frontmatter 的 name 那一行，这时候扔一句「'' 不合法」等于没说。
+    resolved_name = (name or "").strip() or str(meta.get("name") or "").strip()
+    if not resolved_name:
+        raise AppError(
+            code="MISSING_SKILL_NAME",
+            message=(
+                "没拿到 skill 名：SKILL.md 的 frontmatter 里要有 `name: 你的skill名` 那一行"
+                "（也可以在请求里显式传 name）"
+            ),
+            status_code=400,
+        )
+    name = validate_name(resolved_name)
     files = normalize_files(files, content)
 
     if kind not in KINDS:
@@ -356,7 +370,6 @@ async def upsert_skill(
             status_code=400,
         )
 
-    meta = parse_frontmatter(content)
     if not description:
         raw_desc = meta.get("description")
         description = str(raw_desc).strip() if raw_desc else None

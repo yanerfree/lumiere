@@ -1,7 +1,7 @@
 """环境与环境变量服务"""
 import uuid
 
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,8 +12,18 @@ from app.services.variable_service import RESERVED_VAR_NAMES, _check_reserved
 
 
 async def list_environments(session: AsyncSession) -> list[Environment]:
-    result = await session.execute(select(Environment).order_by(Environment.name))
+    # sort_order 为主（拖拽结果），name 兜底：新建的环境 sort_order 都是 0，
+    # 只按 sort_order 排它们之间的顺序就不确定了。
+    result = await session.execute(select(Environment).order_by(Environment.sort_order, Environment.name))
     return list(result.scalars().all())
+
+
+async def reorder_environments(session: AsyncSession, items: list[dict]) -> None:
+    for item in items:
+        await session.execute(
+            update(Environment).where(Environment.id == item["id"]).values(sort_order=item["sort_order"])
+        )
+    await session.flush()
 
 
 async def list_environments_with_base_url(session: AsyncSession) -> list[dict]:

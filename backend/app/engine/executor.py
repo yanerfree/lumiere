@@ -72,8 +72,9 @@ def execute_single_case(
     if is_playwright_script(script_content):
         pw_output_dir = str(Path(sandbox_dir) / ".pw_results")
         Path(pw_output_dir).mkdir(parents=True, exist_ok=True)
+        from app.engine.har import har_path_for
         from app.engine.pw_conftest import write_playwright_conftest
-        write_playwright_conftest(sandbox_dir, env_vars)
+        write_playwright_conftest(sandbox_dir, env_vars, har_path=har_path_for(pw_output_dir))
 
     # 注入 HTTP 捕获插件 + 步骤标记器
     plugin_src = Path(__file__).parent / "plugins" / "tea_capture.py"
@@ -181,8 +182,12 @@ def execute_single_case(
                 break
             steps = parse_step_json(step_json_path)
 
-    # 8. 采集 Playwright 截图（可选）
+    # 8. 采集 Playwright 截图 + 网络流量（可选）
+    # 必须在这里采，不能等回到调用方 —— 四条调用方（/run、tb_run_ui_script、
+    # 计划执行、adhoc 批量）都在 finally 里 rmtree(sandbox)，跟着 sandbox 走的一律拿不到。
+    from app.engine.har import har_path_for, parse_har
     screenshots = _collect_screenshots(pw_output_dir) if pw_output_dir else []
+    captured_requests = parse_har(har_path_for(pw_output_dir)) if pw_output_dir else []
 
     return {
         "status": status,
@@ -191,6 +196,7 @@ def execute_single_case(
         "stdout": ((stdout or "") + ("\n--- STDERR ---\n" + stderr if stderr else ""))[:10000],
         "steps": steps,
         "screenshots": screenshots,
+        "captured_requests": captured_requests,
     }
 
 

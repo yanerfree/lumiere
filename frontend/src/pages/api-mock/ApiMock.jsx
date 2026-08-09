@@ -11,37 +11,19 @@ import {
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
+import { LogBlock, CODE_BLOCK_STYLE } from '../../components/MockCodeBlock'
 
 const { Text } = Typography
 const { TextArea } = Input
 
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
 
 const fmtHeaders = (h) => {
   if (!h || typeof h !== 'object' || !Object.keys(h).length) return '-'
   try { return JSON.stringify(h, null, 2) } catch { return String(h) }
 }
 
-// 请求日志详情抽屉内的分块（请求头/请求体/响应头/响应体）
-function LogBlock({ title, content, onCopy }) {
-  return (
-    <div>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: '#595959' }}>{title}</span>
-        <span style={{ flex: 1 }} />
-        {onCopy && content && content !== '-' && (
-          <Button size="small" type="text" icon={<CopyOutlined />}
-            style={{ fontSize: 11, color: '#8c8c8c' }} onClick={onCopy}>复制</Button>
-        )}
-      </div>
-      <pre style={{
-        margin: 0, padding: 12, borderRadius: 12, maxHeight: 280, overflow: 'auto',
-        background: '#1e1e2e', color: '#cdd6f4', fontSize: 12, lineHeight: 1.6, fontFamily: MONO,
-        whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-      }}>{content}</pre>
-    </div>
-  )
-}const STATUS_COLOR = (sc) => {
+const STATUS_COLOR = (sc) => {
   if (sc >= 500) return '#e8453c'
   if (sc >= 400) return '#fa8c16'
   if (sc >= 300) return '#7c5cbf'
@@ -172,6 +154,8 @@ function HttpMockPanel() {
   const [saving, setSaving] = useState(false)
   const [activeTab, setActiveTab] = useState('config')
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  // 打开高级设置时的快照，用于「取消」回滚抽屉内的改动
+  const [advancedSnapshot, setAdvancedSnapshot] = useState(null)
   const [copyText, setCopyText] = useState('复制')
   const pollRef = useRef(null)
   const [testMethod, setTestMethod] = useState('GET')
@@ -265,15 +249,17 @@ function HttpMockPanel() {
     } catch {}
   }
 
+  // 返回是否保存成功 —— 高级设置抽屉据此决定关不关（失败就别关，改动留着）
   const handleSaveRoute = async () => {
-    if (!routeForm) return
+    if (!routeForm) return false
     setSaving(true)
     try {
       await api.put(`/api-mock/routes/${routeForm.id}`, routeForm)
       message.success('已保存')
       await fetchRoutes()
       setOriginalForm({ ...routeForm })
-    } catch {} finally { setSaving(false) }
+      return true
+    } catch { return false } finally { setSaving(false) }
   }
 
   const handleDeleteRoute = async (id) => {
@@ -437,6 +423,22 @@ function HttpMockPanel() {
     setExpandedLogDetail(null)
   }
 
+  const handleOpenAdvanced = () => {
+    setAdvancedSnapshot(routeForm ? { ...routeForm } : null)
+    setAdvancedOpen(true)
+  }
+
+  // 保存整条路由后关闭抽屉；失败则留在抽屉里，改动不丢
+  const handleSaveAdvanced = async () => {
+    if (await handleSaveRoute()) setAdvancedOpen(false)
+  }
+
+  // 「取消」= 丢弃抽屉里的改动。点 X / 遮罩关闭则保留，主界面的保存按钮会亮着提示
+  const handleCancelAdvanced = () => {
+    if (advancedSnapshot) setRouteForm(advancedSnapshot)
+    setAdvancedOpen(false)
+  }
+
   const handleCopyPreview = () => {
     const body = routeForm?.responseBody || ''
     copyToClipboard(body).then(() => {
@@ -506,7 +508,7 @@ function HttpMockPanel() {
               </Button>
             </Tooltip>
             <Tooltip title={locked ? '已锁定，请先解锁' : ''}>
-              <Button size="small" onClick={() => setAdvancedOpen(true)} disabled={locked}>高级</Button>
+              <Button size="small" onClick={handleOpenAdvanced} disabled={locked}>高级</Button>
             </Tooltip>
             {isDefault ? (
               <Tooltip title="默认路由不可删除"><Button icon={<DeleteOutlined />} size="small" disabled /></Tooltip>
@@ -549,7 +551,7 @@ function HttpMockPanel() {
               ))}
             </Select>
             <div style={{ width: 1, height: 24, background: 'rgba(0,0,0,0.08)', flexShrink: 0 }} />
-            <Input
+            <Input spellCheck={false}
               value={routeForm.path}
               onChange={e => setRouteForm(f => ({ ...f, path: e.target.value }))}
               variant="borderless"
@@ -711,7 +713,7 @@ function HttpMockPanel() {
                   <Button size="small" icon={<StarOutlined />}
                     onClick={() => { setSavePresetName(''); setSavePresetOpen(true) }}>保存为预设</Button>
                 </div>
-                <TextArea
+                <TextArea spellCheck={false}
                   value={routeForm.responseBody}
                   onChange={e => setRouteForm(f => ({ ...f, responseBody: e.target.value }))}
                   disabled={locked}
@@ -742,9 +744,9 @@ function HttpMockPanel() {
                   </Button>
                 </div>
                 <pre style={{
+                  ...CODE_BLOCK_STYLE,
                   margin: 0, padding: 14, flex: 1, minHeight: 200, overflow: 'auto',
-                  fontSize: 12, lineHeight: 1.6, fontFamily: MONO,
-                  background: '#1e1e2e', color: '#cdd6f4',
+                  fontSize: 12, lineHeight: 1.6,
                   whiteSpace: 'pre-wrap', wordBreak: 'break-all', borderRadius: 12,
                 }}>
                   {formatBody(routeForm.responseBody, routeForm.contentType)}
@@ -812,7 +814,7 @@ function HttpMockPanel() {
             </div>
             <div style={{ flex: 1 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Path</div>
-              <Input value={testPath} onChange={e => setTestPath(e.target.value)}
+              <Input spellCheck={false} value={testPath} onChange={e => setTestPath(e.target.value)}
                 style={{ fontFamily: MONO, fontSize: 12 }} placeholder="/api/users" size="small" />
             </div>
           </div>
@@ -820,7 +822,7 @@ function HttpMockPanel() {
           {/* Headers */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Headers (JSON, 可选)</div>
-            <TextArea
+            <TextArea spellCheck={false}
               value={testHeaders}
               onChange={e => setTestHeaders(e.target.value)}
               rows={2}
@@ -833,7 +835,7 @@ function HttpMockPanel() {
           {!['GET', 'HEAD', 'OPTIONS'].includes(testMethod) && (
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Request Body</div>
-              <TextArea
+              <TextArea spellCheck={false}
                 value={testBody}
                 onChange={e => setTestBody(e.target.value)}
                 rows={4}
@@ -959,9 +961,9 @@ function HttpMockPanel() {
                       }}>{Object.entries(testResult.response.headers).map(([k, v]) => `${k}: ${v}`).join('\n')}</pre>
                     )}
                     <pre style={{
-                      background: '#1e1e2e', color: '#cdd6f4', padding: 12, borderRadius: 10,
+                      ...CODE_BLOCK_STYLE, padding: 12, borderRadius: 10,
                       overflow: 'auto', fontSize: 11, lineHeight: 1.5, maxHeight: 250,
-                      fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
                     }}>{typeof testResult.response?.body === 'object' ? JSON.stringify(testResult.response.body, null, 2) : (testResult.response?.body || '(empty)')}</pre>
                   </div>
                 </div>
@@ -1071,7 +1073,7 @@ function HttpMockPanel() {
           }}>
             <Badge status={serviceStatus.running ? 'success' : 'default'} />
             <span style={{
-              fontSize: 12, fontWeight: 600, fontFamily: 'monospace',
+              fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)',
               color: serviceStatus.running ? '#0ea5a0' : '#999',
             }}>
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}
@@ -1218,7 +1220,24 @@ function HttpMockPanel() {
         open={advancedOpen}
         onClose={() => setAdvancedOpen(false)}
         width={420}
-        title="高级设置"
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>高级设置</span>
+            {isDirty && <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>未保存</Tag>}
+          </div>
+        }
+        footer={
+          <div>
+            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 8, lineHeight: 1.6 }}>
+              保存会提交这条路由的全部改动（含主界面上未保存的部分）。直接关闭窗口不会丢改动，回主界面还能保存。
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <Button size="small" onClick={handleCancelAdvanced}>取消</Button>
+              <Button type="primary" size="small" icon={<SaveOutlined />}
+                onClick={handleSaveAdvanced} loading={saving} disabled={!isDirty}>保存</Button>
+            </div>
+          </div>
+        }
       >
         {routeForm && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -1239,7 +1258,7 @@ function HttpMockPanel() {
               {routeForm.authType === 'bearer' && (
                 <div style={{ marginTop: 8 }}>
                   <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Token</div>
-                  <Input value={routeForm.authConfig?.token || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, token: e.target.value } }))}
+                  <Input spellCheck={false} value={routeForm.authConfig?.token || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, token: e.target.value } }))}
                     placeholder="输入 Bearer Token" style={{ fontFamily: MONO, fontSize: 12 }} />
                 </div>
               )}
@@ -1266,7 +1285,7 @@ function HttpMockPanel() {
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Key 值</div>
-                    <Input value={routeForm.authConfig?.key || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, key: e.target.value } }))}
+                    <Input spellCheck={false} value={routeForm.authConfig?.key || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, key: e.target.value } }))}
                       placeholder="your-api-key" style={{ fontFamily: MONO, fontSize: 12 }} />
                   </div>
                 </div>
@@ -1274,7 +1293,7 @@ function HttpMockPanel() {
               {routeForm.authType === 'jwt' && (
                 <div style={{ marginTop: 8 }}>
                   <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Secret（HS256 签名验证，留空则只检查格式和过期时间）</div>
-                  <Input value={routeForm.authConfig?.secret || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, secret: e.target.value } }))}
+                  <Input spellCheck={false} value={routeForm.authConfig?.secret || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, secret: e.target.value } }))}
                     placeholder="your-jwt-secret（可选）" style={{ fontFamily: MONO, fontSize: 12 }} />
                   <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 6 }}>验证逻辑：JWT 格式 → exp 过期检查 → 签名校验（如填了 secret）</div>
                 </div>
@@ -1288,7 +1307,7 @@ function HttpMockPanel() {
                   </div>
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Header 值</div>
-                    <Input value={routeForm.authConfig?.headerValue || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, headerValue: e.target.value } }))}
+                    <Input spellCheck={false} value={routeForm.authConfig?.headerValue || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, headerValue: e.target.value } }))}
                       placeholder="expected-value" style={{ fontFamily: MONO, fontSize: 12 }} />
                   </div>
                 </div>
@@ -1301,7 +1320,7 @@ function HttpMockPanel() {
             {/* 代理转发 */}
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>代理转发 URL</div>
-              <Input value={routeForm.proxyUrl || ''} onChange={e => setRouteForm(f => ({ ...f, proxyUrl: e.target.value || null }))}
+              <Input spellCheck={false} value={routeForm.proxyUrl || ''} onChange={e => setRouteForm(f => ({ ...f, proxyUrl: e.target.value || null }))}
                 placeholder="https://api.example.com/real-endpoint"
                 prefix={<SendOutlined style={{ color: '#bfbfbf' }} />}
                 style={{ fontFamily: MONO, fontSize: 12 }} />
@@ -1318,7 +1337,7 @@ function HttpMockPanel() {
             )}
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>自定义响应头 (JSON)</div>
-              <TextArea
+              <TextArea spellCheck={false}
                 value={routeForm.responseHeaders ? JSON.stringify(routeForm.responseHeaders, null, 2) : ''}
                 onChange={e => { try { setRouteForm(f => ({ ...f, responseHeaders: e.target.value ? JSON.parse(e.target.value) : null })) } catch {} }}
                 rows={4}

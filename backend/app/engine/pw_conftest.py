@@ -3,8 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def write_playwright_conftest(sandbox_dir: str, env_vars: dict[str, str] | None = None):
-    """在沙箱目录写入 Playwright conftest.py — 包含登录 fixture 和浏览器配置"""
+def write_playwright_conftest(
+    sandbox_dir: str,
+    env_vars: dict[str, str] | None = None,
+    har_path: str | None = None,
+):
+    """在沙箱目录写入 Playwright conftest.py — 包含登录 fixture 和浏览器配置。
+
+    har_path：录制执行期的浏览器网络流量。**这是失败分类唯一的网络证据来源**——
+    tea_capture 插件 patch 的是 httpx，浏览器流量根本不经过它。
+    HAR 只在 context.close() 时 flush，所以进程超时被 kill 时拿不到，属正常。
+    """
     ev = env_vars or {}
     pw_locale = ev.get("PLAYWRIGHT_LOCALE", "zh-CN")
     admin_user = ev.get("ADMIN_USERNAME", "")
@@ -12,6 +21,7 @@ def write_playwright_conftest(sandbox_dir: str, env_vars: dict[str, str] | None 
     tenant_user = ev.get("TENANT_USERNAME", "")
     tenant_pass = ev.get("TENANT_PASSWORD", "")
     base_url = ev.get("BASE_URL", "")
+    har_literal = repr(har_path) if har_path else "None"
 
     Path(sandbox_dir, "conftest.py").write_text(f'''import pytest
 from playwright.sync_api import Page
@@ -25,7 +35,11 @@ BASE_URL = "{base_url}"
 
 @pytest.fixture(scope="session")
 def browser_context_args(browser_context_args):
-    return {{**browser_context_args, "locale": "{pw_locale}", "viewport": {{"width": 1280, "height": 720}}}}
+    args = {{**browser_context_args, "locale": "{pw_locale}", "viewport": {{"width": 1280, "height": 720}}}}
+    if {har_literal}:
+        args["record_har_path"] = {har_literal}
+        args["record_har_content"] = "embed"
+    return args
 
 @pytest.fixture(autouse=True)
 def set_timeout(page: Page):

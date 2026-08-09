@@ -7,6 +7,28 @@ import {
 } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
+import FailureTriagePanel from '../../components/FailureTriagePanel'
+
+// 平台按规则算出来的失败现象 —— 只说"是什么"，不说"为什么"。
+// 摊在收起的行上，QA 扫一眼就能把 20 条失败分堆，不用一条条展开。
+const phenomenonLabel = {
+  timeout: '超时',
+  element_not_found: '元素找不到',
+  assertion_mismatch: '断言不符',
+  http_5xx: '服务端 5xx',
+  script_error: '脚本自身报错',
+  dependency_unresolved: '依赖没解析',
+  unknown: '待判定',
+}
+const causeLabel = {
+  product_defect: '系统缺陷',
+  test_defect: '脚本写错',
+  case_expired: '用例过期',
+  env_issue: '环境问题',
+  data_issue: '数据问题',
+  flaky: '不稳定',
+  unknown: '看不出来',
+}
 
 const statusCfg = {
   passed: { label: '通过', color: '#0ea5a0', dot: '#0ea5a0' },
@@ -41,11 +63,15 @@ function PassRateRing({ rate, passed, total, size = 160, running = false, done =
         strokeDasharray={c} strokeDashoffset={offset} strokeLinecap="round"
         transform={`rotate(-90 ${size/2} ${size/2})`}
         style={{ transition: 'stroke-dashoffset 0.6s ease' }} />
+      {/* 跑完了就显示通过率（这个环本来就叫 PassRateRing）。
+          原来标签写「已完成」、数字却是**通过数** —— 一份跑完 1 条、失败 1 条的报告
+          上会显示「已完成 0」，和旁边的「执行: 1」直接打架。而且通过数右边已经
+          单独列了一份，环里重复一遍没有信息增量。 */}
       <text x={size/2} y={size/2 - 14} textAnchor="middle" dominantBaseline="central"
-        style={{ fontSize: 13, fill: running ? '#0ea5a0' : '#86909c' }}>{running ? '执行中' : '已完成'}</text>
+        style={{ fontSize: 13, fill: running ? '#0ea5a0' : '#86909c' }}>{running ? '执行中' : '通过率'}</text>
       <text x={size/2} y={size/2 + 10} textAnchor="middle" dominantBaseline="central"
         style={{ fontSize: running ? 22 : 28, fontWeight: 700, fill: '#1d2129' }}>
-        {running ? `${done}/${total}` : (passed ?? 0)}
+        {running ? `${done}/${total}` : `${pct.toFixed(pct % 1 === 0 ? 0 : 1)}%`}
       </text>
     </svg>
   )
@@ -104,7 +130,7 @@ function JsonBlock({ data, maxHeight = 500 }) {
   return (
     <div style={{ background: 'transparent', borderRadius: 12, overflow: 'hidden' }}>
       <div style={{ overflow: 'auto', maxHeight, padding: '10px 0',
-        fontFamily: "Menlo, Monaco, 'Courier New', monospace", fontSize: 12, lineHeight: 1.9, color: '#383a42',
+        fontFamily: 'var(--font-mono)', fontSize: 12, lineHeight: 1.9, color: '#383a42',
       }}>
         {lines.map((line, i) => (
           <div key={i} style={{ display: 'flex', minHeight: 22, paddingRight: 14 }}>
@@ -116,6 +142,11 @@ function JsonBlock({ data, maxHeight = 500 }) {
     </div>
   )
 }
+
+// 报告里一律显示**实际发出**的地址。step.url 存的可能是步骤定义里的模板
+// （${BASE_URL}/api/...），而同一屏的请求头却是真 token —— 一半变量一半真值，
+// 拿它没法定位问题。后端新报告已存真实地址，这里兼容历史报告。
+const stepRealUrl = (step) => step?.requestData?.url || step?.url
 
 function HeadersTable({ headers }) {
   if (!headers || typeof headers !== 'object') return null
@@ -132,8 +163,8 @@ function HeadersTable({ headers }) {
       <tbody>
         {entries.map(([k, v]) => (
           <tr key={k} style={{ borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-            <td style={{ padding: '8px 0', color: '#4e5969', fontFamily: "Menlo, Monaco, monospace", fontSize: 12, verticalAlign: 'top' }}>{k}</td>
-            <td style={{ padding: '8px 0', color: '#86909c', fontFamily: "Menlo, Monaco, monospace", fontSize: 12, wordBreak: 'break-all' }}>{v}</td>
+            <td style={{ padding: '8px 0', color: '#4e5969', fontFamily: 'var(--font-mono)', fontSize: 12, verticalAlign: 'top' }}>{k}</td>
+            <td style={{ padding: '8px 0', color: '#86909c', fontFamily: 'var(--font-mono)', fontSize: 12, wordBreak: 'break-all' }}>{v}</td>
           </tr>
         ))}
       </tbody>
@@ -150,6 +181,10 @@ function StepDetailDrawer({ step, open, onClose }) {
   const respBody = step.responseData?.body ?? (step.responseData && !step.responseData.headers ? step.responseData : null)
   const reqHeaders = step.requestData?.headers
   const respHeaders = step.responseData?.headers
+  // 优先显示**实际发出**的地址。step.url 可能是步骤定义里的模板（${BASE_URL}/...），
+  // 而旁边的请求头却是真 token —— 一半变量一半真值，没法拿来定位问题。
+  // 后端新报告已经存真实地址了，这里兜住历史报告。
+  const realUrl = stepRealUrl(step)
 
   const tabItems = []
   if (reqBody != null) tabItems.push({ key: 'body', label: '请求体', children: <JsonBlock data={reqBody} /> })
@@ -222,14 +257,19 @@ function StepDetailDrawer({ step, open, onClose }) {
       </div>
 
       {/* Request URL (only when HTTP data exists) */}
-      {step.httpMethod && step.url && (
+      {step.httpMethod && realUrl && (
         <div style={{ padding: '16px 24px', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#1d2129', marginBottom: 8 }}>请求 URL:</div>
-          <div style={{ fontSize: 13, fontFamily: "Menlo, Monaco, monospace", lineHeight: 1.6 }}>
+          <div style={{ fontSize: 13, fontFamily: 'var(--font-mono)', lineHeight: 1.6, wordBreak: 'break-all' }}>
             <span style={{ color: mc, fontWeight: 700 }}>{step.httpMethod}</span>
             {'  '}
-            <span style={{ color: '#4e5969' }}>{step.url}</span>
+            <span style={{ color: '#4e5969' }}>{realUrl}</span>
           </div>
+          {realUrl !== step.url && (
+            <div style={{ fontSize: 11, color: '#c9cdd4', marginTop: 4, fontFamily: 'var(--font-mono)' }}>
+              模板：{step.url}
+            </div>
+          )}
         </div>
       )}
 
@@ -298,8 +338,8 @@ function parseExecutionLog(log) {
   return { testName, result, duration, errorLines, outputLines }
 }
 
-function ScenarioExpanded({ scenario }) {
-  const { caseSteps, preconditions, expectedResult, errorSummary, executionLog, status, scriptRefFile, scriptRefFunc, durationMs, remark, startedAt, completedAt } = scenario
+function ScenarioExpanded({ scenario, projectId, onConfirmed }) {
+  const { caseSteps, preconditions, expectedResult, errorSummary, executionLog, status, scriptRefFile, scriptRefFunc, durationMs, remark, startedAt, completedAt, runId, branchId, caseId } = scenario
   const isFailed = status === 'failed' || status === 'error'
   const isPassed = status === 'passed'
   const parsed = parseExecutionLog(executionLog)
@@ -319,12 +359,12 @@ function ScenarioExpanded({ scenario }) {
               <Tag style={{ color: '#faad14', border: 'none', background: 'transparent', fontSize: 11 }}>{remark}</Tag>
             )}
           </div>
-          <span style={{ fontSize: 13, color: '#86909c', fontFamily: 'monospace' }}>
+          <span style={{ fontSize: 13, color: '#86909c', fontFamily: 'var(--font-mono)' }}>
             {durationMs ? fmt(durationMs) : parsed.duration || '-'}
           </span>
         </div>
         {(scriptRefFile || parsed.testName) && (
-          <div style={{ fontSize: 12, color: '#86909c', fontFamily: 'monospace' }}>
+          <div style={{ fontSize: 12, color: '#86909c', fontFamily: 'var(--font-mono)' }}>
             {parsed.testName || `${scriptRefFile}${scriptRefFunc ? `::${scriptRefFunc}` : ''}`}
           </div>
         )}
@@ -350,16 +390,24 @@ function ScenarioExpanded({ scenario }) {
               margin: 0, padding: '10px 14px', background: 'rgba(0,0,0,0.02)', color: '#e8453c',
               borderRadius: 12, fontSize: 12, lineHeight: 1.5, overflow: 'auto', maxHeight: 200,
               whiteSpace: 'pre-wrap', wordBreak: 'break-all', border: '1px solid rgba(0,0,0,0.04)',
-              fontFamily: "'SF Mono', 'Menlo', 'Monaco', monospace",
+              fontFamily: 'var(--font-mono)',
             }}>{parsed.errorLines.join('\n')}</pre>
           )}
         </div>
       )}
 
-      {isFailed && (
+      {/* 三层失败判断：平台现象 / CC 归因 / 人工确认。
+          QA 看失败就在这一页，原来这里只有一句指向别处的提示，等于把人踢走。 */}
+      {isFailed && runId && branchId && caseId && (
+        <FailureTriagePanel
+          projectId={projectId} branchId={branchId} caseId={caseId}
+          run={{ id: runId }} onConfirmed={onConfirmed}
+        />
+      )}
+      {isFailed && !runId && (
         <div style={{ padding: '8px 12px', background: 'rgba(78,138,240,0.06)', borderRadius: 12, border: '1px solid rgba(78,138,240,0.2)' }}>
           <span style={{ fontSize: 12, color: '#4e8af0' }}>
-            💡 可在用例管理页使用「AI 评审」分析失败原因，或通过 API 调用失败诊断 Skill
+            这条没有脚本执行记录（手工录入或接口测试场景），失败归因看上面的错误信息和步骤明细。
           </span>
         </div>
       )}
@@ -407,7 +455,7 @@ function ScenarioExpanded({ scenario }) {
             margin: 0, padding: '12px 14px', background: 'rgba(0,0,0,0.02)', color: '#4e5969',
             borderRadius: 12, fontSize: 12, lineHeight: 1.6, overflow: 'auto', maxHeight: 300,
             whiteSpace: 'pre-wrap', wordBreak: 'break-all', border: '1px solid rgba(0,0,0,0.04)',
-            fontFamily: "'SF Mono', 'Menlo', 'Monaco', monospace",
+            fontFamily: 'var(--font-mono)',
           }}>{executionLog}</pre>
         </div>
       )}
@@ -585,7 +633,7 @@ export default function ReportDetail() {
               {s.scenarioName}
             </span>
             {s.scriptRefFile && (
-              <span style={{ fontSize: 11, color: '#c9cdd4', fontFamily: 'monospace', flexShrink: 0 }}>
+              <span style={{ fontSize: 11, color: '#c9cdd4', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
                 {s.scriptRefFile}{s.scriptRefFunc ? `::${s.scriptRefFunc}` : ''}
               </span>
             )}
@@ -599,6 +647,21 @@ export default function ReportDetail() {
                 {s.errorSummary}
               </span>
             )}
+            {/* 已确认的原因盖过现象 —— 人确认过之后，现象就不是最该看的那一层了 */}
+            {s.confirmedCause ? (
+              <Tooltip title="人工已确认的失败原因">
+                <Tag color="green" style={{ margin: 0, fontSize: 11 }}>
+                  ✓ {causeLabel[s.confirmedCause] || s.confirmedCause}
+                </Tag>
+              </Tooltip>
+            ) : s.phenomenon ? (
+              <Tooltip title={s.ccAnalysis ? 'CC 已给出归因，展开可确认' : '平台按规则算的现象，展开可归因/确认'}>
+                <Tag color={s.ccAnalysis ? 'blue' : 'orange'} style={{ margin: 0, fontSize: 11 }}>
+                  {phenomenonLabel[s.phenomenon] || s.phenomenon}
+                  {s.ccAnalysis && ' · 待确认'}
+                </Tag>
+              </Tooltip>
+            ) : null}
             <Tag style={{ background: 'transparent', color: isAutomatic ? '#0ea5a0' : '#faad14', border: 'none', fontSize: 11 }}>
               {isAutomatic ? '自动' : '手动'}
             </Tag>
@@ -608,7 +671,7 @@ export default function ReportDetail() {
                 {s.completedAt ? ` ~ ${new Date(s.completedAt).toLocaleTimeString('zh-CN')}` : ''}
               </span>
             )}
-            <span style={{ fontSize: 13, color: '#86909c', fontFamily: 'monospace', minWidth: 50, textAlign: 'right' }}>
+            <span style={{ fontSize: 13, color: '#86909c', fontFamily: 'var(--font-mono)', minWidth: 50, textAlign: 'right' }}>
               {fmt(s.durationMs)}
             </span>
           </div>
@@ -646,15 +709,15 @@ export default function ReportDetail() {
                         </span>
                         {step.httpMethod && (
                           <span style={{
-                            fontSize: 10, fontWeight: 700, fontFamily: 'monospace', flexShrink: 0,
+                            fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono)', flexShrink: 0,
                             padding: '0px 5px', borderRadius: 8,
                             background: `${methodColor[step.httpMethod] || '#86909c'}18`,
                             color: methodColor[step.httpMethod] || '#86909c',
                           }}>{step.httpMethod}</span>
                         )}
-                        {step.url && (
-                          <span style={{ fontFamily: 'monospace', fontSize: 11, color: '#c9cdd4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {step.url.replace(/^https?:\/\/[^/]+/, '')}
+                        {stepRealUrl(step) && (
+                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#c9cdd4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {stepRealUrl(step).replace(/^https?:\/\/[^/]+/, '')}
                           </span>
                         )}
                       </>
@@ -662,31 +725,31 @@ export default function ReportDetail() {
                       <>
                         {step.httpMethod && (
                           <span style={{
-                            fontSize: 11, fontWeight: 700, fontFamily: 'monospace', flexShrink: 0,
+                            fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-mono)', flexShrink: 0,
                             padding: '1px 6px', borderRadius: 8,
                             background: `${methodColor[step.httpMethod] || '#86909c'}18`,
                             color: methodColor[step.httpMethod] || '#86909c',
                           }}>{step.httpMethod}</span>
                         )}
-                        {step.url && (
-                          <span style={{ fontFamily: 'monospace', fontSize: 12, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {step.url.replace(/^https?:\/\/[^/]+/, '')}
+                        {stepRealUrl(step) && (
+                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {stepRealUrl(step).replace(/^https?:\/\/[^/]+/, '')}
                           </span>
                         )}
-                        {!step.url && <span style={{ fontWeight: 500 }}>{step.stepName}</span>}
+                        {!stepRealUrl(step) && <span style={{ fontWeight: 500 }}>{step.stepName}</span>}
                       </>
                     )}
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
                     {step.statusCode && (
                       <span style={{
-                        fontFamily: 'monospace', fontSize: 12, fontWeight: 600,
+                        fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
                         padding: '1px 6px', borderRadius: 8,
                         background: step.statusCode >= 400 ? '#fff2f0' : '#e0f7f6',
                         color: step.statusCode >= 400 ? '#e8453c' : '#0ea5a0',
                       }}>{step.statusCode}</span>
                     )}
-                    <span style={{ fontSize: 12, color: '#c9cdd4', fontFamily: 'monospace', minWidth: 48, textAlign: 'right' }}>
+                    <span style={{ fontSize: 12, color: '#c9cdd4', fontFamily: 'var(--font-mono)', minWidth: 48, textAlign: 'right' }}>
                       {fmt(step.durationMs)}
                     </span>
                     <RightOutlined style={{ fontSize: 10, color: '#c9cdd4' }} />
@@ -694,7 +757,7 @@ export default function ReportDetail() {
                 </div>
               ))
             ) : (
-              <ScenarioExpanded scenario={s} />
+              <ScenarioExpanded scenario={s} projectId={projectId} onConfirmed={() => fetchData(true)} />
             )}
           </div>
         )}

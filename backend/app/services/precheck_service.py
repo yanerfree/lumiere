@@ -12,6 +12,7 @@ exists_check 约定：
 from __future__ import annotations
 
 import re
+import asyncio
 import uuid
 from typing import Any
 
@@ -58,23 +59,36 @@ def _find_first_list(obj: Any):
     return None
 
 
-def _match_exists(data: Any, match: dict) -> bool:
-    """在响应中判断 match 条件是否命中。"""
+def _match_target(data: Any, match: dict) -> tuple[bool, Any]:
+    """判断 match 是否命中，并把**命中的那一条**一起返回。
+
+    只返回 bool 是不够的：extract 要抽的是"匹配到的那个资源的 id"，
+    不返回命中项，调用方就只能在整个响应上写 data[0].id ——
+    match 找的是 name==X，extract 抽的却是第 0 条，两者指向不同对象时
+    会静默注入错误的 id（实测过：match 中"测试平台"，抽到的是"网关管理系统"）。
+
+    返回 (命中?, 命中项)。命中项为 None 表示无法定位到具体对象
+    （无 match 条件、或 field 为空只判空列表），此时 extract 退回整包解析。
+    """
     if not match:
-        return True  # 无 match：能拿到 2xx 即视为存在
+        return True, None  # 无 match：能拿到 2xx 即视为存在
     field = match.get("field")
     equals = match.get("equals")
     lst = _dig(data, match["listPath"]) if match.get("listPath") else _find_first_list(data)
     if lst is None:
         # 也许 data 本身就是单对象
         if isinstance(data, dict) and field in data:
-            return str(data.get(field)) == str(equals)
-        return False
+            hit = str(data.get(field)) == str(equals)
+            return hit, (data if hit else None)
+        return False, None
     if not isinstance(lst, list):
-        return False
+        return False, None
     if field is None:
-        return len(lst) > 0
-    return any(isinstance(it, dict) and str(it.get(field)) == str(equals) for it in lst)
+        return len(lst) > 0, (lst[0] if lst else None)
+    for it in lst:
+        if isinstance(it, dict) and str(it.get(field)) == str(equals):
+            return True, it
+    return False, None
 
 
 async def _check_one(client: httpx.AsyncClient, base: str, headers: dict, res: AutomationResource) -> dict:
@@ -93,36 +107,55 @@ async def _check_one(client: httpx.AsyncClient, base: str, headers: dict, res: A
         "canCreate": bool(res.create_def),
         "description": res.description,
     }
+    # state 三态，别把"我没查成"当成"资源不存在"：
+    #   exists  探到了
+    #   missing 确实没有 —— 只有"请求成功且明确没匹配上"才算，CC 可以据此照
+    #           create_def 自己造
+    #   unknown 我没查成（401/5xx/超时/没配 url）—— **不要动它**。一次 token 过期
+    #           就照着 create_def 补建，会在被测环境里造出一堆重复底座，而且
+    #           keep=true 没人清理
+    # exists 布尔保持原语义（只有 exists 才注入变量），执行时行为不变。
     if not url:
-        item.update(exists=False, reason="未配置存在性检查 url")
+        item.update(exists=False, state="unknown", reason="未配置存在性检查 url")
         return item
     try:
         resp = await client.request(method, url, headers=headers)
     except Exception as e:  # noqa: BLE001
-        item.update(exists=False, reason=f"检查请求失败: {e}")
+        item.update(exists=False, state="unknown", reason=f"检查请求失败: {e}")
         return item
     if resp.status_code == 401:
-        item.update(exists=False, reason="鉴权失败(401)——token 可能过期")
+        item.update(exists=False, state="unknown", reason="鉴权失败(401)——token 可能过期，不代表资源不存在")
         return item
     if resp.status_code >= 400:
-        item.update(exists=False, reason=f"HTTP {resp.status_code}")
+        item.update(exists=False, state="unknown", reason=f"HTTP {resp.status_code}——探测失败，不代表资源不存在")
         return item
     try:
         data = resp.json()
     except Exception:  # noqa: BLE001
         data = None
-    exists = _match_exists(data, chk.get("match") or {})
-    item.update(exists=exists, reason=None if exists else "未匹配到目标资源")
+    exists, matched = _match_target(data, chk.get("match") or {})
+    item.update(
+        exists=exists,
+        state="exists" if exists else "missing",
+        reason=None if exists else "未匹配到目标资源",
+    )
     # 顺带把 extract 里声明的值抽出来 —— 光判断"存在"不够，编排步骤要的是它的 id。
-    # 形如 {"extract": {"upstreamId": "data.items[0].id"}}
+    #
+    # 路径优先在**命中项**上解析（推荐写法 {"upstreamId": "id"}），取不到再退回
+    # 整包解析（兼容历史的 {"upstreamId": "data.items[0].id"}）。顺序不能反：
+    # 反过来的话，命中项里没有该字段时会悄悄拿整包第 0 条顶上，又变回抽错对象。
     if exists:
         # 用执行引擎那套 JSONPath-lite：_dig 只认点号，取不了 data[0].id 这种下标，
-        # 而列表取第 N 个恰恰是前置资源最常见的写法。
+        # 而列表取第 N 个是历史写法里最常见的。
         from app.services.api_test_runner import _extract_value
 
         values = {}
         for var, path in (chk.get("extract") or {}).items():
-            v = _extract_value(data, str(path))
+            v = None
+            if isinstance(matched, (dict, list)):
+                v = _extract_value(matched, str(path))
+            if v is None:
+                v = _extract_value(data, str(path))
             if v is not None:
                 values[str(var)] = v
         if values:
@@ -144,8 +177,8 @@ async def check_resources(
 
     if not env_id:
         return {
-            "ok": False, "total": len(resources), "satisfied": [],
-            "missing": [{"name": r.name, "exists": False, "reason": "未选择环境"} for r in resources],
+            "ok": False, "total": len(resources), "satisfied": [], "unknown": [],
+            "missing": [{"name": r.name, "exists": False, "state": "unknown", "reason": "未选择环境"} for r in resources],
         }
 
     env_vars = await _load_env_vars(session, env_id)
@@ -153,16 +186,31 @@ async def check_resources(
     token = await token_service.get_target_token(session, env_id, role)
     headers = {"Authorization": f"Bearer {token}"} if token else {}
 
-    satisfied, missing = [], []
-    async with httpx.AsyncClient(timeout=15, verify=False) as client:
-        for res in resources:
-            item = await _check_one(client, base, headers, res)
-            (satisfied if item.get("exists") else missing).append(item)
+    # 并发探测：原本串行 × 15s 超时，N 个资源最坏 N×15s，被 MCP/前端调用会先超时。
+    satisfied, missing, unknown = [], [], []
+    async with httpx.AsyncClient(timeout=5, verify=False) as client:
+        items = await asyncio.gather(
+            *[_check_one(client, base, headers, r) for r in resources],
+            return_exceptions=True,
+        )
+    for res, item in zip(resources, items):
+        if isinstance(item, Exception):
+            item = {"name": res.name, "keep": res.keep, "canCreate": bool(res.create_def),
+                    "exists": False, "state": "unknown", "reason": f"探测异常: {item}"}
+        st = item.get("state") or ("exists" if item.get("exists") else "missing")
+        if st == "exists":
+            satisfied.append(item)
+        elif st == "missing":
+            missing.append(item)
+        else:
+            unknown.append(item)
 
     return {
-        "ok": len(missing) == 0,
+        # unknown 也不放行 —— 带着未解析的变量继续跑，失败会伪装成元素找不到/断言失败
+        "ok": not missing and not unknown,
         "total": len(resources),
         "satisfied": satisfied,
         "missing": missing,
+        "unknown": unknown,
         "tokenAcquired": bool(token),
     }

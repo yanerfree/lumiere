@@ -19,9 +19,13 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import Middleware
 
-# key_hash -> (allowed_tools|None, 写入时间)。None 表示不限制。
+# key_hash -> (allowed_tools|None, user_id|None, 写入时间)。allowed=None 表示不限制。
 # tools/list 每次连接都会调，加个短 TTL 缓存避免频繁打库。
-_CACHE: dict[str, tuple[list[str] | None, float]] = {}
+#
+# user_id 一起缓存：Key 上本来就有它，此前只取 allowed_tools 就把整行扔了，
+# 于是所有人的回推 created_by 全记成同一个 admin —— 多人一起用时，
+# 操作日志失去意义，「CC归因 vs 人确认」也没法按人分桶。**这段历史数据事后补不回来。**
+_CACHE: dict[str, tuple[list[str] | None, str | None, float]] = {}
 _TTL_SECONDS = 30
 
 
@@ -33,26 +37,27 @@ def invalidate_scope_cache(key_hash: str | None = None) -> None:
         _CACHE.pop(key_hash, None)
 
 
-async def _lookup_allowed_tools() -> list[str] | None:
-    """返回当前调用方的工具白名单；None = 不限制。
+async def _lookup_key() -> tuple[list[str] | None, str | None]:
+    """返回 (工具白名单, 调用方 user_id)。白名单 None = 不限制。
 
-    没有 bearer（匿名放行 / 环境变量 key）也返回 None——那两条路子不是"某个 Key"，
+    没有 bearer（匿名放行 / 环境变量 key）→ (None, None)，那两条路子不是"某个 Key"，
     不做限制，与 MCPAuthMiddleware 的放行口径保持一致。
     """
     headers = get_http_headers(include={"authorization"})
     auth = headers.get("authorization", "")
     if not auth.startswith("Bearer "):
-        return None
+        return None, None
     token = auth[7:].strip()
     if not token:
-        return None
+        return None, None
 
     key_hash = hashlib.sha256(token.encode()).hexdigest()
     hit = _CACHE.get(key_hash)
-    if hit and (time.monotonic() - hit[1]) < _TTL_SECONDS:
-        return hit[0]
+    if hit and (time.monotonic() - hit[2]) < _TTL_SECONDS:
+        return hit[0], hit[1]
 
     allowed: list[str] | None = None
+    user_id: str | None = None
     try:
         from sqlalchemy import select
 
@@ -61,21 +66,39 @@ async def _lookup_allowed_tools() -> list[str] | None:
 
         async with async_session_factory() as session:
             result = await session.execute(
-                select(McpApiKey.allowed_tools).where(
+                select(McpApiKey.allowed_tools, McpApiKey.user_id).where(
                     McpApiKey.key_hash == key_hash,
                     McpApiKey.is_active == True,  # noqa: E712
                 )
             )
-            row = result.scalar_one_or_none()
-            # 查不到（环境变量 key 等）→ 不限制；查到但为 NULL → 不限制
+            row = result.first()
+            # 查不到（环境变量 key 等）→ 不限制；查到但 allowed_tools 为 NULL → 不限制
             if row:
-                allowed = [str(t) for t in row]
+                if row[0]:
+                    allowed = [str(t) for t in row[0]]
+                if row[1]:
+                    user_id = str(row[1])
     except Exception:
         # 查库失败不能把 MCP 打死，退化为不限制
-        return None
+        return None, None
 
-    _CACHE[key_hash] = (allowed, time.monotonic())
-    return allowed
+    _CACHE[key_hash] = (allowed, user_id, time.monotonic())
+    return allowed, user_id
+
+
+async def _lookup_allowed_tools() -> list[str] | None:
+    return (await _lookup_key())[0]
+
+
+async def current_caller_user_id() -> str | None:
+    """当前 MCP 调用方的用户 id（由其 API Key 决定）。拿不到返回 None。
+
+    工具落库时用它填 created_by / executed_by —— 记成别人比不记还糟。
+    """
+    try:
+        return (await _lookup_key())[1]
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class ToolScopeMiddleware(Middleware):

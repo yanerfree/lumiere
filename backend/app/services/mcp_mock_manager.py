@@ -160,6 +160,7 @@ class McpMockServerManager:
             "params": tool_data.get("params", {}),
             "mode": "success",
             "enabled": True,
+            "locked": False,
             "customData": None,
             "customIsError": False,
             "successData": tool_data.get("successData", {"result": "ok"}),
@@ -172,9 +173,18 @@ class McpMockServerManager:
         tool = self.get_tool(name)
         if not tool:
             return None
-        for k in ("description", "mode", "enabled", "customData", "customIsError", "successData", "params"):
+        for k in ("description", "mode", "enabled", "locked", "customData", "customIsError", "successData", "params"):
             if k in data:
                 tool[k] = data[k]
+        self._save_tools()
+        return tool
+
+    def toggle_lock(self, name: str) -> dict | None:
+        tool = self.get_tool(name)
+        if not tool:
+            return None
+        # 老的 mcp_mock_tools.json 里没有 locked 键，取默认值再翻转
+        tool["locked"] = not tool.get("locked", False)
         self._save_tools()
         return tool
 
