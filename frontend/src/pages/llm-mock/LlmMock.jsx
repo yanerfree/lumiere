@@ -1,20 +1,36 @@
-import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from 'react'
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   Button, Space, Input, Select, Tag, Radio, Popconfirm, Tooltip, Badge, Pagination,
-  Empty, Typography, InputNumber, Switch, message, Drawer, Alert, Modal
+  Empty, Typography, InputNumber, Switch, message, Drawer, Alert, Modal, Spin
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, PlayCircleOutlined, PauseCircleOutlined,
   ReloadOutlined, ExportOutlined, ClearOutlined, CopyOutlined, ThunderboltOutlined,
-  LockOutlined, SettingOutlined, CheckOutlined, SendOutlined, LinkOutlined, StarOutlined
+  LockOutlined, LockFilled, UnlockOutlined, HolderOutlined,
+  SettingOutlined, CheckOutlined, SendOutlined, LinkOutlined, StarOutlined
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
+import { LogBlock, CODE_BLOCK_STYLE } from '../../components/MockCodeBlock'
 
 const { Text } = Typography
 const { TextArea } = Input
 
-const MONO = "'SF Mono', Monaco, Menlo, Consolas, monospace"
+const MONO = 'var(--font-mono)'
+
+const fmtHeaders = (h) => {
+  if (!h || typeof h !== 'object' || !Object.keys(h).length) return '-'
+  try { return JSON.stringify(h, null, 2) } catch { return String(h) }
+}
+
+// 日志里请求体是已解析的对象、响应体是原始字符串，两种都要能格式化
+const fmtJson = (v) => {
+  if (v === null || v === undefined || v === '') return '-'
+  if (typeof v === 'string') {
+    try { return JSON.stringify(JSON.parse(v), null, 2) } catch { return v }
+  }
+  try { return JSON.stringify(v, null, 2) } catch { return String(v) }
+}
 
 const STATUS_COLOR = (sc) => {
   if (sc >= 500) return '#e8453c'
@@ -53,12 +69,17 @@ export default function LlmMock() {
   const [logPageSize] = useState(50)
   const [expandedLogId, setExpandedLogId] = useState(null)
   const [expandedLogDetail, setExpandedLogDetail] = useState(null)
+  const [logDrawerOpen, setLogDrawerOpen] = useState(false)
+  const [logDetailLoading, setLogDetailLoading] = useState(false)
   const [logFilter, setLogFilter] = useState('all')
   const [serviceStatus, setServiceStatus] = useState({ running: false, port: 28100, captureEnabled: true, routesCount: 0, routesEnabled: 0, totalRequests: 0 })
   const [saving, setSaving] = useState(false)
   const [activeTab, setActiveTab] = useState('config')
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  // 打开高级设置时的快照，用于「取消」回滚抽屉内的改动
+  const [advancedSnapshot, setAdvancedSnapshot] = useState(null)
   const [copyText, setCopyText] = useState('复制')
+  const [dragIdx, setDragIdx] = useState(null)
   const pollRef = useRef(null)
 
   useEffect(() => {
@@ -148,15 +169,62 @@ export default function LlmMock() {
     } catch {}
   }
 
+  // 返回是否保存成功 —— 高级设置抽屉据此决定关不关（失败就别关，改动留着）
   const handleSaveRoute = async () => {
-    if (!routeForm) return
+    if (!routeForm) return false
     setSaving(true)
     try {
       await api.put(`/llm-mock/routes/${routeForm.id}`, routeForm)
       message.success('已保存')
       await fetchRoutes()
       setOriginalForm({ ...routeForm })
-    } catch {} finally { setSaving(false) }
+      return true
+    } catch { return false } finally { setSaving(false) }
+  }
+
+  const handleToggleLock = async () => {
+    if (!routeForm) return
+    try {
+      const r = await api.patch(`/llm-mock/routes/${routeForm.id}/lock`)
+      const d = r.data || r
+      message.success(d.locked ? '路由已锁定，需解锁后才能编辑' : '路由已解锁')
+      setRouteForm(f => ({ ...f, locked: d.locked }))
+      setOriginalForm(f => ({ ...f, locked: d.locked }))
+      await fetchRoutes()
+    } catch {}
+  }
+
+  // 拖动调整路由顺序：本地乐观更新 + 持久化 sort_order
+  const handleDropRoute = async (targetIdx) => {
+    const from = dragIdx
+    setDragIdx(null)
+    if (from === null || from === targetIdx) return
+    const next = [...routes]
+    const [moved] = next.splice(from, 1)
+    next.splice(targetIdx, 0, moved)
+    setRoutes(next)
+    try {
+      await api.put('/llm-mock/routes/reorder', {
+        items: next.map((r, i) => ({ id: r.id, sortOrder: i })),
+      })
+      await fetchRoutes()
+    } catch { await fetchRoutes() }
+  }
+
+  const handleOpenAdvanced = () => {
+    setAdvancedSnapshot(routeForm ? { ...routeForm } : null)
+    setAdvancedOpen(true)
+  }
+
+  // 保存整条路由后关闭抽屉；失败则留在抽屉里，改动不丢
+  const handleSaveAdvanced = async () => {
+    if (await handleSaveRoute()) setAdvancedOpen(false)
+  }
+
+  // 「取消」= 丢弃抽屉里的改动。点 X / 遮罩关闭则保留，主界面的保存按钮会亮着提示
+  const handleCancelAdvanced = () => {
+    if (advancedSnapshot) setRouteForm(advancedSnapshot)
+    setAdvancedOpen(false)
   }
 
   const handleDeleteRoute = async (id) => {
@@ -264,13 +332,21 @@ export default function LlmMock() {
 
   const handleExportLogs = () => window.open('/api/llm-mock/logs/export', '_blank')
 
-  const handleToggleLogDetail = async (logId) => {
-    if (expandedLogId === logId) { setExpandedLogId(null); setExpandedLogDetail(null); return }
+  const handleOpenLogDetail = async (logId) => {
+    setExpandedLogId(logId)
+    setExpandedLogDetail(null)
+    setLogDrawerOpen(true)
+    setLogDetailLoading(true)
     try {
       const r = await api.get(`/llm-mock/logs/${logId}`)
       setExpandedLogDetail(r.data || r)
-      setExpandedLogId(logId)
-    } catch {}
+    } catch {} finally { setLogDetailLoading(false) }
+  }
+
+  const handleCloseLogDrawer = () => {
+    setLogDrawerOpen(false)
+    setExpandedLogId(null)
+    setExpandedLogDetail(null)
   }
 
   const handleCopyPreview = () => {
@@ -280,6 +356,7 @@ export default function LlmMock() {
 
   const responseModeValue = routeForm?.responseMode || 'default'
   const isEmbedding = routeForm?.responseType === 'embedding'
+  const locked = !!routeForm?.locked
 
   // 响应内容里写了个纯数字数组 → 固定向量；否则按输入文本确定性生成
   const fixedVector = useMemo(() => {
@@ -362,16 +439,34 @@ export default function LlmMock() {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {isDefault && <Tag color="default" style={{ margin: 0, fontSize: 11 }}>默认</Tag>}
+            {locked && <Tag color="orange" icon={<LockFilled />} style={{ margin: 0, fontSize: 11 }}>已锁定</Tag>}
             <Input value={routeForm.name} onChange={e => setRouteForm(f => ({ ...f, name: e.target.value }))}
-              variant="borderless" style={{ fontSize: 15, fontWeight: 600, width: 200, padding: '0 4px' }} placeholder="路由名称" />
+              variant="borderless" disabled={locked}
+              style={{ fontSize: 15, fontWeight: 600, width: 200, padding: '0 4px' }} placeholder="路由名称" />
           </div>
           <Space size={8}>
-            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSaveRoute} loading={saving} disabled={!isDirty}>保存</Button>
+            <Button type="primary" icon={<SaveOutlined />} size="small" onClick={handleSaveRoute} loading={saving} disabled={!isDirty || locked}>保存</Button>
             <Switch checked={routeForm.enabled} onChange={v => handleToggle(routeForm.id, v)}
+              disabled={locked}
               checkedChildren="启用" unCheckedChildren="禁用" size="small" />
-            <Button size="small" onClick={() => setAdvancedOpen(true)}>高级</Button>
+            <Tooltip title={locked ? '解锁后可编辑' : '锁定后不可编辑，需先解锁'}>
+              <Button
+                size="small"
+                icon={locked ? <UnlockOutlined /> : <LockOutlined />}
+                onClick={handleToggleLock}
+                type={locked ? 'primary' : 'default'}
+                ghost={locked}
+              >
+                {locked ? '解锁' : '锁定'}
+              </Button>
+            </Tooltip>
+            <Tooltip title={locked ? '已锁定，请先解锁' : ''}>
+              <Button size="small" onClick={handleOpenAdvanced} disabled={locked}>高级</Button>
+            </Tooltip>
             {isDefault ? (
               <Tooltip title="默认路由不可删除"><Button icon={<DeleteOutlined />} size="small" disabled /></Tooltip>
+            ) : locked ? (
+              <Tooltip title="已锁定，请先解锁"><Button icon={<DeleteOutlined />} size="small" danger disabled /></Tooltip>
             ) : (
               <Popconfirm title="确认删除？" onConfirm={() => handleDeleteRoute(routeForm.id)}>
                 <Button icon={<DeleteOutlined />} size="small" danger />
@@ -382,13 +477,19 @@ export default function LlmMock() {
 
         {/* 可滚动配置区 */}
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
+          {locked && (
+            <Alert
+              type="warning" showIcon style={{ marginBottom: 12, fontSize: 12 }}
+              message="此路由已锁定，配置为只读。点击右上角「解锁」后才能编辑。"
+            />
+          )}
           {/* URL 栏 */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 0, marginBottom: 8,
             border: '1px solid rgba(0,0,0,0.08)', borderRadius: 12, overflow: 'hidden', background: 'transparent',
           }}>
             <Select value={routeForm.method} onChange={v => setRouteForm(f => ({ ...f, method: v }))}
-              variant="borderless" style={{ width: 100, flexShrink: 0 }} popupMatchSelectWidth={100}>
+              variant="borderless" disabled={locked} style={{ width: 100, flexShrink: 0 }} popupMatchSelectWidth={100}>
               {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => (
                 <Select.Option key={m} value={m}>
                   <span style={{ fontWeight: 600, color: m === 'GET' ? '#0ea5a0' : m === 'POST' ? '#fa8c16' : m === 'DELETE' ? '#e8453c' : '#4e8af0' }}>{m}</span>
@@ -396,8 +497,8 @@ export default function LlmMock() {
               ))}
             </Select>
             <div style={{ width: 1, height: 24, background: 'rgba(0,0,0,0.08)', flexShrink: 0 }} />
-            <Input value={routeForm.path} onChange={e => setRouteForm(f => ({ ...f, path: e.target.value }))}
-              variant="borderless" style={{ fontFamily: MONO, fontSize: 13, background: 'transparent' }} placeholder="/v1/chat/completions" />
+            <Input spellCheck={false} value={routeForm.path} onChange={e => setRouteForm(f => ({ ...f, path: e.target.value }))}
+              variant="borderless" disabled={locked} style={{ fontFamily: MONO, fontSize: 13, background: 'transparent' }} placeholder="/v1/chat/completions" />
           </div>
 
           {/* 完整访问地址 */}
@@ -433,7 +534,7 @@ export default function LlmMock() {
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应模式</div>
               <Radio.Group value={responseModeValue} onChange={e => setRouteForm(f => ({ ...f, responseMode: e.target.value }))}
-                buttonStyle="solid" size="small">
+                buttonStyle="solid" size="small" disabled={locked}>
                 <Radio.Button value="default">默认</Radio.Button>
                 <Radio.Button value="random">随机</Radio.Button>
                 <Radio.Button value="custom">自定义</Radio.Button>
@@ -442,12 +543,12 @@ export default function LlmMock() {
             <div style={{ minWidth: 80 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>状态码</div>
               <InputNumber value={routeForm.statusCode ?? 200} onChange={v => setRouteForm(f => ({ ...f, statusCode: v }))}
-                min={100} max={599} size="small" style={{ width: 80 }} />
+                min={100} max={599} size="small" style={{ width: 80 }} disabled={locked} />
             </div>
             <div style={{ minWidth: 160 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应类型</div>
               <Select value={routeForm.responseType || 'text'} onChange={v => setRouteForm(f => ({ ...f, responseType: v }))}
-                size="small" style={{ width: 160 }}>
+                size="small" style={{ width: 160 }} disabled={locked}>
                 <Select.Option value="text">文本回复</Select.Option>
                 <Select.Option value="tool_calls">Tool Calls</Select.Option>
                 <Select.Option value="refusal">模型拒绝</Select.Option>
@@ -458,7 +559,7 @@ export default function LlmMock() {
               <div style={{ minWidth: 110 }}>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>结束原因</div>
                 <Select value={routeForm.finishReason || 'stop'} onChange={v => setRouteForm(f => ({ ...f, finishReason: v }))}
-                  size="small" style={{ width: 110 }}>
+                  size="small" style={{ width: 110 }} disabled={locked}>
                   <Select.Option value="stop">stop</Select.Option>
                   <Select.Option value="length">length</Select.Option>
                   <Select.Option value="tool_calls">tool_calls</Select.Option>
@@ -469,7 +570,7 @@ export default function LlmMock() {
             <div style={{ flex: 1, minWidth: 170, maxWidth: 250 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>预设模式</div>
               <Select value={routeForm.presetMode} onChange={handlePresetChange}
-                placeholder="选择预设填充..." size="small" style={{ width: '100%' }}
+                placeholder="选择预设填充..." size="small" style={{ width: '100%' }} disabled={locked}
                 allowClear onClear={() => setRouteForm(f => ({ ...f, presetMode: null }))}>
                 <Select.OptGroup label="正常响应 (200)">
                   {presets.filter(p => p.group === 'normal').map(p =>
@@ -503,18 +604,18 @@ export default function LlmMock() {
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={routeForm.delayMs ?? 0} onChange={v => setRouteForm(f => ({ ...f, delayMs: v }))}
-                min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" />
+                min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" disabled={locked} />
             </div>
             {!isEmbedding && (
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>SSE 间隔 (ms)</div>
                 <InputNumber value={routeForm.sseChunkDelayMs ?? 50} onChange={v => setRouteForm(f => ({ ...f, sseChunkDelayMs: v }))}
-                  min={0} size="small" style={{ width: 80 }} placeholder="50" />
+                  min={0} size="small" style={{ width: 80 }} placeholder="50" disabled={locked} />
               </div>
             )}
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Token 模式</div>
-              <Radio.Group value={routeForm.tokenMode || 'auto'} onChange={e => setRouteForm(f => ({ ...f, tokenMode: e.target.value }))} size="small">
+              <Radio.Group value={routeForm.tokenMode || 'auto'} onChange={e => setRouteForm(f => ({ ...f, tokenMode: e.target.value }))} size="small" disabled={locked}>
                 <Radio value="auto">自动</Radio>
                 <Radio value="custom">自定义</Radio>
               </Radio.Group>
@@ -522,18 +623,18 @@ export default function LlmMock() {
             {routeForm.tokenMode === 'custom' && (<>
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Prompt Tokens</div>
-                <InputNumber value={routeForm.customPromptTokens} onChange={v => setRouteForm(f => ({ ...f, customPromptTokens: v }))} min={0} size="small" style={{ width: 80 }} />
+                <InputNumber value={routeForm.customPromptTokens} onChange={v => setRouteForm(f => ({ ...f, customPromptTokens: v }))} min={0} size="small" style={{ width: 80 }} disabled={locked} />
               </div>
               {!isEmbedding && (
                 <div>
                   <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Completion Tokens</div>
-                  <InputNumber value={routeForm.customCompletionTokens} onChange={v => setRouteForm(f => ({ ...f, customCompletionTokens: v }))} min={0} size="small" style={{ width: 80 }} />
+                  <InputNumber value={routeForm.customCompletionTokens} onChange={v => setRouteForm(f => ({ ...f, customCompletionTokens: v }))} min={0} size="small" style={{ width: 80 }} disabled={locked} />
                 </div>
               )}
             </>)}
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>模型模式</div>
-              <Radio.Group value={routeForm.modelMode || 'follow_request'} onChange={e => setRouteForm(f => ({ ...f, modelMode: e.target.value }))} size="small">
+              <Radio.Group value={routeForm.modelMode || 'follow_request'} onChange={e => setRouteForm(f => ({ ...f, modelMode: e.target.value }))} size="small" disabled={locked}>
                 <Radio value="follow_request">跟随请求</Radio>
                 <Radio value="custom">自定义</Radio>
               </Radio.Group>
@@ -542,7 +643,7 @@ export default function LlmMock() {
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>自定义模型</div>
                 <Input value={routeForm.customModel} onChange={e => setRouteForm(f => ({ ...f, customModel: e.target.value }))}
-                  placeholder="gpt-4o-mini" size="small" style={{ width: 130 }} />
+                  placeholder="gpt-4o-mini" size="small" style={{ width: 130 }} disabled={locked} />
               </div>
             )}
           </div>
@@ -570,13 +671,14 @@ export default function LlmMock() {
                   <span style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 500 }}>响应内容</span>
                   <span style={{ fontSize: 11, color: '#bfbfbf' }}>{bodyHint}</span>
                   <span style={{ flex: 1 }} />
-                  <Button size="small" icon={<StarOutlined />}
+                  <Button size="small" icon={<StarOutlined />} disabled={locked}
                     onClick={() => { setSavePresetName(''); setSavePresetOpen(true) }}>保存为预设</Button>
                 </div>
                 {routeForm.responseType !== 'tool_calls' ? (
-                  <TextArea
+                  <TextArea spellCheck={false}
                     value={routeForm.responseBody}
                     onChange={e => setRouteForm(f => ({ ...f, responseBody: e.target.value }))}
+                    disabled={locked}
                     style={{ fontFamily: MONO, fontSize: 12, flex: 1, minHeight: 200, resize: 'vertical' }}
                     placeholder={(routeForm.statusCode ?? 200) >= 400
                       ? '输入错误消息...\n如: Rate limit reached for gpt-4o...'
@@ -611,9 +713,9 @@ export default function LlmMock() {
                   </Button>
                 </div>
                 <pre style={{
+                  ...CODE_BLOCK_STYLE,
                   margin: 0, padding: 14, flex: 1, minHeight: 200, overflow: 'auto',
-                  fontSize: 12, lineHeight: 1.6, fontFamily: MONO,
-                  background: '#1e1e2e', color: '#cdd6f4',
+                  fontSize: 12, lineHeight: 1.6,
                   whiteSpace: 'pre-wrap', wordBreak: 'break-all', borderRadius: 12,
                 }}>
                   {previewJson}
@@ -663,8 +765,7 @@ export default function LlmMock() {
           </thead>
           <tbody>
             {logs.map(l => (
-              <Fragment key={l.id}>
-              <tr key={l.id} onClick={() => handleToggleLogDetail(l.id)} style={{
+              <tr key={l.id} onClick={() => handleOpenLogDetail(l.id)} style={{
                 cursor: 'pointer', borderBottom: '1px solid rgba(0,0,0,0.03)', background: 'rgba(255,255,255,0.25)',
                 background: expandedLogId === l.id ? 'rgba(14,165,160,0.08)' : 'transparent',
               }}>
@@ -688,42 +789,7 @@ export default function LlmMock() {
                   <Button size="small" type="text" icon={<SendOutlined />} onClick={e => { e.stopPropagation(); handleReplay(l.id) }} />
                 </td>
               </tr>
-              {expandedLogId === l.id && expandedLogDetail && (
-                <tr key={`${l.id}-detail`}>
-                  <td colSpan={9} style={{ padding: '10px 16px', background: 'transparent', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-                    <div style={{ display: 'flex', gap: 24, fontSize: 12 }}>
-                      {expandedLogDetail.requestBody?.messages && (
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4, fontWeight: 500 }}>请求消息</div>
-                          <div style={{ maxHeight: 120, overflow: 'auto' }}>
-                            {expandedLogDetail.requestBody.messages.map((m, i) => (
-                              <div key={i} style={{
-                                marginBottom: 2, padding: '3px 8px', borderRadius: 12, fontSize: 11,
-                                background: m.role === 'user' ? '#fff7e6' : m.role === 'system' ? 'rgba(0,0,0,0.03)' : '#e0f7f6',
-                                overflow: 'hidden', textOverflow: 'ellipsis',
-                              }}>
-                                <span style={{ color: '#8c8c8c', fontSize: 10 }}>{m.role}</span>{' '}
-                                {typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4, fontWeight: 500 }}>响应内容</div>
-                        <pre style={{
-                          maxHeight: 120, overflow: 'auto', margin: 0, padding: 8, borderRadius: 12,
-                          background: 'transparent', border: '1px solid rgba(0,0,0,0.04)', fontSize: 11, fontFamily: MONO,
-                          whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-                        }}>
-                          {(() => { try { return JSON.stringify(JSON.parse(expandedLogDetail.responseBody), null, 2) } catch { return expandedLogDetail.responseBody || '-' } })()}
-                        </pre>
-                      </div>
-                    </div>
-                  </td>
-                </tr>
-              )}
-            </Fragment>))}
+            ))}
             {logs.length === 0 && (
               <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40, color: '#bfbfbf', fontSize: 12 }}>暂无请求日志</td></tr>
             )}
@@ -761,7 +827,7 @@ export default function LlmMock() {
             border: `1px solid ${serviceStatus.running ? 'rgba(14,165,160,0.3)' : 'rgba(0,0,0,0.1)'}`,
           }}>
             <Badge status={serviceStatus.running ? 'success' : 'default'} />
-            <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'monospace', color: serviceStatus.running ? '#0ea5a0' : '#999' }}>
+            <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)', color: serviceStatus.running ? '#0ea5a0' : '#999' }}>
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}
             </span>
           </div>
@@ -803,19 +869,39 @@ export default function LlmMock() {
             </Tooltip>
           </div>
           <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px' }}>
-            {routes.map(r => {
+            {routes.map((r, i) => {
               const sel = selectedRouteId === r.id
               const isDef = r.id === defaultRouteId
               const mode = r.responseMode || 'default'
+              const isDragging = dragIdx === i
               return (
-                <div key={r.id} onClick={() => selectRoute(r)} style={{
-                  padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
-                  background: sel ? 'rgba(14,165,160,0.08)' : 'transparent',
-                  borderLeft: `3px solid ${sel ? '#4e8af0' : r.enabled ? '#0ea5a0' : 'rgba(0,0,0,0.1)'}`,
-                  transition: 'all .15s',
-                }}>
+                <div
+                  key={r.id}
+                  draggable
+                  onClick={() => selectRoute(r)}
+                  onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; setDragIdx(i) }}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid #4e8af0' }}
+                  onDragLeave={e => { e.currentTarget.style.borderTop = '2px solid transparent' }}
+                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid transparent'; handleDropRoute(i) }}
+                  onDragEnd={() => setDragIdx(null)}
+                  style={{
+                    padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
+                    background: sel ? 'rgba(14,165,160,0.08)' : 'transparent',
+                    borderLeft: `3px solid ${sel ? '#4e8af0' : r.enabled ? '#0ea5a0' : 'rgba(0,0,0,0.1)'}`,
+                    borderTop: '2px solid transparent',
+                    opacity: isDragging ? 0.4 : 1,
+                    transition: 'opacity .15s',
+                  }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <Tooltip title="拖动调整顺序">
+                      <HolderOutlined style={{ fontSize: 11, color: '#c8c8c8', cursor: 'grab', flexShrink: 0 }} />
+                    </Tooltip>
                     {isDef && <LockOutlined style={{ fontSize: 10, color: '#bfbfbf' }} />}
+                    {r.locked && (
+                      <Tooltip title="已锁定，不可编辑">
+                        <LockFilled style={{ fontSize: 11, color: '#fa8c16', flexShrink: 0 }} />
+                      </Tooltip>
+                    )}
                     <Tag color={r.statusCode >= 400 ? 'red' : 'blue'} style={{
                       margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', borderRadius: 8,
                     }}>{r.method}</Tag>
@@ -870,13 +956,35 @@ export default function LlmMock() {
       </div>
 
       {/* ━━━ 高级设置抽屉 ━━━ */}
-      <Drawer open={advancedOpen} onClose={() => setAdvancedOpen(false)} width={420} title="高级设置">
+      <Drawer
+        open={advancedOpen}
+        onClose={() => setAdvancedOpen(false)}
+        width={420}
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>高级设置</span>
+            {isDirty && <Tag color="orange" style={{ margin: 0, fontSize: 11 }}>未保存</Tag>}
+          </div>
+        }
+        footer={
+          <div>
+            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 8, lineHeight: 1.6 }}>
+              保存会提交这条路由的全部改动（含主界面上未保存的部分）。直接关闭窗口不会丢改动，回主界面还能保存。
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+              <Button size="small" onClick={handleCancelAdvanced}>取消</Button>
+              <Button type="primary" size="small" icon={<SaveOutlined />}
+                onClick={handleSaveAdvanced} loading={saving} disabled={!isDirty}>保存</Button>
+            </div>
+          </div>
+        }
+      >
         {routeForm && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             {routeForm.responseType === 'tool_calls' && (
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>Tool Calls (JSON)</div>
-                <TextArea value={JSON.stringify(routeForm.toolCalls || [], null, 2)}
+                <TextArea spellCheck={false} value={JSON.stringify(routeForm.toolCalls || [], null, 2)}
                   onChange={e => { try { setRouteForm(f => ({ ...f, toolCalls: JSON.parse(e.target.value) })) } catch {} }}
                   rows={6} style={{ fontFamily: MONO, fontSize: 12 }}
                   placeholder='[{"name":"get_weather","arguments":"{\"location\":\"Beijing\"}"}]' />
@@ -884,13 +992,92 @@ export default function LlmMock() {
             )}
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>自定义响应头 (JSON)</div>
-              <TextArea
+              <TextArea spellCheck={false}
                 value={routeForm.responseHeaders ? JSON.stringify(routeForm.responseHeaders, null, 2) : ''}
                 onChange={e => { try { setRouteForm(f => ({ ...f, responseHeaders: e.target.value ? JSON.parse(e.target.value) : null })) } catch {} }}
                 rows={3} style={{ fontFamily: MONO, fontSize: 12 }}
                 placeholder='{"X-Custom-Header": "value"}' />
             </div>
           </div>
+        )}
+      </Drawer>
+
+      {/* ━━━ 请求日志详情抽屉 ━━━ */}
+      <Drawer
+        open={logDrawerOpen}
+        onClose={handleCloseLogDrawer}
+        width={680}
+        title={
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: 15, fontWeight: 600 }}>请求详情</span>
+            {expandedLogDetail && (
+              <>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#4e8af0' }}>{expandedLogDetail.method}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: STATUS_COLOR(expandedLogDetail.statusCode) }}>{expandedLogDetail.statusCode}</span>
+                <span style={{ fontFamily: MONO, fontSize: 12, color: '#595959', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{expandedLogDetail.path}</span>
+              </>
+            )}
+          </div>
+        }
+        extra={expandedLogDetail && (
+          <Button size="small" icon={<SendOutlined />}
+            onClick={() => handleReplay(expandedLogDetail.id)}>重放</Button>
+        )}
+      >
+        {logDetailLoading && !expandedLogDetail ? (
+          <div style={{ textAlign: 'center', padding: 60 }}><Spin /></div>
+        ) : expandedLogDetail ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', fontSize: 12 }}>
+              {[
+                ['时间', new Date(expandedLogDetail.timestamp).toLocaleString('zh-CN', { hour12: false })],
+                ['来源 IP', expandedLogDetail.ip || '-'],
+                ['请求模型', expandedLogDetail.requestModel || '-'],
+                ['响应模型', expandedLogDetail.responseModel || '-'],
+                ['Tokens', (expandedLogDetail.promptTokens || 0) + (expandedLogDetail.completionTokens || 0) > 0
+                  ? `${expandedLogDetail.promptTokens || 0} + ${expandedLogDetail.completionTokens || 0} = ${expandedLogDetail.totalTokens || 0}`
+                  : '-'],
+                ['finish_reason', expandedLogDetail.finishReason || '-'],
+                ['首字节耗时', `${Math.round(expandedLogDetail.firstByteMs ?? 0)} ms`],
+                ['总耗时', `${Math.round(expandedLogDetail.totalMs ?? 0)} ms`],
+              ].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', gap: 8, minWidth: 0 }}>
+                  <span style={{ color: '#8c8c8c', flexShrink: 0 }}>{k}</span>
+                  <span style={{ color: '#262626', fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span>
+                </div>
+              ))}
+            </div>
+
+            {/* LLM 专属：按 role 上色的对话气泡，比裸 JSON 好读，所以单独留一块 */}
+            {expandedLogDetail.requestBody?.messages && (
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#595959', marginBottom: 6 }}>请求消息</div>
+                <div style={{ maxHeight: 220, overflow: 'auto' }}>
+                  {expandedLogDetail.requestBody.messages.map((m, i) => (
+                    <div key={i} style={{
+                      marginBottom: 4, padding: '6px 10px', borderRadius: 12, fontSize: 12, lineHeight: 1.6,
+                      background: m.role === 'user' ? '#fff7e6' : m.role === 'system' ? 'rgba(0,0,0,0.03)' : '#e0f7f6',
+                      whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+                    }}>
+                      <span style={{ color: '#8c8c8c', fontSize: 10, marginRight: 6 }}>{m.role}</span>
+                      {typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <LogBlock title="请求头" content={fmtHeaders(expandedLogDetail.requestHeaders)}
+              onCopy={() => copyToClipboard(fmtHeaders(expandedLogDetail.requestHeaders)).then(() => message.success('已复制'))} />
+            <LogBlock title="请求体" content={fmtJson(expandedLogDetail.requestBody)}
+              onCopy={() => copyToClipboard(fmtJson(expandedLogDetail.requestBody)).then(() => message.success('已复制'))} />
+            <LogBlock title="响应头" content={fmtHeaders(expandedLogDetail.responseHeadersOut)}
+              onCopy={() => copyToClipboard(fmtHeaders(expandedLogDetail.responseHeadersOut)).then(() => message.success('已复制'))} />
+            <LogBlock title="响应体" content={fmtJson(expandedLogDetail.responseBody)}
+              onCopy={() => copyToClipboard(expandedLogDetail.responseBody || '').then(() => message.success('已复制'))} />
+          </div>
+        ) : (
+          <Empty description="加载失败" image={Empty.PRESENTED_IMAGE_SIMPLE} />
         )}
       </Drawer>
 
