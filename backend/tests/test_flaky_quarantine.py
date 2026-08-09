@@ -68,11 +68,51 @@ def test_翻转计数(seq, expected):
     assert _flips(seq) == expected
 
 
-def test_阈值默认值是2次翻转():
-    """默认 3 轮内 2 次翻转。这是经验值不是结论，改这里要同步改 flaky_service 的说明。"""
-    assert flaky_service.WINDOW == 3
+def test_阈值是实测校准过的():
+    """最近至多 7 次里 2 次翻转 —— 造样本真跑 24 轮校准出来的，见 flaky_service 的说明。
+
+    原来是固定 3 窗口，实测漏掉"成片挂"的脚本：50% 失败率的要 23 轮才抓到，
+    而 21% 的 8 轮就抓到，严重程度和检出速度反相关。改窗口后 23 → 9 轮。
+    """
+    assert flaky_service.WINDOW == 7
     assert flaky_service.FLIPS == 2
+    assert flaky_service.MIN_RUNS == 3
     assert flaky_service.QUARANTINE_DAYS == 14
+
+
+def _hit(seq, window=None, need=None):
+    """按线上同一套口径判：最近至多 window 次里翻转 >= need。"""
+    window = window or flaky_service.WINDOW
+    need = need or flaky_service.FLIPS
+    w = seq[-window:]
+    if len(w) < flaky_service.MIN_RUNS:
+        return False
+    return _flips(w) >= need
+
+
+def test_成片挂的脚本也能抓到():
+    """这是改窗口的直接原因：连续失败不产生翻转，FFFF 的翻转数和 PPPP 一样是 0。
+
+    实测序列（40% 设定、实际 50% 失败）在固定 3 窗口下要到第 23 轮才触发。
+    """
+    burst = list("FFFFPPPPF")           # 挂一片 → 好一片 → 又挂
+    assert _hit(burst) is True
+    assert _hit(burst, window=3) is False, "3 窗口就是漏在这里"
+
+
+def test_修好了不能被判成flaky():
+    """FFFF→PPPP 是"改好了"，只有 1 次翻转。
+
+    这条是"别把判据换成『窗口里既有 P 又有 F』"的原因 —— 那个判据实测在第 5 轮
+    就把修好的用例关起来了。
+    """
+    assert _hit(list("FFFFPPPP")) is False
+    assert _hit(list("FFPPPPPP")) is False
+
+
+def test_强交替仍然三轮就抓到():
+    """窗口是"最近**至多** 7 次"，不是"攒满 7 次才判" —— 否则要白等 4 轮。"""
+    assert _hit(list("PFP")) is True
 
 
 def test_一直坏和刚坏都不该被隔离():

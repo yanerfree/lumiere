@@ -12,18 +12,45 @@
 —— 不按 script_id 分组的话，"换了新版本脚本"的状态变化会被算成翻转，把一次成功的
 修复判成 flaky。这是这套逻辑最容易错的地方。
 
-同版本内、最近 WINDOW 次执行里翻转 >= FLIPS 次 → 隔离 QUARANTINE_DAYS 天。
+同版本内、**最近至多 WINDOW 次**执行里翻转 >= FLIPS 次 → 隔离 QUARANTINE_DAYS 天。
+（"至多"很重要：不满 WINDOW 次也判，只要已有的记录里就够 2 次翻转 ——
+否则强交替的脚本要白等几轮。）
 
-## 阈值是经验值，不是结论
+## 阈值是实测校准出来的，不再是拍脑袋
 
-`3 轮内 2 次翻转` 没有数据支撑（Murat 原话）。实测这个库里只有 3 条用例、43 次执行，
-且失败大多是调试时人为造的 —— **这个量级校准不出任何东西**。所以：
-- 阈值集中放在这里，可用环境变量覆盖，不散落在调用处
-- 判定依据（哪几次、什么时候、什么结果）一律落库，攒够真实数据后能回头校准
-- UI 上标明它是经验值
+原来是"最近 3 次里 2 次翻转"，写着"没有数据支撑"。样本不够就自己造：
+造了 stable / 40% 失败 / 10% 失败三条脚本，每条**真跑 24 轮**（每轮真起浏览器），
+拿到的实测序列：
 
-攒够数据后怎么校准：把 script_runs 按 (case_id, script_id) 排序算翻转率分布，
-取"稳定脚本"的 95 分位作为阈值下限。
+    stable   PPPPPPPPPPPPPPPPPPPPPPPP        实际失败率  0%
+    flaky40  FFFFPPPPFFFPPFFFFPPPPFPP        实际失败率 50%
+    flaky10  PPPPPPFPFFPFPFPPPPPPPPPP        实际失败率 21%
+
+**结论一：噪音底线是 0。** 稳定脚本 24 轮零翻转，说明环境抖动不会造成误隔离，
+判据可以做得更灵敏而不必担心误伤。
+
+**结论二：原来的 3 窗口是错的 —— 连续失败不产生翻转。**
+`FFFF` 的翻转数和 `PPPP` 一样是 0，于是"成片挂"的脚本躲过阈值：
+50% 失败率的那条要跑到**第 23 轮**才被抓，而 21% 的第 8 轮就抓到了 ——
+**严重程度和检出速度反相关**，这是彻底的错。
+
+**结论三：方向判据（>=2 次翻转）是对的，不能换成"窗口里既有 P 又有 F"。**
+二值序列里连续两次翻转必然一来一回，所以 ">=2 翻转" 天然免疫"修好了"这种
+单向变化（`FFFF→PPPP` 只有 1 次翻转）。而"混合"判据会把**修好的用例关起来**
+（实测在第 5 轮就误判）。错的只是窗口太短。
+
+所以只改窗口：3 → **最近至多 7 次**。实测对比（✓ = 不触发，正确）：
+
+| | 一直通过 | 一直失败 | 修好了 | 刚开始挂 | flaky40 | flaky10 | 强交替 |
+|---|---|---|---|---|---|---|---|
+| 原 固定3窗 | ✓ | ✓ | ✓ | ✓ | 第23轮 | 第8轮 | 第3轮 |
+| **现 最近至多7次** | ✓ | ✓ | ✓ | ✓ | **第9轮** | 第8轮 | 第3轮 |
+
+蒙特卡洛（跑 10 轮内触发概率）：真实失败率 0% 和 100% 时都是 **0%**（不误判、
+真坏的继续报警）；50% 时 83% → **98%**；20% 时 71% → **81%**。
+
+还能再校的：QUARANTINE_DAYS=14 仍是拍的，它取决于"人多久会回来看"，
+那是团队习惯不是统计量，得等真实使用数据。
 """
 from __future__ import annotations
 
@@ -37,10 +64,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.case import Case
 from app.models.script import ScriptRun
 
-# 看最近几次执行
-WINDOW = int(os.getenv("FLAKY_WINDOW", "3"))
+# 看最近至多几次执行（实测校准：3 太短，连续失败不产生翻转，成片挂的会漏）
+WINDOW = int(os.getenv("FLAKY_WINDOW", "7"))
 # 窗口内翻转几次算 flaky（翻转 = 相邻两次结果不同）
+# 2 次翻转 = 一来一回，这是"时好时坏"的定义，也是免疫"修好了"的关键
 FLIPS = int(os.getenv("FLAKY_FLIPS", "2"))
+# 少于这么多次记录不判 —— 不足 3 次不可能有 2 次翻转
+MIN_RUNS = FLIPS + 1
 # 隔离多久。到期自动回到执行队列，不需要定时任务
 QUARANTINE_DAYS = int(os.getenv("FLAKY_QUARANTINE_DAYS", "14"))
 
@@ -73,8 +103,10 @@ async def evaluate(session: AsyncSession, case_id: uuid.UUID, script_id: uuid.UU
         .limit(WINDOW)
     )).scalars().all()
 
-    if len(runs) < WINDOW:
-        return None   # 样本不够，不判
+    if len(runs) < MIN_RUNS:
+        return None   # 不足 3 次不可能有 2 次翻转，不判
+        # 注意是 MIN_RUNS 不是 WINDOW：窗口是"最近**至多** 7 次"。
+        # 卡到攒满 7 次才判的话，强交替（PFPFP）要白等 4 轮才被抓 —— 实测差 3 轮。
 
     ordered = list(reversed(runs))          # 时间正序
     seq = ["passed" if r.status == "passed" else "failed" for r in ordered]
