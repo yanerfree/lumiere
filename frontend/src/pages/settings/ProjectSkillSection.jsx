@@ -12,8 +12,8 @@ import {
 } from 'antd'
 import {
   ApiOutlined, CloudUploadOutlined, DeleteOutlined, DownloadOutlined,
-  EditOutlined, HistoryOutlined, InboxOutlined, RollbackOutlined, SaveOutlined,
-  TeamOutlined,
+  EditOutlined, HistoryOutlined, InboxOutlined, PlusOutlined, RollbackOutlined,
+  SaveOutlined, TeamOutlined,
 } from '@ant-design/icons'
 import { api, getValidToken } from '../../utils/request'
 
@@ -24,13 +24,35 @@ const MCP_SNIPPET = `# 在任意项目的 Claude Code 里：
 「看看 testBench 上有哪些 skill 能用」                        → tb_list_skills
 「把 feature-verify 拉到本地」                                → tb_pull_skill`
 
+// 粘贴框的起手模板 —— 让人一眼知道 frontmatter 要写什么，name 是从这里读的
+const SKILL_TEMPLATE = `---
+name: my-skill
+description: 一句话说清这个 skill 干什么、什么时候该触发它
+---
+
+# 标题
+
+> 目标：想让 AI 达成什么。
+
+## 步骤
+1. 第一步做什么
+2. 第二步做什么
+
+## 红线
+- 不许做的事写在这里
+`
+
 export default function ProjectSkillSection() {
   const { projectId } = useParams()
   const [scope, setScope] = useState('own')      // own = 本项目 | shared = 全平台共享
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(false)
-  const [uploadOpen, setUploadOpen] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
+  const [addTab, setAddTab] = useState('paste')   // paste = 粘贴正文（最省事）| upload = 传压缩包
   const [uploading, setUploading] = useState(false)
+  const [pasteContent, setPasteContent] = useState('')
+  const [pasteVisibility, setPasteVisibility] = useState('public')
+  const [creating, setCreating] = useState(false)
 
   const [editing, setEditing] = useState(null)   // { name, content }
   const [saving, setSaving] = useState(false)
@@ -72,7 +94,7 @@ export default function ProjectSkillSection() {
       } else {
         const d = data.data
         message.success(`${d.name} ${d.created ? '已上传' : `已覆盖，升到 v${d.version}`}`)
-        setUploadOpen(false)
+        closeAdd()
         setScope('own')
         load()
       }
@@ -82,6 +104,37 @@ export default function ProjectSkillSection() {
       setUploading(false)
     }
     return false  // 阻止 antd 自己发请求
+  }
+
+  const closeAdd = () => {
+    setAddOpen(false)
+    setPasteContent('')
+    setPasteVisibility('public')
+  }
+
+  /** 粘贴正文直接建 —— 单文件 skill 的最短路径，不用打包。name 从 frontmatter 读。 */
+  const handleCreateFromPaste = async () => {
+    if (!pasteContent.trim()) {
+      message.warning('先把 SKILL.md 内容粘进来')
+      return
+    }
+    setCreating(true)
+    try {
+      const res = await api.post(`/projects/${projectId}/skills`, {
+        content: pasteContent,
+        visibility: pasteVisibility,
+      })
+      const d = res.data
+      message.success(`${d.name} ${d.created ? '已添加' : `已覆盖，升到 v${d.version}`}`)
+      closeAdd()
+      setScope('own')
+      load()
+    } catch (e) {
+      // 最常见的两种：frontmatter 没写 name，或者 name 不合法 —— 后端的报错已经说清了原因
+      message.error(e?.message || '添加失败')
+    } finally {
+      setCreating(false)
+    }
   }
 
   const handleEdit = async (name) => {
@@ -229,8 +282,8 @@ export default function ProjectSkillSection() {
       extra={
         <Space>
           <Button size="small" onClick={() => setHowToOpen(true)}>怎么用</Button>
-          <Button size="small" type="primary" icon={<CloudUploadOutlined />} onClick={() => setUploadOpen(true)}>
-            上传 Skill
+          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={() => { setAddTab('paste'); setAddOpen(true) }}>
+            添加 Skill
           </Button>
         </Space>
       }
@@ -275,7 +328,7 @@ export default function ProjectSkillSection() {
               description={
                 <span style={{ fontSize: 12, color: '#86909c' }}>
                   {scope === 'own'
-                    ? '本项目还没有 Skill —— 点右上「上传 Skill」，或在 Claude Code 里让它调 tb_push_skill 推上来'
+                    ? '本项目还没有 Skill —— 点右上「添加 Skill」粘贴内容，或在 Claude Code 里说「把 xxx 传到 testBench」'
                     : '还没有项目共享 Skill 出来'}
                 </span>
               }
@@ -284,36 +337,96 @@ export default function ProjectSkillSection() {
         }}
       />
 
-      {/* 上传 */}
+      {/* 添加 —— 粘贴正文（默认，最省事）/ 传压缩包（带附属文件时才需要） */}
       <Modal
-        title="上传 Skill"
-        open={uploadOpen}
-        onCancel={() => setUploadOpen(false)}
-        footer={null}
-        width={520}
+        title="添加 Skill"
+        open={addOpen}
+        onCancel={closeAdd}
+        width={720}
+        footer={addTab === 'paste' ? [
+          <Button key="cancel" onClick={closeAdd}>取消</Button>,
+          <Button key="ok" type="primary" icon={<SaveOutlined />} loading={creating} onClick={handleCreateFromPaste}>
+            保存
+          </Button>,
+        ] : null}
       >
-        <Upload.Dragger
-          accept=".zip,.tar.gz,.tgz"
-          showUploadList={false}
-          beforeUpload={handleUpload}
-          disabled={uploading}
-          style={{ padding: '28px 0' }}
-        >
-          {uploading ? <Spin tip="正在上传..." /> : (
-            <>
-              <p><InboxOutlined style={{ fontSize: 40, color: '#7c5cff' }} /></p>
-              <p style={{ fontSize: 14, color: '#1d2129', marginTop: 8 }}>点击或拖拽上传 Skill 压缩包</p>
-              <p style={{ fontSize: 12, color: '#86909c' }}>
-                支持 .zip / .tar.gz，把整个 <Text code>skill-name/</Text> 目录打包<br />
-                包内必须有 SKILL.md，references/ 等附属文件会一起存
-              </p>
-            </>
-          )}
-        </Upload.Dragger>
-        <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
-          打包命令：<Text code>tar czf feature-verify.tar.gz feature-verify</Text><br />
-          同名会覆盖，覆盖前自动留档，可在版本历史里回滚。
-        </Paragraph>
+        <Segmented
+          block
+          value={addTab}
+          onChange={setAddTab}
+          style={{ marginBottom: 14 }}
+          options={[
+            { label: '粘贴 SKILL.md（推荐）', value: 'paste' },
+            { label: '上传压缩包', value: 'upload' },
+          ]}
+        />
+
+        {addTab === 'paste' ? (
+          <>
+            <Alert
+              type="info" showIcon style={{ marginBottom: 12 }}
+              message={
+                <span style={{ fontSize: 12 }}>
+                  单文件 skill 直接把 SKILL.md 内容粘进来就行，不用打包。
+                  <b>名字从 frontmatter 的 <Text code>name</Text> 读</b>，所以那一行必须写。
+                </span>
+              }
+            />
+            <Space style={{ marginBottom: 10 }}>
+              <Text style={{ fontSize: 13 }}>可见性：</Text>
+              <Segmented
+                size="small"
+                value={pasteVisibility}
+                onChange={setPasteVisibility}
+                options={[
+                  { label: '全平台可取用', value: 'public' },
+                  { label: '仅本项目', value: 'project' },
+                ]}
+              />
+              <Button size="small" type="link" onClick={() => setPasteContent(SKILL_TEMPLATE)}>
+                填入模板
+              </Button>
+            </Space>
+            <Input.TextArea
+              value={pasteContent}
+              onChange={e => setPasteContent(e.target.value)}
+              rows={20}
+              placeholder={SKILL_TEMPLATE}
+              style={{ fontFamily: 'var(--font-mono)', fontSize: 13, lineHeight: 1.6 }}
+            />
+            <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 8, marginBottom: 0 }}>
+              同名会覆盖，覆盖前自动留档，可在版本历史里回滚。
+            </Paragraph>
+          </>
+        ) : (
+          <>
+            <Alert
+              type="info" showIcon style={{ marginBottom: 12 }}
+              message={<span style={{ fontSize: 12 }}>只有 skill 目录里还有 references/、脚本等附属文件时才需要走这条路。</span>}
+            />
+            <Upload.Dragger
+              accept=".zip,.tar.gz,.tgz"
+              showUploadList={false}
+              beforeUpload={handleUpload}
+              disabled={uploading}
+              style={{ padding: '28px 0' }}
+            >
+              {uploading ? <Spin tip="正在上传..." /> : (
+                <>
+                  <p><InboxOutlined style={{ fontSize: 40, color: '#7c5cff' }} /></p>
+                  <p style={{ fontSize: 14, color: '#1d2129', marginTop: 8 }}>点击或拖拽上传 Skill 压缩包</p>
+                  <p style={{ fontSize: 12, color: '#86909c' }}>
+                    支持 .zip / .tar.gz，把整个 <Text code>skill-name/</Text> 目录打包<br />
+                    包内必须有 SKILL.md，references/ 等附属文件会一起存
+                  </p>
+                </>
+              )}
+            </Upload.Dragger>
+            <Paragraph type="secondary" style={{ fontSize: 12, marginTop: 12, marginBottom: 0 }}>
+              打包命令：<Text code>tar czf feature-verify.tar.gz feature-verify</Text>
+            </Paragraph>
+          </>
+        )}
       </Modal>
 
       {/* 编辑 */}
@@ -349,7 +462,7 @@ export default function ProjectSkillSection() {
           value={editing?.content || ''}
           onChange={e => setEditing(s => ({ ...s, content: e.target.value }))}
           rows={26}
-          style={{ fontFamily: "'SF Mono', Monaco, Menlo, monospace", fontSize: 13, lineHeight: 1.6 }}
+          style={{ fontFamily: 'var(--font-mono)', fontSize: 13, lineHeight: 1.6 }}
         />
       </Drawer>
 
@@ -401,8 +514,12 @@ export default function ProjectSkillSection() {
         width={640}
       >
         <Paragraph style={{ fontSize: 13, marginBottom: 8 }}>
-          <b>推荐：走 MCP</b> —— 项目侧的 Claude Code 已经连了 testBench MCP，直接说人话就行，
-          不用手动打包：
+          <b>最省事：页面上粘贴</b> —— 单文件 skill 点「添加 Skill」，把 SKILL.md 内容复制进去保存，
+          名字自动从 frontmatter 的 <Text code>name</Text> 读。什么都不用装、不用打包。
+        </Paragraph>
+        <Paragraph style={{ fontSize: 13, marginTop: 12, marginBottom: 8 }}>
+          <b>批量 / 带附属文件：走 MCP</b> —— 项目侧的 Claude Code 已经连了 testBench MCP，
+          直接说人话，它自己读文件自己推：
         </Paragraph>
         <pre style={{
           background: 'rgba(0,0,0,0.03)', padding: 12, borderRadius: 8,

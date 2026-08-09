@@ -24,7 +24,18 @@
 
 ## 传上来
 
-### 路线一：MCP（推荐，不用手动打包）
+三条路，按省事程度排。**单文件 skill 就走路线一，别打包。**
+
+### 路线一：页面上粘贴（最省事）
+
+「AI 智能 → Skill 管理 → 项目 Skill → 添加 Skill」，默认就停在「粘贴 SKILL.md」页签，
+把内容复制进去点保存即可。不用装东西、不用打包。
+
+- **名字从 frontmatter 的 `name` 读**，所以那一行必须写。忘了写会明确提示你补
+- 不知道格式点「填入模板」，会填一份起手骨架
+- 可见性当场选：全平台可取用 / 仅本项目
+
+### 路线二：MCP（批量、或带附属文件时最省事）
 
 项目侧的 Claude Code 已经连了 testBench MCP，直接说人话：
 
@@ -42,16 +53,16 @@ tb_push_skill(project_id, content=SKILL.md全文, files={"references/x.md": "...
 - 同名**会覆盖**，覆盖前自动留档，可回滚
 - `visibility` 默认 `public`（别的项目能取用）；只想自己用传 `project`
 
-### 路线二：页面打包上传
+### 路线三：打包上传（只有带附属文件时才需要）
 
 ```bash
 tar czf feature-verify.tar.gz feature-verify
 ```
 
-然后「AI 智能 → Skill 管理 → 项目 Skill → 上传 Skill」拖进去。支持 `.zip` / `.tar.gz`，
-包内必须有 `SKILL.md`，容忍两种结构（包根就是 SKILL.md，或套一层 `<name>/`）。
+「添加 Skill → 上传压缩包」拖进去。支持 `.zip` / `.tar.gz`，包内必须有 `SKILL.md`，
+容忍两种结构（包根就是 SKILL.md，或套一层 `<name>/`）。
 
-### 路线三：curl / CI
+### 路线四：curl / CI
 
 ```bash
 curl -X POST "$BASE/api/projects/$PID/skills" \
