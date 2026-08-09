@@ -109,6 +109,7 @@ export default function McpMock() {
       const r = await api.delete(`/mcp-mock/tools/${name}`)
       if (r.error) { message.error(r.error); return }
       message.success('已删除')
+      if (r.reloadError) message.warning(r.reloadError)
       if (selectedName === name) { setSelectedName(null); setToolForm(null); setOriginalForm(null) }
       await fetchTools()
     } catch {}
@@ -164,6 +165,7 @@ export default function McpMock() {
       })
       if (r.error) { message.error(r.error); return }
       message.success('工具已创建')
+      if (r.data?.reloadError) message.warning(r.data.reloadError)
       setCreateOpen(false)
       setNewToolName('')
       setNewToolDesc('')

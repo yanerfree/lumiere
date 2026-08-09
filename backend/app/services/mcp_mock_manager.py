@@ -336,11 +336,12 @@ class McpMockServerManager:
         服务再也没起来，页面显示已停止）。所以重试几次；真起不回来要如实报出去，
         不能悄悄留下一个停掉的服务 —— 那比不重载更糟。
 
-        返回 {"reloaded": bool, "error": str|None}。没在跑时 reloaded=False
-        且无错（下次 start 自然是新的）。
+        返回 {"reloaded": bool, "reloadError": str|None}。键名不叫 error —— Mock 这一族
+        用 `{"error": "..."}` 表示**这次操作失败了**，而重载失败时改动其实已经存下了，
+        混用会让前端把"删成功了但没重载"报成"删除失败"。
         """
         if not self.running:
-            return {"reloaded": False, "error": None}
+            return {"reloaded": False, "reloadError": None}
         await self.stop()
         # stop() 返回时旧监听 socket 未必已经彻底放开：SO_REUSEADDR 会让新的 bind
         # 直接成功，而新连接仍被路由到正在收尾的旧实例 —— 表现是 initialize 打过去
@@ -353,12 +354,12 @@ class McpMockServerManager:
         for _ in range(6):
             try:
                 await self.start()
-                return {"reloaded": True, "error": None}
+                return {"reloaded": True, "reloadError": None}
             except RuntimeError as e:
                 last = str(e)
                 await asyncio.sleep(0.4)
         logger.error("MCP Mock 重载失败，服务当前是停的: %s", last)
-        return {"reloaded": False, "error": f"改动已保存，但 Mock 服务没能重启（{last}）。请手动启动。"}
+        return {"reloaded": False, "reloadError": f"改动已保存，但 Mock 服务没能重启（{last}）。请手动启动。"}
 
     def _on_task_done(self, task: asyncio.Task) -> None:
         if task.cancelled():
