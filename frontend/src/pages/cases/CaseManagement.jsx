@@ -7,6 +7,15 @@ import { useBranch } from '../../utils/branch'
 import { useEnv, buildEnvOptions } from '../../utils/env'
 import TestForgeModal from './TestForgeModal'
 
+// 和 scenario-gen/Stage5Review 用同一套分类，两处对不上的话质量统计会分裂
+const REJECT_CATEGORIES = [
+  { value: 'vague_expectation', label: '预期含糊' },
+  { value: 'unspecific_data', label: '数据不具体' },
+  { value: 'duplicate', label: '场景重复' },
+  { value: 'misunderstood_requirement', label: '需求理解错' },
+  { value: 'other', label: '其他' },
+]
+
 const priorityColors = { P0: '#fff', P1: '#fff', P2: '#fff', P3: '#fff' }
 const priorityBg = { P0: '#e8453c', P1: '#ff7d00', P2: '#4e8af0', P3: 'rgba(0,0,0,0.08)' }
 const statusMap = { automated: '已自动化', pending: '待自动化', script_removed: '脚本已移除', archived: '已归档' }
@@ -288,11 +297,29 @@ export default function CaseManagement() {
   const [reviewResult, setReviewResult] = useState(null)
   const [reviewSteps, setReviewSteps] = useState([])
 
-  // 就地审核：列表上看到「待审」就能在列表上处理掉，不用绕去生成向导的第 5 步
-  const handleReview = async (caseId, reviewStatus) => {
+  // 就地审核：列表上看到「待审」就能在列表上处理掉，不用绕去生成向导的第 5 步。
+  // 打回**必须带理由**——后端 case_service 会硬校验 review_reason.category，
+  // 只发 reviewStatus 会 400。所以「通过」直接走，「打回」先弹理由。
+  const [rejectFor, setRejectFor] = useState(null)
+  const [rejectCategory, setRejectCategory] = useState('vague_expectation')
+  const [rejectText, setRejectText] = useState('')
+
+  const approveCase = async (caseId) => {
     try {
-      await api.put(`/projects/${projectId}/branches/${globalBranchId}/cases/${caseId}`, { reviewStatus })
-      message.success(reviewStatus === 'approved' ? '已通过' : '已打回')
+      await api.put(`/projects/${projectId}/branches/${globalBranchId}/cases/${caseId}`, { reviewStatus: 'approved' })
+      message.success('已通过')
+      fetchCases()
+    } catch (e) { message.error(e.message || '操作失败') }
+  }
+
+  const rejectCase = async () => {
+    try {
+      await api.put(`/projects/${projectId}/branches/${globalBranchId}/cases/${rejectFor}`, {
+        reviewStatus: 'rejected',
+        reviewReason: { category: rejectCategory, text: rejectText },
+      })
+      message.success('已打回')
+      setRejectFor(null); setRejectText('')
       fetchCases()
     } catch (e) { message.error(e.message || '操作失败') }
   }
@@ -496,7 +523,7 @@ export default function CaseManagement() {
         <Dropdown trigger={['click']} menu={{ items: [
           { key: 'approved', label: '通过' },
           { key: 'rejected', label: '打回', danger: true },
-        ], onClick: ({ key, domEvent }) => { domEvent.stopPropagation(); handleReview(row.id, key) } }}>
+        ], onClick: ({ key, domEvent }) => { domEvent.stopPropagation(); key === 'approved' ? approveCase(row.id) : setRejectFor(row.id) } }}>
           <Tag onClick={e => e.stopPropagation()}
             style={{ fontSize: 10, cursor: 'pointer', background: 'rgba(78,138,240,0.08)', color: '#4e8af0', border: 'none', margin: 0 }}>
             待审 ▾
@@ -1048,6 +1075,21 @@ export default function CaseManagement() {
         onClose={() => setTestforgeOpen(false)}
         onImported={() => fetchCases()}
       />
+
+      {/* 打回理由 —— 分类是必填项，后端拿它做质量归因统计 */}
+      <Modal title="打回这条用例" open={!!rejectFor} onCancel={() => setRejectFor(null)}
+        okText="确认打回" cancelText="取消" okButtonProps={{ danger: true }}
+        onOk={rejectCase} width={380}>
+        <div style={{ padding: '8px 0' }}>
+          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 8 }}>打回原因 *</div>
+          <Radio.Group value={rejectCategory} onChange={e => setRejectCategory(e.target.value)}
+            style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {REJECT_CATEGORIES.map(c => <Radio key={c.value} value={c.value}>{c.label}</Radio>)}
+          </Radio.Group>
+          <Input.TextArea rows={2} placeholder="补充说明（可选）" value={rejectText}
+            onChange={e => setRejectText(e.target.value)} style={{ marginTop: 10 }} />
+        </div>
+      </Modal>
 
       {/* 批量执行弹窗 */}
       <Modal title="批量执行" open={batchExecOpen} onCancel={() => setBatchExecOpen(false)}

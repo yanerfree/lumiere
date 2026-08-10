@@ -205,3 +205,56 @@ def test_报告名用本地时区而不是UTC():
     now = datetime(2026, 8, 10, 8, 17, tzinfo=timezone.utc)
     assert now.astimezone().strftime("%m-%d %H:%M") != "08-10 08:17" or \
         datetime.now().astimezone().utcoffset().total_seconds() == 0
+
+
+# ── 就地审核：打回必须带理由 ────────────────────────────────────────
+
+def test_打回没带理由后端会拒():
+    """后端这道校验一直在（review_reason.category 必填）。
+
+    钉住它，是因为前端很容易只发 reviewStatus —— 我就这么干过一次：
+    下拉里加了「打回」，点下去 400，而我当时没点过所以没发现。
+    """
+    import inspect
+
+    from app.services import case_service
+
+    src = inspect.getsource(case_service.update_case)
+    assert 'data.review_status == "rejected"' in src
+    assert "REASON_REQUIRED" in src
+
+
+def test_前端打回走弹窗收理由_不直接提交():
+    """对应上面那条后端校验。前端只发 reviewStatus 的话，用户点了就是个红叉。
+
+    盯的是「打回」这条路必须把 reviewReason 一起发出去。
+    """
+    from pathlib import Path
+
+    jsx = Path(__file__).resolve().parents[2] / "frontend/src/pages/cases/CaseManagement.jsx"
+    src = jsx.read_text(encoding="utf-8")
+    body = src[src.index("const rejectCase"):]
+    body = body[:body.index("\n  }")]
+    assert "reviewReason" in body, "打回没带 reviewReason，后端会 400"
+    assert "category" in body, "reviewReason 里必须有 category"
+    # 「通过」不需要理由，别顺手也要求填
+    approve = src[src.index("const approveCase"):]
+    approve = approve[:approve.index("\n  }")]
+    assert "reviewReason" not in approve
+
+
+def test_打回分类和生成向导保持同一套():
+    """两处各写一套的话，同一个"场景重复"会落成两个不同的 category，
+    质量归因统计直接分裂 —— 而且没人会发现，因为两边各自都是对的。"""
+    import re
+    from pathlib import Path
+
+    base = Path(__file__).resolve().parents[2] / "frontend/src"
+
+    def cats(path):
+        src = (base / path).read_text(encoding="utf-8")
+        block = src[src.index("REJECT_CATEGORIES = ["):]
+        return set(re.findall(r"value: '([^']+)'", block[:block.index("]")]))
+
+    assert cats("pages/cases/CaseManagement.jsx") == \
+        cats("pages/scenario-gen/components/Stage5Review.jsx")
