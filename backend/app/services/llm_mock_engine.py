@@ -174,9 +174,12 @@ def _detect_smart_response(request_body: dict) -> str | None:
 
 
 def _resolve_body(route: dict, request_body: dict) -> str:
-    smart = _detect_smart_response(request_body)
-    if smart:
-        return smart
+    # 智能应答会**盖掉**路由配的 response_body。做护栏/脱敏这类"输出里必须有某个串"的验证时，
+    # prompt 一旦蹭到 _AI_CASE_KEYWORDS 就会拿到一段用例 JSON，判定直接失真 —— 所以给了开关。
+    if route.get("smart_response", True):
+        smart = _detect_smart_response(request_body)
+        if smart:
+            return smart
     mode = route.get("response_mode", "default")
     if mode == "random":
         raw = random.choice(RANDOM_RESPONSES)

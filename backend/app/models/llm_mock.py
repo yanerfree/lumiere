@@ -51,6 +51,14 @@ class MockRoute(Base):
     # SSE 配置
     sse_chunk_delay_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
 
+    # 流式模式 —— auto 跟随请求的 stream 字段；force_stream 不管请求怎么写都回事件流
+    # （测网关 fail-closed：上游对 stream:false 耍赖返流）；force_json 反过来，请求要流也只给整包 JSON
+    stream_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
+
+    # 智能应答 —— 开着时 prompt 里出现「测试用例」这类关键词会**覆盖**下面的 response_body。
+    # 平台自己的用例生成要它，做护栏/脱敏验证时必须关掉，否则你配的输出根本没发出去。
+    smart_response: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
     # Tool Calls 配置
     response_type: Mapped[str] = mapped_column(String(20), nullable=False, default="text")
     tool_calls: Mapped[list | None] = mapped_column(JSONB, nullable=True)

@@ -125,7 +125,8 @@ export default function LlmMock() {
     if (!routeForm || !originalForm) return false
     const keys = ['name', 'method', 'path', 'enabled', 'statusCode', 'responseType', 'finishReason',
       'responseBody', 'responseMode', 'presetMode', 'delayMs', 'sseChunkDelayMs', 'tokenMode',
-      'customPromptTokens', 'customCompletionTokens', 'modelMode', 'customModel', 'responseFormat']
+      'customPromptTokens', 'customCompletionTokens', 'modelMode', 'customModel', 'responseFormat',
+      'streamMode', 'smartResponse']
     for (const k of keys) {
       if (routeForm[k] !== originalForm[k]) return true
     }
@@ -260,6 +261,8 @@ export default function LlmMock() {
           responseBody: cp.config.responseBody ?? cp.config.response_body ?? f.responseBody,
           toolCalls: cp.config.toolCalls ?? cp.config.tool_calls ?? f.toolCalls,
           responseHeaders: cp.config.responseHeaders ?? cp.config.response_headers ?? f.responseHeaders,
+          streamMode: cp.config.streamMode ?? cp.config.stream_mode ?? f.streamMode,
+          smartResponse: cp.config.smartResponse ?? cp.config.smart_response ?? f.smartResponse,
         }))
       }
       return
@@ -275,6 +278,10 @@ export default function LlmMock() {
         responseBody: p.responseBody ?? p.response_body ?? f.responseBody,
         toolCalls: p.toolCalls ?? p.tool_calls ?? f.toolCalls,
         responseHeaders: p.responseHeaders ?? p.response_headers ?? f.responseHeaders,
+        // 这两个回落到默认值而不是保留当前值 —— 否则选过一次「fail-closed」再换普通预设，
+        // 耍赖开关会悄悄粘着不放，后面所有请求都变成事件流，很难查。
+        streamMode: p.streamMode ?? p.stream_mode ?? 'auto',
+        smartResponse: p.smartResponse ?? p.smart_response ?? true,
       }))
     } catch { setRouteForm(f => ({ ...f, presetMode: key })) }
   }
@@ -291,6 +298,8 @@ export default function LlmMock() {
           responseBody: routeForm.responseBody,
           toolCalls: routeForm.toolCalls,
           responseHeaders: routeForm.responseHeaders,
+          streamMode: routeForm.streamMode,
+          smartResponse: routeForm.smartResponse,
         }
       })
       message.success('预设已保存')
@@ -576,6 +585,10 @@ export default function LlmMock() {
                   {presets.filter(p => p.group === 'normal').map(p =>
                     <Select.Option key={p.key} value={p.key}>{p.label}</Select.Option>)}
                 </Select.OptGroup>
+                <Select.OptGroup label="网关联调">
+                  {presets.filter(p => p.group === 'gateway').map(p =>
+                    <Select.Option key={p.key} value={p.key}>{p.label}</Select.Option>)}
+                </Select.OptGroup>
                 <Select.OptGroup label="客户端错误 (4xx)">
                   {presets.filter(p => p.group === 'clientError' || p.group === 'client_error').map(p =>
                     <Select.Option key={p.key} value={p.key}>{p.label}</Select.Option>)}
@@ -613,6 +626,34 @@ export default function LlmMock() {
                   min={0} size="small" style={{ width: 80 }} placeholder="50" disabled={locked} />
               </div>
             )}
+            {!isEmbedding && (
+              <div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                  响应流式
+                  <Tooltip title="默认「跟随请求」，看请求体里的 stream 字段。选「强制流式」后即使请求写 stream:false 也返回 SSE 事件流，用来验网关的 fail-closed；「强制整包」则相反，请求要流式也只回完整 JSON。">
+                    <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                  </Tooltip>
+                </div>
+                <Select value={routeForm.streamMode || 'auto'} onChange={v => setRouteForm(f => ({ ...f, streamMode: v }))}
+                  size="small" style={{ width: 130 }} disabled={locked}>
+                  <Select.Option value="auto">跟随请求</Select.Option>
+                  <Select.Option value="force_stream">强制流式</Select.Option>
+                  <Select.Option value="force_json">强制整包</Select.Option>
+                </Select>
+              </div>
+            )}
+            {!isEmbedding && (
+              <div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                  智能应答
+                  <Tooltip title="开启时，prompt 里出现「测试用例 / JSON 数组 / test case / 测试设计」等关键词会自动返回一段用例 JSON，覆盖下面配的响应内容。做护栏、脱敏这类「输出里必须含某个串」的验证时请关掉。">
+                    <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                  </Tooltip>
+                </div>
+                <Switch size="small" checked={routeForm.smartResponse !== false}
+                  onChange={v => setRouteForm(f => ({ ...f, smartResponse: v }))} disabled={locked} />
+              </div>
+            )}
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Token 模式</div>
               <Radio.Group value={routeForm.tokenMode || 'auto'} onChange={e => setRouteForm(f => ({ ...f, tokenMode: e.target.value }))} size="small" disabled={locked}>
@@ -647,6 +688,16 @@ export default function LlmMock() {
               </div>
             )}
           </div>
+
+          {/* 耍赖模式提示 —— 这两个会让 mock 故意不守 OpenAI 约定，不提示的话排查半天查不出 */}
+          {!isEmbedding && routeForm.streamMode === 'force_stream' && (
+            <Alert type="warning" showIcon style={{ fontSize: 12, marginBottom: 16 }}
+              message="强制流式：请求写 stream:false 也会返回 text/event-stream。这是故意不守约定，用来验网关 fail-closed —— 别的调用方走这条路由会拿到解析不了的响应。" />
+          )}
+          {!isEmbedding && routeForm.streamMode === 'force_json' && (
+            <Alert type="warning" showIcon style={{ fontSize: 12, marginBottom: 16 }}
+              message="强制整包：请求写 stream:true 也只返回完整 JSON，不发事件流。等着读流的客户端可能会一直挂到超时。" />
+          )}
 
           {/* 随机模式提示 */}
           {responseModeValue === 'random' && (

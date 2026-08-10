@@ -81,6 +81,50 @@ PRESETS: dict[str, dict] = {
         "response_body": "[0.1, 0.2, 0.3]",
     },
 
+    # ── 网关联调 ──
+    # 拿这个 mock 当"假上游"去验网关（护栏 / 脱敏 / fail-closed）时用。
+    # 四条都关掉 smart_response：那个开关会用关键词盖掉下面的 response_body，
+    # 而这几个场景的判定恰恰全靠"输出里到底有没有那个串"。
+    "gateway_guardrail_hit": {
+        "label": "网关 - 护栏命中 (输出含 VIOLATION)",
+        "group": "gateway",
+        "status_code": 200,
+        "finish_reason": "stop",
+        "response_type": "text",
+        "smart_response": False,
+        "response_body": "根据内部风控记录，该客户存在异常交易行为，标记为 VIOLATION，建议冻结账户并转人工复核。",
+    },
+    "gateway_pii_output": {
+        "label": "网关 - 输出侧 PII (含身份证号)",
+        "group": "gateway",
+        "status_code": 200,
+        "finish_reason": "stop",
+        "response_type": "text",
+        "smart_response": False,
+        # 输入里不放、只在输出里放 —— 这样才能验出"护栏查的是输出而不是输入"
+        "response_body": "已为你查到该客户的登记信息：姓名 张三，身份证号 11010119900101123X，联系电话 13800138000。",
+    },
+    "gateway_fail_closed": {
+        "label": "网关 - fail-closed (stream:false 仍返事件流)",
+        "group": "gateway",
+        "status_code": 200,
+        "finish_reason": "stop",
+        "response_type": "text",
+        "stream_mode": "force_stream",
+        "smart_response": False,
+        "response_body": "上游没有遵守 stream:false 的约定，把整段内容拆成事件流返回了，其中还夹带 VIOLATION 关键词。",
+    },
+    "gateway_force_json": {
+        "label": "网关 - 上游不给流 (stream:true 只回整包)",
+        "group": "gateway",
+        "status_code": 200,
+        "finish_reason": "stop",
+        "response_type": "text",
+        "stream_mode": "force_json",
+        "smart_response": False,
+        "response_body": "请求要的是流式，上游却一次性返回了完整 JSON —— 用来验网关在拿不到流时会不会挂住或超时。",
+    },
+
     # ── 客户端错误 4xx ──（只填错误消息，引擎自动包装为 OpenAI 错误格式）
     "error_400_invalid": {
         "label": "400 参数错误",

@@ -38,6 +38,8 @@ _FALLBACK_EMBEDDING_ROUTE: dict = {
     "delay_ms": 0,
     "finish_reason": None,
     "response_headers": None,
+    "stream_mode": "auto",
+    "smart_response": False,
 }
 
 
@@ -229,8 +231,19 @@ class MockServerManager:
 
         route_dict = self._route_to_dict(matched_route)
         is_embeddings = engine.is_embeddings_route(route_dict, path)
-        # embeddings 接口没有流式，请求里带 stream 也按非流式回
-        is_stream = (not is_embeddings) and request_body.get("stream", False) and route_dict["status_code"] < 400
+        # embeddings 没有流式、错误响应也不走流式，这两条压过 stream_mode
+        if is_embeddings or route_dict["status_code"] >= 400:
+            is_stream = False
+        else:
+            stream_mode = route_dict.get("stream_mode") or "auto"
+            if stream_mode == "force_stream":
+                # 故意不守约定：请求写 stream:false 也照样返事件流 —— 网关 fail-closed 就是靠这个验的
+                is_stream = True
+            elif stream_mode == "force_json":
+                # 反过来耍赖：请求要流式，上游只给整包 JSON
+                is_stream = False
+            else:
+                is_stream = bool(request_body.get("stream", False))
 
         # 延迟模拟
         delay = route_dict.get("delay_ms", 0)
@@ -333,6 +346,8 @@ class MockServerManager:
             "custom_model": route.custom_model,
             "response_headers": route.response_headers,
             "sse_chunk_delay_ms": route.sse_chunk_delay_ms,
+            "stream_mode": route.stream_mode,
+            "smart_response": route.smart_response,
             "response_type": route.response_type,
             "tool_calls": route.tool_calls,
         }

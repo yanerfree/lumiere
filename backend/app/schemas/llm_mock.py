@@ -29,6 +29,8 @@ class MockRouteCreate(BaseSchema):
     custom_model: str | None = None
     response_headers: dict | None = None
     sse_chunk_delay_ms: int = Field(default=50, ge=0)
+    stream_mode: str = Field(default="auto", pattern="^(auto|force_stream|force_json)$")
+    smart_response: bool = True
     response_type: str = Field(default="text")
     tool_calls: list | None = None
 
@@ -52,6 +54,8 @@ class MockRouteUpdate(BaseSchema):
     custom_model: str | None = None
     response_headers: dict | None = None
     sse_chunk_delay_ms: int | None = None
+    stream_mode: str | None = Field(default=None, pattern="^(auto|force_stream|force_json)$")
+    smart_response: bool | None = None
     response_type: str | None = None
     tool_calls: list | None = None
 
@@ -78,6 +82,8 @@ class MockRouteResponse(BaseSchema):
     custom_model: str | None
     response_headers: dict | None
     sse_chunk_delay_ms: int
+    stream_mode: str
+    smart_response: bool
     response_type: str
     tool_calls: list | None
     hit_count: int
