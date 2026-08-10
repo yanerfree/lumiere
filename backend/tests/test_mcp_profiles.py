@@ -124,3 +124,35 @@ def test_每个分类在前端都有颜色():
     cats = {t["category"] for t in TOOL_CATALOG}
     missing = cats - mapped
     assert not missing, f"这些分类前端没给颜色，会静默变灰：{sorted(missing)}"
+
+
+def test_全链路的说明逐字引用四个子档的名字():
+    """手写一句顺口的描述，和子档各自的说法必然对不上 —— 人就得自己猜
+    "这一档到底包不包含那一件"。实测被问到了：「第一个是包含后面的 4 个吗？」
+
+    所以说明是拼出来的，不是写出来的。这条钉住：改了任一子档的名字，
+    父档说明会跟着变；要是哪天有人改回手写，这里会红。
+    """
+    fl = next(p for p in PROFILES if p["key"] == "fullloop")
+    for key in ("live", "uiscript", "regression", "triage"):
+        label = next(p for p in PROFILES if p["key"] == key)["label"]
+        assert label in fl["task"], f"全链路的说明里没逐字出现「{label}」"
+
+
+def test_全链路的说明只提它真包含的活():
+    """反过来也得成立：说明里提到的每一件，工具都必须真被包含，否则是页面说假话。"""
+    fl = next(p for p in PROFILES if p["key"] == "fullloop")
+    tools = set(fl["tools"])
+    for p in PROFILES:
+        if p["key"] != "fullloop" and p["tools"] and p["label"] in fl["task"]:
+            assert set(p["tools"]) <= tools, f"说明提了「{p['label']}」但工具没全包含"
+
+
+def test_四段的排列顺序和说明一致():
+    """说明里写 ③跑回归 ④失败归因、卡片上却是失败归因排在前面 —— 一眼就看出对不上，
+    人又得回头猜哪个才算数。页面是按 PROFILES 顺序渲染的，所以这里钉住。"""
+    from app.mcp.profiles import _CHAIN
+
+    order = [p["key"] for p in PROFILES]
+    got = [k for k in order if k in _CHAIN]
+    assert got == _CHAIN, f"卡片顺序 {got} 和说明里的顺序 {_CHAIN} 对不上"

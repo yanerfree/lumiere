@@ -71,7 +71,10 @@ function ActivityCard({ p, checked, disabled, recommended, includedBy, total, on
       cursor: disabled ? 'default' : 'pointer', borderRadius: 10, padding: '12px 14px',
       transition: 'all .15s', opacity: disabled ? 0.55 : 1,
       border: checked ? '1.5px solid #0ea5a0' : '1px solid rgba(0,0,0,0.09)',
-      background: checked ? 'rgba(14,165,160,0.05)' : '#fff',
+      background: checked ? 'rgba(14,165,160,0.05)' : includedBy ? 'rgba(14,165,160,0.02)' : '#fff',
+      // 被别的活包含的，左边加一条色带 —— 让它在视觉上跟父档聚成一组。
+      // 只挂一个小标签的话人扫过去看不见（实测：用户说"没看到已包含标签"）。
+      borderLeft: includedBy ? '3px solid rgba(14,165,160,0.45)' : undefined,
     }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
         <Checkbox checked={checked} disabled={disabled} style={{ marginTop: 1, pointerEvents: 'none' }} />
@@ -87,8 +90,8 @@ function ActivityCard({ p, checked, disabled, recommended, includedBy, total, on
                 只写「已包含」的话，人还得自己猜是哪一件（实测被问了：
                 「第一个是包含后面的 4 个吗？」）。 */}
             {includedBy && (
-              <Tag color="cyan" style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 5px' }}>
-                已含在「{includedBy}」里
+              <Tag color="cyan" style={{ fontSize: 11, lineHeight: '18px', margin: 0, padding: '0 7px', fontWeight: 500 }}>
+                ↳ 已包含在「{includedBy}」里
               </Tag>
             )}
           </div>
