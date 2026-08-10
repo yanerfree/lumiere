@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Card, Tag, Space, Typography, Table, Button, message, Input, Modal, Popconfirm, Tabs, Badge, Checkbox, Tooltip, Alert } from 'antd'
+import { Card, Tag, Space, Typography, Table, Button, message, Input, Modal, Popconfirm, Tabs, Badge, Radio, Checkbox, Tooltip, Alert } from 'antd'
 import {
   ApiOutlined, CopyOutlined, ThunderboltOutlined,
   KeyOutlined, PlusOutlined, DeleteOutlined, CheckCircleOutlined,
@@ -21,13 +21,12 @@ const CAT_COLORS = {
   '文档规范': 'gold', 'Skill 共享': 'lime', '失败归因': 'error', '其它': 'default',
 }
 
-/**
- * 预设档位从后端取（app/mcp/profiles.py）——和工具注册表同一个进程，
+/*
+ * 档位从后端取（app/mcp/profiles.py）——和工具注册表同一个进程，
  * 才不会重演"前端写死 20 条、后端实际 32 条"那种漂移。
  * 档位只是勾选的快捷方式，落库存的仍是展开后的显式工具名列表：
- * 语义可审计，日后改档位定义也不会让已有 Key 的范围悄悄变。
+ * 语义可审计，日后改档位定义也不会让已有项目的范围悄悄变。
  */
-const EMPTY_PROFILE = { label: '', task: '', hint: '', tools: null }
 
 const cardStyle = { borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)', boxShadow: 'none' }
 const sectionTitle = { fontSize: 14, fontWeight: 600, color: '#2e3138', marginBottom: 4 }
@@ -42,66 +41,51 @@ const CAT_HEX = {
 const catHex = (cat) => CAT_HEX[CAT_COLORS[cat]] || CAT_HEX.default
 
 /**
- * 一张「我要干的活」卡片。
+ * 本项目的 MCP 工具范围 —— **可勾选的分类列表**。
  *
- * 原来这里是一排 Radio.Button：9 个档位挤成两行、宽度不一、选中只差个填充色，
- * **必须挨个点开才知道每个是干什么的** —— 说明文字只显示当前选中那一个。
- * 改成卡片：每张自己写明干什么活、要几个工具，9 个档位的内容同时可见，
- * 「当前生效」和「已选中」用两种标记分开（它们经常不是同一张）。
- */
-function ProfileCard({ p, total, selected, effective, onClick }) {
-  const n = p.tools ? p.tools.length : total
-  return (
-    <div onClick={onClick} style={{
-      cursor: 'pointer', borderRadius: 10, padding: '10px 12px', transition: 'all .15s',
-      border: selected ? '2px solid #0ea5a0' : '1px solid rgba(0,0,0,0.08)',
-      background: selected ? 'rgba(14,165,160,0.06)' : '#fff',
-      boxShadow: selected ? '0 2px 8px rgba(14,165,160,0.15)' : 'none',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-        {selected && <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 13 }} />}
-        <span style={{ fontWeight: 600, fontSize: 13, color: selected ? '#0ea5a0' : '#2e3138' }}>{p.label}</span>
-        {effective && (
-          <Tag color="green" style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 5px' }}>当前生效</Tag>
-        )}
-      </div>
-      <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.6, minHeight: 38 }}>{p.task}</div>
-      <div style={{ fontSize: 12, color: '#8c919e', marginTop: 6 }}>
-        <b style={{ color: selected ? '#0ea5a0' : '#4e5969', fontSize: 14 }}>{n}</b> / {total} 个工具
-      </div>
-    </div>
-  )
-}
-
-/**
- * 本项目的 MCP 工具范围。
+ * 走过一段弯路：先做成 9 张档位卡二选一，结果只能"全部"或"恰好某一档"，
+ * 想在某档基础上多开一个工具做不到。范围本来就是个集合，就该按集合来编辑。
  *
- * 范围是**项目级**的：本项目下所有 Key 都按它生效，改一次全都生效，
- * 不用一把一把改、更不用为了换范围重新建 Key（原来这里放的是「按这个范围建 Key」，
- * 把"设权限"和"发钥匙"绑成了一件事，于是每换一次范围就多一把 Key）。
+ * 所以这里：
+ * - 分类头一个三态勾选框（全选 / 半选 / 不选），整组开关
+ * - 每个工具一行一个勾选框，随便挑
+ * - 档位降级成「快速套用」按钮 —— 19 个工具手点太累，它只是个起点，套完还能改
+ * - 「不限制」是独立的一档，不等于"把 42 个全勾上"：
+ *   前者以后新增的工具自动包含，后者不会（落库是 NULL vs 显式清单）
  */
 function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSave }) {
-  const effectiveKey = scope?.profileKey || 'all'
-  const [sel, setSel] = useState(effectiveKey)
-  const [onlyScene, setOnlyScene] = useState(true)
-  // 外部刷新（保存成功后重新拉）时跟上，否则「当前生效」和选中会对不上
-  useEffect(() => { setSel(effectiveKey) }, [effectiveKey])
+  const savedUnlimited = !scope?.allowedTools
+  const savedList = scope?.allowedTools || []
+  const [unlimited, setUnlimited] = useState(savedUnlimited)
+  const [sel, setSel] = useState(savedList)
+  const [onlyPicked, setOnlyPicked] = useState(false)
+  // ⚠ 保存成功后要跟上服务端那份，但**不要用 useEffect 去 setState 同步** ——
+  // 那是 react-hooks/set-state-in-effect，会多渲染一轮且容易和用户正在勾的状态打架。
+  // 调用方给了 key（见 <ScopePanel key=...>），saved 变了整个组件重挂，初值自然就是新的。
 
-  const prof = profiles.find(p => p.key === sel) || profiles[0] || EMPTY_PROFILE
-  const inScene = (n) => !prof.tools || prof.tools.includes(n)
-  const usedCount = prof.tools ? prof.tools.length : tools.length
-  const dirty = sel !== effectiveKey
-  // custom 是"库里那份范围对不上任何一档"，不是可选项 —— 只在它当前生效时露出来
-  const shown = profiles.filter(p => p.key !== 'custom')
+  const selSet = new Set(sel)
+  const same = (a, b) => a.length === b.length && a.every(x => b.includes(x))
+  const dirty = unlimited !== savedUnlimited || (!unlimited && !same(sel, savedList))
+
+  const toggle = (name, on) =>
+    setSel(v => on ? [...v, name] : v.filter(n => n !== name))
+  const toggleCat = (items, on) => {
+    const names = items.map(t => t.name)
+    setSel(v => on ? [...new Set([...v, ...names])] : v.filter(n => !names.includes(n)))
+  }
+  const applyProfile = (p) => {
+    setUnlimited(false)
+    setSel(p.tools ? [...p.tools] : tools.map(t => t.name))
+  }
 
   return (
     <div>
-      <Card size="small" style={{ ...cardStyle, marginBottom: 18, background: 'rgba(14,165,160,0.03)' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+      <Card size="small" style={{ ...cardStyle, marginBottom: 16, background: 'rgba(14,165,160,0.03)' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
           <div>
             <span style={{ ...sectionTitle, marginBottom: 0 }}>本项目的工具范围</span>
             <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-              选「我要干的活」，范围外的工具 CC 看不到、也调不动
+              范围外的工具 CC 看不到、也调不动
             </Text>
           </div>
           <Text type="secondary" style={{ fontSize: 12 }}>
@@ -109,46 +93,71 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
           </Text>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(228px, 1fr))', gap: 10 }}>
-          {shown.map(p => (
-            <ProfileCard key={p.key} p={p} total={tools.length}
-              selected={sel === p.key} effective={effectiveKey === p.key}
-              onClick={() => setSel(p.key)} />
-          ))}
-        </div>
+        {/* 不限制 / 只开放勾选的 —— 这两个不是一回事，写清楚区别 */}
+        <Radio.Group value={unlimited ? 'all' : 'pick'} onChange={e => setUnlimited(e.target.value === 'all')}
+          style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginTop: 12 }}>
+          <Radio value="all">
+            <span style={{ fontSize: 13 }}>不限制</span>
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>全部工具，以后新增的也自动包含</Text>
+          </Radio>
+          <Radio value="pick">
+            <span style={{ fontSize: 13 }}>只开放勾选的</span>
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>下面勾什么就是什么，新增工具不会自动进来</Text>
+          </Radio>
+        </Radio.Group>
 
-        {effectiveKey === 'custom' && (
-          <Alert type="info" showIcon style={{ marginTop: 10, fontSize: 12 }}
-            message={`当前生效的是一份自定义范围（${scope?.allowedTools?.length ?? 0} 个工具），对不上上面任何一档。选一档会把它覆盖掉。`} />
+        {!unlimited && (
+          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>快速套用：</Text>
+            {profiles.filter(p => p.tools).map(p => (
+              <Tooltip key={p.key} title={<span style={{ fontSize: 12 }}>{p.task}{p.hint ? ` —— ${p.hint}` : ''}</span>}>
+                <Button size="small" onClick={() => applyProfile(p)}>
+                  {p.label}
+                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>{p.tools.length}</Text>
+                </Button>
+              </Tooltip>
+            ))}
+            <Button size="small" type="text" onClick={() => setSel(tools.map(t => t.name))}>全选</Button>
+            <Button size="small" type="text" onClick={() => setSel([])}>清空</Button>
+          </div>
         )}
 
         <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13 }}>
-            这件事会用到 <b style={{ color: '#0ea5a0', fontSize: 16 }}>{usedCount}</b> / {tools.length} 个工具
+            {unlimited
+              ? <>不限制 —— <b style={{ color: '#0ea5a0', fontSize: 16 }}>{tools.length}</b> 个工具全开</>
+              : <>已选 <b style={{ color: sel.length ? '#0ea5a0' : '#e8453c', fontSize: 16 }}>{sel.length}</b> / {tools.length} 个工具</>}
           </span>
-          <Checkbox checked={onlyScene} onChange={e => setOnlyScene(e.target.checked)} style={{ fontSize: 12 }}>
-            下面只看用到的
-          </Checkbox>
+          {!unlimited && (
+            <Checkbox checked={onlyPicked} onChange={e => setOnlyPicked(e.target.checked)} style={{ fontSize: 12 }}>
+              下面只看已选的
+            </Checkbox>
+          )}
           <div style={{ flex: 1 }} />
           {dirty && (
             <>
-              <Button size="small" onClick={() => setSel(effectiveKey)}>放弃修改</Button>
+              <Button size="small" onClick={() => { setUnlimited(savedUnlimited); setSel(savedList) }}>放弃修改</Button>
               <Button size="small" type="primary" loading={saving}
-                onClick={() => onSave(sel, prof.tools)}>
+                disabled={!unlimited && sel.length === 0}
+                onClick={() => onSave(unlimited ? null : sel)}>
                 保存为本项目的范围
               </Button>
             </>
           )}
         </div>
-        {prof.hint && <div style={{ marginTop: 8, fontSize: 12, color: '#8c919e' }}>{prof.hint}</div>}
+        {!unlimited && sel.length === 0 && (
+          <div style={{ marginTop: 6, fontSize: 12, color: '#e8453c' }}>
+            一个都没勾 —— 那样 CC 连不上任何工具，等于把这个项目的 MCP 关了。至少勾一个再保存。
+          </div>
+        )}
       </Card>
 
-      {/* 工具列表：一个分类一块，带色条标题和边框。
-          原来只有一个小 Tag + 灰字计数，42 条刷下来看不出段落在哪儿断。 */}
+      {/* 工具列表 = 勾选界面。一个分类一块，分类头是三态开关。 */}
       {byCategory.map(([cat, items]) => {
-        const list = onlyScene ? items.filter(t => inScene(t.name)) : items
+        const names = items.map(t => t.name)
+        const checked = names.filter(n => selSet.has(n)).length
+        const list = (!unlimited && onlyPicked) ? items.filter(t => selSet.has(t.name)) : items
         if (!list.length) return null
-        const hit = items.filter(t => inScene(t.name)).length
         const color = catHex(cat)
         return (
           <div key={cat} style={{ marginBottom: 14, border: '1px solid rgba(0,0,0,0.07)', borderRadius: 10, overflow: 'hidden' }}>
@@ -157,24 +166,38 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
               background: 'rgba(0,0,0,0.015)', borderBottom: '1px solid rgba(0,0,0,0.06)',
             }}>
               <span style={{ width: 3, height: 14, borderRadius: 2, background: color, display: 'inline-block' }} />
-              <span style={{ fontWeight: 600, fontSize: 13, color: '#2e3138' }}>{cat}</span>
+              {unlimited ? (
+                <span style={{ fontWeight: 600, fontSize: 13, color: '#2e3138' }}>{cat}</span>
+              ) : (
+                <Checkbox
+                  checked={checked === names.length}
+                  indeterminate={checked > 0 && checked < names.length}
+                  onChange={e => toggleCat(items, e.target.checked)}
+                >
+                  <span style={{ fontWeight: 600, fontSize: 13, color: '#2e3138' }}>{cat}</span>
+                </Checkbox>
+              )}
               <div style={{ flex: 1 }} />
               <Text type="secondary" style={{ fontSize: 12 }}>
-                <b style={{ color: hit === items.length ? '#0ea5a0' : '#8c919e' }}>{hit}</b>/{items.length} 个用到
+                {unlimited
+                  ? `${items.length} 个`
+                  : <><b style={{ color: checked === names.length ? '#0ea5a0' : checked ? '#fa8c16' : '#8c919e' }}>{checked}</b>/{items.length} 已选</>}
               </Text>
             </div>
             <Table rowKey="name" dataSource={list} pagination={false} size="small" showHeader={false}
-              rowClassName={r => inScene(r.name) ? '' : 'tool-dimmed'}
+              rowClassName={r => (unlimited || selSet.has(r.name)) ? '' : 'tool-dimmed'}
               columns={[
                 {
-                  dataIndex: 'name', width: 240,
-                  render: (n) => (
+                  dataIndex: 'name', width: 250,
+                  render: (n) => unlimited ? (
                     <span>
-                      {inScene(n)
-                        ? <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 12, marginRight: 6 }} />
-                        : <span style={{ display: 'inline-block', width: 18 }} />}
+                      <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 12, marginRight: 6 }} />
                       <Text code style={{ fontSize: 11 }}>{n}</Text>
                     </span>
+                  ) : (
+                    <Checkbox checked={selSet.has(n)} onChange={e => toggle(n, e.target.checked)}>
+                      <Text code style={{ fontSize: 11 }}>{n}</Text>
+                    </Checkbox>
                   ),
                 },
                 { dataIndex: 'description', render: d => <span style={{ fontSize: 13 }}>{d}</span> },
@@ -184,7 +207,7 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
           </div>
         )
       })}
-      <style>{`.tool-dimmed { opacity: .38 }`}</style>
+      <style>{`.tool-dimmed { opacity: .45 }`}</style>
     </div>
   )
 }
@@ -230,7 +253,7 @@ export default function MCPTools() {
   const projectKeys = apiKeys.filter(k => k.projectId === projectId)
   const orphanKeys = apiKeys.filter(k => !k.projectId)
 
-  const saveScope = async (profileKey, toolNames) => {
+  const saveScope = async (toolNames) => {
     setSavingScope(true)
     try {
       // 档位只是快捷方式，落库存展开后的显式工具名（不存档位名，
@@ -411,7 +434,9 @@ export default function MCPTools() {
           key: 'tools',
           label: <span><ThunderboltOutlined /> 工具范围 ({scope?.allowedTools ? `${scope.allowedTools.length}/${tools.length}` : tools.length})</span>,
           children: (
-            <ScopePanel tools={tools} byCategory={byCategory} profiles={profiles}
+            <ScopePanel
+              key={scope ? (scope.allowedTools ? scope.allowedTools.join(',') : 'unlimited') : 'loading'}
+              tools={tools} byCategory={byCategory} profiles={profiles}
               scope={scope} keyCount={scope?.keyCount ?? projectKeys.length}
               saving={savingScope} onSave={saveScope} />
           ),
