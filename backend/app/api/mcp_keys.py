@@ -8,15 +8,17 @@ import uuid
 
 from fastapi import APIRouter, Depends
 from pydantic import Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.common import BaseSchema
 
 from app.deps.db import get_db
-from app.deps.auth import get_current_user
+from app.deps.auth import get_current_user, require_project_role
+from app.core.exceptions import NotFoundError
 from app.models.user import User
 from app.models.mcp_api_key import McpApiKey
+from app.models.project import Project
 
 logger = logging.getLogger(__name__)
 
@@ -25,15 +27,26 @@ router = APIRouter(prefix="/api/mcp-keys", tags=["mcp-keys"])
 
 class CreateKeyRequest(BaseSchema):
     name: str = Field(default="default", max_length=100)
-    # None / 不传 = 不限制（全部工具）；列表 = 只暴露这些工具
+    # Key 归属的项目。它的工具范围由这个项目决定（projects.mcp_allowed_tools）。
+    # 不传 = 不归属任何项目，走下面 allowed_tools 那条遗留路径。
+    project_id: uuid.UUID | None = None
+    # 【遗留】Key 级范围。范围已挪到项目级，页面不再传这个字段。
     allowed_tools: list[str] | None = None
 
 
 class UpdateKeyRequest(BaseSchema):
     name: str | None = Field(default=None, max_length=100)
+    # 把一把未归属的存量 Key 归到某个项目（归了之后它就跟着项目范围走）
+    project_id: uuid.UUID | None = None
     allowed_tools: list[str] | None = None
     # 显式区分"不改 allowed_tools"和"改成不限制"——前者不传该字段，
     # 后者传 reset_tools=true（JSON 里 null 无法表达这个区别）
+    reset_tools: bool = False
+
+
+class ProjectScopeRequest(BaseSchema):
+    """项目级工具范围。三态和 Key 级那套完全一致，别自己再发明一套。"""
+    allowed_tools: list[str] | None = None
     reset_tools: bool = False
 
 
@@ -94,6 +107,7 @@ async def create_api_key(
         name=body.name,
         key_hash=key_hash,
         key_prefix=key_prefix,
+        project_id=body.project_id,
         allowed_tools=_validate_tools(body.allowed_tools),
     )
     session.add(api_key)
@@ -104,6 +118,7 @@ async def create_api_key(
         "name": api_key.name,
         "key": raw_key,
         "prefix": key_prefix,
+        "projectId": str(api_key.project_id) if api_key.project_id else None,
         "allowedTools": api_key.allowed_tools,
         "createdAt": api_key.created_at.isoformat(),
     }}
@@ -123,6 +138,11 @@ async def update_api_key(
 
     if body.name is not None:
         key.name = body.name
+    if body.project_id is not None:
+        # 归到某个项目后，它的范围立刻改由该项目决定。Key 上那份遗留范围一并清掉，
+        # 留着只会让"页面显示项目范围、实际生效的是别的"—— 两个来源必须只剩一个。
+        key.project_id = body.project_id
+        key.allowed_tools = None
     if body.reset_tools:
         key.allowed_tools = None
     elif body.allowed_tools is not None:
@@ -137,6 +157,7 @@ async def update_api_key(
     return {"data": {
         "id": str(key.id),
         "name": key.name,
+        "projectId": str(key.project_id) if key.project_id else None,
         "allowedTools": key.allowed_tools,
     }}
 
@@ -156,6 +177,7 @@ async def list_api_keys(
         "id": str(k.id),
         "name": k.name,
         "prefix": k.key_prefix,
+        "projectId": str(k.project_id) if k.project_id else None,
         "allowedTools": k.allowed_tools,
         "createdAt": k.created_at.isoformat(),
         "lastUsedAt": k.last_used_at.isoformat() if k.last_used_at else None,
@@ -178,3 +200,90 @@ async def revoke_api_key(
 
     invalidate_scope_cache(key.key_hash)
     return {"data": {"revoked": True}}
+
+
+# ── 项目级工具范围 ────────────────────────────────────────────────
+# 范围的心智是「**这个项目**允许 CC 干哪些活」，不是「这一把钥匙允许干哪些活」。
+# 同一个项目发五把 Key 给五个人，范围本来就该是同一个 —— 所以设置落在项目上，
+# 该项目下的所有 Key 一起生效，不用一把一把改、更不用为了换范围重新建 Key。
+project_scope_router = APIRouter(
+    prefix="/api/projects/{project_id}/mcp-scope", tags=["mcp-keys"]
+)
+
+
+def _match_profile(allowed: list[str] | None) -> str:
+    """这份范围对应哪个档位。对不上任何一档就是 custom。
+
+    只用来在页面上把「当前生效」标出来 —— 落库的永远是展开后的显式工具名列表，
+    不存档位名。存档位名的话，日后改了档位定义，已有项目的范围会**悄悄变**。
+    """
+    from app.mcp.profiles import PROFILES
+
+    if allowed is None:
+        return "all"
+    cur = set(allowed)
+    for p in PROFILES:
+        if p["tools"] and set(p["tools"]) == cur:
+            return p["key"]
+    return "custom"
+
+
+@project_scope_router.get("")
+async def get_project_scope(
+    project_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    from app.mcp import TOOL_CATALOG
+
+    project = await session.get(Project, project_id)
+    if not project:
+        raise NotFoundError(code="PROJECT_NOT_FOUND", message="项目不存在")
+
+    n_keys = (await session.execute(
+        select(func.count()).select_from(McpApiKey).where(
+            McpApiKey.project_id == project_id,
+            McpApiKey.is_active == True,  # noqa: E712
+        )
+    )).scalar_one()
+
+    allowed = project.mcp_allowed_tools
+    return {"data": {
+        "allowedTools": allowed,
+        "profileKey": _match_profile(allowed),
+        "totalTools": len(TOOL_CATALOG),
+        # 页面要说清"这一改会影响几把 Key" —— 改的是别人正在用的连接，
+        # 不写出来的话人不知道自己动了多大的面。
+        "keyCount": n_keys,
+    }}
+
+
+@project_scope_router.put("")
+async def set_project_scope(
+    project_id: uuid.UUID,
+    body: ProjectScopeRequest,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer")),
+):
+    project = await session.get(Project, project_id)
+    if not project:
+        raise NotFoundError(code="PROJECT_NOT_FOUND", message="项目不存在")
+
+    if body.reset_tools:
+        project.mcp_allowed_tools = None
+    elif body.allowed_tools is not None:
+        project.mcp_allowed_tools = _validate_tools(body.allowed_tools)
+    await session.commit()
+
+    # 缓存是按 key_hash 存的，这里改的是项目 —— 拿不到该项目所有 Key 的 hash 就
+    # 全清。缓存本来就只有 30s TTL、条目数是 Key 数量级，全清的代价是下一次
+    # tools/list 多打一次库；而漏清的代价是人在页面上改完、CC 那边还是旧范围，
+    # 最难查的那类"改了没生效"。
+    from app.mcp.middleware import invalidate_scope_cache
+
+    invalidate_scope_cache()
+
+    return {"data": {
+        "allowedTools": project.mcp_allowed_tools,
+        "profileKey": _match_profile(project.mcp_allowed_tools),
+    }}

@@ -29,6 +29,22 @@ _CACHE: dict[str, tuple[list[str] | None, str | None, float]] = {}
 _TTL_SECONDS = 30
 
 
+def pick_scope(
+    project_id, project_scope: list | None, legacy_scope: list | None
+) -> list | None:
+    """一把 Key 到底按哪份范围跑。返回 None = 不限制。
+
+    判据是**有没有归属项目**，不是"项目范围真不真"。
+    写成 `project_scope or legacy_scope` 是这里最自然也最错的写法：项目明确
+    设成不限制（NULL）时，那个写法会掉回 Key 上那份旧范围 —— 等于把人刚放开的
+    权限又悄悄收回去，而页面上完全看不出为什么。
+
+    抽成纯函数是为了能直接测这条判据，不用去正则匹配源码。
+    """
+    raw = project_scope if project_id else legacy_scope
+    return [str(t) for t in raw] if raw else None
+
+
 def invalidate_scope_cache(key_hash: str | None = None) -> None:
     """Key 的工具范围被改动后调用，让缓存立刻失效（不传则全清）。"""
     if key_hash is None:
@@ -63,21 +79,32 @@ async def _lookup_key() -> tuple[list[str] | None, str | None]:
 
         from app.deps.db import async_session_factory
         from app.models.mcp_api_key import McpApiKey
+        from app.models.project import Project
 
         async with async_session_factory() as session:
+            # LEFT JOIN：Key 归属项目 → 用项目的范围；没归属（存量 Key）→ 用 Key 自己那份。
+            # 一次查询取完，别拆成两次 —— 这条在连接热路径上。
             result = await session.execute(
-                select(McpApiKey.allowed_tools, McpApiKey.user_id).where(
+                select(
+                    Project.mcp_allowed_tools,
+                    McpApiKey.allowed_tools,
+                    McpApiKey.user_id,
+                    McpApiKey.project_id,
+                )
+                .select_from(McpApiKey)
+                .join(Project, Project.id == McpApiKey.project_id, isouter=True)
+                .where(
                     McpApiKey.key_hash == key_hash,
                     McpApiKey.is_active == True,  # noqa: E712
                 )
             )
             row = result.first()
-            # 查不到（环境变量 key 等）→ 不限制；查到但 allowed_tools 为 NULL → 不限制
+            # 查不到（环境变量 key 等）→ 不限制；查到但范围为 NULL → 不限制
             if row:
-                if row[0]:
-                    allowed = [str(t) for t in row[0]]
-                if row[1]:
-                    user_id = str(row[1])
+                project_scope, legacy_scope, uid, project_id = row
+                allowed = pick_scope(project_id, project_scope, legacy_scope)
+                if uid:
+                    user_id = str(uid)
     except Exception:
         # 查库失败不能把 MCP 打死，退化为不限制
         return None, None
@@ -117,7 +144,8 @@ class ToolScopeMiddleware(Middleware):
         allowed = await _lookup_allowed_tools()
         if allowed is not None and context.message.name not in set(allowed):
             raise ToolError(
-                f"工具 {context.message.name} 不在当前 API Key 的授权范围内。"
-                "如需使用，请在 testBench「MCP 工具中心」调整该 Key 的工具范围。"
+                f"工具 {context.message.name} 不在本项目的 MCP 工具范围内。"
+                "如需使用，请在 testBench「MCP 工具中心 → 工具范围」调整 —— "
+                "范围是项目级的，改一次本项目所有 Key 都生效，不用重新建 Key。"
             )
         return await call_next(context)

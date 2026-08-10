@@ -1,21 +1,24 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Card, Tag, Space, Typography, Table, Button, message, Input, Modal, Popconfirm, Tabs, Badge, Radio, Checkbox, Tooltip, Alert } from 'antd'
+import { useParams } from 'react-router-dom'
+import { Card, Tag, Space, Typography, Table, Button, message, Input, Modal, Popconfirm, Tabs, Badge, Checkbox, Tooltip, Alert } from 'antd'
 import {
   ApiOutlined, CopyOutlined, ThunderboltOutlined,
   KeyOutlined, PlusOutlined, DeleteOutlined, CheckCircleOutlined,
-  RobotOutlined, LinkOutlined, SettingOutlined,
+  RobotOutlined, LinkOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
 
 const { Text } = Typography
 
-// 分类名跟后端 _section() 一一对应，改名要同步改
+// 分类名跟后端 _section() 一一对应，改名要同步改。
+// ⚠ 漏一个不会报错，只会静默变成灰色 —— 「失败归因」就这么灰了一整轮没人发现。
+// 后端加了新分类时这里要跟着加，test_mcp_category_colors 会红。
 const CAT_COLORS = {
   '定位项目/分支': 'green', '用例·手工步骤': 'blue', '接口库·只记怎么调': 'cyan',
   '接口场景·可执行': 'geekblue', '环境与变量': 'orange', '回推入库': 'red',
   '需求→用例流水线': 'magenta', 'UI 脚本': 'volcano', '执行报告': 'purple',
-  '文档规范': 'gold', 'Skill 共享': 'default',
+  '文档规范': 'gold', 'Skill 共享': 'lime', '失败归因': 'error', '其它': 'default',
 }
 
 /**
@@ -29,91 +32,138 @@ const EMPTY_PROFILE = { label: '', task: '', hint: '', tools: null }
 const cardStyle = { borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)', boxShadow: 'none' }
 const sectionTitle = { fontSize: 14, fontWeight: 600, color: '#2e3138', marginBottom: 4 }
 
-/** 按分类勾选工具，分类头可整组全选/取消。 */
-function ToolPicker({ tools, byCategory, value, onChange }) {
-  const toggle = (name, on) =>
-    onChange(on ? [...value, name] : value.filter(n => n !== name))
-  const toggleCat = (items, on) => {
-    const names = items.map(t => t.name)
-    onChange(on ? [...new Set([...value, ...names])] : value.filter(n => !names.includes(n)))
-  }
+// 分类色板对应的实色（Tag 的语义色拿不到色值，分组条要用真颜色）
+const CAT_HEX = {
+  green: '#52c41a', blue: '#1677ff', cyan: '#13c2c2', geekblue: '#2f54eb',
+  orange: '#fa8c16', red: '#f5222d', magenta: '#eb2f96', volcano: '#fa541c',
+  purple: '#722ed1', gold: '#faad14', lime: '#a0d911', error: '#e8453c',
+  default: '#8c919e',
+}
+const catHex = (cat) => CAT_HEX[CAT_COLORS[cat]] || CAT_HEX.default
+
+/**
+ * 一张「我要干的活」卡片。
+ *
+ * 原来这里是一排 Radio.Button：9 个档位挤成两行、宽度不一、选中只差个填充色，
+ * **必须挨个点开才知道每个是干什么的** —— 说明文字只显示当前选中那一个。
+ * 改成卡片：每张自己写明干什么活、要几个工具，9 个档位的内容同时可见，
+ * 「当前生效」和「已选中」用两种标记分开（它们经常不是同一张）。
+ */
+function ProfileCard({ p, total, selected, effective, onClick }) {
+  const n = p.tools ? p.tools.length : total
   return (
-    <div style={{ marginTop: 12, maxHeight: 300, overflowY: 'auto', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 10, padding: 12 }}>
-      <div style={{ fontSize: 12, color: '#8c919e', marginBottom: 8 }}>
-        已选 <b style={{ color: '#0ea5a0' }}>{value.length}</b> / {tools.length}
+    <div onClick={onClick} style={{
+      cursor: 'pointer', borderRadius: 10, padding: '10px 12px', transition: 'all .15s',
+      border: selected ? '2px solid #0ea5a0' : '1px solid rgba(0,0,0,0.08)',
+      background: selected ? 'rgba(14,165,160,0.06)' : '#fff',
+      boxShadow: selected ? '0 2px 8px rgba(14,165,160,0.15)' : 'none',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+        {selected && <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 13 }} />}
+        <span style={{ fontWeight: 600, fontSize: 13, color: selected ? '#0ea5a0' : '#2e3138' }}>{p.label}</span>
+        {effective && (
+          <Tag color="green" style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 5px' }}>当前生效</Tag>
+        )}
       </div>
-      {byCategory.map(([cat, items]) => {
-        const names = items.map(t => t.name)
-        const checkedCount = names.filter(n => value.includes(n)).length
-        return (
-          <div key={cat} style={{ marginBottom: 10 }}>
-            <Checkbox
-              checked={checkedCount === names.length}
-              indeterminate={checkedCount > 0 && checkedCount < names.length}
-              onChange={e => toggleCat(items, e.target.checked)}
-            >
-              <Tag color={CAT_COLORS[cat]} style={{ fontSize: 11 }}>{cat}</Tag>
-            </Checkbox>
-            <div style={{ marginLeft: 24, marginTop: 4, display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {items.map(t => (
-                <Checkbox key={t.name} checked={value.includes(t.name)}
-                  onChange={e => toggle(t.name, e.target.checked)}>
-                  <Text code style={{ fontSize: 11 }}>{t.name}</Text>
-                </Checkbox>
-              ))}
-            </div>
-          </div>
-        )
-      })}
+      <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.6, minHeight: 38 }}>{p.task}</div>
+      <div style={{ fontSize: 12, color: '#8c919e', marginTop: 6 }}>
+        <b style={{ color: selected ? '#0ea5a0' : '#4e5969', fontSize: 14 }}>{n}</b> / {total} 个工具
+      </div>
     </div>
   )
 }
 
 /**
- * 工具目录：按「我要干的活」看，而不是几十条平铺。
- * 选一个场景 → 该场景要调哪些工具直接高亮，其余灰掉，一眼能数清。
+ * 本项目的 MCP 工具范围。
+ *
+ * 范围是**项目级**的：本项目下所有 Key 都按它生效，改一次全都生效，
+ * 不用一把一把改、更不用为了换范围重新建 Key（原来这里放的是「按这个范围建 Key」，
+ * 把"设权限"和"发钥匙"绑成了一件事，于是每换一次范围就多一把 Key）。
  */
-function ToolCatalog({ tools, byCategory, profiles, onUseProfile }) {
-  const [scene, setScene] = useState('live')
+function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSave }) {
+  const effectiveKey = scope?.profileKey || 'all'
+  const [sel, setSel] = useState(effectiveKey)
   const [onlyScene, setOnlyScene] = useState(true)
-  const prof = profiles.find(p => p.key === scene) || profiles[0] || EMPTY_PROFILE
+  // 外部刷新（保存成功后重新拉）时跟上，否则「当前生效」和选中会对不上
+  useEffect(() => { setSel(effectiveKey) }, [effectiveKey])
+
+  const prof = profiles.find(p => p.key === sel) || profiles[0] || EMPTY_PROFILE
   const inScene = (n) => !prof.tools || prof.tools.includes(n)
   const usedCount = prof.tools ? prof.tools.length : tools.length
+  const dirty = sel !== effectiveKey
+  // custom 是"库里那份范围对不上任何一档"，不是可选项 —— 只在它当前生效时露出来
+  const shown = profiles.filter(p => p.key !== 'custom')
 
   return (
     <div>
-      <Card size="small" style={{ ...cardStyle, marginBottom: 16, background: 'rgba(14,165,160,0.03)' }}>
-        <div style={{ fontSize: 12, color: '#8c919e', marginBottom: 8 }}>我要干的活</div>
-        <Radio.Group value={scene} onChange={e => setScene(e.target.value)} optionType="button" buttonStyle="solid" size="small"
-          style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-          {profiles.map(p => <Radio.Button key={p.key} value={p.key}>{p.label}</Radio.Button>)}
-        </Radio.Group>
-        <div style={{ marginTop: 10, fontSize: 13, color: '#4e5969' }}>{prof.task}</div>
-        <div style={{ marginTop: 4, fontSize: 12, color: '#8c919e' }}>{prof.hint}</div>
-        <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 16 }}>
+      <Card size="small" style={{ ...cardStyle, marginBottom: 18, background: 'rgba(14,165,160,0.03)' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: 10, flexWrap: 'wrap', gap: 8 }}>
+          <div>
+            <span style={{ ...sectionTitle, marginBottom: 0 }}>本项目的工具范围</span>
+            <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+              选「我要干的活」，范围外的工具 CC 看不到、也调不动
+            </Text>
+          </div>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            本项目 <b style={{ color: '#4e5969' }}>{keyCount}</b> 把 Key 都按它生效
+          </Text>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(228px, 1fr))', gap: 10 }}>
+          {shown.map(p => (
+            <ProfileCard key={p.key} p={p} total={tools.length}
+              selected={sel === p.key} effective={effectiveKey === p.key}
+              onClick={() => setSel(p.key)} />
+          ))}
+        </div>
+
+        {effectiveKey === 'custom' && (
+          <Alert type="info" showIcon style={{ marginTop: 10, fontSize: 12 }}
+            message={`当前生效的是一份自定义范围（${scope?.allowedTools?.length ?? 0} 个工具），对不上上面任何一档。选一档会把它覆盖掉。`} />
+        )}
+
+        <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 13 }}>
             这件事会用到 <b style={{ color: '#0ea5a0', fontSize: 16 }}>{usedCount}</b> / {tools.length} 个工具
           </span>
           <Checkbox checked={onlyScene} onChange={e => setOnlyScene(e.target.checked)} style={{ fontSize: 12 }}>
-            只看用到的
+            下面只看用到的
           </Checkbox>
-          <Button size="small" type="primary" ghost onClick={() => onUseProfile(scene)}>
-            按这个范围建 Key
-          </Button>
+          <div style={{ flex: 1 }} />
+          {dirty && (
+            <>
+              <Button size="small" onClick={() => setSel(effectiveKey)}>放弃修改</Button>
+              <Button size="small" type="primary" loading={saving}
+                onClick={() => onSave(sel, prof.tools)}>
+                保存为本项目的范围
+              </Button>
+            </>
+          )}
         </div>
+        {prof.hint && <div style={{ marginTop: 8, fontSize: 12, color: '#8c919e' }}>{prof.hint}</div>}
       </Card>
 
+      {/* 工具列表：一个分类一块，带色条标题和边框。
+          原来只有一个小 Tag + 灰字计数，42 条刷下来看不出段落在哪儿断。 */}
       {byCategory.map(([cat, items]) => {
-        const shown = onlyScene ? items.filter(t => inScene(t.name)) : items
-        if (!shown.length) return null
+        const list = onlyScene ? items.filter(t => inScene(t.name)) : items
+        if (!list.length) return null
         const hit = items.filter(t => inScene(t.name)).length
+        const color = catHex(cat)
         return (
-          <div key={cat} style={{ marginBottom: 18 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-              <Tag color={CAT_COLORS[cat]} style={{ fontSize: 12, margin: 0 }}>{cat}</Tag>
-              <Text type="secondary" style={{ fontSize: 12 }}>{hit}/{items.length} 个用到</Text>
+          <div key={cat} style={{ marginBottom: 14, border: '1px solid rgba(0,0,0,0.07)', borderRadius: 10, overflow: 'hidden' }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
+              background: 'rgba(0,0,0,0.015)', borderBottom: '1px solid rgba(0,0,0,0.06)',
+            }}>
+              <span style={{ width: 3, height: 14, borderRadius: 2, background: color, display: 'inline-block' }} />
+              <span style={{ fontWeight: 600, fontSize: 13, color: '#2e3138' }}>{cat}</span>
+              <div style={{ flex: 1 }} />
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                <b style={{ color: hit === items.length ? '#0ea5a0' : '#8c919e' }}>{hit}</b>/{items.length} 个用到
+              </Text>
             </div>
-            <Table rowKey="name" dataSource={shown} pagination={false} size="small" showHeader={false}
+            <Table rowKey="name" dataSource={list} pagination={false} size="small" showHeader={false}
               rowClassName={r => inScene(r.name) ? '' : 'tool-dimmed'}
               columns={[
                 {
@@ -140,6 +190,7 @@ function ToolCatalog({ tools, byCategory, profiles, onUseProfile }) {
 }
 
 export default function MCPTools() {
+  const { projectId } = useParams()
   const mcpUrl = `http://${window.location.hostname}:18800/mcp/`
   const [apiKeys, setApiKeys] = useState([])
   const [tools, setTools] = useState([])
@@ -147,26 +198,26 @@ export default function MCPTools() {
   const [newKeyName, setNewKeyName] = useState('')
   const [newKeyResult, setNewKeyResult] = useState(null)
   const [creating, setCreating] = useState(false)
-  const [profile, setProfile] = useState('live')
-  const [picked, setPicked] = useState(null)
   const [profiles, setProfiles] = useState([])
-  const [scopeEditing, setScopeEditing] = useState(null)   // 正在编辑范围的 Key
+  const [scope, setScope] = useState(null)          // 本项目的工具范围
+  const [savingScope, setSavingScope] = useState(false)
 
-  useEffect(() => { fetchKeys(); fetchTools(); fetchProfiles() }, [])
+  useEffect(() => {
+    if (!projectId) return
+    fetchKeys(); fetchTools(); fetchProfiles(); fetchScope()
+  }, [projectId])
   const fetchKeys = async () => { try { setApiKeys((await api.get('/mcp-keys')).data || []) } catch { /* 拦截器已弹错，这里不重复报 */ } }
   // 工具目录来自后端注册表，不再前端硬编码（曾经写死 20 条、后端实际 32 条）
   const fetchTools = async () => { try { setTools((await api.get('/mcp-keys/tools')).data || []) } catch { /* 同上 */ } }
   const fetchProfiles = async () => {
     try {
       const d = (await api.get('/mcp-keys/profiles')).data || {}
-      const list = d.profiles || []
-      setProfiles(list)
-      // 默认档位的工具作为初始勾选 —— 建 Key 弹窗直接就是收敛过的范围
-      const first = list.find(p => p.key === 'live') || list[0]
-      if (first) setPicked(first.tools)
-    } catch { /* 拉不到就只剩自定义勾选，不至于开天窗 */ }
+      setProfiles(d.profiles || [])
+    } catch { /* 拉不到就只剩工具列表，不至于开天窗 */ }
   }
-  const profileOf = (key) => profiles.find(p => p.key === key)
+  const fetchScope = async () => {
+    try { setScope((await api.get(`/projects/${projectId}/mcp-scope`)).data) } catch { /* 同上 */ }
+  }
 
   const byCategory = useMemo(() => {
     const m = new Map()
@@ -174,37 +225,46 @@ export default function MCPTools() {
     return [...m.entries()]
   }, [tools])
 
-  const applyProfile = (key) => {
-    setProfile(key)
-    // custom 不是后端档位：沿用当前勾选（从档位切过去时正好作为起点）
-    if (key !== 'custom') setPicked(profileOf(key)?.tools ?? null)
-    else if (picked === null) setPicked(tools.map(t => t.name))
+  // 本项目的 Key 和「还没归属项目」的旧 Key 分开列 —— 后者不受项目范围管，
+  // 混在一起会让人以为改了范围它也跟着变了。
+  const projectKeys = apiKeys.filter(k => k.projectId === projectId)
+  const orphanKeys = apiKeys.filter(k => !k.projectId)
+
+  const saveScope = async (profileKey, toolNames) => {
+    setSavingScope(true)
+    try {
+      // 档位只是快捷方式，落库存展开后的显式工具名（不存档位名，
+      // 否则日后改了档位定义，已有项目的范围会悄悄变）。全量档存 null。
+      await api.put(`/projects/${projectId}/mcp-scope`,
+        toolNames ? { allowedTools: toolNames } : { resetTools: true })
+      message.success(`已保存，本项目 ${scope?.keyCount ?? 0} 把 Key 立即生效`)
+      await fetchScope()
+    } catch (e) { message.error(e.message || '保存失败') } finally { setSavingScope(false) }
   }
 
   const createKey = async () => {
     setCreating(true)
     try {
-      const body = { name: newKeyName || 'default' }
-      if (picked) body.allowedTools = picked
+      // 不再在这里选范围 —— 范围跟项目走，Key 只是一把钥匙
+      const body = { name: newKeyName || 'default', projectId }
       setNewKeyResult((await api.post('/mcp-keys', body)).data)
-      setNewKeyName(''); fetchKeys()
+      setNewKeyName(''); fetchKeys(); fetchScope()
     }
     catch (e) { message.error(e.message || '创建失败') } finally { setCreating(false) }
   }
-  const revokeKey = async (id) => { try { await api.delete(`/mcp-keys/${id}`); message.success('已吊销'); fetchKeys() } catch { message.error('吊销失败') } }
+  const revokeKey = async (id) => { try { await api.delete(`/mcp-keys/${id}`); message.success('已吊销'); fetchKeys(); fetchScope() } catch { message.error('吊销失败') } }
 
-  const saveScope = async () => {
-    const { id, tools: sel } = scopeEditing
+  const adoptKey = async (id) => {
     try {
-      await api.patch(`/mcp-keys/${id}`, sel === null ? { resetTools: true } : { allowedTools: sel })
-      message.success('工具范围已更新')
-      setScopeEditing(null); fetchKeys()
-    } catch (e) { message.error(e.message || '更新失败') }
+      await api.patch(`/mcp-keys/${id}`, { projectId })
+      message.success('已归到本项目，范围改由项目决定')
+      fetchKeys(); fetchScope()
+    } catch (e) { message.error(e.message || '操作失败') }
   }
 
   const copy = (text) => copyToClipboard(text).then(() => message.success('已复制'))
 
-  const onlineCount = apiKeys.filter(k => k.lastUsedAt && Date.now() - new Date(k.lastUsedAt).getTime() < 30 * 60 * 1000).length
+  const onlineCount = projectKeys.filter(k => k.lastUsedAt && Date.now() - new Date(k.lastUsedAt).getTime() < 30 * 60 * 1000).length
   const mcpConfig = JSON.stringify({ mcpServers: { testbench: { type: "streamable-http", url: mcpUrl, headers: { Authorization: "Bearer <你的API Key>" } } } }, null, 2)
 
   return (
@@ -229,7 +289,7 @@ export default function MCPTools() {
           <Space size={16}>
             <Button size="small" icon={<CopyOutlined />} onClick={() => copy(mcpUrl)}>复制地址</Button>
             <Space split={<span style={{ color: '#e0e0e3' }}>|</span>}>
-              <Text type="secondary" style={{ fontSize: 12 }}>{onlineCount}/{apiKeys.length} 在线</Text>
+              <Text type="secondary" style={{ fontSize: 12 }}>{onlineCount}/{projectKeys.length} 在线</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>{tools.length} 个工具</Text>
               <Text type="secondary" style={{ fontSize: 12 }}>StreamableHTTP</Text>
             </Space>
@@ -245,13 +305,16 @@ export default function MCPTools() {
           children: (
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-                <Text type="secondary" style={{ fontSize: 13 }}>每个 Claude Code 用独立 API Key 连接。创建后按「配置指南」完成配置。</Text>
+                <Text type="secondary" style={{ fontSize: 13 }}>
+                  每个 Claude Code 用独立 API Key 连接。<b>工具范围不在这里选</b> ——
+                  它是项目级的，去「工具范围」页签改一次，本项目所有 Key 都生效。
+                </Text>
                 <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateModalOpen(true); setNewKeyResult(null); setNewKeyName('') }}>创建 Key</Button>
               </div>
 
-              {apiKeys.length > 0 ? (
+              {projectKeys.length > 0 ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                  {apiKeys.map(k => {
+                  {projectKeys.map(k => {
                     const lastUsed = k.lastUsedAt ? new Date(k.lastUsedAt) : null
                     const isOnline = lastUsed && (Date.now() - lastUsed.getTime() < 30 * 60 * 1000)
                     const isRecent = lastUsed && (Date.now() - lastUsed.getTime() < 24 * 60 * 60 * 1000)
@@ -275,11 +338,11 @@ export default function MCPTools() {
                                 <Text code style={{ fontSize: 11, color: '#8c919e' }}>{k.prefix}...</Text>
                                 {isOnline && <Tag color="cyan" style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>在线</Tag>}
                                 {!isOnline && isRecent && <Tag color="warning" style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>最近活跃</Tag>}
-                                <Tooltip title={k.allowedTools
-                                  ? `已限定 ${k.allowedTools.length} 个工具，范围外的工具该连接看不到也调不了`
-                                  : '未限制，可使用全部工具'}>
-                                  <Tag color={k.allowedTools ? 'processing' : 'default'} style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>
-                                    {k.allowedTools ? `${k.allowedTools.length}/${tools.length} 工具` : '全部工具'}
+                                <Tooltip title={scope?.allowedTools
+                                  ? `跟随本项目的工具范围：${scope.allowedTools.length} 个工具，范围外的看不到也调不了。改范围去「工具范围」页签。`
+                                  : '本项目未限制范围，可使用全部工具'}>
+                                  <Tag color={scope?.allowedTools ? 'processing' : 'default'} style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>
+                                    {scope?.allowedTools ? `${scope.allowedTools.length}/${tools.length} 工具` : '全部工具'}
                                   </Tag>
                                 </Tooltip>
                               </div>
@@ -289,10 +352,6 @@ export default function MCPTools() {
                             </div>
                           </div>
                           <Space size={4}>
-                            <Button size="small" type="text" icon={<SettingOutlined />}
-                              onClick={() => setScopeEditing({ id: k.id, name: k.name, tools: k.allowedTools ?? null })}>
-                              工具范围
-                            </Button>
                             <Popconfirm title="吊销后该连接立即失效" onConfirm={() => revokeKey(k.id)} okText="吊销" cancelText="取消" okButtonProps={{ danger: true }}>
                               <Button size="small" danger type="text" icon={<DeleteOutlined />}>吊销</Button>
                             </Popconfirm>
@@ -305,8 +364,44 @@ export default function MCPTools() {
               ) : (
                 <div style={{ textAlign: 'center', padding: '60px 0', color: '#bfc4cd' }}>
                   <RobotOutlined style={{ fontSize: 36, marginBottom: 12 }} />
-                  <div style={{ fontSize: 14 }}>还没有连接</div>
+                  <div style={{ fontSize: 14 }}>本项目还没有连接</div>
                   <div style={{ fontSize: 12, marginTop: 4 }}>点击「创建 Key」添加 Claude Code 连接</div>
+                </div>
+              )}
+
+              {/* 范围挪到项目级之前建的 Key 没有归属项目。它们**不受本项目范围管**，
+                  单独列出来说清楚 —— 混进上面那一堆里，人会以为改了范围它们也跟着变。
+                  不自动认领：猜错项目等于静默改权限。 */}
+              {orphanKeys.length > 0 && (
+                <div style={{ marginTop: 26 }}>
+                  <div style={{ ...sectionTitle }}>未归属项目的 Key（{orphanKeys.length}）</div>
+                  <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
+                    这些是范围改成项目级之前建的，<b>不受本项目的工具范围管</b>，仍按它自己那份旧范围跑。
+                    归到本项目后就跟着项目范围走。
+                  </Text>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {orphanKeys.map(k => (
+                      <Card key={k.id} size="small" style={{ ...cardStyle, borderLeft: '3px solid #e8e8e8' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Space size={10}>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: '#2e3138' }}>{k.name}</span>
+                            <Text code style={{ fontSize: 11, color: '#8c919e' }}>{k.prefix}...</Text>
+                            <Tag color={k.allowedTools ? 'processing' : 'default'} style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>
+                              {k.allowedTools ? `旧范围 ${k.allowedTools.length}/${tools.length}` : '全部工具'}
+                            </Tag>
+                          </Space>
+                          <Space size={4}>
+                            <Popconfirm title="归到本项目后，它的范围立刻改由本项目决定" onConfirm={() => adoptKey(k.id)} okText="归属" cancelText="取消">
+                              <Button size="small" type="text">归到本项目</Button>
+                            </Popconfirm>
+                            <Popconfirm title="吊销后该连接立即失效" onConfirm={() => revokeKey(k.id)} okText="吊销" cancelText="取消" okButtonProps={{ danger: true }}>
+                              <Button size="small" danger type="text" icon={<DeleteOutlined />}>吊销</Button>
+                            </Popconfirm>
+                          </Space>
+                        </div>
+                      </Card>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -314,10 +409,11 @@ export default function MCPTools() {
         },
         {
           key: 'tools',
-          label: <span><ThunderboltOutlined /> 工具列表 ({tools.length})</span>,
+          label: <span><ThunderboltOutlined /> 工具范围 ({scope?.allowedTools ? `${scope.allowedTools.length}/${tools.length}` : tools.length})</span>,
           children: (
-            <ToolCatalog tools={tools} byCategory={byCategory} profiles={profiles}
-              onUseProfile={(key) => { applyProfile(key); setCreateModalOpen(true); setNewKeyResult(null); setNewKeyName('') }} />
+            <ScopePanel tools={tools} byCategory={byCategory} profiles={profiles}
+              scope={scope} keyCount={scope?.keyCount ?? projectKeys.length}
+              saving={savingScope} onSave={saveScope} />
           ),
         },
         {
@@ -389,28 +485,14 @@ export default function MCPTools() {
             </Text>
             <Input placeholder="如：小李的开发机、CI 流水线" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} size="large" />
 
-            <div style={{ ...sectionTitle, marginTop: 20 }}>工具范围</div>
-            <Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 10 }}>
-              限定这个连接能用哪些工具。范围外的工具 Claude Code <b>看不到也调不了</b>，
-              避免它在几十个工具里挑错。
-            </Text>
-            <Radio.Group value={profile} onChange={e => applyProfile(e.target.value)}
-              style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {profiles.map(p => (
-                <Radio key={p.key} value={p.key}>
-                  <span style={{ fontSize: 13 }}>{p.label}</span>
-                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>
-                    {p.tools ? `${p.tools.length} 个` : `${tools.length} 个`} · {p.hint}
-                  </Text>
-                </Radio>
-              ))}
-              <Radio value="custom"><span style={{ fontSize: 13 }}>自定义</span></Radio>
-            </Radio.Group>
-
-            {profile === 'custom' && (
-              <ToolPicker tools={tools} byCategory={byCategory}
-                value={picked || []} onChange={setPicked} />
-            )}
+            {/* 这里不再选范围。范围是项目级的，一把 Key 只是一把钥匙 ——
+                原来把"设权限"和"发钥匙"绑在一起，于是每换一次范围就多出一把 Key。 */}
+            <div style={{ marginTop: 16, fontSize: 12.5, color: '#4e5969', background: 'rgba(14,165,160,0.06)',
+              border: '1px solid rgba(14,165,160,0.18)', borderRadius: 10, padding: '8px 12px', lineHeight: 1.8 }}>
+              它的工具范围<b>跟随本项目</b>
+              {scope?.allowedTools ? `（当前 ${scope.allowedTools.length}/${tools.length} 个工具）` : '（当前不限制）'}
+              ，不用在这里选。要改去「工具范围」页签，改一次本项目所有 Key 都生效。
+            </div>
           </div>
         ) : (
           <div>
@@ -422,55 +504,15 @@ export default function MCPTools() {
             <Card size="small" style={cardStyle}>
               <Text code copyable style={{ fontSize: 13, wordBreak: 'break-all' }}>{newKeyResult.key}</Text>
             </Card>
-            {newKeyResult.allowedTools && (
+            {scope?.allowedTools && (
               <Alert style={{ marginTop: 12 }} type="info" showIcon
-                message={`该连接已限定 ${newKeyResult.allowedTools.length} 个工具`}
-                description="范围外的工具不会出现在它的工具列表里，直接调用也会被拒绝。" />
+                message={`该连接跟随本项目的工具范围：${scope.allowedTools.length} 个工具`}
+                description="范围外的工具不会出现在它的工具列表里，直接调用也会被拒绝。改范围去「工具范围」页签。" />
             )}
           </div>
         )}
       </Modal>
 
-      {/* 编辑已有 Key 的工具范围 */}
-      <Modal title={`工具范围 · ${scopeEditing?.name || ''}`} open={!!scopeEditing} width={560}
-        onCancel={() => setScopeEditing(null)} onOk={saveScope} okText="保存">
-        {scopeEditing && (
-          <div>
-            {/* 用户抱怨过"改了工具就要重新生成 Key，太麻烦"。改范围其实一直是就地生效的，
-                但弹窗里从来没说过这句话 —— 人打开只看到两个单选和保存，疑虑一点没被打消。 */}
-            <div style={{ fontSize: 12.5, color: '#4e5969', background: 'rgba(14,165,160,0.06)',
-              border: '1px solid rgba(14,165,160,0.18)', borderRadius: 10, padding: '8px 12px', marginBottom: 12, lineHeight: 1.8 }}>
-              保存后<b>立即对这个 Key 生效</b>。Key 本身不变 —— 对面的 Claude Code
-              不用改配置、不用重连，下一次 <Text code style={{ fontSize: 11 }}>tools/list</Text> 就是新范围。
-            </div>
-            <Radio.Group
-              value={scopeEditing.tools === null ? 'all' : 'custom'}
-              onChange={e => setScopeEditing(s => ({
-                ...s, tools: e.target.value === 'all' ? null : (profileOf('live')?.tools || []),
-              }))}
-              style={{ display: 'flex', gap: 16, marginBottom: 12 }}
-            >
-              <Radio value="all">不限制（全部工具）</Radio>
-              <Radio value="custom">限定范围</Radio>
-            </Radio.Group>
-
-            {scopeEditing.tools !== null && (
-              <>
-                <Space wrap size={6} style={{ marginBottom: 4 }}>
-                  <Text type="secondary" style={{ fontSize: 12 }}>快速套用：</Text>
-                  {profiles.filter(p => p.tools).map(p => (
-                    <Button key={p.key} size="small"
-                      onClick={() => setScopeEditing(s => ({ ...s, tools: p.tools }))}>{p.label}</Button>
-                  ))}
-                </Space>
-                <ToolPicker tools={tools} byCategory={byCategory}
-                  value={scopeEditing.tools}
-                  onChange={v => setScopeEditing(s => ({ ...s, tools: v }))} />
-              </>
-            )}
-          </div>
-        )}
-      </Modal>
     </div>
   )
 }

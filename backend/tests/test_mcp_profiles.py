@@ -68,3 +68,22 @@ def test_每个档位都能定位到项目():
 def test_每个档位都写清了这是干什么活的():
     for p in PROFILES:
         assert p.get("label") and p.get("task") and p.get("hint"), p["key"]
+
+
+def test_每个分类在前端都有颜色():
+    """分类漏登记不会报错，只会静默变成灰色 —— 「失败归因」就这么灰了一整轮。
+
+    盯的是前端 CAT_COLORS 覆盖后端 _section() 实际产出的每一个分类名。
+    """
+    import re
+    from pathlib import Path
+
+    jsx = Path(__file__).resolve().parents[2] / "frontend/src/pages/settings/MCPTools.jsx"
+    src = jsx.read_text(encoding="utf-8")
+    block = src[src.index("const CAT_COLORS = {"):]
+    block = block[:block.index("}")]
+    mapped = set(re.findall(r"'([^']+)':\s*'[^']+'", block))
+
+    cats = {t["category"] for t in TOOL_CATALOG}
+    missing = cats - mapped
+    assert not missing, f"这些分类前端没给颜色，会静默变灰：{sorted(missing)}"

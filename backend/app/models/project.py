@@ -11,7 +11,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.user import Base
@@ -27,6 +27,10 @@ class Project(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     git_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     script_base_path: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # 本项目的 MCP 工具范围：NULL = 不限制，列表 = 只暴露这些工具名。
+    # 该项目下的**所有** Key 都按它生效 —— 范围是"这个项目允许 CC 干哪些活"，
+    # 不是"这一把钥匙允许干哪些活"，同一个项目发五把 Key 范围本来就该一样。
+    mcp_allowed_tools: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
