@@ -83,7 +83,7 @@ PRESETS: dict[str, dict] = {
 
     # ── 网关联调 ──
     # 拿这个 mock 当"假上游"去验网关（护栏 / 脱敏 / fail-closed）时用。
-    # 四条都关掉 smart_response：那个开关会用关键词盖掉下面的 response_body，
+    # 四条都关掉条件应答：规则命中会盖掉下面的 response_body，
     # 而这几个场景的判定恰恰全靠"输出里到底有没有那个串"。
     "gateway_guardrail_hit": {
         "label": "网关 - 护栏命中 (输出含 VIOLATION)",
@@ -91,7 +91,8 @@ PRESETS: dict[str, dict] = {
         "status_code": 200,
         "finish_reason": "stop",
         "response_type": "text",
-        "smart_response": False,
+        "match_enabled": False,
+        "match_rules": [],
         "response_body": "根据内部风控记录，该客户存在异常交易行为，标记为 VIOLATION，建议冻结账户并转人工复核。",
     },
     "gateway_pii_output": {
@@ -100,7 +101,8 @@ PRESETS: dict[str, dict] = {
         "status_code": 200,
         "finish_reason": "stop",
         "response_type": "text",
-        "smart_response": False,
+        "match_enabled": False,
+        "match_rules": [],
         # 输入里不放、只在输出里放 —— 这样才能验出"护栏查的是输出而不是输入"
         "response_body": "已为你查到该客户的登记信息：姓名 张三，身份证号 11010119900101123X，联系电话 13800138000。",
     },
@@ -111,7 +113,8 @@ PRESETS: dict[str, dict] = {
         "finish_reason": "stop",
         "response_type": "text",
         "stream_mode": "force_stream",
-        "smart_response": False,
+        "match_enabled": False,
+        "match_rules": [],
         "response_body": "上游没有遵守 stream:false 的约定，把整段内容拆成事件流返回了，其中还夹带 VIOLATION 关键词。",
     },
     "gateway_force_json": {
@@ -121,7 +124,8 @@ PRESETS: dict[str, dict] = {
         "finish_reason": "stop",
         "response_type": "text",
         "stream_mode": "force_json",
-        "smart_response": False,
+        "match_enabled": False,
+        "match_rules": [],
         "response_body": "请求要的是流式，上游却一次性返回了完整 JSON —— 用来验网关在拿不到流时会不会挂住或超时。",
     },
 

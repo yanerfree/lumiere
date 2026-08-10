@@ -62,6 +62,9 @@ export default function LlmMock() {
   const [presets, setPresets] = useState([])
   const [customPresets, setCustomPresets] = useState([])
   const [savePresetOpen, setSavePresetOpen] = useState(false)
+  const [ruleModalOpen, setRuleModalOpen] = useState(false)
+  const [ruleDraft, setRuleDraft] = useState(null)
+  const [ruleEditIdx, setRuleEditIdx] = useState(null)
   const [savePresetName, setSavePresetName] = useState('')
   const [logs, setLogs] = useState([])
   const [logsTotal, setLogsTotal] = useState(0)
@@ -121,17 +124,78 @@ export default function LlmMock() {
     setActiveTab('config')
   }, [])
 
+  // ── 条件应答规则 ──
+  const matchRules = useMemo(
+    () => (Array.isArray(routeForm?.matchRules) ? routeForm.matchRules : []),
+    [routeForm],
+  )
+
+  const FIELD_LABEL = { prompt: '全部消息', last_user: '最后一条用户消息', system: 'system 消息', model: '模型名' }
+  const OP_LABEL = { contains_any: '包含任一', equals: '等于', regex: '正则匹配' }
+
+  const ruleSummary = useCallback((rule) => {
+    const vals = Array.isArray(rule.value) ? rule.value : (rule.value ? [rule.value] : [])
+    const shown = vals.slice(0, 3).join(' / ')
+    const more = vals.length > 3 ? ` 等 ${vals.length} 项` : ''
+    return `${FIELD_LABEL[rule.field] || rule.field || 'prompt'} ${OP_LABEL[rule.op] || rule.op || '包含任一'} ${shown || '(未填)'}${more}`
+  }, [])
+
+  const setRules = useCallback((next) => setRouteForm(f => ({ ...f, matchRules: next })), [])
+  const updateRule = useCallback((idx, patch) => {
+    setRouteForm(f => {
+      const list = Array.isArray(f.matchRules) ? [...f.matchRules] : []
+      list[idx] = { ...list[idx], ...patch }
+      return { ...f, matchRules: list }
+    })
+  }, [])
+  const removeRule = useCallback((idx) => {
+    setRouteForm(f => ({ ...f, matchRules: (f.matchRules || []).filter((_, i) => i !== idx) }))
+  }, [])
+
+  const openRuleEditor = useCallback((idx) => {
+    if (idx === null) {
+      // 新规则给个能直接跑通的骨架，省得用户面对一堆空框
+      setRuleDraft({ id: `rule-${Date.now()}`, enabled: true, name: '', field: 'prompt',
+        op: 'contains_any', value: [], responseBody: '', statusCode: null })
+      setRuleEditIdx(null)
+    } else {
+      setRuleDraft({ ...matchRules[idx] })
+      setRuleEditIdx(idx)
+    }
+    setRuleModalOpen(true)
+  }, [matchRules])
+
+  const saveRuleDraft = useCallback(() => {
+    if (!ruleDraft) return
+    const vals = (ruleDraft.value || []).map(v => String(v).trim()).filter(Boolean)
+    if (!vals.length) { message.warning('匹配值不能为空，否则这条规则永远不会命中'); return }
+    if (ruleDraft.op === 'regex') {
+      for (const v of vals) {
+        try { new RegExp(v) } catch { message.error(`正则写错了：${v}`); return }
+      }
+    }
+    const clean = { ...ruleDraft, value: vals, name: (ruleDraft.name || '').trim() || '未命名规则' }
+    setRouteForm(f => {
+      const list = Array.isArray(f.matchRules) ? [...f.matchRules] : []
+      if (ruleEditIdx === null) list.push(clean); else list[ruleEditIdx] = clean
+      return { ...f, matchRules: list }
+    })
+    setRuleModalOpen(false)
+    setRuleDraft(null)
+  }, [ruleDraft, ruleEditIdx])
+
   const isDirty = useMemo(() => {
     if (!routeForm || !originalForm) return false
     const keys = ['name', 'method', 'path', 'enabled', 'statusCode', 'responseType', 'finishReason',
       'responseBody', 'responseMode', 'presetMode', 'delayMs', 'sseChunkDelayMs', 'tokenMode',
       'customPromptTokens', 'customCompletionTokens', 'modelMode', 'customModel', 'responseFormat',
-      'streamMode', 'smartResponse']
+      'streamMode', 'matchEnabled']
     for (const k of keys) {
       if (routeForm[k] !== originalForm[k]) return true
     }
     if (JSON.stringify(routeForm.toolCalls) !== JSON.stringify(originalForm.toolCalls)) return true
     if (JSON.stringify(routeForm.responseHeaders) !== JSON.stringify(originalForm.responseHeaders)) return true
+    if (JSON.stringify(routeForm.matchRules) !== JSON.stringify(originalForm.matchRules)) return true
     return false
   }, [routeForm, originalForm])
 
@@ -262,7 +326,8 @@ export default function LlmMock() {
           toolCalls: cp.config.toolCalls ?? cp.config.tool_calls ?? f.toolCalls,
           responseHeaders: cp.config.responseHeaders ?? cp.config.response_headers ?? f.responseHeaders,
           streamMode: cp.config.streamMode ?? cp.config.stream_mode ?? f.streamMode,
-          smartResponse: cp.config.smartResponse ?? cp.config.smart_response ?? f.smartResponse,
+          matchEnabled: cp.config.matchEnabled ?? cp.config.match_enabled ?? f.matchEnabled,
+          matchRules: cp.config.matchRules ?? cp.config.match_rules ?? f.matchRules,
         }))
       }
       return
@@ -281,7 +346,8 @@ export default function LlmMock() {
         // 这两个回落到默认值而不是保留当前值 —— 否则选过一次「fail-closed」再换普通预设，
         // 耍赖开关会悄悄粘着不放，后面所有请求都变成事件流，很难查。
         streamMode: p.streamMode ?? p.stream_mode ?? 'auto',
-        smartResponse: p.smartResponse ?? p.smart_response ?? true,
+        matchEnabled: p.matchEnabled ?? p.match_enabled ?? true,
+        matchRules: p.matchRules ?? p.match_rules ?? f.matchRules,
       }))
     } catch { setRouteForm(f => ({ ...f, presetMode: key })) }
   }
@@ -299,7 +365,8 @@ export default function LlmMock() {
           toolCalls: routeForm.toolCalls,
           responseHeaders: routeForm.responseHeaders,
           streamMode: routeForm.streamMode,
-          smartResponse: routeForm.smartResponse,
+          matchEnabled: routeForm.matchEnabled,
+          matchRules: routeForm.matchRules,
         }
       })
       message.success('预设已保存')
@@ -645,13 +712,13 @@ export default function LlmMock() {
             {!isEmbedding && (
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
-                  智能应答
-                  <Tooltip title="开启时，prompt 里出现「测试用例 / JSON 数组 / test case / 测试设计」等关键词会自动返回一段用例 JSON，覆盖下面配的响应内容。做护栏、脱敏这类「输出里必须含某个串」的验证时请关掉。">
+                  条件应答
+                  <Tooltip title="按请求内容分流：命中规则就返回规则自己的响应，都不命中才用下面的「响应内容」。关掉则整张规则表不参与匹配。规则在下方「条件应答规则」区域里编辑。">
                     <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
                   </Tooltip>
                 </div>
-                <Switch size="small" checked={routeForm.smartResponse !== false}
-                  onChange={v => setRouteForm(f => ({ ...f, smartResponse: v }))} disabled={locked} />
+                <Switch size="small" checked={routeForm.matchEnabled !== false}
+                  onChange={v => setRouteForm(f => ({ ...f, matchEnabled: v }))} disabled={locked} />
               </div>
             )}
             <div>
@@ -697,6 +764,66 @@ export default function LlmMock() {
           {!isEmbedding && routeForm.streamMode === 'force_json' && (
             <Alert type="warning" showIcon style={{ fontSize: 12, marginBottom: 16 }}
               message="强制整包：请求写 stream:true 也只返回完整 JSON，不发事件流。等着读流的客户端可能会一直挂到超时。" />
+          )}
+
+          {/* 条件应答规则表 —— 「什么样的请求 → 回什么」，从上往下第一条命中的生效 */}
+          {!isEmbedding && (
+            <div style={{ marginBottom: 16, border: '1px solid var(--border-color, #f0f0f0)', borderRadius: 8, overflow: 'hidden' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'rgba(0,0,0,0.02)' }}>
+                <span style={{ fontSize: 12, fontWeight: 500 }}>条件应答规则</span>
+                <span style={{ fontSize: 11, color: '#bfbfbf' }}>
+                  从上往下匹配，第一条命中的生效；都不命中才用下面的「响应内容」
+                </span>
+                <span style={{ flex: 1 }} />
+                {matchRules.length > 0 && (
+                  <Tag color={routeForm.matchEnabled !== false ? 'green' : 'default'} style={{ marginInlineEnd: 0 }}>
+                    {matchRules.filter(r => r.enabled !== false).length} / {matchRules.length} 条生效
+                  </Tag>
+                )}
+                <Button size="small" icon={<PlusOutlined />} disabled={locked} onClick={() => openRuleEditor(null)}>
+                  添加规则
+                </Button>
+              </div>
+
+              {routeForm.matchEnabled === false && matchRules.length > 0 && (
+                <div style={{ padding: '6px 12px', fontSize: 11, color: '#faad14', background: 'rgba(250,173,20,0.06)' }}>
+                  「条件应答」总开关是关的，下面这些规则当前一条都不会生效。
+                </div>
+              )}
+
+              {matchRules.length === 0 ? (
+                <div style={{ padding: '14px 12px', fontSize: 12, color: '#bfbfbf', textAlign: 'center' }}>
+                  还没有规则，所有请求都返回下面的「响应内容」。点「添加规则」按请求内容分流。
+                </div>
+              ) : (
+                <div>
+                  {matchRules.map((rule, idx) => (
+                    <div key={rule.id || idx} style={{
+                      display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px',
+                      borderTop: '1px solid var(--border-color, #f5f5f5)',
+                      opacity: rule.enabled === false ? 0.45 : 1,
+                    }}>
+                      <Switch size="small" checked={rule.enabled !== false} disabled={locked}
+                        onChange={v => updateRule(idx, { enabled: v })} />
+                      <span style={{ fontSize: 12, fontWeight: 500, minWidth: 96 }}>
+                        {rule.name || `规则 ${idx + 1}`}
+                      </span>
+                      <span style={{ fontSize: 11, color: '#8c8c8c', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {ruleSummary(rule)}
+                      </span>
+                      {rule.statusCode ? <Tag color="orange" style={{ marginInlineEnd: 0 }}>{rule.statusCode}</Tag> : null}
+                      <span style={{ fontSize: 11, color: '#bfbfbf', maxWidth: 190, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        → {(rule.responseBody || '').slice(0, 40) || '(空)'}
+                      </span>
+                      <Button size="small" type="text" disabled={locked} onClick={() => openRuleEditor(idx)}>编辑</Button>
+                      <Popconfirm title="删除这条规则？" onConfirm={() => removeRule(idx)} disabled={locked}>
+                        <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={locked} />
+                      </Popconfirm>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           )}
 
           {/* 随机模式提示 */}
@@ -1141,6 +1268,77 @@ export default function LlmMock() {
         <Input placeholder="输入预设名称" value={savePresetName}
           onChange={e => setSavePresetName(e.target.value)}
           onPressEnter={handleSaveCustomPreset} autoFocus />
+      </Modal>
+
+      <Modal title={ruleEditIdx === null ? '添加条件应答规则' : '编辑条件应答规则'}
+        open={ruleModalOpen} width={720}
+        onOk={saveRuleDraft} onCancel={() => { setRuleModalOpen(false); setRuleDraft(null) }}
+        okText="确定" cancelText="取消">
+        {ruleDraft && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div style={{ flex: 1, minWidth: 180 }}>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>规则名称</div>
+                <Input size="small" placeholder="例如：测试用例生成" value={ruleDraft.name}
+                  onChange={e => setRuleDraft(d => ({ ...d, name: e.target.value }))} />
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>看请求的哪部分</div>
+                <Select size="small" style={{ width: 170 }} value={ruleDraft.field}
+                  onChange={v => setRuleDraft(d => ({ ...d, field: v }))}>
+                  <Select.Option value="prompt">全部消息拼接</Select.Option>
+                  <Select.Option value="last_user">最后一条用户消息</Select.Option>
+                  <Select.Option value="system">system 消息</Select.Option>
+                  <Select.Option value="model">模型名</Select.Option>
+                </Select>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>怎么比</div>
+                <Select size="small" style={{ width: 120 }} value={ruleDraft.op}
+                  onChange={v => setRuleDraft(d => ({ ...d, op: v }))}>
+                  <Select.Option value="contains_any">包含任一</Select.Option>
+                  <Select.Option value="equals">等于</Select.Option>
+                  <Select.Option value="regex">正则匹配</Select.Option>
+                </Select>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                  命中后状态码
+                  <Tooltip title="留空则沿用路由本身的状态码。填 429 就能做到「prompt 里带某个词就触发限流」。">
+                    <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                  </Tooltip>
+                </div>
+                <InputNumber size="small" style={{ width: 110 }} min={100} max={599} placeholder="沿用路由"
+                  value={ruleDraft.statusCode}
+                  onChange={v => setRuleDraft(d => ({ ...d, statusCode: v }))} />
+              </div>
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                匹配值
+                <span style={{ marginLeft: 6, fontSize: 11, color: '#bfbfbf' }}>
+                  回车分隔多个；「包含任一」时命中其中一个就算命中
+                </span>
+              </div>
+              <Select mode="tags" size="small" style={{ width: '100%' }} tokenSeparators={[',', '，', '\n']}
+                placeholder="例如：测试用例、test case" value={ruleDraft.value || []}
+                onChange={v => setRuleDraft(d => ({ ...d, value: v }))} open={false} suffixIcon={null} />
+            </div>
+
+            <div>
+              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                命中后返回的内容
+                <span style={{ marginLeft: 6, fontSize: 11, color: '#bfbfbf' }}>
+                  支持 ${'{request.model}'} 等变量，与「响应内容」同一套
+                </span>
+              </div>
+              <TextArea rows={9} value={ruleDraft.responseBody} style={{ fontFamily: MONO, fontSize: 12 }}
+                placeholder="命中这条规则时，mock 返回的正文"
+                onChange={e => setRuleDraft(d => ({ ...d, responseBody: e.target.value }))} />
+            </div>
+          </div>
+        )}
       </Modal>
     </div>
   )

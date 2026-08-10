@@ -55,9 +55,12 @@ class MockRoute(Base):
     # （测网关 fail-closed：上游对 stream:false 耍赖返流）；force_json 反过来，请求要流也只给整包 JSON
     stream_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
 
-    # 智能应答 —— 开着时 prompt 里出现「测试用例」这类关键词会**覆盖**下面的 response_body。
-    # 平台自己的用例生成要它，做护栏/脱敏验证时必须关掉，否则你配的输出根本没发出去。
-    smart_response: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # 条件应答 —— 按请求内容分流：命中规则就返回规则自己的响应，都不命中才用下面的 response_body。
+    # 总开关关掉则整张规则表不参与匹配（调试时想看默认响应，不必一条条禁用）。
+    match_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # [{id, enabled, name, field, op, value, response_body, status_code}]
+    # 内置那条「测试用例关键词 → 用例 JSON」也躺在这里，跟自建规则完全平权，可改可删。
+    match_rules: Mapped[list | None] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
 
     # Tool Calls 配置
     response_type: Mapped[str] = mapped_column(String(20), nullable=False, default="text")

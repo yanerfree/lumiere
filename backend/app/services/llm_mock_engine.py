@@ -91,7 +91,7 @@ def _error_meta(status_code: int) -> tuple[str, str | None]:
     return _ERROR_MAP.get(status_code, ("server_error", "server_error" if status_code >= 500 else None))
 
 
-_AI_CASE_KEYWORDS = ("测试用例", "JSON 数组", "test case", "测试设计", "设计测试用例")
+_DEFAULT_RULE_KEYWORDS = ("测试用例", "JSON 数组", "test case", "测试设计", "设计测试用例")
 
 _MOCK_CASES_JSON = json.dumps([
     {
@@ -164,22 +164,96 @@ _MOCK_CASES_JSON = json.dumps([
 ], ensure_ascii=False, indent=2)
 
 
-def _detect_smart_response(request_body: dict) -> str | None:
-    messages = request_body.get("messages", [])
-    text = " ".join(m.get("content", "") for m in messages if isinstance(m.get("content"), str))
-    for kw in _AI_CASE_KEYWORDS:
-        if kw in text:
-            return _resolve_template(_MOCK_CASES_JSON, request_body)
+# ───── 条件应答规则 ─────
+# 一条规则 = {id, enabled, name, field, op, value, response_body, status_code}
+#   field: prompt(全部消息拼接) / last_user(最后一条用户消息) / system / model
+#   op:    contains_any(含任一) / equals(全等) / regex(正则)
+# 从上往下匹配，第一条命中的生效。这套东西以前是写死在代码里的关键词，
+# 页面上看不见也改不了，现在存在路由的 match_rules 里。
+
+DEFAULT_MATCH_RULE: dict = {
+    "id": "builtin-testcase",
+    "enabled": True,
+    "name": "测试用例生成",
+    "field": "prompt",
+    "op": "contains_any",
+    "value": list(_DEFAULT_RULE_KEYWORDS),
+    "response_body": _MOCK_CASES_JSON,
+    "status_code": None,
+}
+
+
+def default_match_rules() -> list[dict]:
+    """新建路由时预置的规则表 —— 深拷贝，免得调用方改坏了模板。"""
+    return [json.loads(json.dumps(DEFAULT_MATCH_RULE))]
+
+
+def _rule_field_text(field: str, request_body: dict) -> str:
+    messages = request_body.get("messages") or []
+
+    def _content(m) -> str:
+        c = m.get("content") if isinstance(m, dict) else None
+        return c if isinstance(c, str) else ("" if c is None else json.dumps(c, ensure_ascii=False))
+
+    if field == "model":
+        return str(request_body.get("model") or "")
+    if field == "last_user":
+        for m in reversed(messages):
+            if isinstance(m, dict) and m.get("role") == "user":
+                return _content(m)
+        return ""
+    if field == "system":
+        return " ".join(_content(m) for m in messages if isinstance(m, dict) and m.get("role") == "system")
+    return " ".join(_content(m) for m in messages)
+
+
+def _rule_hit(rule: dict, request_body: dict) -> bool:
+    if not rule.get("enabled", True):
+        return False
+    raw = rule.get("value")
+    values = raw if isinstance(raw, list) else ([raw] if raw not in (None, "") else [])
+    values = [str(v) for v in values if v not in (None, "")]
+    if not values:
+        return False
+    text = _rule_field_text(rule.get("field") or "prompt", request_body)
+    op = rule.get("op") or "contains_any"
+    if op == "equals":
+        return any(text == v for v in values)
+    if op == "regex":
+        for v in values:
+            try:
+                if re.search(v, text):
+                    return True
+            except re.error:
+                continue  # 正则写错只让这条不命中，不能让整条路由 500
+        return False
+    return any(v in text for v in values)
+
+
+def match_rule(route: dict, request_body: dict) -> dict | None:
+    if not route.get("match_enabled", True):
+        return None
+    for rule in route.get("match_rules") or []:
+        if isinstance(rule, dict) and _rule_hit(rule, request_body):
+            return rule
     return None
 
 
+def apply_matched_rule(route: dict, request_body: dict) -> tuple[dict, dict | None]:
+    """命中规则就返回一份被规则覆盖过的路由副本，后续流程照常跑。返回 (生效路由, 命中的规则)"""
+    hit = match_rule(route, request_body)
+    if hit is None:
+        return route, None
+    eff = dict(route)
+    eff["response_body"] = hit.get("response_body") or ""
+    eff["response_mode"] = "default"  # 规则已经给了确定内容，别再被随机模式盖掉
+    sc = hit.get("status_code")
+    if isinstance(sc, int) and not isinstance(sc, bool) and 100 <= sc <= 599:
+        eff["status_code"] = sc
+    return eff, hit
+
+
 def _resolve_body(route: dict, request_body: dict) -> str:
-    # 智能应答会**盖掉**路由配的 response_body。做护栏/脱敏这类"输出里必须有某个串"的验证时，
-    # prompt 一旦蹭到 _AI_CASE_KEYWORDS 就会拿到一段用例 JSON，判定直接失真 —— 所以给了开关。
-    if route.get("smart_response", True):
-        smart = _detect_smart_response(request_body)
-        if smart:
-            return smart
     mode = route.get("response_mode", "default")
     if mode == "random":
         raw = random.choice(RANDOM_RESPONSES)

@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.llm_mock import MockRequestLog, MockRoute
 from app.schemas.llm_mock import MockRouteCreate, MockRouteUpdate
+from app.services import llm_mock_engine as engine
 
 
 # ───── Route CRUD ─────
@@ -24,7 +25,12 @@ async def get_route(session: AsyncSession, route_id: uuid.UUID) -> MockRoute | N
 
 async def create_route(session: AsyncSession, data: MockRouteCreate) -> MockRoute:
     max_order = await session.scalar(select(func.coalesce(func.max(MockRoute.sort_order), -1)))
-    route = MockRoute(**data.model_dump(), sort_order=max_order + 1)
+    payload = data.model_dump()
+    # 没显式给规则表就预置内置那条（新建路由开箱即有一个能照着改的样例）；
+    # 显式传 [] 表示"一条都不要"，要尊重。
+    if payload.get("match_rules") is None:
+        payload["match_rules"] = engine.default_match_rules()
+    route = MockRoute(**payload, sort_order=max_order + 1)
     session.add(route)
     await session.flush()
     await session.refresh(route)

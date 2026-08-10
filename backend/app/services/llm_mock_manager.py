@@ -39,7 +39,8 @@ _FALLBACK_EMBEDDING_ROUTE: dict = {
     "finish_reason": None,
     "response_headers": None,
     "stream_mode": "auto",
-    "smart_response": False,
+    "match_enabled": False,
+    "match_rules": [],
 }
 
 
@@ -230,6 +231,11 @@ class MockServerManager:
             )
 
         route_dict = self._route_to_dict(matched_route)
+        # 条件应答：命中规则就把 response_body / status_code 换成规则自己的，
+        # 放在最前面是因为 status_code 会影响下面的流式判定和日志。
+        route_dict, hit_rule = engine.apply_matched_rule(route_dict, request_body)
+        if hit_rule is not None:
+            logger.info("命中条件应答规则: %s (路由 %s)", hit_rule.get("name") or hit_rule.get("id"), route_dict.get("name"))
         is_embeddings = engine.is_embeddings_route(route_dict, path)
         # embeddings 没有流式、错误响应也不走流式，这两条压过 stream_mode
         if is_embeddings or route_dict["status_code"] >= 400:
@@ -347,7 +353,8 @@ class MockServerManager:
             "response_headers": route.response_headers,
             "sse_chunk_delay_ms": route.sse_chunk_delay_ms,
             "stream_mode": route.stream_mode,
-            "smart_response": route.smart_response,
+            "match_enabled": route.match_enabled,
+            "match_rules": route.match_rules,
             "response_type": route.response_type,
             "tool_calls": route.tool_calls,
         }
