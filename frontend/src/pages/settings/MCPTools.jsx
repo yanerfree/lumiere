@@ -65,7 +65,7 @@ function ToolRow({ t, checked, disabled, onToggle }) {
 }
 
 /** 一张「活」卡片。多选，勾上的活所需的工具自动并起来。 */
-function ActivityCard({ p, checked, disabled, recommended, included, total, onToggle }) {
+function ActivityCard({ p, checked, disabled, recommended, includedBy, total, onToggle }) {
   return (
     <div onClick={() => !disabled && onToggle(p, !checked)} style={{
       cursor: disabled ? 'default' : 'pointer', borderRadius: 10, padding: '12px 14px',
@@ -83,9 +83,13 @@ function ActivityCard({ p, checked, disabled, recommended, included, total, onTo
             {recommended && (
               <Tag color="green" style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 5px' }}>常用</Tag>
             )}
-            {/* 没勾但工具已被别的活全带进来了。不标的话人会以为自己漏勾了。 */}
-            {included && (
-              <Tag style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 5px' }}>已包含</Tag>
+            {/* 没勾但工具已被别的活全带进来了。**要说清被谁包含** ——
+                只写「已包含」的话，人还得自己猜是哪一件（实测被问了：
+                「第一个是包含后面的 4 个吗？」）。 */}
+            {includedBy && (
+              <Tag color="cyan" style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 5px' }}>
+                已含在「{includedBy}」里
+              </Tag>
             )}
           </div>
           <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.65, marginTop: 3 }}>{p.task}</div>
@@ -163,8 +167,16 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
 
   const chosenSet = new Set(chosen)
   const isOn = (p) => chosenSet.has(p.key)
-  // 没被明确选、但工具已经被别的活全带进来了 —— 标出来，别让人以为漏勾了
-  const isIncluded = (p) => !chosenSet.has(p.key) && p.tools.every(n => selSet.has(n))
+  // 没被明确选、但工具已经被**某一件选中的活**全带进来了。
+  // 返回那件活的短名（「全链路：从写用例到读报告」→「全链路」），标在卡片上 ——
+  // 只说"已包含"不说被谁包含，人还得自己猜。
+  const includedBy = (p) => {
+    if (chosenSet.has(p.key)) return null
+    if (!p.tools.every(n => selSet.has(n))) return null
+    const parent = acts.find(o => chosenSet.has(o.key)
+      && o.key !== p.key && p.tools.every(n => o.tools.includes(n)))
+    return parent ? parent.label.split(/[：:]/)[0] : null
+  }
 
   const toggleAct = (p, on) => {
     const next = on ? [...chosen, p.key] : chosen.filter(k => k !== p.key)
@@ -244,7 +256,7 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
       }}>
         {acts.map(p => (
           <ActivityCard key={p.key} p={p} total={tools.length} disabled={unlimited}
-            recommended={p.key === 'fullloop'} checked={isOn(p)} included={isIncluded(p)}
+            recommended={p.key === 'fullloop'} checked={isOn(p)} includedBy={includedBy(p)}
             onToggle={toggleAct} />
         ))}
       </div>
