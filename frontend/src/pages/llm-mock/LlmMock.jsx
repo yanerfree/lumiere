@@ -130,14 +130,19 @@ export default function LlmMock() {
     [routeForm],
   )
 
-  const FIELD_LABEL = { prompt: '全部消息', last_user: '最后一条用户消息', system: 'system 消息', model: '模型名' }
-  const OP_LABEL = { contains_any: '包含任一', equals: '等于', regex: '正则匹配' }
+  // 规则摘要拼成一句能读通的话（「当 用户问的话 里出现「退款」，就回…」），
+  // 之前写成「全部消息 包含任一 退款」那种电报体，没人看得懂。
+  const FIELD_LABEL = { prompt: '用户问的话', last_user: '最后问的那一句', system: 'system 提示词', model: '用的模型' }
 
   const ruleSummary = useCallback((rule) => {
-    const vals = Array.isArray(rule.value) ? rule.value : (rule.value ? [rule.value] : [])
-    const shown = vals.slice(0, 3).join(' / ')
-    const more = vals.length > 3 ? ` 等 ${vals.length} 项` : ''
-    return `${FIELD_LABEL[rule.field] || rule.field || 'prompt'} ${OP_LABEL[rule.op] || rule.op || '包含任一'} ${shown || '(未填)'}${more}`
+    const vals = (Array.isArray(rule.value) ? rule.value : (rule.value ? [rule.value] : [])).filter(Boolean)
+    const what = FIELD_LABEL[rule.field] || '用户问的话'
+    if (!vals.length) return `这条还没填关键词，永远不会生效`
+    const quoted = vals.slice(0, 2).map(v => `「${v}」`).join('、')
+    const more = vals.length > 2 ? ` 等 ${vals.length} 个词` : ''
+    if (rule.op === 'equals') return `当 ${what} 正好是 ${quoted}${more}`
+    if (rule.op === 'regex') return `当 ${what} 符合正则 ${quoted}${more}`
+    return `当 ${what} 里出现 ${quoted}${more}`
   }, [])
 
   const setRules = useCallback((next) => setRouteForm(f => ({ ...f, matchRules: next })), [])
@@ -168,7 +173,7 @@ export default function LlmMock() {
   const saveRuleDraft = useCallback(() => {
     if (!ruleDraft) return
     const vals = (ruleDraft.value || []).map(v => String(v).trim()).filter(Boolean)
-    if (!vals.length) { message.warning('匹配值不能为空，否则这条规则永远不会命中'); return }
+    if (!vals.length) { message.warning('关键词不能空着，不然这条规则永远对不上'); return }
     if (ruleDraft.op === 'regex') {
       for (const v of vals) {
         try { new RegExp(v) } catch { message.error(`正则写错了：${v}`); return }
@@ -189,7 +194,7 @@ export default function LlmMock() {
     const keys = ['name', 'method', 'path', 'enabled', 'statusCode', 'responseType', 'finishReason',
       'responseBody', 'responseMode', 'presetMode', 'delayMs', 'sseChunkDelayMs', 'tokenMode',
       'customPromptTokens', 'customCompletionTokens', 'modelMode', 'customModel', 'responseFormat',
-      'streamMode', 'matchEnabled']
+      'streamMode', 'matchEnabled', 'sseChunkSize']
     for (const k of keys) {
       if (routeForm[k] !== originalForm[k]) return true
     }
@@ -327,6 +332,7 @@ export default function LlmMock() {
           responseHeaders: cp.config.responseHeaders ?? cp.config.response_headers ?? f.responseHeaders,
           streamMode: cp.config.streamMode ?? cp.config.stream_mode ?? f.streamMode,
           matchEnabled: cp.config.matchEnabled ?? cp.config.match_enabled ?? f.matchEnabled,
+          sseChunkSize: cp.config.sseChunkSize ?? cp.config.sse_chunk_size ?? f.sseChunkSize,
           matchRules: cp.config.matchRules ?? cp.config.match_rules ?? f.matchRules,
         }))
       }
@@ -347,6 +353,8 @@ export default function LlmMock() {
         // 耍赖开关会悄悄粘着不放，后面所有请求都变成事件流，很难查。
         streamMode: p.streamMode ?? p.stream_mode ?? 'auto',
         matchEnabled: p.matchEnabled ?? p.match_enabled ?? true,
+        sseChunkSize: p.sseChunkSize ?? p.sse_chunk_size ?? f.sseChunkSize,
+        sseChunkDelayMs: p.sseChunkDelayMs ?? p.sse_chunk_delay_ms ?? f.sseChunkDelayMs,
         matchRules: p.matchRules ?? p.match_rules ?? f.matchRules,
       }))
     } catch { setRouteForm(f => ({ ...f, presetMode: key })) }
@@ -366,6 +374,7 @@ export default function LlmMock() {
           responseHeaders: routeForm.responseHeaders,
           streamMode: routeForm.streamMode,
           matchEnabled: routeForm.matchEnabled,
+          sseChunkSize: routeForm.sseChunkSize,
           matchRules: routeForm.matchRules,
         }
       })
@@ -696,6 +705,18 @@ export default function LlmMock() {
             {!isEmbedding && (
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                  几字一片
+                  <Tooltip title="流式时正文每多少个字发一片。对接网关时「分片数」本身常常是被验证的指标 —— 比如一段 34 字的正文，填 6 就切成 6 片，加上开头帧/结束帧/[DONE] 正好 9 个 data 分片。默认 1 是逐字发。">
+                    <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                  </Tooltip>
+                </div>
+                <InputNumber value={routeForm.sseChunkSize ?? 1} onChange={v => setRouteForm(f => ({ ...f, sseChunkSize: v }))}
+                  min={1} size="small" style={{ width: 80 }} placeholder="1" disabled={locked} />
+              </div>
+            )}
+            {!isEmbedding && (
+              <div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
                   响应流式
                   <Tooltip title="默认「跟随请求」，看请求体里的 stream 字段。选「强制流式」后即使请求写 stream:false 也返回 SSE 事件流，用来验网关的 fail-closed；「强制整包」则相反，请求要流式也只回完整 JSON。">
                     <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
@@ -713,7 +734,7 @@ export default function LlmMock() {
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
                   条件应答
-                  <Tooltip title="按请求内容分流：命中规则就返回规则自己的响应，都不命中才用下面的「响应内容」。关掉则整张规则表不参与匹配。规则在下方「条件应答规则」区域里编辑。">
+                  <Tooltip title="让这个假模型「看人下菜碟」：按请求里问了什么，回不同的话。关掉之后，所有请求都统一回下面那段「响应内容」。规则在下方那一块里加。">
                     <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
                   </Tooltip>
                 </div>
@@ -770,14 +791,14 @@ export default function LlmMock() {
           {!isEmbedding && (
             <div style={{ marginBottom: 16, border: '1px solid var(--border-color, #f0f0f0)', borderRadius: 8, overflow: 'hidden' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'rgba(0,0,0,0.02)' }}>
-                <span style={{ fontSize: 12, fontWeight: 500 }}>条件应答规则</span>
+                <span style={{ fontSize: 12, fontWeight: 500 }}>问什么 · 答什么</span>
                 <span style={{ fontSize: 11, color: '#bfbfbf' }}>
-                  从上往下匹配，第一条命中的生效；都不命中才用下面的「响应内容」
+                  按请求内容回不同的话 · 从上往下看，先对上的那条算数 · 一条都没对上才回下面的「响应内容」
                 </span>
                 <span style={{ flex: 1 }} />
                 {matchRules.length > 0 && (
                   <Tag color={routeForm.matchEnabled !== false ? 'green' : 'default'} style={{ marginInlineEnd: 0 }}>
-                    {matchRules.filter(r => r.enabled !== false).length} / {matchRules.length} 条生效
+                    {matchRules.filter(r => r.enabled !== false).length} / {matchRules.length} 条开着
                   </Tag>
                 )}
                 <Button size="small" icon={<PlusOutlined />} disabled={locked} onClick={() => openRuleEditor(null)}>
@@ -787,13 +808,14 @@ export default function LlmMock() {
 
               {routeForm.matchEnabled === false && matchRules.length > 0 && (
                 <div style={{ padding: '6px 12px', fontSize: 11, color: '#faad14', background: 'rgba(250,173,20,0.06)' }}>
-                  「条件应答」总开关是关的，下面这些规则当前一条都不会生效。
+                  上面的「问什么答什么」开关是关的，下面这些规则现在一条都不起作用。
                 </div>
               )}
 
               {matchRules.length === 0 ? (
                 <div style={{ padding: '14px 12px', fontSize: 12, color: '#bfbfbf', textAlign: 'center' }}>
-                  还没有规则，所有请求都返回下面的「响应内容」。点「添加规则」按请求内容分流。
+                  还没加规则，所有请求都回同一句话（下面的「响应内容」）。<br />
+                  加一条就能按内容分开回，例如：<b>用户问的话里出现「退款」→ 回“您的退款已受理”</b>
                 </div>
               ) : (
                 <div>
@@ -811,9 +833,9 @@ export default function LlmMock() {
                       <span style={{ fontSize: 11, color: '#8c8c8c', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {ruleSummary(rule)}
                       </span>
-                      {rule.statusCode ? <Tag color="orange" style={{ marginInlineEnd: 0 }}>{rule.statusCode}</Tag> : null}
-                      <span style={{ fontSize: 11, color: '#bfbfbf', maxWidth: 190, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        → {(rule.responseBody || '').slice(0, 40) || '(空)'}
+                      {rule.statusCode ? <Tag color="orange" style={{ marginInlineEnd: 0 }}>顺带返 {rule.statusCode}</Tag> : null}
+                      <span style={{ fontSize: 11, color: '#8c8c8c', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        就回：{(rule.responseBody || '').replace(/\s+/g, ' ').slice(0, 34) || '（还没填回复内容）'}
                       </span>
                       <Button size="small" type="text" disabled={locked} onClick={() => openRuleEditor(idx)}>编辑</Button>
                       <Popconfirm title="删除这条规则？" onConfirm={() => removeRule(idx)} disabled={locked}>
@@ -1270,41 +1292,44 @@ export default function LlmMock() {
           onPressEnter={handleSaveCustomPreset} autoFocus />
       </Modal>
 
-      <Modal title={ruleEditIdx === null ? '添加条件应答规则' : '编辑条件应答规则'}
+      <Modal title={ruleEditIdx === null ? '加一条规则：什么样的请求，回什么话' : '改这条规则'}
         open={ruleModalOpen} width={720}
         onOk={saveRuleDraft} onCancel={() => { setRuleModalOpen(false); setRuleDraft(null) }}
         okText="确定" cancelText="取消">
         {ruleDraft && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {/* 边填边告诉他这条规则读出来是什么意思，省得填完还不知道自己配了啥 */}
+            <Alert type="info" showIcon style={{ fontSize: 12 }}
+              message={<span>{ruleSummary(ruleDraft)}，<b>就回</b>：{(ruleDraft.responseBody || '（下面那个框里的内容）').replace(/\s+/g, ' ').slice(0, 50)}</span>} />
             <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
               <div style={{ flex: 1, minWidth: 180 }}>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>规则名称</div>
-                <Input size="small" placeholder="例如：测试用例生成" value={ruleDraft.name}
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>给这条规则起个名（方便你自己认）</div>
+                <Input size="small" placeholder="例如：退款问题" value={ruleDraft.name}
                   onChange={e => setRuleDraft(d => ({ ...d, name: e.target.value }))} />
               </div>
               <div>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>看请求的哪部分</div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>① 看请求里的什么</div>
                 <Select size="small" style={{ width: 170 }} value={ruleDraft.field}
                   onChange={v => setRuleDraft(d => ({ ...d, field: v }))}>
-                  <Select.Option value="prompt">全部消息拼接</Select.Option>
-                  <Select.Option value="last_user">最后一条用户消息</Select.Option>
-                  <Select.Option value="system">system 消息</Select.Option>
-                  <Select.Option value="model">模型名</Select.Option>
+                  <Select.Option value="prompt">用户问的话（全部）</Select.Option>
+                  <Select.Option value="last_user">最后问的那一句</Select.Option>
+                  <Select.Option value="system">system 提示词</Select.Option>
+                  <Select.Option value="model">用的哪个模型</Select.Option>
                 </Select>
               </div>
               <div>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>怎么比</div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>② 怎么判断</div>
                 <Select size="small" style={{ width: 120 }} value={ruleDraft.op}
                   onChange={v => setRuleDraft(d => ({ ...d, op: v }))}>
-                  <Select.Option value="contains_any">包含任一</Select.Option>
-                  <Select.Option value="equals">等于</Select.Option>
-                  <Select.Option value="regex">正则匹配</Select.Option>
+                  <Select.Option value="contains_any">出现下面任一个词</Select.Option>
+                  <Select.Option value="equals">完全等于</Select.Option>
+                  <Select.Option value="regex">正则表达式</Select.Option>
                 </Select>
               </div>
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
-                  命中后状态码
-                  <Tooltip title="留空则沿用路由本身的状态码。填 429 就能做到「prompt 里带某个词就触发限流」。">
+                  顺带改状态码
+                  <Tooltip title="一般不用填，留空就跟这条路由本身的状态码一样。填 429 就能做出「问到某个词就被限流」的效果。">
                     <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
                   </Tooltip>
                 </div>
@@ -1312,29 +1337,43 @@ export default function LlmMock() {
                   value={ruleDraft.statusCode}
                   onChange={v => setRuleDraft(d => ({ ...d, statusCode: v }))} />
               </div>
+              <div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                  顺带改流式
+                  <Tooltip title="一般不用填。选「强制流式」后，只要这条规则对上，哪怕请求写了 stream:false 也照样返回事件流 —— 用来做「请求里带某个指令就故意不守约定」这种验证。">
+                    <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                  </Tooltip>
+                </div>
+                <Select size="small" style={{ width: 130 }} value={ruleDraft.streamMode || ''} allowClear
+                  placeholder="沿用路由"
+                  onChange={v => setRuleDraft(d => ({ ...d, streamMode: v || null }))}>
+                  <Select.Option value="force_stream">强制流式</Select.Option>
+                  <Select.Option value="force_json">强制整包</Select.Option>
+                </Select>
+              </div>
             </div>
 
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
-                匹配值
+                ③ 关键词
                 <span style={{ marginLeft: 6, fontSize: 11, color: '#bfbfbf' }}>
-                  回车分隔多个；「包含任一」时命中其中一个就算命中
+                  输入后按回车可以加多个；出现其中任意一个就算对上
                 </span>
               </div>
               <Select mode="tags" size="small" style={{ width: '100%' }} tokenSeparators={[',', '，', '\n']}
-                placeholder="例如：测试用例、test case" value={ruleDraft.value || []}
+                placeholder="例如：退款、退货（输入后按回车）" value={ruleDraft.value || []}
                 onChange={v => setRuleDraft(d => ({ ...d, value: v }))} open={false} suffixIcon={null} />
             </div>
 
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
-                命中后返回的内容
+                ④ 对上了就回这段话
                 <span style={{ marginLeft: 6, fontSize: 11, color: '#bfbfbf' }}>
-                  支持 ${'{request.model}'} 等变量，与「响应内容」同一套
+                  这就是假模型吐出来的内容；可以用 ${'{request.model}'} 这类变量
                 </span>
               </div>
               <TextArea rows={9} value={ruleDraft.responseBody} style={{ fontFamily: MONO, fontSize: 12 }}
-                placeholder="命中这条规则时，mock 返回的正文"
+                placeholder="例如：您的退款申请已受理，预计 3 个工作日到账。"
                 onChange={e => setRuleDraft(d => ({ ...d, responseBody: e.target.value }))} />
             </div>
           </div>

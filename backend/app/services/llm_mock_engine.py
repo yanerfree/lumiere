@@ -59,7 +59,10 @@ def estimate_tokens(text: str) -> int:
     return max(1, int(ascii_chars / 4 + non_ascii / 1.5))
 
 
-def _resolve_template(template: str, request_body: dict) -> str:
+def _resolve_template(template: str, request_body: dict, match_groups: list[str] | None = None) -> str:
+    # ${match.1} = 命中规则时正则的第 1 个捕获组。「SAY:你好」→ 回「你好」靠它。
+    for i, g in enumerate(match_groups or [], start=1):
+        template = template.replace(f"${{match.{i}}}", g)
     model = request_body.get("model", "gpt-4o")
     template = template.replace("${request.model}", model)
     messages = request_body.get("messages", [])
@@ -207,49 +210,63 @@ def _rule_field_text(field: str, request_body: dict) -> str:
     return " ".join(_content(m) for m in messages)
 
 
-def _rule_hit(rule: dict, request_body: dict) -> bool:
+def _rule_hit(rule: dict, request_body: dict) -> tuple[bool, list[str]]:
+    """返回 (是否命中, 正则捕获组)。捕获组给 ${match.1} 用 —— 「SAY:你好」这类
+    要把指令后面那段原样回显的场景，靠的就是它。"""
     if not rule.get("enabled", True):
-        return False
+        return False, []
     raw = rule.get("value")
     values = raw if isinstance(raw, list) else ([raw] if raw not in (None, "") else [])
     values = [str(v) for v in values if v not in (None, "")]
     if not values:
-        return False
+        return False, []
     text = _rule_field_text(rule.get("field") or "prompt", request_body)
     op = rule.get("op") or "contains_any"
     if op == "equals":
-        return any(text == v for v in values)
+        return any(text == v for v in values), []
     if op == "regex":
         for v in values:
             try:
-                if re.search(v, text):
-                    return True
+                m = re.search(v, text)
             except re.error:
                 continue  # 正则写错只让这条不命中，不能让整条路由 500
-        return False
-    return any(v in text for v in values)
+            if m:
+                return True, [g if g is not None else "" for g in m.groups()]
+        return False, []
+    return any(v in text for v in values), []
 
 
-def match_rule(route: dict, request_body: dict) -> dict | None:
+def match_rule(route: dict, request_body: dict) -> tuple[dict | None, list[str]]:
     if not route.get("match_enabled", True):
-        return None
+        return None, []
     for rule in route.get("match_rules") or []:
-        if isinstance(rule, dict) and _rule_hit(rule, request_body):
-            return rule
-    return None
+        if isinstance(rule, dict):
+            ok, groups = _rule_hit(rule, request_body)
+            if ok:
+                return rule, groups
+    return None, []
 
 
 def apply_matched_rule(route: dict, request_body: dict) -> tuple[dict, dict | None]:
     """命中规则就返回一份被规则覆盖过的路由副本，后续流程照常跑。返回 (生效路由, 命中的规则)"""
-    hit = match_rule(route, request_body)
+    hit, groups = match_rule(route, request_body)
     if hit is None:
         return route, None
     eff = dict(route)
     eff["response_body"] = hit.get("response_body") or ""
     eff["response_mode"] = "default"  # 规则已经给了确定内容，别再被随机模式盖掉
+    eff["_match_groups"] = groups
     sc = hit.get("status_code")
     if isinstance(sc, int) and not isinstance(sc, bool) and 100 <= sc <= 599:
         eff["status_code"] = sc
+    # 规则可以单独指定流式行为 —— 「请求里写了某个指令就硬返流式」这种由请求触发的
+    # fail-closed，路由级开关做不到，只能落在规则上。
+    sm = hit.get("stream_mode")
+    if sm in ("auto", "force_stream", "force_json"):
+        eff["stream_mode"] = sm
+    cs = hit.get("sse_chunk_size")
+    if isinstance(cs, int) and not isinstance(cs, bool) and cs > 0:
+        eff["sse_chunk_size"] = cs
     return eff, hit
 
 
@@ -259,7 +276,7 @@ def _resolve_body(route: dict, request_body: dict) -> str:
         raw = random.choice(RANDOM_RESPONSES)
     else:
         raw = route["response_body"]
-    return _resolve_template(raw, request_body)
+    return _resolve_template(raw, request_body, route.get("_match_groups"))
 
 
 def build_response_json(route: dict, request_body: dict) -> tuple[dict, dict]:
@@ -346,6 +363,12 @@ def build_response_json(route: dict, request_body: dict) -> tuple[dict, dict]:
     return body, _build_headers(route, completion_id)
 
 
+def _split_chunks(text: str, size: int) -> list[str]:
+    """按 size 个字符切块。空串切出 0 块 —— 对应「零内容的流」（只有开头帧和结束帧）。"""
+    n = max(1, int(size or 1))
+    return [text[i:i + n] for i in range(0, len(text), n)]
+
+
 async def build_response_stream(route: dict, request_body: dict) -> AsyncIterator[str]:
     """构建 SSE 流式 Chat Completion 响应。yield 每一行 SSE data"""
     completion_id = _gen_completion_id()
@@ -354,6 +377,7 @@ async def build_response_stream(route: dict, request_body: dict) -> AsyncIterato
     resp_model = req_model if route["model_mode"] == "follow_request" else (route.get("custom_model") or req_model)
     finish_reason = route.get("finish_reason", "stop")
     chunk_delay = route.get("sse_chunk_delay_ms", 50) / 1000.0
+    chunk_size = route.get("sse_chunk_size") or 1
 
     include_usage = False
     stream_opts = request_body.get("stream_options")
@@ -400,17 +424,17 @@ async def build_response_stream(route: dict, request_body: dict) -> AsyncIterato
     elif response_type == "refusal":
         content_text = _resolve_body(route, request_body)
         yield _chunk({"role": "assistant", "refusal": ""}, None)
-        for ch in content_text:
-            yield _chunk({"refusal": ch}, None)
+        for piece in _split_chunks(content_text, chunk_size):
+            yield _chunk({"refusal": piece}, None)
             await asyncio.sleep(chunk_delay)
         yield _chunk({}, finish_reason)
     else:
         content_text = _resolve_body(route, request_body)
         # 第一个 chunk: role
         yield _chunk({"role": "assistant", "content": ""}, None)
-        # 内容逐字
-        for ch in content_text:
-            yield _chunk({"content": ch}, None)
+        # 正文按 sse_chunk_size 切块 —— 空正文就一块都不发（"零内容的流"）
+        for piece in _split_chunks(content_text, chunk_size):
+            yield _chunk({"content": piece}, None)
             await asyncio.sleep(chunk_delay)
         # finish_reason chunk
         yield _chunk({}, finish_reason)

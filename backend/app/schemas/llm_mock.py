@@ -22,6 +22,10 @@ class MatchRule(BaseSchema):
     response_body: str = ""
     # 命中后连状态码一起改（比如"prompt 里带 xxx 就返回 429"），不填则沿用路由的
     status_code: int | None = Field(default=None, ge=100, le=599)
+    # 命中后单独指定流式行为 —— 「请求里写了某个指令就硬返流式」这种由请求触发的
+    # fail-closed，路由级开关做不到
+    stream_mode: str | None = Field(default=None, pattern="^(auto|force_stream|force_json)$")
+    sse_chunk_size: int | None = Field(default=None, ge=1, le=4096)
 
 
 # ───── Mock Route Schemas ─────
@@ -45,6 +49,7 @@ class MockRouteCreate(BaseSchema):
     custom_model: str | None = None
     response_headers: dict | None = None
     sse_chunk_delay_ms: int = Field(default=50, ge=0)
+    sse_chunk_size: int = Field(default=1, ge=1, le=4096)
     stream_mode: str = Field(default="auto", pattern="^(auto|force_stream|force_json)$")
     match_enabled: bool = True
     # 不传则由 service 预置内置规则；显式传 [] 就是明确要一条规则都不要
@@ -72,6 +77,7 @@ class MockRouteUpdate(BaseSchema):
     custom_model: str | None = None
     response_headers: dict | None = None
     sse_chunk_delay_ms: int | None = None
+    sse_chunk_size: int | None = Field(default=None, ge=1, le=4096)
     stream_mode: str | None = Field(default=None, pattern="^(auto|force_stream|force_json)$")
     match_enabled: bool | None = None
     match_rules: list[MatchRule] | None = None
@@ -101,6 +107,7 @@ class MockRouteResponse(BaseSchema):
     custom_model: str | None
     response_headers: dict | None
     sse_chunk_delay_ms: int
+    sse_chunk_size: int
     stream_mode: str
     match_enabled: bool
     match_rules: list[MatchRule]

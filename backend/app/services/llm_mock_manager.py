@@ -39,6 +39,7 @@ _FALLBACK_EMBEDDING_ROUTE: dict = {
     "finish_reason": None,
     "response_headers": None,
     "stream_mode": "auto",
+    "sse_chunk_size": 1,
     "match_enabled": False,
     "match_rules": [],
 }
@@ -352,6 +353,7 @@ class MockServerManager:
             "custom_model": route.custom_model,
             "response_headers": route.response_headers,
             "sse_chunk_delay_ms": route.sse_chunk_delay_ms,
+            "sse_chunk_size": route.sse_chunk_size,
             "stream_mode": route.stream_mode,
             "match_enabled": route.match_enabled,
             "match_rules": route.match_rules,

@@ -50,6 +50,8 @@ class MockRoute(Base):
 
     # SSE 配置
     sse_chunk_delay_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=50)
+    # 每个分片几个字符。对接网关时分片数本身是被验证的指标，逐字符切会跟被对照的 mock 对不上
+    sse_chunk_size: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
 
     # 流式模式 —— auto 跟随请求的 stream 字段；force_stream 不管请求怎么写都回事件流
     # （测网关 fail-closed：上游对 stream:false 耍赖返流）；force_json 反过来，请求要流也只给整包 JSON
