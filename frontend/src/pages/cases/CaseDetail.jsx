@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table, Alert } from 'antd'
+import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table, Alert, Collapse } from 'antd'
 import {
   ArrowLeftOutlined, PlayCircleOutlined, SaveOutlined,
   PlusOutlined, DeleteOutlined, HolderOutlined,
@@ -641,6 +641,10 @@ function ScenarioEditor({
   const [debugResult, setDebugResult] = useState(null)
   const [previewScreenshot, setPreviewScreenshot] = useState(null)
   const [showNoiseSteps, setShowNoiseSteps] = useState(false)
+  // 「脚本」是唯一永远有内容的视图，所以它是默认。另两个视图有数据才出现页签，
+  // 停在某个视图时它的数据没了（重新运行清空），activeKey 会指向不存在的 key，
+  // 页面就空了 —— 所以下面渲染时做一次兜底。
+  const [uiView, setUiView] = useState('script')
   const [selectedApis, setSelectedApis] = useState([])
   const [apiArranging, setApiArranging] = useState(false)
   const [expandedApi, setExpandedApi] = useState(null)  // 接口视图展开查看请求/响应详情的行索引
@@ -870,7 +874,15 @@ function ScenarioEditor({
           .then(res => {
             const last = (res.data || [])[0]
             if (last) {
-              setDebugResult({ ...last, durationMs: last.durationMs || last.duration_ms, errorSummary: last.errorSummary || last.error_summary })
+              // 接口返回的是 capturedRequests（驼峰），这里统一成运行时那套 snake key，
+              // 否则「接口视图」只有当场点过运行验证才有内容 —— 库里明明存着流量。
+              setDebugResult({
+                ...last,
+                durationMs: last.durationMs ?? last.duration_ms,
+                errorSummary: last.errorSummary ?? last.error_summary,
+                captured_requests: last.capturedRequests || last.captured_requests || [],
+                failurePhenomenon: last.failurePhenomenon,
+              })
             }
           }).catch(() => {})
       }
@@ -938,14 +950,44 @@ function ScenarioEditor({
             {debugResult.captured_requests?.length > 0 && (
               <span style={{ fontSize: 12, color: '#86909c' }}>{debugResult.captured_requests.length} 个接口</span>
             )}
+            {/* 失败现象是平台按确定性规则判好的「是什么」，一直存在库里没送到页面。
+                人扫一眼就知道往哪看，不用去读一坨 pytest stdout。 */}
+            {!passed && debugResult.failurePhenomenon && (
+              <Tag color="error" style={{ margin: 0, fontSize: 11 }}>
+                {phenomenonLabel(debugResult.failurePhenomenon)}
+              </Tag>
+            )}
             <span style={{ fontSize: 11, color: '#c9cdd4', marginLeft: 'auto' }}>点击查看详情</span>
           </div>
         )}
 
-        {/* 三视图切换 */}
-        <Tabs size="small" defaultActiveKey="steps" style={{ marginBottom: 0 }}
+        {/* 脚本永远在，另两个视图只有真有数据才出现。
+            此前三个页签常驻，而「执行轨迹」全平台 0/204 条用例有数据（它的生产者是
+            已封存的平台侧 UI 生成），「接口视图」也要当场跑过才有 —— 打开就是两个空页签，
+            人得挨个点一遍才知道哪个是活的。有内容才给页签，角标直接写清有多少。 */}
+        <Tabs size="small" style={{ marginBottom: 0 }}
+          activeKey={
+            (uiView === 'steps' && !(liveSteps.length || debugResult?.steps?.length)) ||
+            (uiView === 'api' && !debugResult?.captured_requests?.length)
+              ? 'script' : uiView
+          }
+          onChange={setUiView}
           items={[
-            { key: 'steps', label: `执行轨迹${(liveSteps.length || debugResult?.steps?.length) ? ` (${liveSteps.length > 0 ? liveSteps.length : debugResult.steps.length})` : ''}`, children: (
+            { key: 'script', label: '脚本', children: (
+              <div style={{ position: 'relative' }}>
+                <ScriptEditor
+                  ref={scriptEditorRef}
+                  projectId={projectId} branchId={branchId} caseId={caseId}
+                  scriptType="ui" accentColor="#7c5cbf"
+                  autoGenerateCode={generateUiCode(steps, caseTitle)}
+                  onScriptSaved={onScriptSaved}
+                  envId={runEnv}
+                  hideToolbar
+                />
+              </div>
+            )},
+            ...(!(liveSteps.length || debugResult?.steps?.length) ? [] : [
+            { key: 'steps', label: `执行轨迹 (${liveSteps.length > 0 ? liveSteps.length : debugResult.steps.length})`, children: (
               <div style={{ padding: '12px 0' }}>
                 {(debugResult?.steps || liveSteps || []).length > 0 ? (() => {
                   const allSteps = liveSteps.length > 0 ? liveSteps : (debugResult?.steps || [])
@@ -1011,21 +1053,9 @@ function ScenarioEditor({
                   <div style={{ padding: 32, textAlign: 'center', color: '#c9cdd4' }}>点击「运行验证」后查看执行步骤</div>
                 )}
               </div>
-            )},
-            { key: 'script', label: '脚本视图', children: (
-              <div style={{ position: 'relative' }}>
-                <ScriptEditor
-                  ref={scriptEditorRef}
-                  projectId={projectId} branchId={branchId} caseId={caseId}
-                  scriptType="ui" accentColor="#7c5cbf"
-                  autoGenerateCode={generateUiCode(steps, caseTitle)}
-                  onScriptSaved={onScriptSaved}
-                  envId={runEnv}
-                  hideToolbar
-                />
-              </div>
-            )},
-            { key: 'api', label: `接口视图${debugResult?.captured_requests?.length ? ` (${debugResult.captured_requests.length})` : ''}`, children: (
+            )}]),
+            ...(!(debugResult?.captured_requests?.length) ? [] : [
+            { key: 'api', label: `本次流量 (${debugResult.captured_requests.length})`, children: (
               debugResult?.captured_requests?.length > 0 ? (
                 <div style={{ padding: '8px 0' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -1196,12 +1226,8 @@ function ScenarioEditor({
                     })}
                   </div>
                 </div>
-              ) : (
-                <div style={{ padding: 32, textAlign: 'center', color: '#c9cdd4' }}>
-                  点击「AI 生成」后，执行过程中的 API 请求将在此展示
-                </div>
-              )
-            )},
+              ) : null
+            )}]),
           ]}
         />
 
@@ -2238,8 +2264,34 @@ export default function CaseDetail() {
                             onConfirmed={loadScriptRuns}
                           />
                         )}
-                        {r.stdout ? (
-                          <pre style={{ margin: 0, padding: 12, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontSize: 12, fontFamily: 'var(--font-mono)', maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{r.stdout}</pre>
+                        {/* 接口执行落的是给人看的中文轨迹，直接展开；
+                            UI 执行落的是 pytest 原文（执行器只有这个），
+                            先把人能用的信息摆出来，原文收进折叠里给排查用。
+                            此前不分类型一律甩一屏 pytest stdout —— 「给用户看的还是给 CC 看的」。 */}
+                        {r.scriptType === 'api' && r.stdout ? (
+                          <pre style={{ margin: 0, padding: 12, background: 'rgba(0,0,0,0.02)', color: '#1d2129', borderRadius: 12, fontSize: 12.5, fontFamily: 'var(--font-mono)', maxHeight: 340, overflow: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>{r.stdout}</pre>
+                        ) : r.stdout ? (
+                          <>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                              {r.failurePhenomenon && (
+                                <Tag color={r.status === 'passed' ? undefined : 'error'} style={{ margin: 0 }}>
+                                  {phenomenonLabel(r.failurePhenomenon)}
+                                </Tag>
+                              )}
+                              {r.errorSummary
+                                ? <span style={{ fontSize: 12.5, color: '#e8453c', fontFamily: 'var(--font-mono)' }}>{r.errorSummary}</span>
+                                : <span style={{ fontSize: 12.5, color: '#86909c' }}>
+                                    脚本跑完没有报错{r.screenshots?.length ? `，留下 ${r.screenshots.length} 张截图` : ''}
+                                  </span>}
+                            </div>
+                            <Collapse ghost size="small" items={[{
+                              key: 'raw',
+                              label: <span style={{ fontSize: 12, color: '#86909c' }}>原始日志（pytest 输出，排查用）</span>,
+                              children: (
+                                <pre style={{ margin: 0, padding: 12, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontSize: 12, fontFamily: 'var(--font-mono)', maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{r.stdout}</pre>
+                              ),
+                            }]} />
+                          </>
                         ) : <span style={{ color: '#c9cdd4' }}>无输出日志</span>}
                         {r.screenshots?.length > 0 && (
                           <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -2293,7 +2345,12 @@ export default function CaseDetail() {
               </Card>
             )},
 
-            { key: 'provenance', label: '来源', children: <ProvenanceTab caseId={caseId} /> },
+            // 溯源只有走「AI 生成用例」流水线的用例才有（实测 49/257）。
+            // 常驻的话，八成用例点进去是两行"没有关联需求点"的占位 ——
+            // 有内容才给页签，没有就不占位置。
+            ...(!(caseData?.requirementPointIds?.length || caseData?.generationTaskId) ? [] : [
+              { key: 'provenance', label: '来源', children: <ProvenanceTab caseId={caseId} /> },
+            ]),
           ]} />
         </div>
       </div>

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox } from 'antd'
+import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox, Dropdown } from 'antd'
 import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, RobotOutlined, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, getValidToken } from '../../utils/request'
@@ -168,25 +168,32 @@ export default function CaseManagement() {
   const [batchExecType, setBatchExecType] = useState('api')
   const [batchPrecheck, setBatchPrecheck] = useState({ total: 0, executable: 0, skipped: 0 })
 
-  const countExecutable = (selected, type) => selected.filter(c => {
-    const dim = type === 'api' ? c.apiStatus : c.uiStatus
-    return dim === 'executable' || (c.scriptRefFile && c.automationStatus === 'automated')
-  }).length
+  // 「跳过」有两种，原先合成一句「N 个无脚本」，是句假话：
+  // 一条接口场景跑通过 69 次的用例，只因 apiStatus 还停在 debugging 就被算进"无脚本"。
+  // 人看到"无脚本"会去写脚本，而实际该做的只是把状态推到「可执行」。
+  const precheck = (selected, type) => {
+    let executable = 0, notReady = 0, missing = 0
+    selected.forEach(c => {
+      const dim = type === 'api' ? c.apiStatus : c.uiStatus
+      const has = type === 'api' ? c.hasApi : c.hasUi
+      if (dim === 'executable' || (c.scriptRefFile && c.automationStatus === 'automated')) executable++
+      else if (has) notReady++
+      else missing++
+    })
+    return { total: selected.length, executable, notReady, missing, skipped: notReady + missing }
+  }
 
   const openBatchExec = () => {
     if (!selectedRowKeys.length) { message.warning('请先选择用例'); return }
     const selected = cases.filter(c => selectedRowKeys.includes(c.id))
-    const execCount = countExecutable(selected, 'ui')
     setBatchExecType('ui')
-    setBatchPrecheck({ total: selected.length, executable: execCount, skipped: selected.length - execCount })
+    setBatchPrecheck(precheck(selected, 'ui'))
     setBatchExecOpen(true)
   }
 
   const updatePrecheck = (type) => {
     setBatchExecType(type)
-    const selected = cases.filter(c => selectedRowKeys.includes(c.id))
-    const execCount = countExecutable(selected, type)
-    setBatchPrecheck({ total: selected.length, executable: execCount, skipped: selected.length - execCount })
+    setBatchPrecheck(precheck(cases.filter(c => selectedRowKeys.includes(c.id)), type))
   }
 
   const handleBatchExec = async () => {
@@ -280,6 +287,15 @@ export default function CaseManagement() {
   const [reviewLoading, setReviewLoading] = useState(false)
   const [reviewResult, setReviewResult] = useState(null)
   const [reviewSteps, setReviewSteps] = useState([])
+
+  // 就地审核：列表上看到「待审」就能在列表上处理掉，不用绕去生成向导的第 5 步
+  const handleReview = async (caseId, reviewStatus) => {
+    try {
+      await api.put(`/projects/${projectId}/branches/${globalBranchId}/cases/${caseId}`, { reviewStatus })
+      message.success(reviewStatus === 'approved' ? '已通过' : '已打回')
+      fetchCases()
+    } catch (e) { message.error(e.message || '操作失败') }
+  }
 
   const handleQualityReview = () => {
     if (!globalBranchId) { message.warning('请先选择分支'); return }
@@ -402,18 +418,22 @@ export default function CaseManagement() {
       >{row.isCore && <Tooltip title="核心/标杆用例（供其他用例参考生成）"><StarFilled style={{ color: '#fa8c16', marginRight: 4, fontSize: 12 }} /></Tooltip>}{v}</span>
     )},
     { key: 'type', title: '类型', dataIndex: 'type', width: 50, defaultVisible: true, render: v => <span style={{ fontSize: 11, color: '#86909c' }}>{v?.toUpperCase()}</span> },
-    { key: 'scenarios', title: '场景', width: 105, defaultVisible: true, render: (_, row) => {
+    // 三个标签各有各的真实来源，后端 list_case_assets 已经把两个存储取过并集了。
+    // 别再回头读 row.apiScenario —— 那只是其中一个存储，MCP 回推的场景不在里面。
+    { key: 'scenarios', title: '场景', width: 112, defaultVisible: true, render: (_, row) => {
       const apiSt = row.apiScenarioStatus
       const uiSt = row.uiScenarioStatus
       const apiColor = apiSt === 'completed' ? '#0ea5a0' : apiSt === 'debugging' ? '#faad14' : '#86909c'
       const uiColor = uiSt === 'completed' ? '#7c5cbf' : uiSt === 'debugging' ? '#faad14' : '#86909c'
+      const none = !row.hasManual && !row.hasApi && !row.hasUi
+      if (none) return <span style={{ fontSize: 11, color: '#c9cdd4' }}>空壳</span>
       return (
         <Space size={2}>
-          <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#e0f7f6', color: '#0ea5a0', margin: 0 }}>手动</Tag>
-          {row.apiScenario && <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#e0f7f6', color: apiColor, margin: 0 }}>
-            {row.isApiTemplate && <StarFilled style={{ fontSize: 9, color: '#faad14', marginRight: 2 }} />}API
+          {row.hasManual && <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#e0f7f6', color: '#0ea5a0', margin: 0 }}>手动</Tag>}
+          {row.hasApi && <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#e0f7f6', color: apiColor, margin: 0 }}>
+            {row.isApiTemplate && <StarFilled style={{ fontSize: 9, color: '#faad14', marginRight: 2 }} />}接口
           </Tag>}
-          {row.uiScenario && <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#f5f0ff', color: uiColor, margin: 0 }}>
+          {row.hasUi && <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#f5f0ff', color: uiColor, margin: 0 }}>
             {row.isUiTemplate && <StarFilled style={{ fontSize: 9, color: '#faad14', marginRight: 2 }} />}UI
           </Tag>}
         </Space>
@@ -444,7 +464,12 @@ export default function CaseManagement() {
     //   已隔离       —— 人主动点的，到期自己回来，**执行时跳过**
     //   不稳定       —— 平台检测到的，**照常执行**，只是提示该去查
     // 检测到不稳定不等于被隔离：自动把它藏起来 = 自动让人不去查这个问题。
-    { key: 'isFlaky', title: 'Flaky', dataIndex: 'isFlaky', width: 66, align: 'center', defaultVisible: true,
+    { key: 'isFlaky', dataIndex: 'isFlaky', width: 66, align: 'center', defaultVisible: true,
+      title: (
+        <Tooltip title="结果反复翻转的用例会自动打上标记。这一列大部分时候是空的 —— 空 = 目前没有不稳定的用例，不是功能没跑。">
+          <span style={{ borderBottom: '1px dotted #c9cdd4' }}>Flaky</span>
+        </Tooltip>
+      ),
       render: (v, r) => {
         const until = r.quarantinedUntil ? new Date(r.quarantinedUntil) : null
         const quarantined = until && until > new Date()
@@ -461,11 +486,23 @@ export default function CaseManagement() {
         )
         return null
       } },
-    { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 52, align: 'center', defaultVisible: true, render: v => {
+    // 「待审」以前只是个标签：列表里看得到，却只能去 AI 生成用例的第 5 步才审得了。
+    // 看得见 ≠ 做得了 —— 在哪看到就在哪能处理，点标签直接通过/打回。
+    { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center', defaultVisible: true, render: (v, row) => {
       if (!v) return null
       if (v === 'approved') return <Tag style={{ fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none', margin: 0 }}>已审</Tag>
       if (v === 'rejected') return <Tag color="error" style={{ fontSize: 10, margin: 0 }}>已拒</Tag>
-      return <Tag style={{ fontSize: 10, background: 'rgba(78,138,240,0.08)', color: '#4e8af0', border: 'none', margin: 0 }}>待审</Tag>
+      return (
+        <Dropdown trigger={['click']} menu={{ items: [
+          { key: 'approved', label: '通过' },
+          { key: 'rejected', label: '打回', danger: true },
+        ], onClick: ({ key, domEvent }) => { domEvent.stopPropagation(); handleReview(row.id, key) } }}>
+          <Tag onClick={e => e.stopPropagation()}
+            style={{ fontSize: 10, cursor: 'pointer', background: 'rgba(78,138,240,0.08)', color: '#4e8af0', border: 'none', margin: 0 }}>
+            待审 ▾
+          </Tag>
+        </Dropdown>
+      )
     }},
     { key: 'qualityScore', title: '评分', dataIndex: 'qualityScore', width: 48, align: 'center', defaultVisible: false, render: v => {
       if (!v || v.total == null) return <span style={{ color: '#c9cdd4' }}>—</span>
@@ -1033,12 +1070,24 @@ export default function CaseManagement() {
           </div>
           <div style={{ padding: '12px 16px', background: 'rgba(0,0,0,0.02)', borderRadius: 12, fontSize: 13 }}>
             <div style={{ marginBottom: 4 }}>共选中 <b>{batchPrecheck.total}</b> 个用例</div>
-            <div style={{ color: '#0ea5a0' }}>{batchPrecheck.executable} 个包含可执行脚本</div>
-            {batchPrecheck.skipped > 0 && (
-              <div style={{ color: '#faad14' }}>{batchPrecheck.skipped} 个无脚本，将被跳过</div>
+            <div style={{ color: '#0ea5a0' }}>
+              {batchPrecheck.executable} 个会执行<span style={{ color: '#c9cdd4' }}>（{batchExecType === 'api' ? '接口' : 'UI'}状态 = 可执行）</span>
+            </div>
+            {batchPrecheck.notReady > 0 && (
+              <div style={{ color: '#faad14', marginTop: 2 }}>
+                {batchPrecheck.notReady} 个<b>有{batchExecType === 'api' ? '接口场景' : 'UI 脚本'}但状态还不是「可执行」</b>，这次跳过
+                <div style={{ fontSize: 11, color: '#86909c', marginTop: 2, lineHeight: 1.5 }}>
+                  跑通一次就会自动推到「待复核」，确认没问题后在用例详情把它改成「可执行」，才会进回归。
+                </div>
+              </div>
+            )}
+            {batchPrecheck.missing > 0 && (
+              <div style={{ color: '#86909c', marginTop: 2 }}>
+                {batchPrecheck.missing} 个还没有{batchExecType === 'api' ? '接口场景' : 'UI 脚本'}，这次跳过
+              </div>
             )}
             {batchPrecheck.executable === 0 && (
-              <div style={{ color: '#e8453c', marginTop: 4 }}>没有可执行的用例</div>
+              <div style={{ color: '#e8453c', marginTop: 6 }}>这批里没有能执行的用例</div>
             )}
           </div>
         </div>

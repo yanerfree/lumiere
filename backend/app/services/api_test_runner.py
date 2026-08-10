@@ -43,6 +43,10 @@ class ScenarioResult:
     scenario_title: str
     scenario_status: str = "draft"  # draft | published | deprecated — 草稿调试不进报告
     folder_id: str | None = None
+    # 场景绑的源用例。带着它，这次执行才能同时记进 script_runs ——
+    # 否则接口执行只进 test_reports，用例的「执行历史」永远只看得见 UI，
+    # 报告页永远只看得见接口，同一条用例在两个页面各显示一半事实。
+    source_case_id: str | None = None
     steps: list[StepResult] = field(default_factory=list)
 
     @property
@@ -687,6 +691,9 @@ async def run_batch(
                     scenario_title=scenario.title,
                     scenario_status=scenario.status,
                     folder_id=str(scenario.folder_id) if scenario.folder_id else None,
+                    source_case_id=(
+                        str(scenario.source_case_id) if scenario.source_case_id else None
+                    ),
                 )
                 # url 取**实际发出去**的那个，不是步骤定义里的模板。
                 # 以前直接用 s.url，报告里就成了 ${BASE_URL}/api/auth/login，而同一屏的
@@ -730,6 +737,59 @@ async def _resolve_common_folder_name(session: AsyncSession, results: list[Scena
     return folder.name if folder else None
 
 
+_ASSERT_LABELS = {
+    "status": "状态码",
+    "body_field": "响应字段",
+    "body_contains": "响应包含",
+    "not_contains": "响应不含",
+    "header": "响应头",
+    "json_path": "JSONPath",
+    "duration": "耗时",
+}
+
+
+def _first_error(result: ScenarioResult) -> str | None:
+    """第一个挂掉的步骤的错误。摘要只留一条——列表里那一列本来就只显示一行。"""
+    for s in result.steps:
+        if s.status == "fail":
+            return f"步骤「{s.step_name}」：{s.error or '断言不通过'}"
+    return None
+
+
+def _readable_trace(result: ScenarioResult) -> str:
+    """给**人**看的执行轨迹，不是给机器解析的。
+
+    接口执行以前只往报告里塞，用例那边什么都没有；现在要落 script_runs，
+    顺手把 stdout 写成人话——UI 那边塞的是 pytest 原文，看不懂是实测反馈过的问题，
+    接口这边没有必要重蹈一遍。断言逐条列出来，失败的标出期望和实际。
+    """
+    lines = [f"场景：{result.scenario_title}", ""]
+    for i, s in enumerate(result.steps, 1):
+        mark = {"pass": "✅", "fail": "❌", "skip": "⏭"}.get(s.status, "•")
+        code = f" → {s.status_code}" if s.status_code is not None else ""
+        lines.append(f"{mark} {i}. {s.step_name}  [{s.method} {s.url}{code}]  {s.duration}ms")
+        for a in (s.assertions or []):
+            if not isinstance(a, dict):
+                continue
+            # 断言原文是 {type, operator, value, field, passed}。只印 type
+            # （"✓ status"）等于没说——人要看的是"断言了什么"，所以拼成一句话。
+            desc = a.get("message") or " ".join(
+                str(x) for x in (
+                    _ASSERT_LABELS.get(a.get("type"), a.get("type") or "断言"),
+                    a.get("field") or "",
+                    a.get("operator") or "==",
+                    a.get("value") if a.get("value") is not None else a.get("expected"),
+                ) if str(x) != ""
+            )
+            if a.get("passed"):
+                lines.append(f"      ✓ {desc}")
+            else:
+                lines.append(f"      ✗ {desc}｜实际 {a.get('actual')}")
+        if s.error:
+            lines.append(f"      错误：{s.error}")
+    return "\n".join(lines)
+
+
 async def _create_report(
     session: AsyncSession,
     results: list[ScenarioResult],
@@ -749,13 +809,16 @@ async def _create_report(
     pass_rate = round(total_pass / total_steps * 100, 2) if total_steps > 0 else 0
 
     now = datetime.now(timezone.utc)
+    # 名字里的时间给人看 → 本地时区；executed_at 照旧存 UTC。
+    # 两边不一致时，同一行会显示相差 8 小时的两个时间。
+    local = now.astimezone()
     if not report_name:
         if len(results) == 1:
             report_name = results[0].scenario_title
         elif folder_name:
-            report_name = f"{folder_name} {now.strftime('%Y-%m-%d %H:%M')}"
+            report_name = f"{folder_name} {local.strftime('%Y-%m-%d %H:%M')}"
         else:
-            report_name = f"接口测试回归 {now.strftime('%Y-%m-%d %H:%M')}"
+            report_name = f"接口测试回归 {local.strftime('%Y-%m-%d %H:%M')}"
 
     report = TestReport(
         report_type="api_test",
@@ -776,8 +839,15 @@ async def _create_report(
 
     for i, result in enumerate(results):
         scenario_duration = sum(s.duration for s in result.steps)
+        # 场景绑了用例就把用例一起记上：报告里能点回用例，用例那边也能反查到这次执行
+        case = None
+        if result.source_case_id:
+            from app.models.case import Case
+            case = await session.get(Case, uuid.UUID(result.source_case_id))
         report_scenario = TestReportScenario(
             report_id=report.id,
+            case_id=case.id if case else None,
+            case_code=case.case_code if case else None,
             scenario_name=result.scenario_title,
             status="passed" if result.passed else "failed",
             execution_type="automated",
@@ -786,6 +856,30 @@ async def _create_report(
         )
         session.add(report_scenario)
         await session.flush()
+
+        # 同一次执行也落进 script_runs —— 用例的「执行历史」读的是这张表。
+        # 不记的话，接口场景跑了多少次，用例页面上都是零。
+        if case is not None:
+            from app.services import script_run_service
+            await script_run_service.record_run(
+                session,
+                case_id=case.id,
+                script_type="api",
+                result={
+                    "status": "passed" if result.passed else "failed",
+                    "duration_ms": scenario_duration,
+                    "error_summary": _first_error(result),
+                    "stdout": _readable_trace(result),
+                },
+                executed_by=user_id,
+                run_mode=script_run_service.REGRESSION,
+                report_scenario_id=report_scenario.id,
+            )
+            script_run_service.apply_case_status(
+                case, "api",
+                "passed" if result.passed else "failed",
+                script_run_service.REGRESSION,
+            )
 
         for j, step in enumerate(result.steps):
             session.add(TestReportStep(

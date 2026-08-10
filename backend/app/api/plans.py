@@ -574,6 +574,52 @@ async def abort_plan(
 reports_router = APIRouter(prefix="/api/projects/{project_id}/reports", tags=["reports"])
 
 
+async def _exec_kind_by_report(
+    session: AsyncSession, report_ids: list, plan_test_type: dict,
+    report_kind: dict | None = None,
+) -> dict:
+    """这份报告到底跑的是 UI 脚本还是接口场景。返回 report_id -> 'ui'|'api'|'mixed'|None。
+
+    三级回退，越靠前越是"真的发生过什么"：
+    1. `script_runs.script_type` —— 执行留下的痕迹，最可信
+    2. 计划自己声明的 `test_type`（e2e 即 UI）—— 老计划报告在 record_run 接进来
+       之前生成，没有第 1 条
+    3. `report_type == 'api_test'` —— 这条通道只跑接口场景，是定义使然不是猜测
+
+    三条都不命中就返回 None，页面显示「—」。宁可留白也别编一个。
+    """
+    if not report_ids:
+        return {}
+    from sqlalchemy import select
+
+    from app.models.report import TestReportScenario
+    from app.models.script import ScriptRun
+
+    rows = (await session.execute(
+        select(TestReportScenario.report_id, ScriptRun.script_type)
+        .join(ScriptRun, ScriptRun.report_scenario_id == TestReportScenario.id)
+        .where(TestReportScenario.report_id.in_(report_ids))
+        .distinct()
+    )).all()
+
+    kinds: dict = {}
+    for rid, stype in rows:
+        prev = kinds.get(rid)
+        kinds[rid] = stype if prev in (None, stype) else "mixed"
+
+    for rid in report_ids:
+        if kinds.get(rid):
+            continue
+        tt = plan_test_type.get(rid)
+        kinds[rid] = (
+            "ui" if tt == "e2e"
+            else "api" if tt == "api"
+            else "api" if (report_kind or {}).get(rid) == "api_test"
+            else None
+        )
+    return kinds
+
+
 @reports_router.get("")
 async def list_reports(
     project_id: uuid.UUID,
@@ -609,9 +655,19 @@ async def list_reports(
     result = await session.execute(base.offset((page - 1) * page_size).limit(page_size))
     rows = result.all()
 
+    exec_kinds = await _exec_kind_by_report(
+        session,
+        [r[0].id for r in rows],
+        {r[0].id: r[3] for r in rows},
+        {r[0].id: r[0].report_type for r in rows},
+    )
+
     data = []
     for report, plan_name, plan_type, test_type, env_name in rows:
         data.append({
+            # 「类型」说的是从哪个入口发起的，不是跑的什么 —— 两件事此前挤在一列里，
+            # 结果报告页清一色「接口测试」，用例页清一色 UI，看着像在自相矛盾。
+            "execKind": exec_kinds.get(report.id),
             "id": str(report.id),
             "planId": str(report.plan_id) if report.plan_id else None,
             "planName": plan_name,
@@ -683,7 +739,10 @@ async def execute_adhoc(
             skipped_count += 1
 
     now = datetime.now(timezone.utc)
-    report_title = body.title or f"批量执行 · {now.strftime('%m-%d %H:%M')}"
+    # 名字给人看，时间就得是人所在时区的。用 UTC 拼名字，列表右边按本地渲染
+    # createdAt，同一行会显示「批量执行 · 08-10 08:17」和「16:17:06」，差 8 小时。
+    # astimezone() 不传参 = 转服务器本地时区；executed_at 仍然存 UTC，只有名字换算。
+    report_title = body.title or f"批量执行 · {now.astimezone().strftime('%m-%d %H:%M')}"
 
     report = TestReport(
         plan_id=None,

@@ -216,11 +216,12 @@ export default function PlanList() {
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px', height: 36, background: 'rgba(0,0,0,0.02)', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
             <div style={{ flex: 4, ...th }}>计划名称</div>
-            <div style={{ width: 70, textAlign: 'center', ...th }}>类型</div>
-            <div style={{ width: 90, textAlign: 'center', ...th }}>环境</div>
-            <div style={{ width: 60, textAlign: 'center', ...th }}>用例</div>
-            <div style={{ width: 80, textAlign: 'center', ...th }}>状态</div>
-            <div style={{ width: 160, textAlign: 'center', ...th }}>操作</div>
+            <div style={{ width: 62, textAlign: 'center', flexShrink: 0, ...th }}>类型</div>
+            <div style={{ width: 62, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
+            <div style={{ width: 90, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
+            <div style={{ width: 60, textAlign: 'center', flexShrink: 0, ...th }}>用例</div>
+            <div style={{ width: 80, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
+            <div style={{ width: 240, textAlign: 'center', flexShrink: 0, ...th }}>操作</div>
           </div>
           {/* Body */}
           <div style={{ flex: 1, overflow: 'auto' }}>
@@ -246,15 +247,27 @@ export default function PlanList() {
                     </span>
                   </div>
 
-                  {/* Type */}
-                  <div style={{ width: 70, textAlign: 'center' }}>
+                  {/* Type：自动化/手动 —— 这一列回答的不是"跑的什么" */}
+                  <div style={{ width: 62, textAlign: 'center', flexShrink: 0 }}>
                     <span style={{ fontSize: 12, color: '#86909c' }}>
                       {plan.planType === 'automated' ? '自动化' : '手动'}
                     </span>
                   </div>
 
+                  {/* 执行方式：UI 脚本还是接口场景。库里一直有 test_type，
+                      只是从没显示过 —— 12 条计划全是接口，页面上完全看不出来 */}
+                  <div style={{ width: 62, textAlign: 'center', flexShrink: 0 }}>
+                    {plan.testType ? (
+                      <span style={{
+                        fontSize: 11, padding: '1px 6px', borderRadius: 6,
+                        background: plan.testType === 'e2e' ? '#f5f0ff' : '#e0f7f6',
+                        color: plan.testType === 'e2e' ? '#7c5cbf' : '#0ea5a0',
+                      }}>{plan.testType === 'e2e' ? 'UI' : '接口'}</span>
+                    ) : <span style={{ fontSize: 11, color: '#c9cdd4' }}>—</span>}
+                  </div>
+
                   {/* Environment */}
-                  <div style={{ width: 90, textAlign: 'center' }}>
+                  <div style={{ width: 90, textAlign: 'center', flexShrink: 0 }}>
                     {plan.environmentName ? (
                       <span style={{ fontSize: 12, color: '#86909c' }}>
                         {plan.environmentName}
@@ -263,12 +276,12 @@ export default function PlanList() {
                   </div>
 
                   {/* Case count */}
-                  <div style={{ width: 60, textAlign: 'center', fontSize: 13, color: '#4e5969', fontFamily: 'var(--font-mono)' }}>
+                  <div style={{ width: 60, textAlign: 'center', flexShrink: 0, fontSize: 13, color: '#4e5969', fontFamily: 'var(--font-mono)' }}>
                     {plan.caseCount}
                   </div>
 
                   {/* Status */}
-                  <div style={{ width: 80, textAlign: 'center' }}>
+                  <div style={{ width: 80, textAlign: 'center', flexShrink: 0 }}>
                     <span style={{
                       display: 'inline-flex', alignItems: 'center', gap: 4,
                       fontSize: 11, padding: '2px 8px', borderRadius: 12,
@@ -280,7 +293,7 @@ export default function PlanList() {
                   </div>
 
                   {/* Actions */}
-                  <div style={{ width: 160, display: 'flex', justifyContent: 'center', gap: 4 }}>
+                  <div style={{ width: 240, flexShrink: 0, display: 'flex', justifyContent: 'flex-end', gap: 4 }}>
                     {['draft', 'completed', 'paused'].includes(plan.status) && (
                       <Button type="text" size="small" style={{ fontSize: 12, color: '#86909c' }}
                         onClick={async e => {

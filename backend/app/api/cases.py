@@ -194,11 +194,14 @@ async def list_cases(
         lifecycle_status=lifecycle_status, manual_status=manual_status,
         ui_status=ui_status, api_status=api_status,
     )
+    assets = await case_service.list_case_assets(session, [c.id for c in cases])
+    data = []
+    for c in cases:
+        row = CaseResponse.model_validate(c, from_attributes=True).model_dump(by_alias=True)
+        row.update(assets.get(c.id, {}))
+        data.append(row)
     return {
-        "data": [
-            CaseResponse.model_validate(c, from_attributes=True).model_dump(by_alias=True)
-            for c in cases
-        ],
+        "data": data,
         "pagination": {"page": page, "pageSize": page_size, "total": total},
     }
 

@@ -140,14 +140,21 @@ def apply_case_status(case, script_type: str, status: str, run_mode: str = DEBUG
     而断点续跑的判据是 `ui_status != executable`——调试失败一打回 debugging，
     CC 下一轮就会把已经做完的用例又捡回来重做一遍。
     只有 regression（计划/批量回归）失败才是真信号，才允许把状态打回 debugging。
+
+    **UI 和接口两维一视同仁**：此前这里写死 `script_type != "ui"` 直接 return，
+    于是接口场景跑通多少次 `api_status` 都停在 debugging，而「批量执行」的可执行判据
+    正是 `api_status == executable`——页面就报「0 个包含可执行脚本」。
+    它明明有脚本、还跑通了 69 次，文案却说没有。
     """
-    if case is None or script_type != "ui":
+    if case is None or script_type not in ("ui", "api"):
         return
+    scenario_attr = f"{script_type}_scenario_status"
+    dim_attr = f"{script_type}_status"
     passed = status == "passed"
     if passed:
-        case.ui_scenario_status = "completed"
-        if case.ui_status in ("debugging", "not_started", "draft", "needs_fix"):
-            case.ui_status = "pending_review"
+        setattr(case, scenario_attr, "completed")
+        if getattr(case, dim_attr) in ("debugging", "not_started", "draft", "needs_fix"):
+            setattr(case, dim_attr, "pending_review")
     elif run_mode == REGRESSION:
-        case.ui_scenario_status = "debugging"
-        case.ui_status = "debugging"
+        setattr(case, scenario_attr, "debugging")
+        setattr(case, dim_attr, "debugging")

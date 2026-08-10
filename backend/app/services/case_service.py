@@ -238,6 +238,59 @@ async def list_cases(
     return cases, total
 
 
+async def list_case_assets(session: AsyncSession, case_ids: list) -> dict:
+    """每条用例**真的**有哪几样东西：手动步骤 / 接口场景 / UI 脚本。
+
+    列表的「场景」列原先自己拍脑袋：「手动」标签写死无条件显示（257/257 全亮，
+    等于没说），「API」只看 `cases.api_scenario` 这个内嵌字段——而 MCP 回推的接口
+    场景写的是 `api_test_scenarios` 表。实测 7 条绑了用例的回推场景，
+    对应用例的内嵌字段 100% 是 null，于是**全部在列表上隐身**。
+
+    所以这里把三样东西各自的真实来源都查一遍，两个存储取并集。
+    """
+    if not case_ids:
+        return {}
+    from sqlalchemy import func
+
+    from app.models.api_test import ApiTestScenario
+    from app.models.script import Script
+
+    out = {cid: {"hasManual": False, "hasApi": False, "hasUi": False} for cid in case_ids}
+
+    # 内嵌字段：注意 jsonb 的 'null' 不是 SQL NULL，必须判类型，
+    # 否则 184 条存着 JSON null 的用例会被算成"有场景"。
+    rows = (await session.execute(
+        select(
+            Case.id,
+            func.jsonb_array_length(Case.steps) > 0,
+            func.jsonb_typeof(Case.api_scenario) == "object",
+            func.jsonb_typeof(Case.ui_scenario) == "object",
+        ).where(Case.id.in_(case_ids))
+    )).all()
+    for cid, has_steps, has_api, has_ui in rows:
+        out[cid] = {
+            "hasManual": bool(has_steps),
+            "hasApi": bool(has_api),
+            "hasUi": bool(has_ui),
+        }
+
+    for cid, in (await session.execute(
+        select(ApiTestScenario.source_case_id)
+        .where(ApiTestScenario.source_case_id.in_(case_ids)).distinct()
+    )).all():
+        if cid in out:
+            out[cid]["hasApi"] = True
+
+    for cid, in (await session.execute(
+        select(Script.case_id)
+        .where(Script.case_id.in_(case_ids), Script.script_type == "ui").distinct()
+    )).all():
+        if cid in out:
+            out[cid]["hasUi"] = True
+
+    return out
+
+
 async def list_templates(
     session: AsyncSession,
     branch_id: uuid.UUID,

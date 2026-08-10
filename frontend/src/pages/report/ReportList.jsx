@@ -1,9 +1,15 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Button, Space, Spin, Empty, Input, Pagination, Modal, message } from 'antd'
+import { Button, Space, Spin, Empty, Input, Pagination, Modal, Tooltip, message } from 'antd'
 import { SearchOutlined, ReloadOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
+
+// 「入口」= 从哪儿点的；「执行」= 真跑的什么。两件事，分两列，别再共用「类型」这个词。
+const ENTRY_LABELS = {
+  plan: '测试计划', api_test: '接口测试', scenario_test: '功能场景', adhoc: '批量执行',
+}
+const EXEC_LABELS = { ui: 'UI', api: '接口', mixed: '混合' }
 
 function fmt(ms) {
   if (!ms && ms !== 0) return '-'
@@ -124,13 +130,16 @@ export default function ReportList() {
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px', height: 36, background: 'rgba(0,0,0,0.02)', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
             <div style={{ flex: 4, ...th }}>报告名称</div>
-            <div style={{ width: 70, textAlign: 'center', ...th }}>类型</div>
-            <div style={{ width: 80, textAlign: 'center', ...th }}>环境</div>
-            <div style={{ width: 80, textAlign: 'center', ...th }}>状态</div>
-            <div style={{ width: 130, textAlign: 'center', ...th }}>结果</div>
-            <div style={{ width: 70, textAlign: 'center', ...th }}>通过率</div>
-            <div style={{ width: 60, textAlign: 'right', ...th }}>耗时</div>
-            <div style={{ width: 100, textAlign: 'center', ...th }}>操作</div>
+            {/* 「入口」和「跑的什么」是两件事，此前挤在一列叫「类型」——
+                于是报告页清一色「接口测试」，用例页清一色 UI，看着像互相打架。 */}
+            <div style={{ width: 76, textAlign: 'center', flexShrink: 0, ...th }}>入口</div>
+            <div style={{ width: 62, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
+            <div style={{ width: 80, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
+            <div style={{ width: 80, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
+            <div style={{ width: 130, textAlign: 'center', flexShrink: 0, ...th }}>结果</div>
+            <div style={{ width: 70, textAlign: 'center', flexShrink: 0, ...th }}>通过率</div>
+            <div style={{ width: 60, textAlign: 'right', flexShrink: 0, ...th }}>耗时</div>
+            <div style={{ width: 100, textAlign: 'center', flexShrink: 0, ...th }}>操作</div>
           </div>
           {/* Body */}
           <div style={{ flex: 1, overflow: 'auto' }}>
@@ -156,19 +165,38 @@ export default function ReportList() {
                     </span>
                   </div>
 
-                  {/* Type */}
-                  <div style={{ width: 70, textAlign: 'center' }}>
-                    <span style={{
-                      fontSize: 11, padding: '1px 6px', borderRadius: 6,
-                      background: r.reportType === 'adhoc' ? 'rgba(250,173,20,0.08)' : r.reportType === 'api_test' ? 'rgba(78,138,240,0.06)' : r.reportType === 'scenario_test' ? 'rgba(14,165,160,0.06)' : 'rgba(78,138,240,0.06)',
-                      color: r.reportType === 'adhoc' ? '#fa8c16' : r.reportType === 'api_test' ? '#0ea5a0' : r.reportType === 'scenario_test' ? '#0ea5a0' : '#4e8af0',
-                    }}>
-                      {r.reportType === 'adhoc' ? '批量执行' : r.reportType === 'api_test' ? '接口测试' : r.reportType === 'scenario_test' ? '功能场景' : '测试计划'}
-                    </span>
+                  {/* 入口：从哪儿发起的 */}
+                  <div style={{ width: 76, textAlign: 'center', flexShrink: 0 }}>
+                    <Tooltip title="从哪个入口发起的这次执行">
+                      <span style={{
+                        fontSize: 11, padding: '1px 6px', borderRadius: 6,
+                        background: r.reportType === 'adhoc' ? 'rgba(250,173,20,0.08)' : r.reportType === 'scenario_test' ? 'rgba(14,165,160,0.06)' : 'rgba(78,138,240,0.06)',
+                        color: r.reportType === 'adhoc' ? '#fa8c16' : r.reportType === 'scenario_test' ? '#0ea5a0' : '#4e8af0',
+                      }}>
+                        {ENTRY_LABELS[r.reportType] || '测试计划'}
+                      </span>
+                    </Tooltip>
+                  </div>
+
+                  {/* 执行方式：跑的是 UI 脚本还是接口场景 */}
+                  <div style={{ width: 62, textAlign: 'center', flexShrink: 0 }}>
+                    {r.execKind ? (
+                      <span style={{
+                        fontSize: 11, padding: '1px 6px', borderRadius: 6,
+                        background: r.execKind === 'ui' ? '#f5f0ff' : r.execKind === 'mixed' ? 'rgba(250,173,20,0.08)' : '#e0f7f6',
+                        color: r.execKind === 'ui' ? '#7c5cbf' : r.execKind === 'mixed' ? '#fa8c16' : '#0ea5a0',
+                      }}>
+                        {EXEC_LABELS[r.execKind]}
+                      </span>
+                    ) : (
+                      <Tooltip title="这份报告生成时还没记录执行方式，从计划和执行痕迹里都推不出来">
+                        <span style={{ fontSize: 11, color: '#c9cdd4' }}>—</span>
+                      </Tooltip>
+                    )}
                   </div>
 
                   {/* Environment */}
-                  <div style={{ width: 80, textAlign: 'center' }}>
+                  <div style={{ width: 80, textAlign: 'center', flexShrink: 0 }}>
                     {r.environmentName ? (
                       <span style={{ fontSize: 12, color: '#86909c' }}>
                         {r.environmentName}
@@ -177,7 +205,7 @@ export default function ReportList() {
                   </div>
 
                   {/* Status */}
-                  <div style={{ width: 80, textAlign: 'center' }}>
+                  <div style={{ width: 80, textAlign: 'center', flexShrink: 0 }}>
                     <span style={{
                       display: 'inline-flex', alignItems: 'center', gap: 4,
                       fontSize: 11, padding: '2px 8px', borderRadius: 12,
@@ -190,7 +218,7 @@ export default function ReportList() {
                   </div>
 
                   {/* Results */}
-                  <div style={{ width: 130, textAlign: 'center', fontSize: 12, fontFamily: 'var(--font-mono)' }}>
+                  <div style={{ width: 130, textAlign: 'center', fontSize: 12, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
                     <span style={{ color: '#0ea5a0' }}>{r.passed}</span>
                     <span style={{ color: '#c9cdd4' }}> / </span>
                     <span style={{ color: '#e8453c' }}>{r.failed + r.error}</span>
@@ -200,7 +228,7 @@ export default function ReportList() {
                   </div>
 
                   {/* Pass rate */}
-                  <div style={{ width: 70, textAlign: 'center' }}>
+                  <div style={{ width: 70, textAlign: 'center', flexShrink: 0 }}>
                     {r.passRate != null ? (
                       <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'var(--font-mono)', color: rateColor(r.passRate) }}>
                         {r.passRate}%
@@ -209,12 +237,12 @@ export default function ReportList() {
                   </div>
 
                   {/* Duration */}
-                  <div style={{ width: 60, textAlign: 'right', fontSize: 12, fontFamily: 'var(--font-mono)', color: '#86909c' }}>
+                  <div style={{ width: 60, textAlign: 'right', fontSize: 12, fontFamily: 'var(--font-mono)', color: '#86909c', flexShrink: 0 }}>
                     {fmt(r.totalDurationMs)}
                   </div>
 
                   {/* Actions */}
-                  <div style={{ width: 100, display: 'flex', justifyContent: 'center', gap: 2 }}>
+                  <div style={{ width: 100, display: 'flex', justifyContent: 'center', gap: 2, flexShrink: 0 }}>
                     <Button type="text" size="small" style={{ fontSize: 12, color: '#0ea5a0' }}
                       onClick={e => handleExport(e, r.id)}>导出</Button>
                     <Button type="text" size="small" danger style={{ fontSize: 12 }}

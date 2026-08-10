@@ -585,6 +585,13 @@ async def list_script_runs(
                 "error_summary": r.error_summary,
                 "stdout": r.stdout,
                 "screenshots": r.screenshots,
+                # 下面两个库里一直有，只是从没送到前端过：
+                # captured_requests 让「接口视图」打开页面就有内容（此前只有当场
+                # 点了运行验证才有）；failure_phenomenon 是平台判好的失败现象
+                # （超时/元素找不到/断言不符…），人扫一眼就知道往哪看，
+                # 不用去读一坨 pytest stdout。
+                "captured_requests": r.captured_requests,
+                "failure_phenomenon": r.failure_phenomenon,
                 "executed_by": str(r.executed_by),
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
