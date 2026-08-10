@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Card, Tag, Space, Typography, Button, message, Input, Modal, Popconfirm, Tabs, Badge, Checkbox, Tooltip, Alert, Dropdown, Collapse, Switch } from 'antd'
+import { Card, Tag, Space, Typography, Button, message, Input, Modal, Popconfirm, Tabs, Badge, Checkbox, Tooltip, Alert, Collapse, Switch } from 'antd'
 import {
   ApiOutlined, CopyOutlined, ThunderboltOutlined,
   KeyOutlined, PlusOutlined, DeleteOutlined, CheckCircleOutlined,
@@ -40,14 +40,11 @@ const CAT_HEX = {
 }
 const catHex = (cat) => CAT_HEX[CAT_COLORS[cat]] || CAT_HEX.default
 
-/** 一行工具：勾选框 + 名字 + 说明（夹两行，悬停看全文）+ 参数。 */
+/** 一行工具（明细里用）。说明夹两行，悬停看全文。 */
 function ToolRow({ t, checked, disabled, onToggle }) {
-  const clamp2 = {
-    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
-  }
   return (
     <label style={{
-      display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 14px 9px 34px',
+      display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 14px 8px 34px',
       borderTop: '1px solid rgba(0,0,0,0.04)', cursor: disabled ? 'default' : 'pointer',
       background: checked && !disabled ? 'rgba(14,165,160,0.035)' : 'transparent',
     }}>
@@ -55,84 +52,145 @@ function ToolRow({ t, checked, disabled, onToggle }) {
         onChange={e => onToggle(t.name, e.target.checked)} style={{ marginTop: 1 }} />
       <Text code style={{ fontSize: 11, flex: '0 0 190px', lineHeight: '20px' }}>{t.name}</Text>
       <div style={{ flex: 1, minWidth: 0 }}>
-        {/* 说明最长的有 400 多字，全铺开就没法挑工具了。夹两行，悬停看全文。 */}
         <Tooltip title={<span style={{ fontSize: 12 }}>{t.description}</span>}
           styles={{ root: { maxWidth: 620 } }}>
-          <div style={{ fontSize: 12.5, color: '#4e5969', lineHeight: 1.65, ...clamp2 }}>
-            {t.description}
-          </div>
-        </Tooltip>
-        {t.params && (
           <div style={{
-            fontSize: 11, color: '#a8adb7', marginTop: 3, fontFamily: 'var(--font-mono)',
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-          }}>{t.params}</div>
-        )}
+            fontSize: 12.5, color: '#4e5969', lineHeight: 1.65,
+            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+          }}>{t.description}</div>
+        </Tooltip>
       </div>
     </label>
   )
 }
 
+/** 一张「活」卡片。多选，勾上的活所需的工具自动并起来。 */
+function ActivityCard({ p, checked, disabled, recommended, included, total, onToggle }) {
+  return (
+    <div onClick={() => !disabled && onToggle(p, !checked)} style={{
+      cursor: disabled ? 'default' : 'pointer', borderRadius: 10, padding: '12px 14px',
+      transition: 'all .15s', opacity: disabled ? 0.55 : 1,
+      border: checked ? '1.5px solid #0ea5a0' : '1px solid rgba(0,0,0,0.09)',
+      background: checked ? 'rgba(14,165,160,0.05)' : '#fff',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
+        <Checkbox checked={checked} disabled={disabled} style={{ marginTop: 1, pointerEvents: 'none' }} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <span style={{ fontWeight: 600, fontSize: 13.5, color: checked ? '#0ea5a0' : '#2e3138' }}>
+              {p.label}
+            </span>
+            {recommended && (
+              <Tag color="green" style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 5px' }}>常用</Tag>
+            )}
+            {/* 没勾但工具已被别的活全带进来了。不标的话人会以为自己漏勾了。 */}
+            {included && (
+              <Tag style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 5px' }}>已包含</Tag>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.65, marginTop: 3 }}>{p.task}</div>
+          <div style={{ fontSize: 11.5, color: '#9aa0aa', marginTop: 5 }}>
+            要用到 {p.tools.length} / {total} 个工具
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** 从落库的工具清单反推「当初选了哪几件活」。
+ *
+ * 库里存的是展开后的显式工具名（不存档位名 —— 存了的话日后改档位定义，
+ * 已有项目的范围会悄悄变）。所以进页面要反推一次：取所有"工具被完全包含"的活，
+ * 再去掉被别的活套住的（选了全链路就不用再标用例档），剩下的就是当初那几件。
+ */
+function deriveChosen(profiles, toolNames) {
+  const has = new Set(toolNames)
+  const acts = profiles.filter(p => p.tools)
+  const fit = acts.filter(p => p.tools.every(n => has.has(n)))
+  // 被别人套住的丢掉：只留"极大"的那几件
+  return fit
+    .filter(p => !fit.some(o => o.key !== p.key && p.tools.every(n => o.tools.includes(n))))
+    .map(p => p.key)
+}
+
 /**
- * 本项目的 MCP 工具范围 —— 一张默认收起的可勾选清单。
+ * 本项目的 MCP 工具范围。
  *
- * 走过三段弯路，都记下来免得再犯：
+ * ## 打开这一页的人要决定的只有一件事：这个项目的 CC 允许干哪些活
  *
- * 1. 做成 9 张档位卡二选一 → 只能"全部"或"恰好某一档"，想在某档基础上
- *    多开一个工具做不到。范围是个集合，就该按集合编辑。
- * 2. 改成勾选之后，把勾选框藏在「只开放勾选的」模式后面 →
- *    **默认打开一个勾选框都看不到**，跟改之前长得一样。模式切换是给程序看的。
- * 3. 勾选框露出来了，但 42 条整段说明全铺开 → 一堵墙，滚好几屏才看得完。
+ * 他不认识那 42 个工具名，也不该认识。所以**「活」是主角，工具明细是结果** ——
+ * 明细默认整块收起，是给想核对的人看的，不是让人从里面挑。
  *
- * 定稿：分类默认收起（整页 12 行看得完）、勾选框常驻可点、说明夹两行悬停看全文。
+ * 前面连改四版都是从数据模型出发（工具、集合、模式），每一版的毛病都记在这：
+ * 1. 9 张档位卡**二选一** → 只能"全部"或"恰好某一档"，想在某档基础上多开一个做不到
+ * 2. 勾选框藏在「只开放勾选的」模式后面 → 默认打开一个框都看不到，跟没改一样
+ * 3. 42 条整段说明全铺开 → 一堵墙，滚四屏
+ * 4. 「活」被塞进下拉菜单、只能单选，反而让人去下面 42 条里挑 —— 他不懂那些名字
+ *
+ * 另外：**没有一档覆盖"从头干到尾"**，想干整条链的人只能选「全量」，
+ * 分档对他等于没发生。后端补了 `fullloop`（写用例→回填→跑→读报告→归因）。
+ *
+ * 多选的语义：勾上 = 这件活要能干（并上它的工具）；取消 = 去掉它的工具，
+ * 于是别的活如果因此缺了工具，也会跟着自动取消 —— 这条自然成立，不用特判。
  */
 function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSave }) {
   const savedUnlimited = !scope?.allowedTools
   const savedList = scope?.allowedTools || []
   const allNames = tools.map(t => t.name)
   const [unlimited, setUnlimited] = useState(savedUnlimited)
-  // 不限制时下面照样显示全勾，人看到的和"全开"一致
   const [sel, setSel] = useState(savedUnlimited ? allNames : savedList)
+  // 人**明确选了哪几件活**，单独记一份。
+  // 一开始想省掉它、用"工具集合包含关系"反推，结果分不出「人自己勾的」和
+  // 「被大档带进来的」：勾了「全链路」之后「用例」「UI 脚本」等自动显示成已勾，
+  // 再去点「全链路」取消 —— 那几个子档还"勾着"，工具一个都减不掉，**按钮像坏了**。
+  // 反推只用在初次加载（库里只存了工具清单，没存档位名）。
+  const [chosen, setChosen] = useState(() => deriveChosen(profiles, savedUnlimited ? [] : savedList))
+  const [showDetail, setShowDetail] = useState(false)
   const [openKeys, setOpenKeys] = useState([])
-  // ⚠ 保存成功后要跟上服务端那份，但**不要用 useEffect 去 setState 同步** ——
-  // 那是 react-hooks/set-state-in-effect。调用方给了 key（见 <ScopePanel key=...>），
-  // saved 变了整个组件重挂，初值自然就是新的。
+  // ⚠ 别用 useEffect 同步服务端那份（react-hooks/set-state-in-effect）。
+  // 调用方给了 key（见 <ScopePanel key=...>），saved 变了整个组件重挂。
 
   const selSet = new Set(sel)
   const same = (a, b) => a.length === b.length && a.every(x => b.includes(x))
   const dirty = unlimited !== savedUnlimited || (!unlimited && !same(sel, savedList))
   const picked = unlimited ? tools.length : sel.length
+  const acts = profiles.filter(p => p.tools)
+  // 关掉「不限制」时落到哪儿：**不能原样留着 42 个全勾**。
+  // 人关掉它就是想收窄，结果九件活全亮着、得先取消八件才够挑一件 —— 方向是反的。
+  // 落到推荐的那条全链路（人再改），这是他多半想要的起点。
+  const baseline = (profiles.find(p => p.key === 'fullloop') || acts[0])?.tools || allNames
 
-  const toggle = (name, on) => setSel(v => on ? [...v, name] : v.filter(n => n !== name))
+  const chosenSet = new Set(chosen)
+  const isOn = (p) => chosenSet.has(p.key)
+  // 没被明确选、但工具已经被别的活全带进来了 —— 标出来，别让人以为漏勾了
+  const isIncluded = (p) => !chosenSet.has(p.key) && p.tools.every(n => selSet.has(n))
+
+  const toggleAct = (p, on) => {
+    const next = on ? [...chosen, p.key] : chosen.filter(k => k !== p.key)
+    setChosen(next)
+    // 工具永远 = 选中那几件活的**并集**，重算而不是增量加减。
+    // 增量减法会把公共工具（tb_list_projects 之类几乎每件活都要）顺手拿走，
+    // 别的活悄悄就不完整了 —— 人只点了一下，坏的是别处。
+    const keep = new Set(next)
+    setSel([...new Set(acts.filter(o => keep.has(o.key)).flatMap(o => o.tools))])
+  }
+
+  // 在明细里单独加减工具之后，某件活可能就不完整了 —— 它得跟着取消勾选，
+  // 否则页面会显示"这件活能干"而实际上缺工具。
+  const syncChosen = (nextSel) => {
+    const has = new Set(nextSel)
+    setChosen(c => c.filter(k => {
+      const p = acts.find(o => o.key === k)
+      return p && p.tools.every(n => has.has(n))
+    }))
+  }
+  const applySel = (fn) => setSel(v => { const n = fn(v); syncChosen(n); return n })
+  const toggle = (name, on) =>
+    applySel(v => on ? [...v, name] : v.filter(n => n !== name))
   const toggleCat = (items, on) => {
     const names = items.map(t => t.name)
-    setSel(v => on ? [...new Set([...v, ...names])] : v.filter(n => !names.includes(n)))
-  }
-  const applyProfile = (p) => {
-    setUnlimited(false)
-    setSel(p.tools ? [...p.tools] : allNames)
-    // 套完把命中的分类展开，让人看见它到底勾了些什么，而不是只看到个数字
-    setOpenKeys(byCategory
-      .filter(([, items]) => items.some(t => (p.tools || allNames).includes(t.name)))
-      .map(([c]) => c))
-  }
-
-  // 预设走下拉，不排成一行按钮：那行 chips 长短不一会换行，Tooltip 弹出来
-  // 还正好盖住旁边的按钮。菜单是纵向的，说明直接当第二行小字排下来。
-  const presetMenu = {
-    items: profiles.filter(p => p.tools).map(p => ({
-      key: p.key,
-      label: (
-        <div style={{ padding: '3px 0', maxWidth: 400 }}>
-          <div style={{ fontSize: 13, fontWeight: 500 }}>
-            {p.label}
-            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{p.tools.length} 个</Text>
-          </div>
-          <div style={{ fontSize: 11.5, color: '#8c919e', whiteSpace: 'normal', lineHeight: 1.5 }}>{p.task}</div>
-        </div>
-      ),
-    })),
-    onClick: ({ key }) => applyProfile(profiles.find(p => p.key === key)),
+    applySel(v => on ? [...new Set([...v, ...names])] : v.filter(n => !names.includes(n)))
   }
 
   const collapseItems = byCategory.map(([cat, items]) => {
@@ -144,10 +202,8 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
       label: (
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <span style={{ width: 3, height: 15, borderRadius: 2, background: catHex(cat), flex: '0 0 auto' }} />
-          {/* 勾选框自己吃掉点击，别让"想勾一整类"变成"把它收起来" */}
           <span onClick={e => e.stopPropagation()} style={{ display: 'inline-flex' }}>
-            <Checkbox disabled={unlimited} checked={full}
-              indeterminate={n > 0 && !full}
+            <Checkbox disabled={unlimited} checked={full} indeterminate={n > 0 && !full}
               onChange={e => toggleCat(items, e.target.checked)} />
           </span>
           <span style={{ fontWeight: 600, fontSize: 13, color: '#2e3138' }}>{cat}</span>
@@ -174,77 +230,96 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
 
   return (
     <div>
-      <Card size="small" style={{ ...cardStyle, marginBottom: 14, background: 'rgba(14,165,160,0.035)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
-          <div style={{ minWidth: 210 }}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
-              <span style={{ fontSize: 26, fontWeight: 700, color: picked ? '#0ea5a0' : '#e8453c', lineHeight: 1 }}>
-                {picked}
-              </span>
-              <span style={{ fontSize: 13, color: '#8c919e' }}>/ {tools.length} 个工具已开放</span>
-            </div>
-            <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.06)', marginTop: 8, overflow: 'hidden' }}>
-              <div style={{
-                height: '100%', width: `${(picked / Math.max(tools.length, 1)) * 100}%`,
-                background: '#0ea5a0', borderRadius: 2, transition: 'width .2s',
-              }} />
-            </div>
-            <Text type="secondary" style={{ fontSize: 11.5, display: 'block', marginTop: 6 }}>
-              勾上的 CC 才看得到、调得动 · 本项目 <b style={{ color: '#4e5969' }}>{keyCount}</b> 把 Key 都按它生效
-            </Text>
-          </div>
+      <div style={{ marginBottom: 14 }}>
+        <div style={{ ...sectionTitle, fontSize: 15 }}>这个项目的 Claude Code 能干哪些活？</div>
+        <Text type="secondary" style={{ fontSize: 12.5 }}>
+          勾上的活所需要的工具会自动合并；范围外的工具 CC 看不到、也调不动。
+          本项目 <b style={{ color: '#4e5969' }}>{keyCount}</b> 把 Key 都按它生效，改完立即生效，不用重新建 Key。
+        </Text>
+      </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
-            <Space size={8} wrap>
-              <Dropdown menu={presetMenu} trigger={['click']} placement="bottomRight">
-                <Button size="small">套用预设 <DownOutlined style={{ fontSize: 10 }} /></Button>
-              </Dropdown>
-              <Button size="small" disabled={unlimited} onClick={() => setSel(allNames)}>全选</Button>
-              <Button size="small" disabled={unlimited} onClick={() => setSel([])}>清空</Button>
-              <Button size="small" type="text" onClick={() =>
-                setOpenKeys(openKeys.length ? [] : byCategory.map(([c]) => c))}>
-                {openKeys.length ? '全部收起' : '全部展开'}
-              </Button>
-            </Space>
-            <Space size={12} wrap>
-              {/* 「不限制」不等于"把 42 个全勾上"：前者以后新增的工具自动包含，
-                  后者不会（落库 NULL vs 显式清单）。这个区别得写出来，别让人猜。 */}
-              <Tooltip title="勾上之后，以后平台新增的工具也自动包含；取消勾选就按下面的清单来">
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                  <Switch size="small" checked={unlimited}
-                    onChange={v => { setUnlimited(v); if (v) setSel(allNames) }} />
-                  <span style={{ fontSize: 12.5, color: unlimited ? '#0ea5a0' : '#8c919e' }}>不限制</span>
-                </span>
-              </Tooltip>
-              {dirty && (
-                <>
-                  <Button size="small" onClick={() => {
-                    setUnlimited(savedUnlimited); setSel(savedUnlimited ? allNames : savedList)
-                  }}>放弃修改</Button>
-                  <Button size="small" type="primary" loading={saving}
-                    disabled={!unlimited && sel.length === 0}
-                    onClick={() => onSave(unlimited ? null : sel)}>保存</Button>
-                </>
-              )}
-            </Space>
+      <div style={{
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+        gap: 10, marginBottom: 16, opacity: unlimited ? 0.5 : 1,
+      }}>
+        {acts.map(p => (
+          <ActivityCard key={p.key} p={p} total={tools.length} disabled={unlimited}
+            recommended={p.key === 'fullloop'} checked={isOn(p)} included={isIncluded(p)}
+            onToggle={toggleAct} />
+        ))}
+      </div>
+
+      <Card size="small" style={{ ...cardStyle, background: 'rgba(14,165,160,0.035)', marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <span style={{ fontSize: 22, fontWeight: 700, color: picked ? '#0ea5a0' : '#e8453c' }}>{picked}</span>
+            <span style={{ fontSize: 13, color: '#8c919e' }}> / {tools.length} 个工具已开放</span>
           </div>
+          <div style={{ width: 140, height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.07)', overflow: 'hidden' }}>
+            <div style={{
+              height: '100%', width: `${(picked / Math.max(tools.length, 1)) * 100}%`,
+              background: '#0ea5a0', transition: 'width .2s',
+            }} />
+          </div>
+          <Button size="small" type="text" onClick={() => setShowDetail(v => !v)}>
+            {showDetail ? '收起工具明细' : '查看工具明细'}
+          </Button>
+          <div style={{ flex: 1 }} />
+          {/* 「不限制」不等于"把 42 个全勾上"：前者以后新增的工具自动包含，后者不会
+              （落库 NULL vs 显式清单）。这个区别得写出来，别让人猜。 */}
+          <Tooltip title="勾上之后，以后平台新增的工具也自动包含；关掉就按上面勾的活来">
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <Switch size="small" checked={unlimited}
+                onChange={v => {
+                  setUnlimited(v)
+                  setSel(v ? allNames : baseline)
+                  setChosen(v ? [] : deriveChosen(profiles, baseline))
+                }} />
+              <span style={{ fontSize: 12.5, color: unlimited ? '#0ea5a0' : '#8c919e' }}>不限制</span>
+            </span>
+          </Tooltip>
+          {dirty && (
+            <Space size={8}>
+              <Button size="small" onClick={() => {
+                setUnlimited(savedUnlimited)
+                setSel(savedUnlimited ? allNames : savedList)
+                setChosen(deriveChosen(profiles, savedUnlimited ? [] : savedList))
+              }}>放弃修改</Button>
+              <Button size="small" type="primary" loading={saving}
+                disabled={!unlimited && sel.length === 0}
+                onClick={() => onSave(unlimited ? null : sel)}>保存</Button>
+            </Space>
+          )}
         </div>
         {unlimited && (
           <div style={{ marginTop: 8, fontSize: 11.5, color: '#8c919e' }}>
-            当前不限制，所以下面全勾且点不动 —— 关掉右上角「不限制」就能逐个勾选。
+            当前不限制，所以上面的活全部置灰 —— 关掉右边的「不限制」就能按活来选。
           </div>
         )}
         {!unlimited && sel.length === 0 && (
           <div style={{ marginTop: 8, fontSize: 12, color: '#e8453c' }}>
-            一个都没勾 —— 那样 CC 连不上任何工具，等于把这个项目的 MCP 关了。至少勾一个再保存。
+            一件活都没勾 —— 那样 CC 连不上任何工具，等于把这个项目的 MCP 关了。
           </div>
         )}
       </Card>
 
-      {/* 默认全部收起：42 条整段说明铺开是一堵墙，收起来整页 12 行，要改哪类点哪类。 */}
-      <Collapse items={collapseItems} activeKey={openKeys} onChange={setOpenKeys}
-        expandIconPosition="start" size="small"
-        style={{ background: 'transparent', borderRadius: 10 }} />
+      {/* 明细是给想核对的人看的，默认整块收起。也能在这里单独加减某个工具。 */}
+      {showDetail && (
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
+              按上面的活自动勾好的。要单独加减某个工具，展开分类改就行。
+            </Text>
+            <div style={{ flex: 1 }} />
+            <Button size="small" type="text" onClick={() =>
+              setOpenKeys(openKeys.length ? [] : byCategory.map(([c]) => c))}>
+              {openKeys.length ? '全部收起' : '全部展开'}
+            </Button>
+          </div>
+          <Collapse items={collapseItems} activeKey={openKeys} onChange={setOpenKeys}
+            expandIconPosition="start" size="small" style={{ background: 'transparent' }} />
+        </div>
+      )}
     </div>
   )
 }

@@ -30,58 +30,82 @@ from __future__ import annotations
 # 每条链都要先定位到项目/分支，单列出来避免各档位重复抄
 _LOCATE = ["tb_list_projects", "tb_list_branches"]
 
+_LIVE = _LOCATE + [
+    "tb_list_cases", "tb_get_case", "tb_get_folder_tree", "tb_create_case",
+    "tb_list_api_tree", "tb_get_api_node",
+    "tb_list_environments", "tb_get_merged_variables",
+    "tb_get_sync_spec", "tb_list_global_data",
+    "tb_upsert_scenario_variables", "tb_list_scenario_variables",
+    "tb_upsert_automation_resource",
+    "tb_sync_orchestrated_scenario",
+    "tb_list_api_tests", "tb_get_api_test", "tb_run_api_test",
+]
+
+_UISCRIPT = _LOCATE + [
+    "tb_list_cases", "tb_get_case",
+    "tb_get_sync_spec", "tb_list_global_data",
+    "tb_list_scenario_variables", "tb_upsert_scenario_variables",
+    "tb_list_environments", "tb_get_merged_variables",
+    "tb_sync_ui_script", "tb_run_ui_script", "tb_get_ui_script_result",
+]
+
+_TRIAGE = _LOCATE + [
+    "tb_list_plans", "tb_list_reports", "tb_get_report_summary",
+    "tb_get_failed_scenarios", "tb_get_ui_script_result", "tb_get_case",
+    "tb_submit_analysis", "tb_list_pending_confirm",
+]
+
+_REGRESSION = _LOCATE + [
+    "tb_list_cases", "tb_list_environments",
+    "tb_create_plan", "tb_run_plan", "tb_list_plans",
+    "tb_list_reports", "tb_get_report_summary", "tb_get_failed_scenarios",
+    "tb_run_ui_scripts_batch", "tb_list_api_tests", "tb_run_api_test",
+]
+
+# 主线那条完整的链。前面四档是它切开的段，单独用得上，但**最常见的用法是从头干到尾** ——
+# 原来没有这一档，想干整条链的人只能去选「全量」，等于分档对他没发生（和当初 18 个
+# 工具不属于任何档位是同一个毛病）。
+#
+# 它比别的档大得多（三十多个），这是有意的：这一档挡的不是"工具多"，而是那几条
+# **会把人带偏的岔路** —— tb_generate_api_test（凭文档造，绕开亲手验证）、
+# 需求文档流水线（不碰被测系统的另一条路）、Skill 存取、文档规范。
+_FULLLOOP = sorted(set(_LIVE + _UISCRIPT + _REGRESSION + _TRIAGE))
+
 PROFILES: list[dict] = [
+    {
+        "key": "fullloop",
+        "label": "全链路：从写用例到读报告",
+        "task": "写用例 → 回填接口场景和 UI 脚本 → 组计划跑一轮 → 读报告 → 给失败提归因",
+        "hint": "最常见的用法就是这一条。不含 tb_generate_api_test（凭文档造）和需求文档流水线 —— 那是另外两条路",
+        "tools": _FULLLOOP,
+    },
     {
         "key": "live",
         "label": "用例：步骤 + 接口场景",
         "task": "在被测系统里真跑一遍，把测试步骤和接口链回写成用例",
         "hint": "刻意排除 tb_generate_api_test —— 那个凭文档造，和「亲手验证过」是两回事",
-        "tools": _LOCATE + [
-            "tb_list_cases", "tb_get_case", "tb_get_folder_tree", "tb_create_case",
-            "tb_list_api_tree", "tb_get_api_node",
-            "tb_list_environments", "tb_get_merged_variables",
-            "tb_get_sync_spec", "tb_list_global_data",
-            "tb_upsert_scenario_variables", "tb_list_scenario_variables",
-            "tb_upsert_automation_resource",
-            "tb_sync_orchestrated_scenario",
-            "tb_list_api_tests", "tb_get_api_test", "tb_run_api_test",
-        ],
+        "tools": _LIVE,
     },
     {
         "key": "uiscript",
         "label": "UI 脚本：本地写好回推",
         "task": "在本地把 Playwright 脚本写通，回推到用例的「UI 测试」页签，再在目标环境上真跑一遍确认",
         "hint": "平台侧 AI 生成 UI 脚本已封存，这是现在唯一的 UI 脚本入库路径",
-        "tools": _LOCATE + [
-            "tb_list_cases", "tb_get_case",
-            "tb_get_sync_spec", "tb_list_global_data",
-            "tb_list_scenario_variables", "tb_upsert_scenario_variables",
-            "tb_list_environments", "tb_get_merged_variables",
-            "tb_sync_ui_script", "tb_run_ui_script", "tb_get_ui_script_result",
-        ],
+        "tools": _UISCRIPT,
     },
     {
         "key": "triage",
         "label": "失败归因：看证据、提判断",
         "task": "拿失败用例的证据包（截图/流量/现象）判断为什么挂，把归因提交到待确认队列",
         "hint": "刻意不含任何写用例/脚本的工具 —— CC 的归因不改任何状态，人拍板才算数",
-        "tools": _LOCATE + [
-            "tb_list_plans", "tb_list_reports", "tb_get_report_summary",
-            "tb_get_failed_scenarios", "tb_get_ui_script_result", "tb_get_case",
-            "tb_submit_analysis", "tb_list_pending_confirm",
-        ],
+        "tools": _TRIAGE,
     },
     {
         "key": "regression",
         "label": "跑回归、看结果",
         "task": "组计划、在平台执行器上跑一轮，看通过率和失败分布",
         "hint": "只按按钮和读结果 —— 执行结果由平台执行器写，你改不了通过状态",
-        "tools": _LOCATE + [
-            "tb_list_cases", "tb_list_environments",
-            "tb_create_plan", "tb_run_plan", "tb_list_plans",
-            "tb_list_reports", "tb_get_report_summary", "tb_get_failed_scenarios",
-            "tb_run_ui_scripts_batch", "tb_list_api_tests", "tb_run_api_test",
-        ],
+        "tools": _REGRESSION,
     },
     {
         "key": "docgen",

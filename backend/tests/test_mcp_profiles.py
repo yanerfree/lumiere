@@ -34,11 +34,48 @@ def test_全量档位是不限制而不是列全部工具():
     assert allp["tools"] is None
 
 
-def test_每个档位都比全量小得多():
-    """分档的收益就是这个数。任何一档接近全量就说明它没在分。"""
+def test_单件活的档位都比全量小得多():
+    """分档的收益就是这个数。一档接近全量就说明它没在分。
+
+    `fullloop` 例外，单独由下面那条测 —— 它是把四段拼成一整条链，
+    本来就大；拿"小"当唯一标准会逼着把它拆回去，而拆回去正是它要解决的问题
+    （想干整条链的人只能选「全量」，分档对他等于没发生）。
+    """
     for p in PROFILES:
-        if p["tools"] is not None:
+        if p["tools"] is not None and p["key"] != "fullloop":
             assert len(p["tools"]) < len(NAMES) * 0.6, p["key"]
+
+
+def test_全链路档大_但仍然挡住那几条岔路():
+    """它挡的不是"工具多"，是**会把人带偏的岔路**。这几条一条都不能漏进去。"""
+    fl = next(p for p in PROFILES if p["key"] == "fullloop")
+    tools = set(fl["tools"])
+    for forbidden, why in [
+        ("tb_generate_api_test", "凭文档造场景，绕开亲手验证"),
+        ("tb_create_scenario_task", "需求文档流水线是另一条路，不碰被测系统"),
+        ("tb_confirm_and_generate", "同上"),
+        ("tb_push_skill", "Skill 存取跟这条链无关"),
+        ("tb_get_doc_spec", "写文档是另一件活"),
+    ]:
+        assert forbidden not in tools, f"{forbidden} 不该进全链路档：{why}"
+    # 也不能大到跟全量没区别，那样等于没分
+    assert len(tools) < len(NAMES) * 0.85, "全链路档已经接近全量，重新想想它排除了什么"
+
+
+def test_全链路档覆盖整条链的每一步():
+    """少任何一步，人就得退回去选「全量」—— 那这一档就白加了。"""
+    fl = set(next(p for p in PROFILES if p["key"] == "fullloop")["tools"])
+    for step, tool in [
+        ("写用例", "tb_create_case"),
+        ("回填接口场景", "tb_sync_orchestrated_scenario"),
+        ("回填 UI 脚本", "tb_sync_ui_script"),
+        ("组计划", "tb_create_plan"),
+        ("跑一轮", "tb_run_plan"),
+        ("读报告", "tb_get_report_summary"),
+        ("看失败证据", "tb_get_ui_script_result"),
+        ("提归因", "tb_submit_analysis"),
+    ]:
+        assert tool in fl, f"全链路缺了「{step}」这一步（{tool}）"
 
 
 def test_活体验证档位不含凭文档造场景的工具():
