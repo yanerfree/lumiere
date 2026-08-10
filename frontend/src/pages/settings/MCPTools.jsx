@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
-import { Card, Tag, Space, Typography, Table, Button, message, Input, Modal, Popconfirm, Tabs, Badge, Radio, Checkbox, Tooltip, Alert } from 'antd'
+import { Card, Tag, Space, Typography, Button, message, Input, Modal, Popconfirm, Tabs, Badge, Checkbox, Tooltip, Alert, Dropdown, Collapse, Switch } from 'antd'
 import {
   ApiOutlined, CopyOutlined, ThunderboltOutlined,
   KeyOutlined, PlusOutlined, DeleteOutlined, CheckCircleOutlined,
-  RobotOutlined, LinkOutlined,
+  RobotOutlined, LinkOutlined, DownOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -40,174 +40,211 @@ const CAT_HEX = {
 }
 const catHex = (cat) => CAT_HEX[CAT_COLORS[cat]] || CAT_HEX.default
 
+/** 一行工具：勾选框 + 名字 + 说明（夹两行，悬停看全文）+ 参数。 */
+function ToolRow({ t, checked, disabled, onToggle }) {
+  const clamp2 = {
+    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
+  }
+  return (
+    <label style={{
+      display: 'flex', alignItems: 'flex-start', gap: 10, padding: '9px 14px 9px 34px',
+      borderTop: '1px solid rgba(0,0,0,0.04)', cursor: disabled ? 'default' : 'pointer',
+      background: checked && !disabled ? 'rgba(14,165,160,0.035)' : 'transparent',
+    }}>
+      <Checkbox disabled={disabled} checked={checked}
+        onChange={e => onToggle(t.name, e.target.checked)} style={{ marginTop: 1 }} />
+      <Text code style={{ fontSize: 11, flex: '0 0 190px', lineHeight: '20px' }}>{t.name}</Text>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {/* 说明最长的有 400 多字，全铺开就没法挑工具了。夹两行，悬停看全文。 */}
+        <Tooltip title={<span style={{ fontSize: 12 }}>{t.description}</span>}
+          styles={{ root: { maxWidth: 620 } }}>
+          <div style={{ fontSize: 12.5, color: '#4e5969', lineHeight: 1.65, ...clamp2 }}>
+            {t.description}
+          </div>
+        </Tooltip>
+        {t.params && (
+          <div style={{
+            fontSize: 11, color: '#a8adb7', marginTop: 3, fontFamily: 'var(--font-mono)',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>{t.params}</div>
+        )}
+      </div>
+    </label>
+  )
+}
+
 /**
- * 本项目的 MCP 工具范围 —— **可勾选的分类列表**。
+ * 本项目的 MCP 工具范围 —— 一张默认收起的可勾选清单。
  *
- * 走过一段弯路：先做成 9 张档位卡二选一，结果只能"全部"或"恰好某一档"，
- * 想在某档基础上多开一个工具做不到。范围本来就是个集合，就该按集合来编辑。
+ * 走过三段弯路，都记下来免得再犯：
  *
- * 所以这里：
- * - 分类头一个三态勾选框（全选 / 半选 / 不选），整组开关
- * - 每个工具一行一个勾选框，随便挑
- * - 档位降级成「快速套用」按钮 —— 19 个工具手点太累，它只是个起点，套完还能改
- * - 「不限制」是独立的一档，不等于"把 42 个全勾上"：
- *   前者以后新增的工具自动包含，后者不会（落库是 NULL vs 显式清单）
+ * 1. 做成 9 张档位卡二选一 → 只能"全部"或"恰好某一档"，想在某档基础上
+ *    多开一个工具做不到。范围是个集合，就该按集合编辑。
+ * 2. 改成勾选之后，把勾选框藏在「只开放勾选的」模式后面 →
+ *    **默认打开一个勾选框都看不到**，跟改之前长得一样。模式切换是给程序看的。
+ * 3. 勾选框露出来了，但 42 条整段说明全铺开 → 一堵墙，滚好几屏才看得完。
+ *
+ * 定稿：分类默认收起（整页 12 行看得完）、勾选框常驻可点、说明夹两行悬停看全文。
  */
 function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSave }) {
   const savedUnlimited = !scope?.allowedTools
   const savedList = scope?.allowedTools || []
+  const allNames = tools.map(t => t.name)
   const [unlimited, setUnlimited] = useState(savedUnlimited)
-  const [sel, setSel] = useState(savedList)
-  const [onlyPicked, setOnlyPicked] = useState(false)
+  // 不限制时下面照样显示全勾，人看到的和"全开"一致
+  const [sel, setSel] = useState(savedUnlimited ? allNames : savedList)
+  const [openKeys, setOpenKeys] = useState([])
   // ⚠ 保存成功后要跟上服务端那份，但**不要用 useEffect 去 setState 同步** ——
-  // 那是 react-hooks/set-state-in-effect，会多渲染一轮且容易和用户正在勾的状态打架。
-  // 调用方给了 key（见 <ScopePanel key=...>），saved 变了整个组件重挂，初值自然就是新的。
+  // 那是 react-hooks/set-state-in-effect。调用方给了 key（见 <ScopePanel key=...>），
+  // saved 变了整个组件重挂，初值自然就是新的。
 
   const selSet = new Set(sel)
   const same = (a, b) => a.length === b.length && a.every(x => b.includes(x))
   const dirty = unlimited !== savedUnlimited || (!unlimited && !same(sel, savedList))
+  const picked = unlimited ? tools.length : sel.length
 
-  const toggle = (name, on) =>
-    setSel(v => on ? [...v, name] : v.filter(n => n !== name))
+  const toggle = (name, on) => setSel(v => on ? [...v, name] : v.filter(n => n !== name))
   const toggleCat = (items, on) => {
     const names = items.map(t => t.name)
     setSel(v => on ? [...new Set([...v, ...names])] : v.filter(n => !names.includes(n)))
   }
   const applyProfile = (p) => {
     setUnlimited(false)
-    setSel(p.tools ? [...p.tools] : tools.map(t => t.name))
+    setSel(p.tools ? [...p.tools] : allNames)
+    // 套完把命中的分类展开，让人看见它到底勾了些什么，而不是只看到个数字
+    setOpenKeys(byCategory
+      .filter(([, items]) => items.some(t => (p.tools || allNames).includes(t.name)))
+      .map(([c]) => c))
   }
+
+  // 预设走下拉，不排成一行按钮：那行 chips 长短不一会换行，Tooltip 弹出来
+  // 还正好盖住旁边的按钮。菜单是纵向的，说明直接当第二行小字排下来。
+  const presetMenu = {
+    items: profiles.filter(p => p.tools).map(p => ({
+      key: p.key,
+      label: (
+        <div style={{ padding: '3px 0', maxWidth: 400 }}>
+          <div style={{ fontSize: 13, fontWeight: 500 }}>
+            {p.label}
+            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>{p.tools.length} 个</Text>
+          </div>
+          <div style={{ fontSize: 11.5, color: '#8c919e', whiteSpace: 'normal', lineHeight: 1.5 }}>{p.task}</div>
+        </div>
+      ),
+    })),
+    onClick: ({ key }) => applyProfile(profiles.find(p => p.key === key)),
+  }
+
+  const collapseItems = byCategory.map(([cat, items]) => {
+    const names = items.map(t => t.name)
+    const n = names.filter(x => selSet.has(x)).length
+    const full = n === names.length
+    return {
+      key: cat,
+      label: (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+          <span style={{ width: 3, height: 15, borderRadius: 2, background: catHex(cat), flex: '0 0 auto' }} />
+          {/* 勾选框自己吃掉点击，别让"想勾一整类"变成"把它收起来" */}
+          <span onClick={e => e.stopPropagation()} style={{ display: 'inline-flex' }}>
+            <Checkbox disabled={unlimited} checked={full}
+              indeterminate={n > 0 && !full}
+              onChange={e => toggleCat(items, e.target.checked)} />
+          </span>
+          <span style={{ fontWeight: 600, fontSize: 13, color: '#2e3138' }}>{cat}</span>
+        </div>
+      ),
+      extra: (
+        <span style={{
+          fontSize: 11.5, fontWeight: 600, padding: '1px 9px', borderRadius: 10,
+          color: full ? '#0ea5a0' : n ? '#fa8c16' : '#9aa0aa',
+          background: full ? 'rgba(14,165,160,0.1)' : n ? 'rgba(250,140,22,0.1)' : 'rgba(0,0,0,0.04)',
+        }}>{n}/{items.length}</span>
+      ),
+      children: (
+        <div>
+          {items.map(t => (
+            <ToolRow key={t.name} t={t} disabled={unlimited}
+              checked={selSet.has(t.name)} onToggle={toggle} />
+          ))}
+        </div>
+      ),
+      styles: { body: { padding: 0 } },
+    }
+  })
 
   return (
     <div>
-      <Card size="small" style={{ ...cardStyle, marginBottom: 16, background: 'rgba(14,165,160,0.03)' }}>
-        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-          <div>
-            <span style={{ ...sectionTitle, marginBottom: 0 }}>本项目的工具范围</span>
-            <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
-              范围外的工具 CC 看不到、也调不动
+      <Card size="small" style={{ ...cardStyle, marginBottom: 14, background: 'rgba(14,165,160,0.035)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ minWidth: 210 }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+              <span style={{ fontSize: 26, fontWeight: 700, color: picked ? '#0ea5a0' : '#e8453c', lineHeight: 1 }}>
+                {picked}
+              </span>
+              <span style={{ fontSize: 13, color: '#8c919e' }}>/ {tools.length} 个工具已开放</span>
+            </div>
+            <div style={{ height: 4, borderRadius: 2, background: 'rgba(0,0,0,0.06)', marginTop: 8, overflow: 'hidden' }}>
+              <div style={{
+                height: '100%', width: `${(picked / Math.max(tools.length, 1)) * 100}%`,
+                background: '#0ea5a0', borderRadius: 2, transition: 'width .2s',
+              }} />
+            </div>
+            <Text type="secondary" style={{ fontSize: 11.5, display: 'block', marginTop: 6 }}>
+              勾上的 CC 才看得到、调得动 · 本项目 <b style={{ color: '#4e5969' }}>{keyCount}</b> 把 Key 都按它生效
             </Text>
           </div>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            本项目 <b style={{ color: '#4e5969' }}>{keyCount}</b> 把 Key 都按它生效
-          </Text>
-        </div>
 
-        {/* 不限制 / 只开放勾选的 —— 这两个不是一回事，写清楚区别 */}
-        <Radio.Group value={unlimited ? 'all' : 'pick'} onChange={e => setUnlimited(e.target.value === 'all')}
-          style={{ display: 'flex', flexWrap: 'wrap', gap: 20, marginTop: 12 }}>
-          <Radio value="all">
-            <span style={{ fontSize: 13 }}>不限制</span>
-            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>全部工具，以后新增的也自动包含</Text>
-          </Radio>
-          <Radio value="pick">
-            <span style={{ fontSize: 13 }}>只开放勾选的</span>
-            <Text type="secondary" style={{ fontSize: 11, marginLeft: 6 }}>下面勾什么就是什么，新增工具不会自动进来</Text>
-          </Radio>
-        </Radio.Group>
-
-        {!unlimited && (
-          <div style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <Text type="secondary" style={{ fontSize: 12 }}>快速套用：</Text>
-            {profiles.filter(p => p.tools).map(p => (
-              <Tooltip key={p.key} title={<span style={{ fontSize: 12 }}>{p.task}{p.hint ? ` —— ${p.hint}` : ''}</span>}>
-                <Button size="small" onClick={() => applyProfile(p)}>
-                  {p.label}
-                  <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>{p.tools.length}</Text>
-                </Button>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 10 }}>
+            <Space size={8} wrap>
+              <Dropdown menu={presetMenu} trigger={['click']} placement="bottomRight">
+                <Button size="small">套用预设 <DownOutlined style={{ fontSize: 10 }} /></Button>
+              </Dropdown>
+              <Button size="small" disabled={unlimited} onClick={() => setSel(allNames)}>全选</Button>
+              <Button size="small" disabled={unlimited} onClick={() => setSel([])}>清空</Button>
+              <Button size="small" type="text" onClick={() =>
+                setOpenKeys(openKeys.length ? [] : byCategory.map(([c]) => c))}>
+                {openKeys.length ? '全部收起' : '全部展开'}
+              </Button>
+            </Space>
+            <Space size={12} wrap>
+              {/* 「不限制」不等于"把 42 个全勾上"：前者以后新增的工具自动包含，
+                  后者不会（落库 NULL vs 显式清单）。这个区别得写出来，别让人猜。 */}
+              <Tooltip title="勾上之后，以后平台新增的工具也自动包含；取消勾选就按下面的清单来">
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                  <Switch size="small" checked={unlimited}
+                    onChange={v => { setUnlimited(v); if (v) setSel(allNames) }} />
+                  <span style={{ fontSize: 12.5, color: unlimited ? '#0ea5a0' : '#8c919e' }}>不限制</span>
+                </span>
               </Tooltip>
-            ))}
-            <Button size="small" type="text" onClick={() => setSel(tools.map(t => t.name))}>全选</Button>
-            <Button size="small" type="text" onClick={() => setSel([])}>清空</Button>
+              {dirty && (
+                <>
+                  <Button size="small" onClick={() => {
+                    setUnlimited(savedUnlimited); setSel(savedUnlimited ? allNames : savedList)
+                  }}>放弃修改</Button>
+                  <Button size="small" type="primary" loading={saving}
+                    disabled={!unlimited && sel.length === 0}
+                    onClick={() => onSave(unlimited ? null : sel)}>保存</Button>
+                </>
+              )}
+            </Space>
+          </div>
+        </div>
+        {unlimited && (
+          <div style={{ marginTop: 8, fontSize: 11.5, color: '#8c919e' }}>
+            当前不限制，所以下面全勾且点不动 —— 关掉右上角「不限制」就能逐个勾选。
           </div>
         )}
-
-        <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: 13 }}>
-            {unlimited
-              ? <>不限制 —— <b style={{ color: '#0ea5a0', fontSize: 16 }}>{tools.length}</b> 个工具全开</>
-              : <>已选 <b style={{ color: sel.length ? '#0ea5a0' : '#e8453c', fontSize: 16 }}>{sel.length}</b> / {tools.length} 个工具</>}
-          </span>
-          {!unlimited && (
-            <Checkbox checked={onlyPicked} onChange={e => setOnlyPicked(e.target.checked)} style={{ fontSize: 12 }}>
-              下面只看已选的
-            </Checkbox>
-          )}
-          <div style={{ flex: 1 }} />
-          {dirty && (
-            <>
-              <Button size="small" onClick={() => { setUnlimited(savedUnlimited); setSel(savedList) }}>放弃修改</Button>
-              <Button size="small" type="primary" loading={saving}
-                disabled={!unlimited && sel.length === 0}
-                onClick={() => onSave(unlimited ? null : sel)}>
-                保存为本项目的范围
-              </Button>
-            </>
-          )}
-        </div>
         {!unlimited && sel.length === 0 && (
-          <div style={{ marginTop: 6, fontSize: 12, color: '#e8453c' }}>
+          <div style={{ marginTop: 8, fontSize: 12, color: '#e8453c' }}>
             一个都没勾 —— 那样 CC 连不上任何工具，等于把这个项目的 MCP 关了。至少勾一个再保存。
           </div>
         )}
       </Card>
 
-      {/* 工具列表 = 勾选界面。一个分类一块，分类头是三态开关。 */}
-      {byCategory.map(([cat, items]) => {
-        const names = items.map(t => t.name)
-        const checked = names.filter(n => selSet.has(n)).length
-        const list = (!unlimited && onlyPicked) ? items.filter(t => selSet.has(t.name)) : items
-        if (!list.length) return null
-        const color = catHex(cat)
-        return (
-          <div key={cat} style={{ marginBottom: 14, border: '1px solid rgba(0,0,0,0.07)', borderRadius: 10, overflow: 'hidden' }}>
-            <div style={{
-              display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px',
-              background: 'rgba(0,0,0,0.015)', borderBottom: '1px solid rgba(0,0,0,0.06)',
-            }}>
-              <span style={{ width: 3, height: 14, borderRadius: 2, background: color, display: 'inline-block' }} />
-              {unlimited ? (
-                <span style={{ fontWeight: 600, fontSize: 13, color: '#2e3138' }}>{cat}</span>
-              ) : (
-                <Checkbox
-                  checked={checked === names.length}
-                  indeterminate={checked > 0 && checked < names.length}
-                  onChange={e => toggleCat(items, e.target.checked)}
-                >
-                  <span style={{ fontWeight: 600, fontSize: 13, color: '#2e3138' }}>{cat}</span>
-                </Checkbox>
-              )}
-              <div style={{ flex: 1 }} />
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                {unlimited
-                  ? `${items.length} 个`
-                  : <><b style={{ color: checked === names.length ? '#0ea5a0' : checked ? '#fa8c16' : '#8c919e' }}>{checked}</b>/{items.length} 已选</>}
-              </Text>
-            </div>
-            <Table rowKey="name" dataSource={list} pagination={false} size="small" showHeader={false}
-              rowClassName={r => (unlimited || selSet.has(r.name)) ? '' : 'tool-dimmed'}
-              columns={[
-                {
-                  dataIndex: 'name', width: 250,
-                  render: (n) => unlimited ? (
-                    <span>
-                      <CheckCircleOutlined style={{ color: '#0ea5a0', fontSize: 12, marginRight: 6 }} />
-                      <Text code style={{ fontSize: 11 }}>{n}</Text>
-                    </span>
-                  ) : (
-                    <Checkbox checked={selSet.has(n)} onChange={e => toggle(n, e.target.checked)}>
-                      <Text code style={{ fontSize: 11 }}>{n}</Text>
-                    </Checkbox>
-                  ),
-                },
-                { dataIndex: 'description', render: d => <span style={{ fontSize: 13 }}>{d}</span> },
-                { dataIndex: 'params', width: 220, render: p => <Text type="secondary" style={{ fontSize: 11 }}>{p}</Text> },
-              ]}
-            />
-          </div>
-        )
-      })}
-      <style>{`.tool-dimmed { opacity: .45 }`}</style>
+      {/* 默认全部收起：42 条整段说明铺开是一堵墙，收起来整页 12 行，要改哪类点哪类。 */}
+      <Collapse items={collapseItems} activeKey={openKeys} onChange={setOpenKeys}
+        expandIconPosition="start" size="small"
+        style={{ background: 'transparent', borderRadius: 10 }} />
     </div>
   )
 }
