@@ -330,6 +330,31 @@ async def release_quarantine(
     return {"data": {"caseId": str(case.id), "quarantinedUntil": None}}
 
 
+@router.post("/{case_id}/quarantine")
+async def quarantine_case(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    case_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """人主动隔离 —— 「我知道它不稳，先别让它挡路」。
+
+    自动检测**不会**做这件事：平台替人决定"这条先不跑了"，等于替人决定不查这个问题。
+    所以隔离只能由人发起，而且 14 天到期自动回来。
+    """
+    from app.services import flaky_service
+
+    case = await flaky_service.quarantine(session, case_id)
+    if case is None:
+        raise NotFoundError(code="CASE_NOT_FOUND", message="用例不存在")
+    await session.commit()
+    await write_audit_log(session, action="quarantine", target_type="case",
+                          target_id=case.id, target_name=case.title)
+    return {"data": {"caseId": str(case.id),
+                     "quarantinedUntil": case.quarantined_until.isoformat()}}
+
+
 @router.post("/{case_id}/confirm-expected")
 async def confirm_expected(
     project_id: uuid.UUID,

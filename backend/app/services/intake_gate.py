@@ -160,57 +160,41 @@ def check_batch(items: list[dict]) -> tuple[list[str], list[str]]:
                 )
     return errors, warns
 
+def p0_confirmation_hint(priority: str, target_level: str, confirmed_note: str | None) -> list[str]:
+    """P0 一次性出三件套时的**提醒**，不是拦截。
 
-def check_p0_two_phase(priority: str, target_level: str, has_confirmed_expected: bool) -> list[str]:
-    """闸：P0 不允许一次性三件套直出（C4）。
+    ## 为什么从"拦"改成"提醒"
 
-    三份产物同源生成会让它们**必然互相一致**，而一致会被误读成"验证过了"——
-    一致性冒充正确性。典型失效：把"创建成功"理解成"返回 200"，于是步骤写
-    "预期：创建成功"、接口断言 status==200、UI 断言 toast 含"成功"，三层全绿；
-    但真实业务是异步创建，200 只代表受理。
+    原来这里是硬拦：P0 不许一次性出三件套。CC 被拦住 → 人切到平台页面 → 找到那条
+    用例 → 点「确认预期结果」→ CC 再回来挂。每条 P0 都走一趟，是实打实的税。
 
-    所以 P0 走两阶段：先只出步骤用例，人**只看「预期结果」这一列**确认
-    （一屏二三十条，五分钟），再据此生成接口和 UI。人的介入点刻意选得极窄 ——
-    让人审全文他会疲劳、会盖章。
+    支撑那道拦截的数（同源生成 80% 的断言退化成只看状态码）测的是**平台自己的
+    AI 生成器**，不是 CC —— 拿它去拦 CC，这个推断跨得太快，当初没说清楚。
+
+    而且拦截本身也没那么硬：人在页面上点一下按钮，同样验证不了他真读了预期结果。
+    两边都是形式，那就选便宜的那个 —— 确认发生在人已经在的地方（CC 对话里），
+    CC 把确认内容一起带上来，平台**只存不拦**。
+
+    ## 那这条提醒还有什么用
+
+    风险是真的（同源生成确实会把"创建成功"做成"返回 200"），所以信号留着：
+    没带确认记录就回一句提醒，让 CC 知道该去问人。但它进 warnings 不进 errors，
+    不挡任何东西。
     """
     if (priority or "").upper() != "P0":
         return []
     if target_level != "full":
         return []
-    if has_confirmed_expected:
+    if (confirmed_note or "").strip():
         return []
     return [
-        "P0 用例不允许一次性出三件套：三份产物同源生成会必然互相一致，"
-        "而一致会被当成已经验证过（一致性冒充正确性）。"
-        "先只回推步骤用例（target_level=spec），让人确认「预期结果」这一列之后，"
-        "再补接口和 UI。人选了 full 也不行 —— 门禁要能覆盖手滑。"
+        "⚠ 这是 P0 且一次性出三件套。三份产物同源生成容易互相一致而不正确 —— "
+        "典型是把「创建成功」做成「返回 200」，三层全绿但没验到业务状态。"
+        "建议先跟用户确认这个场景到底要验什么，再把确认内容用 "
+        "expected_confirmed_by / expected_confirmed_note 带上来（平台只记录、不拦你）。"
     ]
 
 
-# 第二阶段的闸：往已有 P0 用例上挂产物时看确认了没有。
-# 缺了它的话，上面那道只拦住"一次调用里的声明"—— 实测（真 MCP 连接）：
-# 改成 target_level=spec 建 P0 → 放行，紧接着 tb_sync_orchestrated_scenario
-# + tb_sync_ui_script 全部成功，中间没有任何人确认过。三件套照样同源直出。
-_ARTIFACT_LABEL = {"api": "接口场景", "ui": "UI 脚本"}
-
-
-def check_p0_artifact(priority: str, confirmed_at, kind: str, case_code: str = "") -> list[str]:
-    """给 P0 用例挂接口场景 / UI 脚本之前，先看「预期结果」确认了没有。
-
-    只拦 P0。其余优先级照旧直接挂 —— 这道闸的成本要花在真正挂了就得停线的那一档上。
-    """
-    if (priority or "").upper() != "P0":
-        return []
-    if confirmed_at:
-        return []
-    label = _ARTIFACT_LABEL.get(kind, "自动化产物")
-    who = f"{case_code} " if case_code else ""
-    return [
-        f"{who}是 P0，但它的「预期结果」还没有人确认过，现在不能挂{label}。"
-        "\n为什么：步骤、接口断言、UI 断言如果都由同一次生成推出来，三份必然互相一致，"
-        "而一致会被当成已经验证过。典型失效是把「创建成功」理解成「返回 200」——"
-        "三层全绿，但真实业务是异步创建，200 只代表受理。"
-        "\n怎么解：让人在用例详情里过一遍「预期结果」这一列（一屏二三十条，几分钟），"
-        "点「确认预期结果」；确认之后再回来挂，这一步就会放行。"
-        "\n注意：之后再改动步骤或预期结果，确认会自动失效 —— 确认的是当时那一版。"
-    ]
+# 原来这里还有第二道闸 check_p0_artifact：往已有 P0 用例上挂接口场景 / UI 脚本时，
+# 没人确认过就拒收。一并去掉 —— 理由同上，确认挪到 CC 侧，平台只存不拦。
+# 真要把拦截加回来就加在这里，判据是 case.expected_confirmed_note 是否为空。

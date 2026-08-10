@@ -55,6 +55,7 @@
 from __future__ import annotations
 
 import os
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -83,7 +84,11 @@ def is_quarantined(case: Case, now: datetime | None = None) -> bool:
 
 
 def should_skip(case: Case, now: datetime | None = None) -> bool:
-    """执行时该不该跳过这条用例：人工标记的 flaky，或还在自动隔离期内。"""
+    """执行时该不该跳过这条用例。
+
+    **只认人主动表达的意愿**：手动 `is_flaky`，或人主动点了隔离。
+    自动检测到不稳定**不会**让它进这里 —— 检测只标记和给线索，跳不跳由人定。
+    """
     return bool(case.is_flaky) or is_quarantined(case, now)
 
 
@@ -119,27 +124,117 @@ async def evaluate(session: AsyncSession, case_id: uuid.UUID, script_id: uuid.UU
         return None   # 人工已经标过了，不覆盖人的判断
 
     now = datetime.now(timezone.utc)
+    runs_detail = [
+        {
+            "runId": str(r.id),
+            "status": r.status,
+            "at": r.created_at.isoformat() if r.created_at else None,
+            "error": (r.error_summary or "")[:160] or None,
+            "phenomenon": r.failure_phenomenon,
+        }
+        for r in ordered
+    ]
     evidence = {
         "detectedAt": now.isoformat(),
         "scriptId": str(script_id),
         "window": WINDOW,
         "flips": flips,
         "threshold": FLIPS,
-        "note": f"同一脚本版本最近 {WINDOW} 次执行里结果翻转了 {flips} 次",
-        "runs": [
-            {
-                "runId": str(r.id),
-                "status": r.status,
-                "at": r.created_at.isoformat() if r.created_at else None,
-                "error": (r.error_summary or "")[:160] or None,
-            }
-            for r in ordered
-        ],
+        "note": f"同一脚本版本最近 {len(ordered)} 次执行里结果翻转了 {flips} 次",
+        "runs": runs_detail,
+        # 检测出来之后**不隔离**，给的是"往哪儿看"。见下面 _diagnose 的说明。
+        "diagnosis": _diagnose(runs_detail),
     }
-    case.quarantined_until = now + timedelta(days=QUARANTINE_DAYS)
+    # ⚠ 这里**不动 quarantined_until**。
+    # 检测到不稳定 ≠ 该把它藏起来 —— 时好时坏本身就是信息（时序、脏数据、并发、
+    # 环境抖动），自动隔离 14 天等于 14 天不看它，问题一直在。
+    # 隔离改成人主动要的动作（quarantine()），默认只标记 + 给诊断线索。
     case.flaky_evidence = evidence
     await session.flush()
     return evidence
+
+
+# 错误摘要里天然带**每次都不同**的东西：内存地址、随机值、时间戳、UUID、耗时、行号。
+# 不归一化就直接比字符串的话，"同一个错"永远被数成"好多种错" —— 实测：
+#   AssertionError: 校准用的随机失败\nassert 0.272... = <... object at 0xcf91c50>
+#   AssertionError: 校准用的随机失败\nassert 0.156... = <... object at 0x3f314c50>
+# 这是同一个断言失败，却被判成 4 种不同的错，于是诊断给出**完全相反**的结论
+# （"更像环境问题"，而实际是稳定的同一个失败）。
+_NOISE = [
+    (re.compile(r"0x[0-9a-fA-F]+"), "0xADDR"),                       # 内存地址
+    (re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"), "UUID"),         # UUID
+    (re.compile(r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}[.\d]*"), "TS"),  # 时间戳
+    (re.compile(r"\d+\.\d+"), "NUM"),                                # 小数（随机值/耗时）
+    (re.compile(r"\b\d+\b"), "N"),                                    # 整数（行号/计数）
+]
+
+
+def _err_shape(msg: str) -> str:
+    """把错误摘要归一成"形状"，用来判断两次失败是不是同一个错。"""
+    out = (msg or "").strip()
+    for pat, rep in _NOISE:
+        out = pat.sub(rep, out)
+    return out[:200]
+
+
+def _diagnose(runs: list[dict]) -> dict:
+    """给"该往哪儿看"，不下结论。
+
+    平台能看见的只有执行记录，判不出根因；但它能把**失败之间的共性/差异**摆出来，
+    这是人去查的起点：
+
+    · 失败的错误摘要**全一样** → 稳定的失败模式，更像被测系统真有问题（偶发触发），
+      而不是环境抖动 —— 该照着这条错误去查业务。
+    · 失败的错误摘要**各不相同** → 更像环境/时序/资源竞争 —— 该查执行环境和并发。
+    · 现象分类集中在 timeout / element_not_found → 多半是等待策略或数据准备时机。
+
+    另外给出一对"最近一次成功 vs 最近一次失败"的 runId：这两条的截图和流量摆在
+    一起对比，是最快能看出差别的方式。
+    """
+    fails = [r for r in runs if r["status"] != "passed"]
+    passes = [r for r in runs if r["status"] == "passed"]
+    msgs = {_err_shape(r.get("error")) for r in fails if (r.get("error") or "").strip()}
+    phen: dict[str, int] = {}
+    for r in fails:
+        if r.get("phenomenon"):
+            phen[r["phenomenon"]] = phen.get(r["phenomenon"], 0) + 1
+
+    if not fails:
+        hint = "窗口里没有失败记录 —— 翻转来自状态本身的变化，先看执行日志。"
+    elif len(msgs) <= 1:
+        hint = ("每次失败的错误都一样 —— 更像被测系统真有问题（只是偶发触发），"
+                "照着这条错误去查业务逻辑，别先怀疑环境。")
+    else:
+        hint = (f"{len(fails)} 次失败报了 {len(msgs)} 种不同的错 —— 更像环境/时序/资源竞争，"
+                "先查执行环境、并发和数据准备时机。")
+
+    return {
+        "failCount": len(fails),
+        "passCount": len(passes),
+        "distinctErrors": len(msgs),
+        "phenomena": phen,
+        "hint": hint,
+        # 拿这两条的截图和流量对比，最快看出差别在哪
+        "compare": {
+            "lastPassed": passes[-1]["runId"] if passes else None,
+            "lastFailed": fails[-1]["runId"] if fails else None,
+        },
+    }
+
+
+async def quarantine(session: AsyncSession, case_id: uuid.UUID, days: int | None = None) -> Case | None:
+    """人主动要求隔离 —— "我知道它不稳，先别让它挡路"。
+
+    这是唯一会设置 quarantined_until 的地方。自动检测不再做这件事：
+    平台替人决定"这条先不跑了"，等于替人决定不查这个问题。
+    """
+    case = await session.get(Case, case_id)
+    if case is None:
+        return None
+    case.quarantined_until = datetime.now(timezone.utc) + timedelta(days=days or QUARANTINE_DAYS)
+    await session.flush()
+    return case
 
 
 async def release(session: AsyncSession, case_id: uuid.UUID) -> Case | None:

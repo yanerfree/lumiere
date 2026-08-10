@@ -149,12 +149,19 @@ async def create_case(
     steps: list | None = None,
     expected_result: str | None = None,
     target_level: str = "spec",
+    expected_confirmed_by: str | None = None,
+    expected_confirmed_note: str | None = None,
 ) -> dict:
     """创建一条测试用例。自动生成 case_code 和目录。
 
-    入库前过门禁（C3/C4）：完全同名硬拒、模糊词硬拒、P0 不许一次性直出三件套；
-    相似标题只提醒不拦 —— 字符串相似度分不清"同一测试点换说法"和"不同测试点用词像"，
-    误拦会逼你把标题改得看不出关系来绕过，比多一条重复用例有害得多。
+    入库前过门禁（C3/C4）：完全同名硬拒、模糊词硬拒；相似标题只提醒不拦 ——
+    字符串相似度分不清"同一测试点换说法"和"不同测试点用词像"，误拦会逼你把标题
+    改得看不出关系来绕过，比多一条重复用例有害得多。
+
+    **P0 三件套不再拦你**。原来是硬拦（先只回推步骤用例、人去平台页面点确认、
+    再回来挂接口和 UI），每条 P0 走一趟太贵。现在改成：你在对话里跟用户确认
+    「这个场景到底要验什么」，然后把确认内容用 expected_confirmed_by /
+    expected_confirmed_note 带上来，平台只记录、不拦截。没带就回一句提醒。
     """
     from app.services import intake_gate
 
@@ -166,7 +173,10 @@ async def create_case(
     gate_errors, gate_warns = await intake_gate.check_one(
         session, uuid.UUID(branch_id), title, module, priority
     )
-    gate_errors.extend(intake_gate.check_p0_two_phase(priority, target_level, False))
+    # P0 一次性出三件套只提醒不拦（见 intake_gate.p0_confirmation_hint 的说明）
+    gate_warns = list(gate_warns) + intake_gate.p0_confirmation_hint(
+        priority, target_level, expected_confirmed_note
+    )
     if gate_errors:
         return {
             "error": "用例没通过入库门禁，改完再传：",
@@ -200,8 +210,22 @@ async def create_case(
     )
     case = await case_service.create_case(session, uuid.UUID(branch_id), data, source="ai")
     case.target_level = target_level
+    # CC 侧确认记录：平台只存不判。改了步骤/预期结果会被 update_case 自动清掉，
+    # 所以它始终指向"确认的是哪一版"。
+    if (expected_confirmed_note or "").strip():
+        from datetime import datetime, timezone
+        case.expected_confirmed_note = expected_confirmed_note.strip()[:2000]
+        case.expected_confirmed_actor = (expected_confirmed_by or "未署名").strip()[:100]
+        case.expected_confirmed_at = datetime.now(timezone.utc)
     await session.commit()
     result = {**_case_to_dict(case), "targetLevel": case.target_level}
+    if case.expected_confirmed_at:
+        result["expectedConfirmed"] = {
+            "by": case.expected_confirmed_actor,
+            "note": case.expected_confirmed_note,
+            "at": case.expected_confirmed_at.isoformat(),
+        }
+    warnings = list(warnings or []) + list(gate_warns or [])
     if warnings:
         result["_qualityWarnings"] = warnings
     return result

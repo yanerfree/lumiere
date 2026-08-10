@@ -111,6 +111,30 @@ const dimStatusMap = {
 }
 const DIM_STATUS_KEYS = ['not_started', 'draft', 'debugging', 'pending_review', 'executable', 'needs_fix']
 
+// 失败现象码 → 人话。
+// ⚠ 这里的键是**数据**不是字段名，但响应层会把 JSON 里的字典键一并驼峰化
+// （库里存的是 assertion_mismatch，到前端变成 assertionMismatch），所以两种写法都认；
+// 认不出来的原样显示，别吞掉 —— 出现新现象码时要看得见，而不是显示成空白。
+const PHENOMENON_LABELS = {
+  timeout: '超时',
+  element_not_found: '元素找不到',
+  assertion_mismatch: '断言不符',
+  http_5xx: '接口 5xx',
+  script_error: '脚本自身报错',
+  dependency_unresolved: '依赖没解析出来',
+  unknown: '看不出来',
+}
+
+function phenomenonLabel(k) {
+  // 驼峰化把 http_5xx 变成 http5xx（下划线后是数字，没有大写可转），
+  // 所以字母边界和数字边界都要还原，否则这一条永远落回英文。
+  const snake = String(k || '')
+    .replace(/([a-z])([A-Z])/g, '$1_$2')
+    .replace(/([a-zA-Z])(\d)/g, '$1_$2')
+    .toLowerCase()
+  return PHENOMENON_LABELS[snake] || PHENOMENON_LABELS[k] || k
+}
+
 function InlineProp({ icon, value, color, bg, children }) {
   const [open, setOpen] = useState(false)
   return (
@@ -1640,6 +1664,18 @@ export default function CaseDetail() {
 
   // 隔离态直接从 quarantinedUntil 算 —— 到期即失效，不需要谁去清标记
   const quarantined = !!caseData?.quarantinedUntil && new Date(caseData.quarantinedUntil) > new Date()
+  // 检测到不稳定 ≠ 被隔离。检测只标记，隔离要人自己点。
+  const unstable = !!caseData?.flakyEvidence
+
+  const quarantineCase = async () => {
+    try {
+      await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/quarantine`)
+      message.success('已隔离，14 天内不进回归；到期自动回来')
+      loadData()
+    } catch (e) {
+      message.error(e?.response?.data?.error?.message || '隔离失败')
+    }
+  }
 
   const releaseQuarantine = async () => {
     try {
@@ -1915,9 +1951,9 @@ export default function CaseDetail() {
             </InlineProp>
           ))}
           <InlineProp icon={<WarningOutlined />}
-            value={quarantined ? '隔离中' : flaky ? 'Flaky' : '正常'}
-            color={quarantined ? '#e8453c' : flaky ? '#faad14' : '#86909c'}
-            bg={quarantined ? '#fff1f0' : flaky ? '#fffbe6' : 'rgba(0,0,0,0.02)'}>
+            value={quarantined ? '已隔离' : unstable ? '不稳定' : flaky ? 'Flaky' : '正常'}
+            color={quarantined ? '#e8453c' : unstable ? '#fa8c16' : flaky ? '#faad14' : '#86909c'}
+            bg={quarantined ? '#fff1f0' : unstable ? '#fff7e6' : flaky ? '#fffbe6' : 'rgba(0,0,0,0.02)'}>
             <div style={{ padding: '4px 8px', minWidth: 300 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
                 <span style={{ fontSize: 13 }}>Flaky 标记（人工）</span>
@@ -1925,16 +1961,47 @@ export default function CaseDetail() {
               </div>
               {/* 自动隔离要能复核：凭什么说它 flaky、什么时候回来、怎么提前放出来。
                   只给一个红标不给依据的话，等于平台单方面判了一条用例不跑。 */}
-              {quarantined && (
+              {/* 检测到不稳定 —— **不跳过它**，只标出来 + 给"该往哪儿看"。
+                  时好时坏本身就是信息（时序/脏数据/并发/环境），自动隔离等于自动
+                  把问题藏起来。跳不跳由人定，下面那个按钮才会隔离。 */}
+              {unstable && (
                 <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
-                  <div style={{ fontSize: 12.5, color: '#e8453c', fontWeight: 600, marginBottom: 4 }}>
-                    自动隔离中，执行时会被跳过
+                  <div style={{ fontSize: 12.5, color: quarantined ? '#e8453c' : '#fa8c16', fontWeight: 600, marginBottom: 4 }}>
+                    {quarantined ? '已隔离，执行时会被跳过' : '检测到不稳定 —— 仍会照常执行'}
                   </div>
                   <div style={{ fontSize: 12, color: '#4e5969', lineHeight: 1.8 }}>
                     {caseData.flakyEvidence?.note || '结果反复翻转'}
-                    <br />
-                    到期：{new Date(caseData.quarantinedUntil).toLocaleString('zh-CN')}（到期自动恢复）
+                    {quarantined && (
+                      <>
+                        <br />
+                        到期：{new Date(caseData.quarantinedUntil).toLocaleString('zh-CN')}（到期自动恢复）
+                      </>
+                    )}
                   </div>
+
+                  {/* 平台判不出根因，但能把失败之间的共性/差异摆出来 —— 这是查的起点 */}
+                  {caseData.flakyEvidence?.diagnosis && (
+                    <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8,
+                      background: 'rgba(250,140,22,0.06)', border: '1px solid rgba(250,140,22,0.2)',
+                      fontSize: 12, color: '#4e5969', lineHeight: 1.8 }}>
+                      <div style={{ fontWeight: 600, marginBottom: 2 }}>该往哪儿看</div>
+                      {caseData.flakyEvidence.diagnosis.hint}
+                      {Object.keys(caseData.flakyEvidence.diagnosis.phenomena || {}).length > 0 && (
+                        <div style={{ marginTop: 2 }}>
+                          现象：{Object.entries(caseData.flakyEvidence.diagnosis.phenomena)
+                            .map(([k, v]) => `${phenomenonLabel(k)} ×${v}`).join('、')}
+                        </div>
+                      )}
+                      {caseData.flakyEvidence.diagnosis.compare?.lastPassed
+                        && caseData.flakyEvidence.diagnosis.compare?.lastFailed && (
+                        <div style={{ marginTop: 2 }}>
+                          把最近一次成功和最近一次失败的截图/流量摆一起对比，最快看出差别
+                          （见「执行历史」页签）
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   {(caseData.flakyEvidence?.runs || []).length > 0 && (
                     <div style={{ marginTop: 6 }}>
                       {caseData.flakyEvidence.runs.map((r, i) => (
@@ -1945,9 +2012,16 @@ export default function CaseDetail() {
                       ))}
                     </div>
                   )}
-                  <Button size="small" style={{ marginTop: 8 }} onClick={releaseQuarantine}>
-                    解除隔离（脚本已修好）
-                  </Button>
+
+                  {quarantined ? (
+                    <Button size="small" style={{ marginTop: 8 }} onClick={releaseQuarantine}>
+                      解除隔离（问题已解决）
+                    </Button>
+                  ) : (
+                    <Button size="small" style={{ marginTop: 8 }} onClick={quarantineCase}>
+                      先隔离它（14 天，我知道它不稳）
+                    </Button>
+                  )}
                 </div>
               )}
             </div>
@@ -1964,24 +2038,33 @@ export default function CaseDetail() {
                 {expectedConfirmed ? (
                   <>
                     <div style={{ fontSize: 12.5, color: '#0ea5a0', fontWeight: 600 }}>
-                      已确认，可以补接口场景和 UI 脚本
+                      已确认预期结果
                     </div>
                     <div style={{ fontSize: 12, color: '#4e5969' }}>
-                      确认时间：{new Date(caseData.expectedConfirmedAt).toLocaleString('zh-CN')}
-                      <br />
-                      改动步骤或预期结果会让这次确认自动失效 —— 确认的是当时那一版。
+                      {caseData.expectedConfirmedActor ? `由 ${caseData.expectedConfirmedActor} 确认 · ` : ''}
+                      {new Date(caseData.expectedConfirmedAt).toLocaleString('zh-CN')}
+                      {caseData.expectedConfirmedNote && (
+                        <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 8,
+                          background: 'rgba(14,165,160,0.06)', border: '1px solid rgba(14,165,160,0.18)' }}>
+                          确认内容：{caseData.expectedConfirmedNote}
+                        </div>
+                      )}
+                      <div style={{ marginTop: 6 }}>
+                        改动步骤或预期结果会让这次确认自动失效 —— 确认的是当时那一版。
+                      </div>
                     </div>
                   </>
                 ) : (
                   <>
                     <div style={{ fontSize: 12.5, color: '#fa8c16', fontWeight: 600 }}>
-                      还没人确认过预期结果，暂时不能挂接口场景 / UI 脚本
+                      还没有人确认过预期结果
                     </div>
                     <div style={{ fontSize: 12, color: '#4e5969' }}>
-                      P0 走两阶段：步骤、接口断言、UI 断言如果由同一次生成推出来，
-                      三份必然互相一致，而一致会被当成已经验证过。
+                      不挡任何操作 —— 接口场景和 UI 脚本照样能挂。只是同源生成的三份产物
+                      容易互相一致而不正确（把「创建成功」做成「返回 200」），
+                      有人过一眼「预期结果」这一列会稳得多。
                       <br />
-                      只需要看下面「预期结果」这一列写得对不对，看完点确认。
+                      CC 在对话里跟你确认过的话，它会把确认内容一起带上来，这里直接显示。
                     </div>
                     <Button size="small" type="primary" ghost style={{ marginTop: 8 }} onClick={confirmExpected}>
                       确认预期结果

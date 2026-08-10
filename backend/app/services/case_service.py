@@ -95,18 +95,24 @@ async def update_case(
         case.preconditions = data.preconditions
     # 改了步骤或预期结果，之前那次「预期结果已确认」就作废 —— 确认的是当时那一版。
     # 不作废的话，确认会变成一次性的终身通行证：确认完再把预期改成模糊的，
-    # P0 门禁照样放行，等于白确认。
-    if data.steps is not None and data.steps != case.steps:
-        case.steps = data.steps
+    # 页面照样显示「已确认」，等于白确认。
+    #
+    # ⚠ 四个字段必须一起清。只清 at/by 的话：改完步骤 → 在平台上点一次「确认」
+    # （那个接口只写 at/by）→ 页面就会把**改动前那一版**的确认内容当成本次的展示出来。
+    # 实测踩过，所以抽成一个函数，别再分头清。
+    def _invalidate_confirmation() -> None:
         case.expected_confirmed_at = None
         case.expected_confirmed_by = None
-    elif data.steps is not None:
+        case.expected_confirmed_actor = None
+        case.expected_confirmed_note = None
+
+    if data.steps is not None:
+        if data.steps != case.steps:
+            _invalidate_confirmation()
         case.steps = data.steps
-    if data.expected_result is not None and data.expected_result != case.expected_result:
-        case.expected_result = data.expected_result
-        case.expected_confirmed_at = None
-        case.expected_confirmed_by = None
-    elif data.expected_result is not None:
+    if data.expected_result is not None:
+        if data.expected_result != case.expected_result:
+            _invalidate_confirmation()
         case.expected_result = data.expected_result
     if data.variables_used is not None:
         case.variables_used = data.variables_used

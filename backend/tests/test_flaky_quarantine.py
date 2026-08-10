@@ -32,6 +32,18 @@ def test_人工标记的仍然跳过():
     assert flaky_service.should_skip(_Case(is_flaky=True), NOW) is True
 
 
+def test_检测到不稳定不跳过():
+    """这是这次改的核心：检测 ≠ 隔离。
+
+    时好时坏本身就是信息（时序/脏数据/并发/环境抖动），自动把它藏起来
+    等于自动让人不去查这个问题。检测只标记 + 给"该往哪儿看"，跳不跳由人定。
+    """
+    c = _Case()
+    c.flaky_evidence = {"note": "翻转了 2 次", "runs": []}     # 检测到了
+    assert c.quarantined_until is None                         # 但没被隔离
+    assert flaky_service.should_skip(c, NOW) is False           # 所以照常执行
+
+
 def test_隔离期内跳过():
     c = _Case(quarantined_until=NOW + timedelta(days=3))
     assert flaky_service.is_quarantined(c, NOW) is True
@@ -115,7 +127,69 @@ def test_强交替仍然三轮就抓到():
     assert _hit(list("PFP")) is True
 
 
+def test_诊断给的是往哪儿看不是结论():
+    """平台看不见根因，但能把失败之间的共性/差异摆出来 —— 这是查的起点。"""
+    same = flaky_service._diagnose([
+        {"status": "failed", "error": "Timeout", "phenomenon": "timeout", "runId": "1"},
+        {"status": "passed", "error": None, "phenomenon": None, "runId": "2"},
+        {"status": "failed", "error": "Timeout", "phenomenon": "timeout", "runId": "3"},
+    ])
+    assert same["distinctErrors"] == 1
+    assert "被测系统" in same["hint"]        # 错误都一样 → 指向业务
+
+    diff = flaky_service._diagnose([
+        {"status": "failed", "error": "Timeout", "phenomenon": "timeout", "runId": "1"},
+        {"status": "passed", "error": None, "phenomenon": None, "runId": "2"},
+        {"status": "failed", "error": "Connection refused", "phenomenon": "http_5xx", "runId": "3"},
+    ])
+    assert diff["distinctErrors"] == 2
+    assert "环境" in diff["hint"]            # 错误各不同 → 指向环境/时序
+
+
+def test_诊断给出可对比的两次执行():
+    """最近一次成功 vs 最近一次失败，截图和流量摆一起最快看出差别。"""
+    d = flaky_service._diagnose([
+        {"status": "passed", "error": None, "phenomenon": None, "runId": "p1"},
+        {"status": "failed", "error": "boom", "phenomenon": "assertion_mismatch", "runId": "f1"},
+    ])
+    assert d["compare"] == {"lastPassed": "p1", "lastFailed": "f1"}
+
+
 def test_一直坏和刚坏都不该被隔离():
     """隔离是为了挡住"时好时坏"的噪音；真坏了必须继续报警，不能被隔离藏起来。"""
     assert _flips(["failed", "failed", "failed"]) < flaky_service.FLIPS
     assert _flips(["passed", "passed", "failed"]) < flaky_service.FLIPS
+
+
+def test_错误摘要归一化后同一个错不被数成多种():
+    """实测踩过：pytest 把随机值和对象地址写进摘要，同一个断言失败被数成 4 种错，
+    诊断于是给出**完全相反**的结论（说"更像环境问题"，实际是稳定的同一个失败）。"""
+    from app.services.flaky_service import _diagnose, _err_shape
+
+    same = [
+        "AssertionError: 校准用的随机失败\nassert 0.2721101623515365 >= 0.4\n"
+        " +  where 0.2721101623515365 = <built-in method random of Random object at 0xcf91c50>()",
+        "AssertionError: 校准用的随机失败\nassert 0.15617404998147644 >= 0.4\n"
+        " +  where 0.15617404998147644 = <built-in method random of Random object at 0x3f314c50>()",
+        "AssertionError: 校准用的随机失败\nassert 0.3848953127147271 >= 0.4\n"
+        " +  where 0.3848953127147271 = <built-in method random of Random object at 0x133b8c50>()",
+    ]
+    assert len(set(same)) == 3, "前提：这三条原始字符串确实各不相同"
+    assert len({_err_shape(x) for x in same}) == 1, "归一化后应收敛成同一个错"
+
+    runs = [{"status": "failed", "error": e, "phenomenon": "assertion_mismatch", "runId": str(i)}
+            for i, e in enumerate(same)]
+    runs.insert(1, {"status": "passed", "error": None, "phenomenon": None, "runId": "p"})
+    d = _diagnose(runs)
+    assert d["distinctErrors"] == 1
+    assert "被测系统真有问题" in d["hint"], "同一个错应指向业务，不该说'更像环境'"
+
+
+def test_归一化不会把真不同的错抹成一种():
+    """反向兜底：归一化删掉的只能是噪声。真不同的错必须仍然分得开，
+    否则诊断会永远说"同一个错"，一样是错的。"""
+    from app.services.flaky_service import _err_shape
+
+    diff = ["TimeoutError: 等 #save 超时", "ConnectionRefused: 连不上 db",
+            "AssertionError: 名字不对", "net::ERR_ABORTED"]
+    assert len({_err_shape(x) for x in diff}) == 4

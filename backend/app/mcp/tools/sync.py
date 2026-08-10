@@ -418,18 +418,6 @@ async def sync_orchestrated_scenario(
     if source_case_id:
         scid = uuid.UUID(source_case_id)
 
-        # P0 两阶段的第二道闸：没人确认过「预期结果」就不许挂接口场景。
-        # 只有 tb_create_case 那道闸的话，两次调用就绕过去了（实测验证过）。
-        from app.services import intake_gate
-
-        src_case = await session.get(Case, scid)
-        if src_case:
-            gate = intake_gate.check_p0_artifact(
-                src_case.priority, src_case.expected_confirmed_at, "api", src_case.case_code or ""
-            )
-            if gate:
-                return {"error": "没通过 P0 两阶段门禁", "problems": gate}
-
         rows = (await session.execute(
             select(ScenarioVariable.name).where(ScenarioVariable.case_id == scid)
         )).scalars().all()
@@ -1002,16 +990,6 @@ async def sync_ui_script(
     case = await session.get(Case, cid)
     if not case:
         return {"error": f"用例不存在: {case_id}"}
-
-    # P0 两阶段的第二道闸：没人确认过「预期结果」就不许挂 UI 脚本。
-    # 只有 tb_create_case 那道闸的话，两次调用就绕过去了（实测验证过）。
-    from app.services import intake_gate
-
-    gate = intake_gate.check_p0_artifact(
-        case.priority, case.expected_confirmed_at, "ui", case.case_code or ""
-    )
-    if gate:
-        return {"error": "没通过 P0 两阶段门禁", "problems": gate}
 
     lang = (language or "").lower() or _detect_language(content, file_name)
     if lang not in ("python", "typescript"):

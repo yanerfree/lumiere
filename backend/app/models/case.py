@@ -119,6 +119,9 @@ class Case(Base):
     expected_confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+    # 确认发生在 CC 对话里时，确认人不是平台用户 —— 存自由文本 + 确认了什么
+    expected_confirmed_actor: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    expected_confirmed_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     # —— AI 生成用例扩展（功能场景测试模块，仅 source=ai 使用；旧数据全部为 NULL）——
     # pending_review / approved / rejected
