@@ -379,6 +379,68 @@ export default function CaseManagement() {
       onError: (msg) => { message.error(msg); setReviewLoading(false) },
     })
   }
+  // 导出备份：脚本正文打包成 zip。价值不在"拿去别处跑"（变量和环境不跟着走，
+  // 跑不通是预期的），在**逃生**——平台哪天没了，这堆资产还在。
+  const handleExportBackup = async () => {
+    if (!globalBranchId) { message.warning('请先选择分支'); return }
+    try {
+      const token = await getValidToken()
+      const res = await fetch(`/api/projects/${projectId}/branches/${globalBranchId}/scripts/export`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!res.ok) {
+        const e = await res.json().catch(() => ({}))
+        message.error(e?.error?.message || '该分支还没有脚本可以备份')
+        return
+      }
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = `用例备份-${new Date().toLocaleDateString('zh-CN').replace(/\//g, '-')}.zip`
+      a.click()
+      URL.revokeObjectURL(a.href)
+      message.success('备份已下载')
+    } catch (e) { message.error(e.message || '备份失败') }
+  }
+
+  // 跨分支复制：新分支要复用老用例，这是团队里最高频的"移植"，后端一直有、前端一直没入口
+  const [copyOpen, setCopyOpen] = useState(false)
+  const [branches, setBranches] = useState([])
+  const [copySrc, setCopySrc] = useState(null)
+  const [copySrcCases, setCopySrcCases] = useState([])
+  const [copyPicked, setCopyPicked] = useState([])
+  const [copying, setCopying] = useState(false)
+
+  const openCopy = async () => {
+    if (!globalBranchId) { message.warning('请先选择分支'); return }
+    try {
+      const res = await api.get(`/projects/${projectId}/branches`)
+      setBranches((res.data || []).filter(b => b.id !== globalBranchId))
+      setCopySrc(null); setCopySrcCases([]); setCopyPicked([])
+      setCopyOpen(true)
+    } catch (e) { message.error(e.message || '加载分支失败') }
+  }
+
+  const loadCopySource = async (branchId) => {
+    setCopySrc(branchId); setCopyPicked([])
+    try {
+      const res = await api.get(`/projects/${projectId}/branches/${branchId}/cases?pageSize=100`)
+      setCopySrcCases(res.data || [])
+    } catch { setCopySrcCases([]) }
+  }
+
+  const doCopy = async () => {
+    setCopying(true)
+    try {
+      const res = await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/copy-from`,
+        { sourceBranchId: copySrc, caseIds: copyPicked })
+      message.success(`已复制 ${res.data?.copied ?? 0} 条到当前分支`)
+      setCopyOpen(false)
+      fetchCases(); fetchFolders()
+    } catch (e) { message.error(e.message || '复制失败') }
+    finally { setCopying(false) }
+  }
+
   const handleExport = async () => {
     if (!globalBranchId) { message.warning('请先选择分支'); return }
     setExporting(true)
@@ -418,6 +480,19 @@ export default function CaseManagement() {
       a.click()
       URL.revokeObjectURL(url)
       message.success('导出成功')
+      // 缺什么要说出来 —— 人默认会以为"导出的就是全部"
+      try {
+        const sum = JSON.parse(res.headers.get('X-Export-Summary') || '{}')
+        const miss = []
+        if (sum.apiScenarios) miss.push(`${sum.apiScenarios} 条接口场景`)
+        if (sum.uiScripts) miss.push(`${sum.uiScripts} 个 UI 脚本`)
+        if (miss.length) {
+          message.warning({
+            content: `已导出 ${sum.cases} 条手动步骤；${miss.join('、')}不在 Excel 里，需要可执行内容请用「导出备份」`,
+            duration: 6,
+          })
+        }
+      } catch { /* 头没拿到就不提示，别把导出本身搞挂 */ }
     } catch {
       message.error('导出失败')
     } finally {
@@ -426,10 +501,6 @@ export default function CaseManagement() {
   }
 
   // ---- 导入 ----
-  // 同步删除默认关。开着的话，"之前导入过但这次文件里没有"的用例会被删掉 ——
-  // 实测传一个只含 1 条用例的 Excel，删掉了 3 条无关用例，界面上一句提示都没有。
-  const [syncDelete, setSyncDelete] = useState(false)
-
   const handleImportFile = async (file) => {
     if (!globalBranchId) return false
     setImporting(true)
@@ -437,7 +508,7 @@ export default function CaseManagement() {
       const formData = new FormData()
       formData.append('file', file)
       const token = await getValidToken()
-      const res = await fetch(`/api/projects/${projectId}/branches/${globalBranchId}/cases/import?syncDelete=${syncDelete}`, {
+      const res = await fetch(`/api/projects/${projectId}/branches/${globalBranchId}/cases/import`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
@@ -795,12 +866,20 @@ export default function CaseManagement() {
                   <Button icon={<SearchOutlined />} onClick={() => handleQualityReview()}>AI 评审</Button>
                 </Tooltip>
                 <Button icon={<UploadOutlined />} size="small" onClick={() => setImportOpen(true)}>导入</Button>
+                {/* 「给人看」和「给机器用」是两个动作，各给一个入口。
+                    做成一个带选项的弹窗等于把人已经做好的决定再问一遍。 */}
                 <Tooltip title={selectedRowKeys.length
-                  ? `导出勾选的 ${selectedRowKeys.length} 条`
-                  : '导出当前筛选下的全部用例（含手动步骤、前置条件、预期结果；接口场景和 UI 脚本正文不在表格里）'}>
+                  ? `导出勾选的 ${selectedRowKeys.length} 条手动步骤`
+                  : '手动步骤清单（Excel）：编号、归属、前置条件、步骤、预期结果。不含接口场景与脚本'}>
                   <Button icon={<DownloadOutlined />} size="small" onClick={handleExport} loading={exporting}>
-                    导出{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+                    导出清单{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
                   </Button>
+                </Tooltip>
+                <Tooltip title="把本分支的脚本正文打包成 zip 存档。用途是「平台没了资产还在」，不是拿去别处直接跑（变量和环境不跟着走）">
+                  <Button icon={<DownloadOutlined />} size="small" onClick={handleExportBackup}>导出备份</Button>
+                </Tooltip>
+                <Tooltip title="从本项目其它分支复制用例到当前分支（深拷贝，含步骤和场景）">
+                  <Button icon={<CopyOutlined />} size="small" onClick={openCopy}>从分支复制</Button>
                 </Tooltip>
                 <Button type="primary" icon={<PlusOutlined />} size="small" onClick={() => {
                   createCaseForm.resetFields()
@@ -904,6 +983,52 @@ export default function CaseManagement() {
         </div>
       </div>
 
+      {/* 从分支复制 */}
+      <Modal title="从其它分支复制用例" open={copyOpen} onCancel={() => setCopyOpen(false)}
+        okText={`复制选中的 ${copyPicked.length} 条`} cancelText="取消" confirmLoading={copying}
+        okButtonProps={{ disabled: !copyPicked.length }} onOk={doCopy} width={560}>
+        <div style={{ padding: '8px 0' }}>
+          {/* 空下拉不说话，人分不清是坏了还是真没有 */}
+          {branches.length === 0 ? (
+            <div style={{ fontSize: 13, color: '#86909c', padding: '12px 0', lineHeight: 1.8 }}>
+              这个项目只有当前一条分支，没有可以复制的来源。<br />
+              <span style={{ fontSize: 12, color: '#c9cdd4' }}>先在分支管理里建一条分支，再回来复制。</span>
+            </div>
+          ) : (<>
+          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 8 }}>源分支</div>
+          <Select value={copySrc} onChange={loadCopySource} placeholder="选择要从哪个分支复制"
+            style={{ width: '100%' }} options={branches.map(b => ({ value: b.id, label: b.name }))} />
+          {copySrc && (
+            <>
+              <div style={{ fontSize: 12, color: '#86909c', margin: '14px 0 8px' }}>
+                选择用例（{copySrcCases.length} 条，最多显示 100 条）
+                <Button type="link" size="small" style={{ fontSize: 12 }}
+                  onClick={() => setCopyPicked(copySrcCases.map(c => c.id))}>全选</Button>
+                <Button type="link" size="small" style={{ fontSize: 12 }}
+                  onClick={() => setCopyPicked([])}>清空</Button>
+              </div>
+              <div style={{ maxHeight: 280, overflow: 'auto', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 8, padding: 8 }}>
+                {copySrcCases.length ? (
+                  <Checkbox.Group value={copyPicked} onChange={setCopyPicked}
+                    style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {copySrcCases.map(c => (
+                      <Checkbox key={c.id} value={c.id}>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#86909c' }}>{c.caseCode}</span>
+                        <span style={{ marginLeft: 8 }}>{c.title}</span>
+                      </Checkbox>
+                    ))}
+                  </Checkbox.Group>
+                ) : <div style={{ color: '#c9cdd4', fontSize: 12, padding: 12 }}>这个分支没有用例</div>}
+              </div>
+              <div style={{ fontSize: 11, color: '#c9cdd4', marginTop: 8 }}>
+                深拷贝：手动步骤、接口场景、UI 场景一起带过来，编号在当前分支重新生成。
+              </div>
+            </>
+          )}
+          </>)}
+        </div>
+      </Modal>
+
       {/* 导入用例弹窗 */}
       <Modal
         title="导入用例"
@@ -914,20 +1039,17 @@ export default function CaseManagement() {
       >
         {!importResult ? (
           <>
-          <div style={{ marginBottom: 12, padding: '10px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 10 }}>
-            <Checkbox checked={syncDelete} onChange={e => setSyncDelete(e.target.checked)}>
-              <span style={{ fontSize: 13 }}>同步删除</span>
-            </Checkbox>
-            <div style={{ fontSize: 12, color: '#86909c', marginTop: 4, lineHeight: 1.6 }}>
-              不勾（默认）：只新增和更新，文件里没有的用例原样保留。<br />
-              勾上：把<b>之前导入过、这次文件里没有</b>的用例移到回收站 —— 用于"以这个文件为准"整体覆盖。
-            </div>
+          <div style={{ marginBottom: 12, fontSize: 12, color: '#86909c', lineHeight: 1.7,
+                        padding: '10px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 10 }}>
+            <b style={{ color: '#1d2129' }}>只新增和更新，不会删除任何用例。</b><br />
+            按「用例ID」对齐：已存在的更新，没有的新建。文件里没有的用例原样保留。<br />
+            接口场景和 UI 脚本不在 Excel 里，导入也不会动它们。
           </div>
           <Upload.Dragger accept=".json,.xlsx" showUploadList={false} beforeUpload={handleImportFile} disabled={importing} style={{ padding: '32px 0' }}>
             {importing ? <Spin tip="正在导入..." /> : (<>
               <p><InboxOutlined style={{ fontSize: 40, color: '#0ea5a0' }} /></p>
               <p style={{ fontSize: 14, color: '#1d2129', marginTop: 8 }}>点击或拖拽上传用例文件</p>
-              <p style={{ fontSize: 12, color: '#86909c' }}>支持 .json（TEA 格式）和 .xlsx（Excel 导出格式）</p>
+              <p style={{ fontSize: 12, color: '#86909c' }}>.xlsx（本页「导出清单」的格式，改完传回来）<br /><span style={{ fontSize: 11, color: '#c9cdd4' }}>也接受早期 TEA 系统的 .json</span></p>
             </>)}
           </Upload.Dragger>
           </>
@@ -936,20 +1058,19 @@ export default function CaseManagement() {
             {[
               { label: '新增', count: importResult.new, color: '#0ea5a0', bg: '#e0f7f6' },
               { label: '更新', count: importResult.updated, color: '#0ea5a0', bg: '#e0f7f6' },
-              { label: '移除', count: importResult.removed, color: '#e8453c', bg: '#fff2f0' },
               { label: '跳过', count: importResult.skipped, color: '#86909c', bg: 'rgba(0,0,0,0.03)' },
-            ].filter(s => s.label !== '移除' || syncDelete).map(s => (
+            ].map(s => (
               <div key={s.label} style={{ flex: 1, textAlign: 'center', padding: '16px 0', background: s.bg, borderRadius: 12 }}>
                 <div style={{ fontSize: 28, fontWeight: 700, color: s.color }}>{s.count}</div>
                 <div style={{ fontSize: 12, color: '#86909c' }}>{s.label}</div>
               </div>
             ))}
-            {!syncDelete && importResult.notInFile > 0 && (
+            {importResult.notInFile > 0 && (
               <div style={{ flexBasis: '100%', fontSize: 12, color: '#86909c', lineHeight: 1.7 }}>
                 另有 <b>{importResult.notInFile}</b> 条之前导入过的用例不在这个文件里，已<b>原样保留</b>
                 {importResult.notInFileSample?.length
                   ? `（如「${importResult.notInFileSample.slice(0, 2).join('」「')}」）` : ''}
-                。要以文件为准整体覆盖，重新导入时勾上「同步删除」。
+。
               </div>
             )}
           </div>

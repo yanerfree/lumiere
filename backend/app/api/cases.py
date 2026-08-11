@@ -25,15 +25,13 @@ async def import_cases(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     file: UploadFile = File(...),
-    sync_delete: bool = Query(default=False, alias="syncDelete"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    """导入用例文件（支持 .json 和 .xlsx 格式）。
+    """导入用例文件。**只新增和更新，不删除任何东西。**
 
-    默认**只增量**（新增 + 更新）。`syncDelete=true` 才会把
-    「之前导入过、这次文件里没有」的用例删掉 —— 那是个破坏性动作，
-    必须由人明确选，不能是默认。
+    主用 .xlsx（本平台导出的格式，改完再传回来）；.json 是早期从 TEA
+    迁移用的格式，靠 tea_id 对齐，保留但不在界面上主推。
     """
     filename = file.filename or ""
     if not (filename.endswith(".json") or filename.endswith(".xlsx")):
@@ -59,8 +57,7 @@ async def import_cases(
     else:
         cases_list = _parse_excel_to_cases(content)
 
-    summary = await import_service.import_cases(
-        session, branch_id, cases_list, sync_delete=sync_delete)
+    summary = await import_service.import_cases(session, branch_id, cases_list)
     await write_audit_log(session, action="import", target_type="case", changes=summary)
     return {"data": summary}
 
@@ -307,12 +304,15 @@ async def export_cases_excel(
     ws = wb.active
     ws.title = "用例列表"
 
+    # 「脚本文件/脚本函数」两列 257 条里只有 3 条有值，读的人会以为平台在管脚本 ——
+    # 那不叫覆盖率低，叫误导。换成三件套的有无标记：告诉人"这条还有另外 2/3，
+    # 在平台里"，而不是装作这张表里有。
     headers = [
         "用例ID", "标题", "模块", "子模块", "测试类型", "优先级",
         "自动化状态", "来源", "Flaky",
         "前置条件", "测试步骤", "预期结果",
-        "脚本文件", "脚本函数", "TEA ID",
-        "备注", "创建时间", "更新时间",
+        "接口场景", "UI脚本", "场景变量",
+        "TEA ID", "备注", "创建时间", "更新时间",
     ]
 
     header_fill = PatternFill(start_color="E6F0FF", end_color="E6F0FF", fill_type="solid")
@@ -325,6 +325,19 @@ async def export_cases_excel(
         cell.alignment = Alignment(horizontal="center")
 
     status_map = {"automated": "已自动化", "pending": "待自动化", "script_removed": "脚本已移除", "archived": "已归档"}
+
+    # 三件套的另外 2/3 在别的表里，这里只统计有无 —— 正文不装进表格
+    # （接口场景是带状态传递的多步链，UI 脚本是代码，塞进单元格既看不懂也还原不了）。
+    case_ids = [c.id for c in cases]
+    assets = await case_service.list_case_assets(session, case_ids)
+    from sqlalchemy import func as _func
+
+    from app.models.scenario_variable import ScenarioVariable
+    var_counts = dict((await session.execute(
+        select(ScenarioVariable.case_id, _func.count())
+        .where(ScenarioVariable.case_id.in_(case_ids))
+        .group_by(ScenarioVariable.case_id)
+    )).all()) if case_ids else {}
 
     for row_idx, c in enumerate(cases, 2):
         steps_text = steps_to_text(c.steps)
@@ -344,8 +357,9 @@ async def export_cases_excel(
             c.preconditions or "",
             steps_text,
             c.expected_result or "",
-            c.script_ref_file or "",
-            c.script_ref_func or "",
+            "有" if assets.get(c.id, {}).get("hasApi") else "",
+            "有" if assets.get(c.id, {}).get("hasUi") else "",
+            var_counts.get(c.id, "") or "",
             c.tea_id or "",
             c.remark or "",
             c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "",
@@ -354,9 +368,30 @@ async def export_cases_excel(
         for col_idx, val in enumerate(row, 1):
             ws.cell(row=row_idx, column=col_idx, value=val)
 
-    col_widths = [18, 40, 12, 12, 8, 6, 12, 6, 5, 30, 50, 30, 40, 25, 20, 20, 18, 18]
+    col_widths = [18, 40, 12, 12, 8, 6, 12, 6, 5, 30, 50, 30, 10, 10, 10, 20, 20, 18, 18]
     for i, w in enumerate(col_widths, 1):
         ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = w
+
+    # 缺什么必须写在文件里。人拿到这张表默认会以为"用例就这些"，
+    # 而接口场景和 UI 脚本一个字都不在里面 —— 沉默的缺失比报错更伤人。
+    n_api = sum(1 for c in cases if assets.get(c.id, {}).get("hasApi"))
+    n_ui = sum(1 for c in cases if assets.get(c.id, {}).get("hasUi"))
+    n_var = sum(var_counts.values())
+    ws2 = wb.create_sheet("说明")
+    for r, line in enumerate([
+        "这份文件是什么",
+        "　用例的「手动步骤视图」：编号、归属、优先级、前置条件、步骤、预期结果。",
+        "",
+        "这份文件里没有什么",
+        f"　接口场景 —— 本次 {n_api} 条用例带有。多步接口链，含断言和步骤间取值，表格装不下。",
+        f"　UI 脚本 —— 本次 {n_ui} 条用例带有。pytest 代码，表格装不下。",
+        f"　场景变量 —— 本次共 {n_var} 条。UI 和接口共用的取值定义。",
+        "",
+        "要可执行的内容，用用例管理页的「导出备份 (zip)」。",
+        "改完这张表可以传回平台：导入只新增和更新，不会删掉任何用例。",
+    ], 1):
+        ws2.cell(row=r, column=1, value=line)
+    ws2.column_dimensions["A"].width = 95
 
     output = io.BytesIO()
     wb.save(output)
@@ -365,7 +400,14 @@ async def export_cases_excel(
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename=cases-export.xlsx"},
+        headers={
+            "Content-Disposition": "attachment; filename=cases-export.xlsx",
+            # 前端拿它在下载后如实提示"导了多少、缺了什么"
+            "X-Export-Summary": json.dumps(
+                {"cases": len(cases), "apiScenarios": n_api, "uiScripts": n_ui,
+                 "scenarioVariables": n_var}),
+            "Access-Control-Expose-Headers": "X-Export-Summary",
+        },
     )
 
 @router.post("/{case_id}/release-quarantine")

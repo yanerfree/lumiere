@@ -570,7 +570,8 @@ def test_前端导出和列表用同一套筛选口径():
 
     jsx = Path(__file__).resolve().parents[2] / "frontend/src/pages/cases/CaseManagement.jsx"
     src = jsx.read_text(encoding="utf-8")
-    exp = src[src.index("const handleExport"):]
+    # 精确锚定：新增的 handleExportBackup 排在前面，模糊匹配会切错块
+    exp = src[src.index("const handleExport = async"):]
     exp = exp[:exp.index("\n  }")]
     assert "selectedRowKeys.length" in exp, "没有优先导勾选的"
     for k in ("reviewStatus", "lifecycleStatus", "readyFilter"):
@@ -578,32 +579,6 @@ def test_前端导出和列表用同一套筛选口径():
 
 
 # ── 导入：破坏性动作不能是默认 ──────────────────────────────────────
-
-@pytest.mark.parametrize("sync_delete,expect_removed", [
-    (False, 0),   # ★ 默认。文件里没有的一条都不许动
-    (True, 2),    # 明确选了才删
-])
-def test_导入默认只增量_不删文件里没有的(sync_delete, expect_removed):
-    """实测点一次「导入」（文件里只有 1 条用例）删掉了 3 条无关用例，
-    还把它们的 folder_id 清成 NULL（原值不留，恢复不回原目录）——
-    界面上按钮只写「导入」，人以为是"再加一批进来"。
-
-    要全量同步是合理需求，但必须由人明确选。这条把默认值钉死。
-    """
-    import inspect
-
-    from app.services import import_service
-
-    sig = inspect.signature(import_service.import_cases).parameters
-    assert "sync_delete" in sig, "没有这个开关"
-    assert sig["sync_delete"].default is False, "破坏性动作不能是默认"
-
-    src = inspect.getsource(import_service.import_cases)
-    assert "if sync_delete:" in src
-    # 删的时候也不许再清 folder_id —— 清了从回收站还原出来会挂不到树上
-    body = src[src.index("if sync_delete:"):]
-    assert "folder_id = None" not in body
-
 
 def test_没删也要如实报告有几条不在文件里():
     """"什么都没发生"和"有 3 条我没动"是两回事。人得知道有这回事，
@@ -614,16 +589,6 @@ def test_没删也要如实报告有几条不在文件里():
 
     src = inspect.getsource(import_service.import_cases)
     assert '"notInFile"' in src and '"notInFileSample"' in src
-
-
-def test_接口层默认也是不删():
-    import inspect
-
-    from app.api import cases as cases_api
-
-    p = inspect.signature(cases_api.import_cases).parameters
-    assert "sync_delete" in p
-    assert "sync_delete=sync_delete" in inspect.getsource(cases_api.import_cases)
 
 
 # ── 导出/导入回环不许丢步骤预期 ─────────────────────────────────────
@@ -685,3 +650,132 @@ def test_回环解析的正反例():
         {"seq": 1, "action": "点新建"},
         {"seq": 2, "action": "提交"},
     ], got["无预期"]
+
+
+# ── 评审结论落地：导入不删、Excel 说实话、备份不覆盖 ────────────────
+
+def test_导入代码里不存在任何删除动作():
+    """用 AST 查，不用字符串匹配。
+
+    上一版断言 `"case.deleted_at" not in src`，埋雷时改成 `c.deleted_at = None`
+    就绕过去了 —— 换个变量名断言就失效。这轮第三次被"源码文本断言"骗。
+    这里遍历语法树：函数体内**任何**对 `.deleted_at` 的赋值都算违规。
+    """
+    import ast
+    import inspect
+    import textwrap
+
+    from app.services import import_service
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(import_service.import_cases)))
+    bad = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        for t in node.targets:
+            if not isinstance(t, ast.Attribute):
+                continue
+            # 任何对 deleted_at 的赋值都算删除动作
+            if t.attr == "deleted_at":
+                bad.append((node.lineno, "deleted_at"))
+            # folder_id 赋成 None 才是问题（清空归属，原值不留、还原不回去）；
+            # 重新导入时按「模块」列改归属是正常更新，不能一并禁掉。
+            elif t.attr == "folder_id" and isinstance(node.value, ast.Constant) \
+                    and node.value.value is None:
+                bad.append((node.lineno, "folder_id=None"))
+    assert not bad, f"导入不该删除或清空归属：{bad}"
+
+    src = inspect.getsource(import_service.import_cases)
+    assert "sync_delete" not in src, "同步删除这条语义应该整个不存在"
+    assert '"notInFile"' in src, "但要如实说有几条不在文件里"
+
+
+def test_接口层没有同步删除参数():
+    import inspect
+
+    from app.api import cases as cases_api
+
+    assert "sync_delete" not in inspect.signature(cases_api.import_cases).parameters
+
+
+def test_excel不再有名存实亡的脚本列():
+    """「脚本文件/脚本函数」257 条里只有 3 条有值。那不叫覆盖率低，
+    叫误导 —— 读的人会以为平台在管脚本。换成三件套有无标记。"""
+    import inspect
+
+    from app.api import cases as cases_api
+
+    src = inspect.getsource(cases_api.export_cases_excel)
+    head = src[src.index("headers = ["):src.index("]", src.index("headers = ["))]
+    assert "脚本文件" not in head and "脚本函数" not in head
+    for col in ("接口场景", "UI脚本", "场景变量"):
+        assert col in head, f"缺 {col} 标记列"
+
+
+def test_excel必须说出自己缺了什么():
+    """人拿到这张表默认会以为"用例就这些"。沉默的缺失比报错更伤人。"""
+    import inspect
+
+    from app.api import cases as cases_api
+
+    src = inspect.getsource(cases_api.export_cases_excel)
+    assert 'wb.create_sheet("说明")' in src, "文件里没写清缺什么"
+    assert "这份文件里没有什么" in src
+    assert "X-Export-Summary" in src, "没把数字给前端，页面上提示不出来"
+
+
+def test_备份包里两个脚本不会互相覆盖():
+    """**测行为，不测源码字符串。**
+
+    上一版断言 `"tests/{code}/" in src`，埋雷把路径改回扁平后测试照样绿 ——
+    因为下面兜底那行里还有同一个字符串。改成直接跑路径分配。
+
+    CC 回推的脚本几乎都叫 test_ui.py / test_api.py，实测 8 个脚本
+    压出来只剩 2 个文件。
+    """
+    from app.api.scripts import backup_path
+
+    seen = set()
+    paths = []
+    for code in ("TC-登录认证-00001", "TC-登录认证-00002", "TC-项目管理-00001"):
+        p = backup_path(code, "api", "test_api.py", seen)
+        seen.add(p)
+        paths.append(p)
+    assert len(set(paths)) == 3, f"不同用例的同名脚本撞在一起了：{paths}"
+    assert all("00001" in p or "00002" in p or "项目管理" in p for p in paths)
+
+
+def test_同一用例多个同名脚本也不会覆盖():
+    """同一条用例同一类型还可能有多个版本，编号目录也救不了，得再兜一层。"""
+    from app.api.scripts import backup_path
+
+    seen = set()
+    got = []
+    for _ in range(3):
+        p = backup_path("TC-A-1", "ui", "test_ui.py", seen)
+        seen.add(p)
+        got.append(p)
+    assert len(set(got)) == 3, got
+
+
+def test_备份包有对照清单():
+    """解压出来一堆 test_api.py，认不出哪个是哪条用例。"""
+    import inspect
+
+    from app.api import scripts as scripts_api
+
+    assert "MANIFEST.tsv" in inspect.getsource(scripts_api.export_scripts)
+
+
+def test_备份README必须说明跑不起来是预期的():
+    """脚本的取值来自场景变量/全局引用/步骤提取物，都不在包里。
+    不说清楚的话，人会以为备份坏了 —— 他缺的是环境，不是资产。
+    另外必须写明凭据不在包里，且不提供"包含凭据"这种选项。
+    """
+    import inspect
+
+    from app.api import scripts as scripts_api
+
+    src = inspect.getsource(scripts_api.export_scripts)
+    assert "跑不起来，这是预期的" in src
+    assert "凭据一个字都不在这个包里" in src

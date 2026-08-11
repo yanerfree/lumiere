@@ -674,6 +674,27 @@ export_router = APIRouter(
 )
 
 
+def backup_path(case_code: str | None, script_type: str,
+                file_name: str | None, seen: set[str]) -> str:
+    """备份包里一个脚本该放哪。抽成纯函数是为了能直接测"两个脚本不会同名"。
+
+    CC 回推上来的脚本几乎都叫 test_ui.py / test_api.py。原来扁平放在
+    `tests/{类型}/` 下，同名互相覆盖 —— 实测 8 个脚本压出来只剩 2 个文件。
+    备份的意义是"平台没了资产还在"，覆盖掉就等于没备份。
+    所以按**用例编号**分目录，同一用例同类型再撞就加序号。
+    """
+    code = (case_code or "case").lower().replace("-", "_")
+    fname = file_name or "script.py"
+    base = f"tests/{code}/{script_type}"
+    path = f"{base}/{fname}"
+    n = 1
+    while path in seen:
+        n += 1
+        stem, _, ext = fname.rpartition(".")
+        path = f"{base}/{stem}_{n}.{ext}" if ext else f"{base}/{fname}_{n}"
+    return path
+
+
 @export_router.get("/export")
 async def export_scripts(
     project_id: uuid.UUID,
@@ -697,16 +718,38 @@ async def export_scripts(
     if not rows:
         raise NotFoundError(code="NO_SCRIPTS", message="没有可导出的脚本")
 
+    # 用**用例编号**建目录，不能只用 file_name —— CC 回推上来的脚本几乎都叫
+    # test_ui.py / test_api.py，扁平放一起会同名互相覆盖：实测 6 个脚本压出来
+    # 只剩 2 个文件。备份的意义是"平台没了资产还在"，覆盖掉就等于没备份。
     buf = io.BytesIO()
+    manifest = []
+    seen: set[str] = set()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for script_obj, case_code in rows:
-            folder = f"tests/{script_obj.script_type}"
-            fname = script_obj.file_name or f"{case_code.lower().replace('-', '_')}.py"
-            zf.writestr(f"{folder}/{fname}", script_obj.content)
+            path = backup_path(case_code, script_obj.script_type,
+                               script_obj.file_name, seen)
+            seen.add(path)
+            zf.writestr(path, script_obj.content)
+            manifest.append(f"{case_code}\t{script_obj.script_type}\t{path}")
+
+        zf.writestr("MANIFEST.tsv", "用例编号\t类型\t文件\n" + "\n".join(manifest))
+        zf.writestr("README.md", (
+            "# 用例脚本备份\n\n"
+            f"共 {len(rows)} 个脚本，按用例编号分目录。对照见 MANIFEST.tsv。\n\n"
+            "## 这份备份能干什么\n\n"
+            "存档。平台哪天没了，脚本正文还在。\n\n"
+            "## 直接跑得起来吗\n\n"
+            "**跑不起来，这是预期的。** 脚本里的取值来自三层，都不在这个包里：\n\n"
+            "1. 场景变量（平台按用例存，执行时注入）\n"
+            "2. 项目级全局引用 —— `BASE_URL` / 账号 / token，按环境注入\n"
+            "3. 步骤间提取物（上一步的响应里取的）\n\n"
+            "**凭据一个字都不在这个包里**，也不会有「包含凭据」这种选项。\n"
+            "要跑，把脚本放回平台执行，或在目标环境自己补齐上面这些值。\n"
+        ))
 
     buf.seek(0)
     return StreamingResponse(
         buf,
         media_type="application/zip",
-        headers={"Content-Disposition": "attachment; filename=scripts-export.zip"},
+        headers={"Content-Disposition": "attachment; filename=scripts-backup.zip"},
     )
