@@ -165,8 +165,11 @@ async def run_script(
         for v in rows.scalars().all():
             env_vars[v.key] = v.value
 
-    from app.services.scenario_variable_service import resolve_scenario_variables
-    env_vars.update(await resolve_scenario_variables(session, case_id, global_lookup=env_vars))
+    from app.services.scenario_variable_service import (
+        add_bare_names, resolve_scenario_variables,
+    )
+    add_bare_names(env_vars, await resolve_scenario_variables(
+        session, case_id, global_lookup=env_vars))
     await _inject_test_token(session, env_id, case_id, env_vars)
 
     file_name = script.file_name or f"test_{script_type}.py"
@@ -251,8 +254,11 @@ async def run_script_stream(
         for v in rows.scalars().all():
             env_vars[v.key] = v.value
 
-    from app.services.scenario_variable_service import resolve_scenario_variables
-    env_vars.update(await resolve_scenario_variables(session, case_id, global_lookup=env_vars))
+    from app.services.scenario_variable_service import (
+        add_bare_names, resolve_scenario_variables,
+    )
+    add_bare_names(env_vars, await resolve_scenario_variables(
+        session, case_id, global_lookup=env_vars))
     await _inject_test_token(session, env_id, case_id, env_vars)
 
     is_typescript = (script.language == "typescript"

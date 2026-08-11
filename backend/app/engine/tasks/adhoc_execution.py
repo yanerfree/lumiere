@@ -42,11 +42,14 @@ async def _run_new_style_script(session: AsyncSession, case, test_type: str, bas
     from pathlib import Path as _P
 
     from app.engine.executor import execute_single_case
-    from app.services.scenario_variable_service import resolve_scenario_variables
+    from app.services.scenario_variable_service import (
+        add_bare_names, resolve_scenario_variables,
+    )
 
     env_vars = dict(base_env_vars or {})
     try:
-        env_vars.update(await resolve_scenario_variables(session, case.id, global_lookup=env_vars))
+        add_bare_names(env_vars, await resolve_scenario_variables(
+            session, case.id, global_lookup=env_vars))
     except Exception:
         pass
     if env_id:

@@ -90,8 +90,8 @@ async def create_plan(
         return {"error": "找不到可用的创建人（plans.created_by 是必填）"}
 
     uids = [uuid.UUID(i) for i in ids]
-    found = (await session.execute(select(Case.id).where(Case.id.in_(uids)))).scalars().all()
-    missing = set(uids) - set(found)
+    cases = (await session.execute(select(Case).where(Case.id.in_(uids)))).scalars().all()
+    missing = set(uids) - {c.id for c in cases}
     if missing:
         return {"error": f"这些用例不存在：{[str(m) for m in missing]}"}
 
@@ -115,13 +115,50 @@ async def create_plan(
     note = ""
     if not environment_id:
         note = " ⚠ 没指定 environment_id —— 执行时拿不到 BASE_URL 和账号，脚本会挂。先调 tb_list_environments。"
+
+    # 进回归的门槛是「该维度状态 = 可执行」，而这个状态**只有人能推**
+    # （CC 按红线不改状态）。不说清楚的话，计划建出来、跑起来、报告里
+    # 一条 pending —— 三步都在暗示"它会跑"，而它一条都没跑。实测踩到了。
+    blocked = _not_executable(cases, test_type)
+    if blocked:
+        note += (
+            f" ⚠ 其中 {len(blocked)} 条**不会执行**："
+            + "；".join(f"{c} 的{'接口' if test_type == 'api' else 'UI'}状态是 {st}" for c, st in blocked[:5])
+            + "。进回归要求该维度状态为「可执行」，而这一步只能由人在平台上确认"
+              "（跑通一次会自动推到「待复核」，人核对后改成「可执行」）——"
+              "CC 不改状态是红线，别绕。"
+        )
     return {
         "status": "ok",
         "planId": str(plan.id),
         "name": plan.name,
         "caseCount": len(uids),
-        "message": f"已建计划「{name}」（{len(uids)} 条用例）。调 tb_run_plan 触发执行。{note}",
+        "willRun": len(uids) - len(blocked),
+        "blockedCases": [{"caseCode": c, "status": st} for c, st in blocked],
+        "message": f"已建计划「{name}」（{len(uids)} 条用例，其中 {len(uids) - len(blocked)} 条会真的执行）。"
+                   f"调 tb_run_plan 触发执行。{note}",
     }
+
+
+_DIM_LABEL = {
+    "not_started": "未开始", "draft": "草稿", "debugging": "调试中",
+    "pending_review": "待复核", "needs_fix": "待修改",
+}
+
+
+def _not_executable(cases, test_type: str) -> list[tuple[str, str]]:
+    """挑出「进不了回归」的用例：该维度状态不是 executable，也没有旧式脚本引用。
+
+    判据和 execution_service._will_run_automated 保持一致 —— 两边不一致的话，
+    这里报"会跑"而执行器跳过，等于换个地方说谎。
+    """
+    out = []
+    for c in cases:
+        dim = c.api_status if test_type == "api" else c.ui_status
+        legacy = bool(c.script_ref_file) and c.automation_status == "automated"
+        if dim != "executable" and not legacy:
+            out.append((c.case_code, _DIM_LABEL.get(dim, dim)))
+    return out
 
 
 async def run_plan(session: AsyncSession, plan_id: str) -> dict:
@@ -156,14 +193,28 @@ async def run_plan(session: AsyncSession, plan_id: str) -> dict:
     asyncio.create_task(  # noqa: RUF006
         run_automated_execution(task_id, str(pid), str(report.id), str(uid))
     )
+    # totalScenarios 里包含被判成「手动」的那些 —— 它们一条都不会跑，
+    # 只报总数等于说谎。manual_count 是执行器自己算出来的，直接用它。
+    manual = report.manual_count or 0
+    will_run = (report.total_scenarios or 0) - manual
+    extra = ""
+    if manual:
+        extra = (f" ⚠ 其中 {manual} 条不会执行（该维度状态不是「可执行」，"
+                 "会记成待人工录入）。这一步只能由人在平台上确认，CC 不改状态。")
     return {
         "status": "started",
         "taskId": task_id,
         "reportId": str(report.id),
         "planName": plan.name,
         "totalScenarios": report.total_scenarios,
-        "message": "已在平台执行器上触发。执行是异步的，拿 reportId 调 "
-                   "tb_get_report_summary 看进度和结果；失败明细用 tb_get_failed_scenarios。",
+        "willRun": will_run,
+        "skippedAsManual": manual,
+        "message": (
+            f"已在平台执行器上触发：{will_run} 条会真的跑"
+            + (f"，{manual} 条不会。" if manual else "。")
+            + "执行是异步的，拿 reportId 调 tb_get_report_summary 看进度和结果；"
+              "失败明细用 tb_get_failed_scenarios。" + extra
+        ),
     }
 
 

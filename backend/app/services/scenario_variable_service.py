@@ -48,3 +48,20 @@ async def resolve_scenario_variables(
             val = v.value_template
         out[f"SV_{v.name}"] = str(val)
     return out
+
+
+def add_bare_names(env: dict, resolved: dict) -> dict:
+    """把 `SV_名字` 同时以裸名 `名字` 注册一份。
+
+    两条执行路径此前各写各的：接口场景那边做了这一步，所以 `${PROJ_NAME}` 能用；
+    UI 脚本那边只注 `SV_PROJ_NAME`。而工具说明和抽屉里都写着「UI 和接口共用同一份」——
+    外部 CC 照着写 `os.getenv("PROJ_NAME")`，拿到的是空串，**还不报错**，
+    表现成"填了个空名字"这种莫名其妙的失败。实测踩到了。
+
+    裸名不覆盖已有的环境变量：环境里同名的键是"这个环境是什么"，优先级更高。
+    """
+    for k, val in (resolved or {}).items():
+        env[k] = val
+        if k.startswith("SV_") and k != "SV_RUN_ID" and k[3:] not in env:
+            env[k[3:]] = val
+    return env

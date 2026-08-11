@@ -60,9 +60,14 @@ async def run_ui_script(
         for v in rows.scalars().all():
             env_vars[v.key] = v.value
 
-    # 注入场景变量 SV_*（random 唯一化）——UI 与接口执行共用同一份
-    from app.services.scenario_variable_service import resolve_scenario_variables
-    env_vars.update(await resolve_scenario_variables(session, cid, global_lookup=env_vars))
+    # 注入场景变量：`SV_名字` 和裸名 `名字` 都注册 —— 和接口场景那边同一套规则。
+    # 只注 SV_ 前缀的话，CC 照着「UI/接口共用同一份」写 os.getenv("PROJ_NAME")
+    # 会静默拿到空串。
+    from app.services.scenario_variable_service import (
+        add_bare_names, resolve_scenario_variables,
+    )
+    add_bare_names(env_vars, await resolve_scenario_variables(
+        session, cid, global_lookup=env_vars))
 
     # 注入鉴权 token TEST_TOKEN（S1.3）——脚本鉴权造数/清理用，避免 401
     if env_id:

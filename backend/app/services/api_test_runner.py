@@ -239,8 +239,20 @@ def _unresolved_refs(*objs) -> list[str]:
 def _extract_value(body, path: str):
     """按 JSONPath-lite 从响应体取值，支持点号 + 数组下标：
     data.token / data.isolation_rules[0].id / data.items[0] / data[0].name / [0].id
+
+    **`$.` 前缀一并接受。** MCP 工具的参数说明里写的是 "jsonpath"，
+    外部 CC 照着写 `$.data.token` 是完全合理的，而这里只认 `data.token` ——
+    结果是提取静默返回 None，下一步报「变量未解析」，把人指向环境变量，
+    而根因在上一步。宽进严出：能认的写法就认下来。
     """
     val = body
+    path = (path or "").strip()
+    if path.startswith("$."):
+        path = path[2:]
+    elif path == "$":
+        return body
+    elif path.startswith("$["):
+        path = path[1:]
     for seg in path.split("."):
         if val is None:
             return None
@@ -375,9 +387,10 @@ async def run_single_step(
             method=step.method, url=step.url, status="fail", duration=0,
             error=(
                 f"变量未解析：{names}。请求未发出。\n"
-                "请检查：①所选执行环境是否配了这些键（环境管理）"
-                "②是否该由更早的步骤 variables_extract 提取（顺序对不对）"
-                "③是否该在用例「场景变量」里定义。"
+                "**先往上看**：如果这些变量本该由前面的步骤 variables_extract 提取，"
+                "那问题在上一步 —— 它可能断言过了但没取到值（看那一步的错误）。\n"
+                "其次检查：①所选执行环境是否配了这些键（环境管理）"
+                "②提取步骤的顺序对不对 ③是否该在用例「场景变量」里定义。"
             ),
             request_data={
                 "method": step.method, "url": url,
@@ -452,8 +465,34 @@ async def run_single_step(
                     "name": var_name, "path": path,
                     "value": None if val is None else str(val),
                     "ok": val is not None,
+                    # 取不到时把响应顶层键列出来 —— 十有八九是路径写错了层级，
+                    # 光说"取不到"人还得自己去翻响应体。
+                    "availableTopKeys": (
+                        None if val is not None or not isinstance(resp_body, dict)
+                        else sorted(resp_body.keys())[:12]
+                    ),
                 })
         request_data["extracted"] = extracted
+
+        # 提取失败必须在**当步**说出来。原先只是静默记 ok:false，
+        # 报错落到下一步的「变量未解析」上，把人指向环境变量 —— 而根因在这里。
+        failed_ex = [e for e in extracted if not e["ok"]]
+        if failed_ex and all_pass:
+            detail = "；".join(
+                f"{e['name']} ← {e['path']}"
+                + (f"（响应顶层只有 {'/'.join(e['availableTopKeys'])}）"
+                   if e.get("availableTopKeys") else "")
+                for e in failed_ex
+            )
+            all_pass = False
+            extract_error = (
+                f"这一步的响应里没取到：{detail}。\n"
+                "断言是过了的，但后面用到这些变量的步骤会全部失败。\n"
+                "路径写法：点号 + 数组下标，如 data.token / data.items[0].id"
+                "（`$.` 前缀也接受）。"
+            )
+        else:
+            extract_error = None
 
         return StepResult(
             step_id=str(step.id), step_name=step.name,
@@ -462,6 +501,7 @@ async def run_single_step(
             status_code=resp.status_code, duration=duration,
             assertions=assertion_results,
             response_body=resp_body if isinstance(resp_body, (dict, list)) else {"_text": str(resp_body)},
+            error=extract_error,
             request_data=request_data,
         )
     except Exception as e:

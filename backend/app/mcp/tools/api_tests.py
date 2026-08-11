@@ -121,8 +121,35 @@ async def get_api_test_scenario(
             "assertions": st.assertions,
             "variablesExtract": st.variables_extract,
             "lastStatus": st.last_status,
+            # 只给 pass/fail 等于告诉 CC「挂了，自己猜」。跑挂之后最需要的三样：
+            # 错误原文、实际状态码、每条提取到底取到没有 —— 都在 last_response 里，
+            # 此前一个都没送出来，CC 只能去猜或者放弃。
+            **_last_run_facts(st.last_response),
         } for st in steps],
     }
+
+
+def _last_run_facts(last_response: dict | None) -> dict:
+    """最近一次执行留下的可诊断信息。没跑过就返回空，别塞一堆 None。"""
+    if not isinstance(last_response, dict):
+        return {}
+    out: dict = {}
+    if last_response.get("error"):
+        out["lastError"] = str(last_response["error"])[:600]
+    if last_response.get("statusCode") is not None:
+        out["lastStatusCode"] = last_response["statusCode"]
+    # 断言逐条的通过情况：哪一条没过、期望是什么、实际是什么
+    fails = [a for a in (last_response.get("assertions") or [])
+             if isinstance(a, dict) and not a.get("passed")]
+    if fails:
+        out["failedAssertions"] = fails[:5]
+    # 提取物：取没取到最关键 —— 取不到的话，后面用它的步骤会全挂，
+    # 而报错会落在那些步骤上，指错地方。
+    ex = ((last_response.get("request") or {}).get("extracted")) or []
+    bad = [e for e in ex if isinstance(e, dict) and not e.get("ok")]
+    if bad:
+        out["failedExtracts"] = bad[:5]
+    return out
 
 
 async def run_api_test(

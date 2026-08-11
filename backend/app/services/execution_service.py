@@ -10,6 +10,10 @@ from app.core.exceptions import NotFoundError, ValidationError
 from app.models.case import Case
 from app.models.plan import Plan, PlanCase
 from app.models.report import TestReport, TestReportScenario
+# 模块级导入：此前只在 _will_run_automated 里 import，而 start_execution 也用它。
+# 计划里只要有一条不是 executable 的用例就会走到那个分支 → NameError 把整个
+# 计划执行打死。实测 tb_run_plan 直接崩「name 'flaky_service' is not defined」。
+from app.services import flaky_service
 
 
 async def _will_run_automated(session: AsyncSession, plan, case) -> bool:
@@ -19,8 +23,6 @@ async def _will_run_automated(session: AsyncSession, plan, case) -> bool:
     优先，兼容旧式（automation_status=automated + script_ref_file）。
     Flaky 用例被执行器跳过，这里也不算自动。
     """
-    from app.services import flaky_service
-
     if plan.plan_type != "automated" or flaky_service.should_skip(case):
         return False
     from app.engine.tasks.adhoc_execution import _has_new_style_script

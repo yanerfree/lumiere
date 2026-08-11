@@ -779,3 +779,111 @@ def test_备份README必须说明跑不起来是预期的():
     src = inspect.getsource(scripts_api.export_scripts)
     assert "跑不起来，这是预期的" in src
     assert "凭据一个字都不在这个包里" in src
+
+
+# ── CC 闭环体检：跑整条链时抓到的 ────────────────────────────────────
+
+@pytest.mark.parametrize("path,expect", [
+    ("$.data.token", "tok"),      # ★ MCP 工具说明写的是 "jsonpath"，CC 照着写就是这个
+    ("data.token", "tok"),
+    ("$.data.items[0].id", "i1"),
+    ("data.items[0].id", "i1"),
+    ("$", None),                  # 整体
+])
+def test_提取路径要认jsonpath前缀(path, expect):
+    """`variables_extract:{name:jsonpath}` —— 参数说明里写着 jsonpath，
+    实现却只认 `data.token`。CC 写 `$.data.token` 会**静默**取不到值，
+    报错落在下一步的「变量未解析」上，把人指向环境变量，而根因在上一步。
+    实测在闭环体检里踩到了。
+    """
+    from app.services.api_test_runner import _extract_value
+
+    body = {"data": {"token": "tok", "items": [{"id": "i1"}]}}
+    got = _extract_value(body, path)
+    assert (got == expect) if expect is not None else (got == body)
+
+
+def test_提取失败要在当步报错_不要甩给下一步():
+    """断言过了但没取到值 —— 原先只静默记 ok:false，这一步照样算 pass。
+    后面每一步都报「变量未解析」，指错地方。"""
+    import inspect
+
+    from app.services import api_test_runner
+
+    src = inspect.getsource(api_test_runner)
+    assert "这一步的响应里没取到" in src, "提取失败没在当步报出来"
+    assert "availableTopKeys" in src, "没告诉人响应里实际有哪些键"
+    assert "**先往上看**" in src, "下游的变量未解析没指向上游提取"
+
+
+def test_场景变量在所有执行路径都注册裸名():
+    """抽屉和工具说明都写「UI 和接口共用同一份」，接口那边注了 `SV_x` 和裸名 `x`，
+    UI 那边只注 `SV_x` —— CC 写 os.getenv("PROJ_NAME") 拿到空串，**还不报错**，
+    表现成"填了个空名字"。实测踩到了。
+    """
+    import inspect
+
+    from app.mcp.tools import ui_scripts
+    from app.services.scenario_variable_service import add_bare_names
+
+    env = {}
+    add_bare_names(env, {"SV_RUN_ID": "r1", "SV_PROJ_NAME": "p-1"})
+    assert env["SV_PROJ_NAME"] == "p-1"
+    assert env["PROJ_NAME"] == "p-1", "裸名没注册"
+    assert "RUN_ID" not in env, "SV_RUN_ID 是平台自己的，不该占用裸名"
+
+    # 环境变量同名时不许被覆盖：环境说的是"这个环境是什么"，优先级更高
+    env2 = {"PROJ_NAME": "来自环境"}
+    add_bare_names(env2, {"SV_PROJ_NAME": "来自场景变量"})
+    assert env2["PROJ_NAME"] == "来自环境"
+
+    # 每条执行路径都得走这个函数，少一条就又出现"两边不一样"
+    for mod in (ui_scripts,):
+        assert "add_bare_names" in inspect.getsource(mod)
+
+
+def test_执行服务里flaky_service是模块级导入():
+    """函数内 import 只在那一个函数里有效。start_execution 用了却没导入，
+    计划里只要有一条不是 executable 的用例就走到那个分支 → NameError
+    把整个计划执行打死。实测 tb_run_plan 直接崩。
+    """
+    import ast
+    import inspect
+
+    from app.services import execution_service
+
+    tree = ast.parse(inspect.getsource(execution_service))
+    top = {a.asname or a.name.split(".")[-1]
+           for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))
+           for a in n.names}
+    assert "flaky_service" in top, "得是模块级导入，不能藏在某个函数里"
+
+
+def test_建计划和跑计划都要说清哪些不会执行():
+    """进回归的门槛是「该维度 = 可执行」，而这一步只有人能推（CC 不改状态是红线）。
+    不说的话：计划建出来、跑起来、报告里一条 pending —— 三步都在暗示"它会跑"，
+    而它一条都没跑。实测踩到了。
+    """
+    import inspect
+
+    from app.mcp.tools import plans
+
+    create = inspect.getsource(plans.create_plan)
+    assert "blockedCases" in create and "willRun" in create
+    assert "只能由人在平台上确认" in create
+
+    run = inspect.getsource(plans.run_plan)
+    assert "skippedAsManual" in run and "willRun" in run
+
+
+def test_不会执行的判据和执行器保持一致():
+    """这里报"会跑"、执行器却跳过，等于换个地方说谎。两边必须同一套判据。"""
+    import inspect
+
+    from app.mcp.tools.plans import _not_executable
+    from app.services import execution_service
+
+    mine = inspect.getsource(_not_executable)
+    theirs = inspect.getsource(execution_service._will_run_automated)
+    for key in ('"executable"', "script_ref_file", "automation_status"):
+        assert key in mine and key in theirs, f"两边判据对不上：{key}"

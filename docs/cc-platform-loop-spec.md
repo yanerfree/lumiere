@@ -1592,3 +1592,57 @@ Excel 装得下什么决定了按钮做什么 —— 存储结构泄漏到了界
 **纪律：断言行为，不断言源码文本。** 做不到就用 AST（如"函数体内任何对
 `deleted_at` 的赋值"），别用子串。抽纯函数是为了能测行为 ——
 `pick_scope` / `steps_to_text` / `backup_path` 都是为这个抽的。
+
+## 9. CC 闭环体检（2026-08-11，真跑一遍整条链）
+
+用 MCP 从零走一遍「①建用例+回推 → ②执行 → ③查报告 → ④分析」，抓到 4 个 bug，
+**每一个都只有真跑才会暴露**，读代码看不出来。
+
+### 9.1 提取路径不认 `$.` 前缀 —— 而且报错指错地方
+
+`tb_sync_orchestrated_scenario` 的参数说明写的是 `variables_extract:{name:jsonpath}`。
+外部 CC 照着写 `$.data.token` 完全合理 —— 而 `_extract_value` 是 JSONPath-lite，
+只认 `data.token`。后果是**静默**取不到值：
+
+1. 第 1 步断言过了（status 200），记成 pass
+2. 第 2 步报「变量未解析：${TOKEN}」，提示指向"检查环境变量配置"
+3. 根因在第 1 步，而错误在第 2 步 —— CC 会去查环境，查不出来
+
+三处一起修：`_extract_value` 接受 `$.` 前缀（宽进）；提取失败在**当步**就判 fail
+并列出响应实际有哪些顶层键；下游的「变量未解析」改成先让人往上看。
+
+### 9.2 场景变量只在接口侧注册裸名，UI 侧没有
+
+抽屉和工具说明都写「UI 和接口共用同一份」。接口侧注册 `SV_x` **和**裸名 `x`，
+UI 侧只注 `SV_x`。CC 写 `os.getenv("PROJ_NAME")` 拿到空串，**不报错**，
+表现成"填了个空项目名"。抽成 `add_bare_names()`，五条执行路径共用
+（MCP UI 执行 / 页面运行验证 ×2 / 批量执行 / 计划执行 / 执行前预检）。
+
+### 9.3 `tb_run_plan` 直接崩：`name 'flaky_service' is not defined`
+
+`execution_service` 里这个 import 写在 `_will_run_automated` 函数内，
+而 `start_execution` 也用它。**计划里只要有一条不是 executable 的用例**
+就走到那个分支 → NameError 打死整个计划执行。提到模块级。
+另写了一个 AST 扫描，全库 247 个文件确认同类问题只此一处。
+
+### 9.4 计划会"假装要跑"
+
+进回归的门槛是「该维度状态 = 可执行」，而这个状态**只有人能推**
+（CC 不改状态是红线 3）。此前三步都在暗示"它会跑"：
+`tb_create_plan` 说「1 条用例」、`tb_run_plan` 说「totalScenarios: 1」、
+报告里一条 pending —— 实际一条都没跑。
+
+改成两个工具都如实返回 `willRun` / `blockedCases` / `skippedAsManual`，
+并说明卡在哪、该谁去做。判据与 `_will_run_automated` 共用同一套，
+两边不一致等于换个地方说谎。
+
+**这一条不是缺陷，是设计**：人确认才进回归。但工具得说出来。
+体检里模拟人确认（走正式编辑接口改成 executable）之后，
+`willRun: 1` → 计划真跑 → 报告 100%，链路是通的。
+
+### 9.5 顺带发现、未修
+
+`tb_create_case` 的自动拆步骤（`_split_coarse_steps`）会把
+「填写名称，点击确定」拆成两步，**并给拆出来的新步骤填上
+「操作完成，页面状态更新」** —— 这正是入库门禁 `_FUZZY_WORDS` 要拦的模糊词，
+平台自己注进去的。拆步骤本身是对的，填充文案不对。

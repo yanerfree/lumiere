@@ -46,8 +46,11 @@ async def preflight(session: AsyncSession, case_id, env_id, role: str | None = N
     env_vars: dict[str, str] = {}
     token_acquired = False
     try:
-        from app.services.scenario_variable_service import resolve_scenario_variables
-        env_vars.update(await resolve_scenario_variables(session, cid, global_lookup={}))
+        from app.services.scenario_variable_service import (
+            add_bare_names, resolve_scenario_variables,
+        )
+        add_bare_names(env_vars, await resolve_scenario_variables(
+            session, cid, global_lookup={}))
     except Exception:
         pass
     if env_id:
