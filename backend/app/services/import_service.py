@@ -142,9 +142,20 @@ async def _next_case_code(
 
 
 async def import_cases(
-    session: AsyncSession, branch_id: uuid.UUID, cases_data: list[dict]
+    session: AsyncSession, branch_id: uuid.UUID, cases_data: list[dict],
+    sync_delete: bool = False,
 ) -> dict:
     """导入用例主函数。
+
+    `sync_delete` —— 是否把「本次文件里没有、但之前导入过」的用例删掉。
+
+    **默认 False，这是个刻意的默认值。** 这里原来无条件按全量同步走：
+    传一个只含 1 条用例的 Excel，会把该分支所有 source='imported' 的用例
+    软删除、并把 folder_id 清成 NULL（原值不留、恢复不回来）。
+    而界面上按钮只写「导入」，人以为是"再加一批进来"。
+    实测点一次就删掉了 3 条无关用例。
+
+    要全量同步是合理需求，但必须是人**明确选**的，不能是默认。
 
     返回摘要: { "new": N, "updated": M, "removed": K, "skipped": L,
                 "new_modules": X, "new_submodules": Y, "skipped_reasons": [...] }
@@ -275,12 +286,17 @@ async def import_cases(
     all_imported = result.scalars().all()
 
     removed_count = 0
-    now = datetime.now(timezone.utc)
-    for case in all_imported:
-        if case.tea_id and case.tea_id not in imported_tea_ids:
+    # 没勾「同步删除」就只算给人看：告诉他有几条不在文件里，但一条都不动。
+    stale = [c for c in all_imported if c.tea_id and c.tea_id not in imported_tea_ids]
+    if sync_delete:
+        now = datetime.now(timezone.utc)
+        for case in stale:
             case.deleted_at = now
-            case.folder_id = None
+            # folder_id 不再清空 —— 清了就恢复不回原来的目录，
+            # 从回收站还原出来的用例会挂不到树上（"用例还在但看不见"）。
             removed_count += 1
+    else:
+        removed_count = 0
 
     if removed_count > 0:
         await session.flush()
@@ -289,6 +305,10 @@ async def import_cases(
         "new": new_count,
         "updated": updated_count,
         "removed": removed_count,
+        # 没勾同步删除时，把"文件里没有的那几条"如实报出来 ——
+        # 人知道有这回事，才谈得上决定要不要删。
+        "notInFile": len(stale),
+        "notInFileSample": [c.title for c in stale[:5]],
         "skipped": skipped_count,
         "new_modules": total_new_modules,
         "new_submodules": total_new_submodules,

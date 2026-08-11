@@ -426,6 +426,10 @@ export default function CaseManagement() {
   }
 
   // ---- 导入 ----
+  // 同步删除默认关。开着的话，"之前导入过但这次文件里没有"的用例会被删掉 ——
+  // 实测传一个只含 1 条用例的 Excel，删掉了 3 条无关用例，界面上一句提示都没有。
+  const [syncDelete, setSyncDelete] = useState(false)
+
   const handleImportFile = async (file) => {
     if (!globalBranchId) return false
     setImporting(true)
@@ -433,7 +437,7 @@ export default function CaseManagement() {
       const formData = new FormData()
       formData.append('file', file)
       const token = await getValidToken()
-      const res = await fetch(`/api/projects/${projectId}/branches/${globalBranchId}/cases/import`, {
+      const res = await fetch(`/api/projects/${projectId}/branches/${globalBranchId}/cases/import?syncDelete=${syncDelete}`, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
@@ -909,6 +913,16 @@ export default function CaseManagement() {
         width={520}
       >
         {!importResult ? (
+          <>
+          <div style={{ marginBottom: 12, padding: '10px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 10 }}>
+            <Checkbox checked={syncDelete} onChange={e => setSyncDelete(e.target.checked)}>
+              <span style={{ fontSize: 13 }}>同步删除</span>
+            </Checkbox>
+            <div style={{ fontSize: 12, color: '#86909c', marginTop: 4, lineHeight: 1.6 }}>
+              不勾（默认）：只新增和更新，文件里没有的用例原样保留。<br />
+              勾上：把<b>之前导入过、这次文件里没有</b>的用例移到回收站 —— 用于"以这个文件为准"整体覆盖。
+            </div>
+          </div>
           <Upload.Dragger accept=".json,.xlsx" showUploadList={false} beforeUpload={handleImportFile} disabled={importing} style={{ padding: '32px 0' }}>
             {importing ? <Spin tip="正在导入..." /> : (<>
               <p><InboxOutlined style={{ fontSize: 40, color: '#0ea5a0' }} /></p>
@@ -916,19 +930,28 @@ export default function CaseManagement() {
               <p style={{ fontSize: 12, color: '#86909c' }}>支持 .json（TEA 格式）和 .xlsx（Excel 导出格式）</p>
             </>)}
           </Upload.Dragger>
+          </>
         ) : (
-          <div style={{ display: 'flex', gap: 12 }}>
+          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             {[
               { label: '新增', count: importResult.new, color: '#0ea5a0', bg: '#e0f7f6' },
               { label: '更新', count: importResult.updated, color: '#0ea5a0', bg: '#e0f7f6' },
               { label: '移除', count: importResult.removed, color: '#e8453c', bg: '#fff2f0' },
               { label: '跳过', count: importResult.skipped, color: '#86909c', bg: 'rgba(0,0,0,0.03)' },
-            ].map(s => (
+            ].filter(s => s.label !== '移除' || syncDelete).map(s => (
               <div key={s.label} style={{ flex: 1, textAlign: 'center', padding: '16px 0', background: s.bg, borderRadius: 12 }}>
                 <div style={{ fontSize: 28, fontWeight: 700, color: s.color }}>{s.count}</div>
                 <div style={{ fontSize: 12, color: '#86909c' }}>{s.label}</div>
               </div>
             ))}
+            {!syncDelete && importResult.notInFile > 0 && (
+              <div style={{ flexBasis: '100%', fontSize: 12, color: '#86909c', lineHeight: 1.7 }}>
+                另有 <b>{importResult.notInFile}</b> 条之前导入过的用例不在这个文件里，已<b>原样保留</b>
+                {importResult.notInFileSample?.length
+                  ? `（如「${importResult.notInFileSample.slice(0, 2).join('」「')}」）` : ''}
+                。要以文件为准整体覆盖，重新导入时勾上「同步删除」。
+              </div>
+            )}
           </div>
         )}
       </Modal>

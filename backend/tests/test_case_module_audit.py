@@ -575,3 +575,113 @@ def test_前端导出和列表用同一套筛选口径():
     assert "selectedRowKeys.length" in exp, "没有优先导勾选的"
     for k in ("reviewStatus", "lifecycleStatus", "readyFilter"):
         assert k in exp, f"导出漏了 {k}"
+
+
+# ── 导入：破坏性动作不能是默认 ──────────────────────────────────────
+
+@pytest.mark.parametrize("sync_delete,expect_removed", [
+    (False, 0),   # ★ 默认。文件里没有的一条都不许动
+    (True, 2),    # 明确选了才删
+])
+def test_导入默认只增量_不删文件里没有的(sync_delete, expect_removed):
+    """实测点一次「导入」（文件里只有 1 条用例）删掉了 3 条无关用例，
+    还把它们的 folder_id 清成 NULL（原值不留，恢复不回原目录）——
+    界面上按钮只写「导入」，人以为是"再加一批进来"。
+
+    要全量同步是合理需求，但必须由人明确选。这条把默认值钉死。
+    """
+    import inspect
+
+    from app.services import import_service
+
+    sig = inspect.signature(import_service.import_cases).parameters
+    assert "sync_delete" in sig, "没有这个开关"
+    assert sig["sync_delete"].default is False, "破坏性动作不能是默认"
+
+    src = inspect.getsource(import_service.import_cases)
+    assert "if sync_delete:" in src
+    # 删的时候也不许再清 folder_id —— 清了从回收站还原出来会挂不到树上
+    body = src[src.index("if sync_delete:"):]
+    assert "folder_id = None" not in body
+
+
+def test_没删也要如实报告有几条不在文件里():
+    """"什么都没发生"和"有 3 条我没动"是两回事。人得知道有这回事，
+    才谈得上决定要不要开同步删除。"""
+    import inspect
+
+    from app.services import import_service
+
+    src = inspect.getsource(import_service.import_cases)
+    assert '"notInFile"' in src and '"notInFileSample"' in src
+
+
+def test_接口层默认也是不删():
+    import inspect
+
+    from app.api import cases as cases_api
+
+    p = inspect.signature(cases_api.import_cases).parameters
+    assert "sync_delete" in p
+    assert "sync_delete=sync_delete" in inspect.getsource(cases_api.import_cases)
+
+
+# ── 导出/导入回环不许丢步骤预期 ─────────────────────────────────────
+
+@pytest.mark.parametrize("steps", [
+    [{"seq": 1, "action": "点新建", "expected": "弹出对话框"},
+     {"seq": 2, "action": "提交", "expected": "提示成功"}],
+    [{"seq": 1, "action": "只有动作"}],
+    [{"seq": 1, "action": "混着来", "expected": "有预期"}, {"seq": 2, "action": "没预期"}],
+    [],
+])
+def test_每步预期原样回环(steps):
+    """**测行为，不测源码字符串。**
+
+    上一版断言的是「导出函数的源码里出现了 ' → '」—— 埋雷把格式化改回只写
+    action，测试照样绿，因为我自己写的注释里就有这个分隔符。
+    这轮第二次踩"注释满足断言"了。
+
+    这里直接把编码-解码跑一遍，比对进出是否一致。
+    """
+    from app.api.cases import steps_to_text, text_to_steps
+
+    assert text_to_steps(steps_to_text(steps)) == steps
+
+
+def test_只写动作就会丢预期_这是埋雷要抓的():
+    """反向确认上面那条真的有效：换成只写 action 的旧写法，回环必然对不上。"""
+    from app.api.cases import text_to_steps
+
+    old_style = "1. 点新建\n2. 提交"
+    got = text_to_steps(old_style)
+    assert all("expected" not in s for s in got)
+    assert got != [{"seq": 1, "action": "点新建", "expected": "弹出对话框"},
+                   {"seq": 2, "action": "提交", "expected": "提示成功"}]
+
+
+def test_回环解析的正反例():
+    """真跑一遍解析：带箭头的要解出 expected，不带的只有 action。"""
+    import io
+
+    from openpyxl import Workbook
+
+    from app.api.cases import _parse_excel_to_cases
+
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["用例ID", "标题", "模块", "测试步骤", "预期结果"])
+    ws.append(["TC-1", "带预期", "M", "1. 点新建 → 弹出对话框\n2. 提交 → 提示成功", "整体预期"])
+    ws.append(["TC-2", "无预期", "M", "1. 点新建\n2. 提交", "整体预期"])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    got = {c["title"]: c["steps"] for c in _parse_excel_to_cases(buf.getvalue())}
+    assert got["带预期"] == [
+        {"seq": 1, "action": "点新建", "expected": "弹出对话框"},
+        {"seq": 2, "action": "提交", "expected": "提示成功"},
+    ], got["带预期"]
+    assert got["无预期"] == [
+        {"seq": 1, "action": "点新建"},
+        {"seq": 2, "action": "提交"},
+    ], got["无预期"]

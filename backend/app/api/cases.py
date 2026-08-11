@@ -25,10 +25,16 @@ async def import_cases(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     file: UploadFile = File(...),
+    sync_delete: bool = Query(default=False, alias="syncDelete"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    """导入用例文件（支持 .json 和 .xlsx 格式）"""
+    """导入用例文件（支持 .json 和 .xlsx 格式）。
+
+    默认**只增量**（新增 + 更新）。`syncDelete=true` 才会把
+    「之前导入过、这次文件里没有」的用例删掉 —— 那是个破坏性动作，
+    必须由人明确选，不能是默认。
+    """
     filename = file.filename or ""
     if not (filename.endswith(".json") or filename.endswith(".xlsx")):
         raise AppError(code="INVALID_FILE", message="仅接受 .json 或 .xlsx 文件", status_code=400)
@@ -53,9 +59,47 @@ async def import_cases(
     else:
         cases_list = _parse_excel_to_cases(content)
 
-    summary = await import_service.import_cases(session, branch_id, cases_list)
+    summary = await import_service.import_cases(
+        session, branch_id, cases_list, sync_delete=sync_delete)
     await write_audit_log(session, action="import", target_type="case", changes=summary)
     return {"data": summary}
+
+
+# 导出/导入两头共用的步骤编解码。抽成一对纯函数，是为了能直接做回环测试 ——
+# 光断言"源码里出现了分隔符"没用：写在注释里也算数，埋雷时不会红。
+STEP_SEP = " → "
+
+
+def steps_to_text(steps: list) -> str:
+    """`[{action, expected}]` → `1. 动作 → 预期`（没有预期就只写动作）。"""
+    out = []
+    for i, st in enumerate(steps or []):
+        if not isinstance(st, dict):
+            out.append(f"{i + 1}. {st}")
+            continue
+        line = f"{i + 1}. {st.get('action', '')}"
+        exp = (st.get("expected") or "").strip()
+        out.append(f"{line}{STEP_SEP}{exp}" if exp else line)
+    return "\n".join(out)
+
+
+def text_to_steps(text: str) -> list[dict]:
+    """上面那个的逆运算。只导 action 的话，导出→导入一圈每步预期就全丢了，
+    而人看 Excel 看不出丢了东西。"""
+    import re
+
+    steps = []
+    for seq, line in enumerate((text or "").split("\n"), 1):
+        line = line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^\d+\.\s*", "", line)
+        action, sep, expected = line.partition(STEP_SEP)
+        step = {"seq": seq, "action": action.strip()}
+        if sep and expected.strip():
+            step["expected"] = expected.strip()
+        steps.append(step)
+    return steps
 
 
 def _parse_excel_to_cases(content: bytes) -> list[dict]:
@@ -102,15 +146,7 @@ def _parse_excel_to_cases(content: bytes) -> list[dict]:
         if script_func:
             script_ref["func"] = script_func
 
-        steps_text = get("测试步骤")
-        steps = []
-        if steps_text:
-            for line in steps_text.split("\n"):
-                line = line.strip()
-                if line:
-                    import re
-                    line = re.sub(r"^\d+\.\s*", "", line)
-                    steps.append({"action": line})
+        steps = text_to_steps(get("测试步骤"))
 
         cases.append({
             "tea_id": tea_id,
@@ -291,9 +327,7 @@ async def export_cases_excel(
     status_map = {"automated": "已自动化", "pending": "待自动化", "script_removed": "脚本已移除", "archived": "已归档"}
 
     for row_idx, c in enumerate(cases, 2):
-        steps_text = ""
-        if c.steps:
-            steps_text = "\n".join(f"{i+1}. {s.get('action', s) if isinstance(s, dict) else s}" for i, s in enumerate(c.steps))
+        steps_text = steps_to_text(c.steps)
 
         module_name, sub_module_name = get_folder_names(c.folder_id)
 
