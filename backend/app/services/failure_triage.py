@@ -98,7 +98,8 @@ def _parse_dt(v: Any) -> datetime | None:
         return None
 
 
-def _tail_5xx(captured: list[dict] | None, base_url: str | None = None) -> list[dict]:
+def _tail_5xx(captured: list[dict] | None, base_url: str | None = None,
+              failed_at=None) -> list[dict]:
     """失败窗口内、同域的 5xx。
 
     两道限制缺一不可：
@@ -106,6 +107,11 @@ def _tail_5xx(captured: list[dict] | None, base_url: str | None = None) -> list[
     - **窗口**：一次登录+CRUD 抓 70 多条，任何位置的一个 5xx 都能让规则误判成
       「系统挂了」，而真实失败可能只是选择器过期。这正是「见 5xx 就判 system_bug」
       那类规则拿高分却在真实场景里全错的原因。
+
+    窗口锚在**失败时刻**（failed_at），不是"最后一条抓包"。两者能差很远：
+    页面早就静默了、定位器又干等 10 秒才超时 —— 这时候按最后一条抓包算，
+    十几秒前一个无关的 5xx 还在窗口内，就会把"选择器过期"判成"系统挂了"。
+    拿不到 failed_at 才退回用最后一条抓包（老数据没有这个时间）。
     """
     if not captured:
         return []
@@ -118,8 +124,11 @@ def _tail_5xx(captured: list[dict] | None, base_url: str | None = None) -> list[
                 hosts[h] = hosts.get(h, 0) + 1
         target_host = max(hosts, key=hosts.get) if hosts else ""
 
-    times = [t for t in (_parse_dt(r.get("startedAt")) for r in captured) if t]
-    cutoff = (max(times) - timedelta(seconds=FAILURE_WINDOW_SECONDS)) if times else None
+    anchor = failed_at
+    if anchor is None:
+        times = [t for t in (_parse_dt(r.get("startedAt")) for r in captured) if t]
+        anchor = max(times) if times else None
+    cutoff = (anchor - timedelta(seconds=FAILURE_WINDOW_SECONDS)) if anchor else None
 
     hits = []
     for r in captured:
@@ -142,6 +151,7 @@ def classify(
     stdout: str | None = None,
     captured_requests: list[dict] | None = None,
     base_url: str | None = None,
+    failed_at=None,
 ) -> dict:
     """返回 {phenomenon, reason, evidence}。
 
@@ -152,7 +162,7 @@ def classify(
         return {"phenomenon": None, "reason": None, "evidence": {}}
 
     text = f"{error_summary or ''}\n{stdout or ''}"
-    fivexx = _tail_5xx(captured_requests, base_url)
+    fivexx = _tail_5xx(captured_requests, base_url, failed_at)
     evidence: dict = {}
     if fivexx:
         evidence["fiveXX"] = [

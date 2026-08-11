@@ -68,7 +68,9 @@ async def _execute(
 ) -> dict:
     """执行核心逻辑。"""
     from app.engine.executor import execute_single_case
-    from app.engine.tasks.adhoc_execution import _has_new_style_script, _run_new_style_script
+    from app.engine.tasks.adhoc_execution import (
+        _has_new_style_script, _run_new_style_script, _script_fk,
+    )
     from app.engine.sandbox import cleanup_sandbox, create_sandbox
     from app.services import script_run_service
     from app.services.environment_service import get_merged_variables
@@ -267,7 +269,10 @@ async def _execute(
                 await script_run_service.record_run(
                     session,
                     case_id=case.id,
-                    script_id=new_script.id if new_script else None,
+                    # script_runs.script_id 是 scripts 表的外键。可执行产物
+                    # 也可能是**编排接口场景**（api_test_scenarios），那个 id
+                    # 塞进来会直接撞外键、把整次执行打死 —— 只有真脚本才传。
+                    script_id=_script_fk(new_script),
                     script_type="api" if plan.test_type == "api" else "ui",
                     result=case_result,
                     executed_by=user_id,

@@ -49,6 +49,26 @@ async def list_projects(
     }
 
 
+@router.get("/{project_id}")
+async def get_project(
+    project_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """单个项目详情。
+
+    这条路由此前是缺的 —— 同一路径上 PUT 和 DELETE 都在，唯独没有 GET，
+    于是 `GET /api/projects/{id}` 返回 **405**（路径匹配到了、方法不允许）。
+    写接口测试的人会理所当然地假设它存在（实测第一次就撞上），
+    而 405 比 404 更难懂：既不是"没这个东西"也不是"没权限"。
+    服务层的 get_project 一直都有，缺的只是这一层。
+    """
+    project = await project_service.get_project(session, project_id)
+    return {
+        "data": ProjectResponse.model_validate(project, from_attributes=True).model_dump(by_alias=True)
+    }
+
+
 @router.put("/{project_id}")
 async def update_project(
     project_id: uuid.UUID,

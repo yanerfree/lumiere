@@ -119,7 +119,7 @@ async def create_plan(
     # 进回归的门槛是「该维度状态 = 可执行」，而这个状态**只有人能推**
     # （CC 按红线不改状态）。不说清楚的话，计划建出来、跑起来、报告里
     # 一条 pending —— 三步都在暗示"它会跑"，而它一条都没跑。实测踩到了。
-    blocked = _not_executable(cases, test_type)
+    blocked = await _not_executable(session, cases, test_type)
     if blocked:
         note += (
             f" ⚠ 其中 {len(blocked)} 条**不会执行**："
@@ -146,18 +146,27 @@ _DIM_LABEL = {
 }
 
 
-def _not_executable(cases, test_type: str) -> list[tuple[str, str]]:
-    """挑出「进不了回归」的用例：该维度状态不是 executable，也没有旧式脚本引用。
+async def _not_executable(session, cases, test_type: str) -> list[tuple[str, str]]:
+    """挑出「进不了回归」的用例，并说清卡在哪一环。
 
-    判据和 execution_service._will_run_automated 保持一致 —— 两边不一致的话，
-    这里报"会跑"而执行器跳过，等于换个地方说谎。
+    判据**直接复用执行器那两个函数**，不自己再写一套 —— 上一版就是各写各的：
+    这里只看状态说"1 条会跑"，执行器还要求有可执行产物，结果跑起来变成
+    "0 条会跑、2 条记成待人工录入"。两个工具当场自相矛盾。
     """
+    from app.engine.tasks.adhoc_execution import _has_new_style_script
+
     out = []
     for c in cases:
         dim = c.api_status if test_type == "api" else c.ui_status
         legacy = bool(c.script_ref_file) and c.automation_status == "automated"
-        if dim != "executable" and not legacy:
+        if legacy:
+            continue
+        if dim != "executable":
             out.append((c.case_code, _DIM_LABEL.get(dim, dim)))
+            continue
+        if await _has_new_style_script(session, c.id, test_type) is None:
+            kind = "接口场景或接口脚本" if test_type == "api" else "UI 脚本"
+            out.append((c.case_code, f"状态是可执行，但没有{kind}"))
     return out
 
 

@@ -187,6 +187,7 @@ async def create_case(
     if steps:
         # 自动拆分粒度过粗的步骤（"一步一动作"规范）
         steps = _split_coarse_steps(steps)
+        warnings = list(warnings) + _split_warnings(steps)
         for i, s in enumerate(steps):
             if not s.get("seq"):
                 s["seq"] = i + 1
@@ -315,20 +316,41 @@ def _split_coarse_steps(steps: list[dict]) -> list[dict]:
             result.append(s)
             continue
 
-        # 生成拆分后的步骤
+        # 生成拆分后的步骤。
+        #
+        # 拆出来的中间步骤**留空预期，不编**。原先填的是「操作完成，页面状态更新」——
+        # 那正是入库门禁 _FUZZY_WORDS 要拦的模糊词，平台自己注进去的：
+        # 人写这句会被拒，平台写就通过。而且它看起来像填了，实际什么都没说，
+        # 比空着更糟 —— 空着至少一眼看得出这里缺东西。
         for j, part in enumerate(parts):
-            new_step = {
+            result.append({
                 "seq": len(result) + 1,
                 "action": part,
-                "expected": expected if j == len(parts) - 1 else f"操作完成，页面状态更新",
-            }
-            result.append(new_step)
+                "expected": expected if j == len(parts) - 1 else "",
+                "_autoSplit": j != len(parts) - 1,
+            })
 
     # 重新编号
     for i, s in enumerate(result):
         s["seq"] = i + 1
 
     return result
+
+
+def _split_warnings(steps: list[dict]) -> list[str]:
+    """把"哪几步是自动拆出来的、预期还空着"说出来，并清掉内部标记。
+
+    不说的话，回推方以为自己写的步骤原样入库了，等到有人看用例才发现
+    中间几步没有预期 —— 而那时候已经不知道是谁留的空。
+    """
+    blanks = [s["seq"] for s in steps if s.pop("_autoSplit", False)]
+    if not blanks:
+        return []
+    return [
+        f"第 {'、'.join(map(str, blanks))} 步是平台按「一步一动作」自动拆出来的，"
+        "预期结果留空了 —— 拆得对不对、每步该验什么，需要你补上再回推一次。"
+        "（平台不替你编预期：编出来的那句话会看起来像填了，实际什么都没说。）"
+    ]
 
 
 async def get_folder_tree(session: AsyncSession, branch_id: str) -> list[dict]:

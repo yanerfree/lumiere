@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from app.config import settings
 from app.engine.task_status import set_task_status
+from app.models.api_test import ApiTestScenario, ApiTestStep
 from app.models.case import Case
 from app.models.environment import EnvironmentVariable, GlobalVariable
 from app.models.project import Branch, Project
@@ -28,14 +29,111 @@ _EXECUTION_TIMEOUT = 600
 
 
 async def _has_new_style_script(session: AsyncSession, case_id, test_type: str):
-    """返回该用例指定类型(ui/api)的活跃脚本(scripts 表)，无则 None。"""
+    """该用例这一维有没有**可执行的东西**。有就返回它，没有返回 None。
+
+    接口这一维有两种载体，此前只认第一种：
+    1. `scripts` 表里 script_type='api' 的 pytest 脚本
+    2. `api_test_scenarios` 里绑了这条用例的**编排接口场景** —— MCP
+       `tb_sync_orchestrated_scenario` 回推的就是这个
+
+    实测：全平台 8 条有接口场景的用例，**0 条**有 api 脚本。只认第一种的话，
+    CC 这条链的接口产物一条都进不了计划回归 —— 只能用 tb_run_api_test 即席跑，
+    不进计划通过率。而建计划时还会说"这条会执行"，跑起来又变成"记成待人工录入"。
+    """
     from app.services import script_service
     stype = "api" if test_type == "api" else "ui"
-    return await script_service.get_active_script(session, case_id, stype)
+    script = await script_service.get_active_script(session, case_id, stype)
+    if script is not None:
+        return script
+    if stype == "api":
+        sc = (await session.execute(
+            select(ApiTestScenario).where(ApiTestScenario.source_case_id == case_id)
+            .order_by(ApiTestScenario.created_at.desc()).limit(1)
+        )).scalar_one_or_none()
+        return sc
+    return None
+
+
+def _script_fk(asset):
+    """给 script_runs.script_id 用的值。
+
+    这一列是 `scripts` 表的外键。可执行产物有两种：pytest 脚本（有这个 id）、
+    编排接口场景（`api_test_scenarios`，**不是**同一张表）。把后者的 id 塞进来
+    会撞外键，而错误发生在记账阶段 —— 执行明明成功了，整次计划却被打死。
+    """
+    return None if (asset is None or isinstance(asset, ApiTestScenario)) else asset.id
+
+
+async def _run_orchestrated_scenario(session: AsyncSession, scenario, env_id: str) -> dict:
+    """跑一条编排接口场景，并把结果转成执行器那套 result 形状。
+
+    调用方（计划执行 / 批量执行）只认 {status, duration_ms, error_summary, stdout}，
+    所以这里负责翻译；轨迹用和用例「执行历史」同一套中文写法，别再造第二种。
+    """
+    from app.services import api_test_runner, environment_service
+
+    base_env: dict = {}
+    if env_id:
+        try:
+            merged = await environment_service.get_merged_variables(session, uuid.UUID(env_id))
+            base_env = {i["key"]: i["value"] for i in merged}
+        except Exception:  # noqa: BLE001
+            pass
+
+    result = None
+    # 全部用关键字传 —— run_batch 的前两个位置参数是 (scenario_ids, session)，
+    # 位置传很容易反过来，反了之后报错在 run_batch 内部，看不出是调用方传错。
+    #
+    # user_id 传 None 是**故意的**：run_batch 只在 user_id 有值时才另外建一份
+    # api_test 报告。这里是计划回归，结果要记进计划自己那份报告，
+    # 再开一份会让同一次执行在报告页出现两条。
+    async for ev in api_test_runner.run_batch(
+        scenario_ids=[scenario.id],
+        session=session,
+        user_id=None,
+        project_id=scenario.project_id,
+        base_env=base_env,
+        branch_id=scenario.branch_id,
+    ):
+        if ev.type == "scenario_done":
+            result = ev.data
+    if result is None:
+        return {"status": "error", "duration_ms": 0,
+                "error_summary": "接口场景没有产出结果（可能一步都没执行）", "stdout": ""}
+
+    steps = (await session.execute(
+        select(ApiTestStep).where(ApiTestStep.scenario_id == scenario.id)
+        .order_by(ApiTestStep.sort_order)
+    )).scalars().all()
+    lines = [f"场景：{scenario.title}", ""]
+    first_err = None
+    total_ms = 0
+    for i, st in enumerate(steps, 1):
+        resp = st.last_response or {}
+        ms = resp.get("duration", 0) or 0
+        total_ms += ms
+        mark = {"pass": "✅", "fail": "❌", "skip": "⏭"}.get(st.last_status, "•")
+        code = resp.get("statusCode")
+        # 用**实际发出去**的 URL，不是步骤定义里的模板 —— 打印 ${BASE_URL}
+        # 等于让人自己去脑补解析结果，出问题时最想看的恰恰是真实地址。
+        url = ((resp.get("request") or {}).get("url")) or st.url
+        lines.append(f"{mark} {i}. {st.name}  [{st.method} {url}"
+                     + (f" → {code}" if code is not None else "") + f"]  {ms}ms")
+        if st.last_status == "fail" and first_err is None:
+            first_err = f"步骤「{st.name}」：{resp.get('error') or '断言不通过'}"
+    return {
+        "status": "passed" if result.get("passed") else "failed",
+        "duration_ms": total_ms,
+        "error_summary": first_err,
+        "stdout": "\n".join(lines),
+    }
 
 
 async def _run_new_style_script(session: AsyncSession, case, test_type: str, base_env_vars: dict, env_id: str, script):
-    """执行 AI 生成的活跃脚本(scripts 表)——复用单用例运行那套：注入场景变量 SV_* + 鉴权 TEST_TOKEN，再跑。"""
+    """执行该用例这一维的可执行产物：pytest 脚本，或编排接口场景。"""
+    if isinstance(script, ApiTestScenario):
+        return await _run_orchestrated_scenario(session, script, env_id)
+
     import re as _re
     import shutil
     import tempfile
@@ -259,7 +357,7 @@ async def _execute_adhoc(
             await script_run_service.record_run(
                 session,
                 case_id=case.id,
-                script_id=new_scripts[case.id].id if case.id in new_scripts else None,
+                script_id=_script_fk(new_scripts.get(case.id)),
                 script_type="api" if test_type == "api" else "ui",
                 result=case_result,
                 executed_by=user_id,

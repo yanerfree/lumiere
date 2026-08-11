@@ -887,3 +887,111 @@ def test_不会执行的判据和执行器保持一致():
     theirs = inspect.getsource(execution_service._will_run_automated)
     for key in ('"executable"', "script_ref_file", "automation_status"):
         assert key in mine and key in theirs, f"两边判据对不上：{key}"
+
+
+# ── 铺开体检抓到的：接口场景进不了回归 ──────────────────────────────
+
+@pytest.mark.asyncio
+async def test_接口场景也算可执行产物():
+    """回归执行器此前只认 `scripts` 表的 api 脚本，而 MCP
+    `tb_sync_orchestrated_scenario` 回推的是 `api_test_scenarios`。
+
+    实测：全平台 8 条有接口场景的用例，**0 条**有 api 脚本 ——
+    CC 这条链的接口产物一条都进不了计划回归，只能即席跑、不进通过率。
+    而建计划时还说"这条会执行"。
+    """
+    import inspect
+
+    from app.engine.tasks import adhoc_execution
+
+    src = inspect.getsource(adhoc_execution._has_new_style_script)
+    assert "ApiTestScenario" in src, "只认 scripts 表的话，回推的接口场景永远进不了回归"
+    assert "source_case_id" in src
+
+
+def test_接口场景的id不许塞进脚本外键():
+    """script_runs.script_id 是 scripts 表的外键。把 api_test_scenarios 的 id
+    塞进来会撞外键 —— 而且是在**记账**阶段撞：执行明明成功了，整次计划被打死。
+    """
+    from app.engine.tasks.adhoc_execution import _script_fk
+    from app.models.api_test import ApiTestScenario
+
+    class _S:
+        id = "script-id"
+
+    # 必须给它一个 id —— 不给的话两种实现都返回 None，埋雷不会红（第一版就这样）
+    sc = ApiTestScenario()
+    sc.id = "scenario-id"
+    assert _script_fk(sc) is None, "接口场景的 id 不该塞进 scripts 外键"
+    assert _script_fk(None) is None
+    assert _script_fk(_S()) == "script-id", "真脚本还是要记上"
+
+
+def test_建计划的判据直接复用执行器():
+    """上一版两边各写各的：这里只看状态说「1 条会跑」，执行器还要求有可执行产物，
+    跑起来变成「0 条会跑」。两个工具当场自相矛盾。"""
+    import inspect
+
+    from app.mcp.tools import plans
+
+    src = inspect.getsource(plans._not_executable)
+    assert "_has_new_style_script" in src, "没复用执行器的判据，迟早又不一致"
+
+
+def test_轨迹里印实际URL不是模板():
+    """打印 ${BASE_URL} 等于让人自己脑补解析结果，而出问题时最想看的就是真实地址。"""
+    import inspect
+
+    from app.engine.tasks import adhoc_execution
+
+    src = inspect.getsource(adhoc_execution._run_orchestrated_scenario)
+    assert '(resp.get("request") or {}).get("url")' in src
+
+
+def test_合成uuid不算写死资源id():
+    """负向测试要一个肯定不存在的 id（全 0/全 f）。对这种写法报警，
+    等于逼人改掉正当的负向用例，或者学会忽略告警 —— 后者更糟。"""
+    from app.mcp.tools.sync import _is_synthetic_uuid
+
+    for v in ("00000000-0000-0000-0000-000000000000",
+              "00000000-0000-0000-0000-0000000000ff",
+              "ffffffff-ffff-ffff-ffff-ffffffffffff"):
+        assert _is_synthetic_uuid(v), v
+    for v in ("9912c051-3a5c-4163-ac06-2a442f69a337",
+              "b1dca224-ae93-4f42-bd9a-02370cb37583"):
+        assert not _is_synthetic_uuid(v), v
+
+
+def test_项目详情有GET路由():
+    """同一路径上 PUT / DELETE 都在，唯独没有 GET —— `GET /api/projects/{id}`
+    返回 405。写接口测试的人会理所当然假设它存在（实测第一次就撞上），
+    而 405 比 404 更难懂。服务层的 get_project 一直都有，缺的只是这一层。
+    """
+    from fastapi.routing import APIRoute
+
+    from app.main import app
+
+    got = {m for r in app.routes if isinstance(r, APIRoute)
+           and r.path == "/api/projects/{project_id}" for m in r.methods}
+    assert {"GET", "PUT", "DELETE"} <= got, f"实际只有 {got}"
+
+
+def test_自动拆步骤不编预期():
+    """填「操作完成，页面状态更新」正是入库门禁要拦的模糊词，平台自己注进去的：
+    人写这句会被拒，平台写就通过。而且看起来像填了、实际什么都没说，比空着更糟。
+    """
+    from app.mcp.tools.test_cases import (
+        _FUZZY_WORDS, _split_coarse_steps, _split_warnings,
+    )
+
+    out = _split_coarse_steps([
+        {"seq": 1, "action": "填入名称，点击确定", "expected": "出现「创建成功」提示"},
+    ])
+    assert len(out) == 2
+    assert out[0]["expected"] == "", "中间步骤不该被编一个预期"
+    assert out[1]["expected"] == "出现「创建成功」提示", "最后一步保留原预期"
+    for s in out:
+        for w in _FUZZY_WORDS:
+            assert w not in (s["expected"] or ""), f"平台自己注了模糊词 {w}"
+    # 而且要告诉回推方哪几步需要补
+    assert _split_warnings(out), "留空了却不说，等于偷偷改了人的输入"

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -94,6 +95,9 @@ async def record_run(
                     stdout=result.get("stdout"),
                     captured_requests=result.get("captured_requests"),
                     base_url=base_url,
+                    # 记账就发生在执行刚结束时，所以"现在"就是失败时刻。
+                    # 窗口锚在它身上，别锚在最后一条抓包上。
+                    failed_at=datetime.now(timezone.utc),
                 )["phenomenon"]
             except Exception:  # noqa: BLE001
                 logger.exception("失败分类异常（不影响记账）")

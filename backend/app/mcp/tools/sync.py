@@ -66,6 +66,20 @@ _STRUCT_ENUM = {
 }
 
 
+
+def _is_synthetic_uuid(val: str) -> bool:
+    """这个 UUID 是不是"摆明编出来的"。
+
+    负向测试要一个肯定不存在的 id：全 0、全 f、nil UUID、或者十六进制部分
+    只用了一两种字符。这类值不指向任何真实资源，换环境也不会挂 ——
+    不该按"环境里已存在的资源 id"来报警。
+    """
+    hexpart = val.strip().replace("-", "").lower()
+    if len(hexpart) != 32:
+        return False
+    # 只由 0 / f / 少数几个字符拼成 —— 真实 UUID 不长这样
+    return len(set(hexpart)) <= 3
+
 def _loads(v: Any) -> Any:
     """MCP 客户端有时把 JSON 字段序列化成字符串，这里尽量还原成对象。"""
     if isinstance(v, str):
@@ -608,7 +622,13 @@ async def upsert_scenario_variables(
 
         val = str(item.get("value_template") or "")
         # 反模式①：literal + 真实 UUID —— 那是"环境里已存在的资源 id"，换环境/资源被删就全挂
-        if kind == "literal" and _UUID_RE.fullmatch(val.strip()):
+        #
+        # 但**摆明是编出来的 UUID 不算**：全零、全 f、nil UUID —— 那是负向测试的
+        # 常规写法（"查一个肯定不存在的 id，应该 404 而不是 500"）。
+        # 对这种写法报警，等于逼人把正当的负向用例改掉，或者干脆学会忽略告警 ——
+        # 后者更糟：真的反模式也就一起被忽略了。
+        if kind == "literal" and _UUID_RE.fullmatch(val.strip()) \
+                and not _is_synthetic_uuid(val):
             antipatterns.append({
                 "name": name, "issue": "literal_uuid",
                 "hint": f"{name} 存的是一个真实资源 UUID。要么用 tb_upsert_automation_resource "
