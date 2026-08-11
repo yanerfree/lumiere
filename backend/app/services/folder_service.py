@@ -21,7 +21,9 @@ async def list_folder_tree(session: AsyncSession, branch_id: uuid.UUID) -> list[
     )
     folders = result.scalars().all()
 
-    # 统计每个 folder 下的用例数
+    # 每个 folder 的**直属**用例数。父目录的合计由下面的 _sum_counts 递归汇总，
+    # 别在这里再累加一遍 —— 那会把子目录的数算两次
+    # （实测「项目管理」1 + 子目录 11 会显示成 23）。
     count_result = await session.execute(
         select(Case.folder_id, func.count(Case.id))
         .where(Case.branch_id == branch_id, Case.deleted_at.is_(None))

@@ -216,17 +216,42 @@ async def export_cases_excel(
     keyword: str | None = Query(default=None),
     automation_status: str | None = Query(default=None, alias="automationStatus"),
     folder_id: uuid.UUID | None = Query(default=None, alias="folderId"),
+    # 页面上的筛选此前一个都没接：筛了「待审核」点导出，导出来的还是全部。
+    # 人拿到文件不会发现，因为文件里看不出它本该是 41 条。
+    lifecycle_status: str | None = Query(default=None, alias="lifecycleStatus"),
+    review_status: str | None = Query(default=None, alias="reviewStatus"),
+    ui_status: str | None = Query(default=None, alias="uiStatus"),
+    api_status: str | None = Query(default=None, alias="apiStatus"),
+    case_ids: str | None = Query(default=None, alias="caseIds"),
 ):
-    """导出用例为 Excel"""
+    """导出用例为 Excel。
+
+    导的是**手动步骤用例**——接口场景和 UI 脚本的正文不在里面
+    （它们分别在 api_test_scenarios / scripts，格式也不是表格能装的）。
+
+    范围：勾了行就只导勾的；没勾就按页面当前的筛选导。
+    """
     import io
     from fastapi.responses import StreamingResponse
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill
 
-    cases, _ = await case_service.list_cases(
-        session, branch_id, page=1, page_size=10000,
-        keyword=keyword, automation_status=automation_status, folder_id=folder_id,
-    )
+    if case_ids:
+        picked = [uuid.UUID(x) for x in case_ids.split(",") if x.strip()]
+        from sqlalchemy import select as _select
+
+        from app.models.case import Case as _Case
+        cases = list((await session.execute(
+            _select(_Case).where(_Case.id.in_(picked), _Case.deleted_at.is_(None))
+            .order_by(_Case.case_code)
+        )).scalars().all())
+    else:
+        cases, _ = await case_service.list_cases(
+            session, branch_id, page=1, page_size=10000,
+            keyword=keyword, automation_status=automation_status, folder_id=folder_id,
+            lifecycle_status=lifecycle_status, review_status=review_status,
+            ui_status=ui_status, api_status=api_status,
+        )
 
     # 加载目录映射: folder_id → (模块名, 子模块名)
     from sqlalchemy import select

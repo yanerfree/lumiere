@@ -368,10 +368,19 @@ async def execute_quality_review(
     # Step 1: 收集用例
     yield SSEEvent(type="step_start", data={"step": 1, "title": "收集用例和接口"})
 
-    cases_result = await test_cases.list_cases(
-        session, str(branch_id), page_size=200, folder_id=folder_id,
-    )
-    cases = cases_result["cases"]
+    # list_cases 内部把 page_size 压到 100（min(page_size, 100)），传 200 也只回 100。
+    # 报告顶上却按拿到的条数报「共 N 条」—— 105 条的分支上会显示 100，
+    # 那 5 条既没参与评审也没人知道被漏了。分页取完。
+    cases = []
+    page = 1
+    while True:
+        chunk = (await test_cases.list_cases(
+            session, str(branch_id), page=page, page_size=100, folder_id=folder_id,
+        ))["cases"]
+        cases.extend(chunk)
+        if len(chunk) < 100 or len(cases) >= 2000:
+            break
+        page += 1
     if not cases:
         yield SSEEvent(type="error", data={"message": "该模块下没有用例，无法评审"})
         return
@@ -392,9 +401,33 @@ async def execute_quality_review(
     # Step 2: LLM 评审
     yield SSEEvent(type="step_start", data={"step": 2, "title": "AI 四维度评审"})
 
+    # 统计由**平台**算，不许 LLM 自己数。
+    #
+    # 实测它编得有鼻子有眼：报告说「105 条里 50 条没有前置条件、50 条没有预期结果、
+    # P0 只有 3 条」，库里真实是 6 / 5 / 11。原因很直白 —— 送进去的只有
+    # 「[优先级] 标题 (N步)」，它**从没看见过** preconditions 和 expected_result 这两个字段，
+    # 于是按"看起来合理"编了一组整数。人照这个报告去改用例会被带偏，
+    # 比不给报告更糟。
+    SAMPLE = 50
+    facts = {
+        "totalCases": len(cases),
+        "sampledCases": min(SAMPLE, len(cases)),
+        "priorityDist": priority_dist,
+        "casesWithoutPrecondition": sum(
+            1 for c in cases if not (c.get("preconditions") or "").strip()),
+        "casesWithoutExpectedResult": sum(
+            1 for c in cases if not (c.get("expectedResult") or c.get("expected_result") or "").strip()),
+        "avgStepsPerCase": round(
+            sum(len(c.get("steps") or []) for c in cases) / max(len(cases), 1), 1),
+        "apisTotal": len(endpoints),
+    }
+
     cases_text = "\n".join(
-        f"- [{c['priority']}] {c['title']} (步骤{len(c.get('steps', []))}步)"
-        for c in cases[:50]
+        # 把它要判断的东西真的给它看：没有前置条件/预期结果的，明写出来。
+        f"- [{c['priority']}] {c['title']}（{len(c.get('steps', []))} 步"
+        f"{'，无前置条件' if not (c.get('preconditions') or '').strip() else ''}"
+        f"{'，无预期结果' if not (c.get('expectedResult') or c.get('expected_result') or '').strip() else ''}）"
+        for c in cases[:SAMPLE]
     )
     api_text = "\n".join(f"- {ep.get('method','GET')} {ep.get('url','')} ({ep.get('name','')})" for ep in endpoints[:20])
 
@@ -414,11 +447,18 @@ async def execute_quality_review(
     {"dimension": "completeness", "severity": "high", "case": "用例标题", "description": "具体问题"},
   ],
   "suggestions": ["建议1", "建议2"],
-  "coverage": {"apisCovered": 3, "apisTotal": 5, "missingApis": ["GET /api/xxx"]}
+  "coverage": {"apisCovered": 3, "missingApis": ["GET /api/xxx"]}
 }
 
-评分标准：90-100 优秀 / 75-89 良好 / 60-74 一般 / <60 不合格"""},
-        {"role": "user", "content": f"""## 待评审用例（{len(cases)} 条）
+评分标准：90-100 优秀 / 75-89 良好 / 60-74 一般 / <60 不合格
+
+**不要输出任何统计数字**（总数、各优先级条数、缺前置条件的条数等）——
+那些由平台查库给出，见下方「事实」。你自己数会数错，而人会当真。
+missingApis 只能从下方真实给出的 API 列表里挑；列表为空就返回空数组，不要凭印象编。"""},
+        {"role": "user", "content": f"""## 事实（平台查库得出，以此为准，不要另行估算）
+{json.dumps(facts, ensure_ascii=False, indent=2)}
+
+## 待评审用例（共 {facts["totalCases"]} 条，下面列出前 {facts["sampledCases"]} 条）
 {cases_text}
 
 ## 项目 API 端点（{len(endpoints)} 个）
@@ -448,6 +488,21 @@ async def execute_quality_review(
         yield SSEEvent(type="error", data={"message": "无法解析 AI 评审结果"})
         return
 
+    # LLM 还是可能自作主张塞 statistics —— 一律用平台算的覆盖掉，
+    # 它编的数字一个都不许出现在界面上。
+    report["statistics"] = facts
+    cov = report.get("coverage")
+    if isinstance(cov, dict):
+        cov["apisTotal"] = facts["apisTotal"]
+        if not facts["apisTotal"]:
+            # 一个端点都没有的时候还列出「缺失的 API」，那是凭空想的。
+            cov["missingApis"] = []
+            cov["note"] = "项目还没有登记 API 端点，无法做覆盖率分析"
+    if facts["sampledCases"] < facts["totalCases"]:
+        report.setdefault("suggestions", []).insert(
+            0, f"本次只抽样评审了前 {facts['sampledCases']} 条（共 {facts['totalCases']} 条），"
+               "结论仅代表抽样部分")
+
     score = report.get("score", 0)
     level = "优秀" if score >= 90 else "良好" if score >= 75 else "一般" if score >= 60 else "不合格"
 
@@ -465,8 +520,9 @@ async def execute_quality_review(
         "report": report,
         "score": score,
         "level": level,
-        "caseCount": len(cases),
-        "apiCount": len(endpoints),
+        "caseCount": facts["totalCases"],
+        "sampledCount": facts["sampledCases"],
+        "apiCount": facts["apisTotal"],
     })
 
 

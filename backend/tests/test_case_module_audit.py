@@ -389,34 +389,42 @@ def test_接口层只认append和replace():
 
 # ── 空目录 ──────────────────────────────────────────────────────────
 
-def test_硬删用例后会回收变空的目录():
-    """目录是建用例时按 module 顺带创建的，硬删用例却从不回收它 ——
-    实测 93 个目录里 51 个从来没装过用例，人打开导航看到一屏 (0)，
-    分不清哪些是真模块。"""
+def test_删用例不许顺手删目录():
+    """目录是**模块分类**，不是用例的容器。
+
+    删掉「环境管理」下最后一条用例，不代表这个模块不存在了 —— 替人把分类
+    删掉是越权。上一版我做成了自动回收，是判错了：观察到的现象（一屏空目录）
+    真正的原因是**计数只算自己**，不是目录该被删。
+    """
     import inspect
 
     from app.services import case_service
 
     for fn in (case_service.batch_hard_delete, case_service.empty_trash):
         src = inspect.getsource(fn)
-        assert "_prune_emptied_folders" in src, f"{fn.__name__} 没回收目录"
-        assert "touched_folders" in src, f"{fn.__name__} 没收集受影响的目录"
+        assert "folder" not in src.lower(), f"{fn.__name__} 不该碰目录"
 
 
-def test_只回收这次删空的_不碰从没装过用例的():
-    """从没装过用例的目录可能是人先搭好的结构，替他删掉更糟。
+def test_目录计数含子目录_且只汇总一次():
+    """两件事都要成立，少一件人就看到假数：
 
-    判据是"这次删除波及到的目录"，不是"所有空目录"。
+    1. 父目录的数必须**含子目录** —— 否则「环境管理 (0)」点进去冒出 20 条
+    2. 但只能汇总**一次** —— 我上一版在计数时先向上累加了一遍，
+       而 `_sum_counts` 本来就在递归汇总，结果「项目管理」1+11 显示成 23。
+       教训：改之前先看接口**真实返回**，别只读源码前半段就下结论。
     """
     import inspect
 
-    from app.services import case_service
+    from app.services import case_service, folder_service
 
-    src = inspect.getsource(case_service._prune_emptied_folders)
-    assert "folder_ids" in src.split("\n")[0] or "folder_ids: set" in src
-    # 必须同时看"有没有用例"和"有没有子目录"，只看其一会把父目录连坐删掉
-    assert "Case.folder_id == f.id" in src
-    assert "CaseFolder.parent_id == f.id" in src
+    src = inspect.getsource(folder_service.list_folder_tree)
+    assert "_sum_counts" in src, "没有向上汇总，父目录会显示 0"
+    # 计数那一步必须是纯直属，不能再自己爬一遍父链
+    head = src[:src.index("# 构建树")]
+    assert "parent_of" not in head and "count_map[cur]" not in head, "汇总了两次"
+
+    # 另一头：筛选确实含后代，两边口径才对得上
+    assert "_collect_descendant_ids" in inspect.getsource(case_service.list_cases)
 
 
 def test_批量清空目录不接受删光指令():
@@ -457,3 +465,113 @@ def test_HMR的websocket不算接口_但真websocket要留():
     finally:
         os.unlink(path)
     assert got == ["ws://h:5173/socket.io/?EIO=4", "wss://h/ws/notify"], got
+
+
+# ── AI 评审：统计归平台算，不许 LLM 自己数 ──────────────────────────
+
+def test_评审的统计数字由平台算():
+    """实测它编得有鼻子有眼：报告说「50 条没有前置条件、50 条没有预期结果、
+    P0 只有 3 条」，库里真实是 6 / 5 / 11 —— 每个数都错，而且错得像真的。
+
+    原因很直白：送进 LLM 的只有「[优先级] 标题 (N步)」，
+    它**从没看见过** preconditions 和 expected_result 这两个字段。
+    人照这个报告去改用例会被带偏，比不给报告更糟。
+    """
+    import inspect
+
+    from app.services.ai import skill_executor
+
+    src = inspect.getsource(skill_executor)
+    i = src.index("tb-quality-review Skill")
+    body = src[i:i + 9000]
+
+    assert 'facts = {' in body, "平台没有自己算统计"
+    assert 'report["statistics"] = facts' in body, "没有用平台的数覆盖 LLM 编的"
+    assert "不要输出任何统计数字" in body, "提示词没禁止 LLM 自己数"
+    # 也得真把字段喂给它看，否则禁了它也判不了
+    assert "无前置条件" in body and "无预期结果" in body
+
+
+def test_没有api端点时不许列缺失的api():
+    """apisTotal=0 却列出 9 个「缺失的 API」—— 那是凭空想的，还印在报告里。"""
+    import inspect
+
+    from app.services.ai import skill_executor
+
+    src = inspect.getsource(skill_executor)
+    i = src.index("tb-quality-review Skill")
+    body = src[i:i + 9000]
+    assert 'cov["missingApis"] = []' in body
+    assert 'cov["apisTotal"] = facts["apisTotal"]' in body
+
+
+def test_评审要取全量而不是被静默截断():
+    """list_cases 内部 min(page_size, 100)，传 200 也只回 100。
+    105 条的分支上报告顶上写「共 100 条」，那 5 条既没评审也没人知道被漏了。"""
+    import inspect
+
+    from app.services.ai import skill_executor
+
+    src = inspect.getsource(skill_executor)
+    i = src.index("tb-quality-review Skill")
+    body = src[i:i + 9000]
+    assert "while True:" in body and "page += 1" in body, "没有分页取全"
+    assert "page_size=200" not in body, "还在用会被静默截断的写法"
+
+
+def test_抽样时必须在报告里说明():
+    """只评了前 50 条却按全量下结论，人会当成全量结论。"""
+    import inspect
+
+    from app.services.ai import skill_executor
+
+    src = inspect.getsource(skill_executor)
+    i = src.index("tb-quality-review Skill")
+    body = src[i:i + 9000]
+    assert 'sampledCases"] < facts["totalCases"]' in body
+    assert "仅代表抽样部分" in body
+
+
+# ── 导出 ────────────────────────────────────────────────────────────
+
+def test_导出跟随页面筛选():
+    """筛「待审核」点导出，导出来的还是全部 105 条 —— 人拿到文件不会发现，
+    因为文件里看不出它本该是 41 条。
+
+    页面用的是 lifecycleStatus / reviewStatus / uiStatus / apiStatus，
+    导出端点一个都没接。
+    """
+    import inspect
+
+    from app.api import cases as cases_api
+
+    sig = inspect.signature(cases_api.export_cases_excel).parameters
+    for name in ("lifecycle_status", "review_status", "ui_status", "api_status"):
+        assert name in sig, f"导出没接 {name}"
+
+    src = inspect.getsource(cases_api.export_cases_excel)
+    for name in ("lifecycle_status=", "review_status=", "ui_status=", "api_status="):
+        assert name in src, f"{name} 接了参数却没往下传"
+
+
+def test_勾选了行就只导勾的():
+    import inspect
+
+    from app.api import cases as cases_api
+
+    assert "case_ids" in inspect.signature(cases_api.export_cases_excel).parameters
+    src = inspect.getsource(cases_api.export_cases_excel)
+    assert "_Case.id.in_(picked)" in src
+
+
+def test_前端导出和列表用同一套筛选口径():
+    """两边各写一套的话，页面显示 41 条、导出 105 条，而且没人会发现。"""
+    from pathlib import Path
+
+    jsx = Path(__file__).resolve().parents[2] / "frontend/src/pages/cases/CaseManagement.jsx"
+    src = jsx.read_text(encoding="utf-8")
+    exp = src[src.index("const handleExport"):]
+    exp = exp[:exp.index("\n  }")]
+    assert "selectedRowKeys.length" in exp, "没有优先导勾选的"
+    for k in ("reviewStatus", "lifecycleStatus", "readyFilter"):
+        assert k in exp, f"导出漏了 {k}"

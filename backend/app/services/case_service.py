@@ -407,51 +407,6 @@ async def hard_delete_case(session: AsyncSession, case_id: uuid.UUID) -> None:
     await session.flush()
 
 
-async def _prune_emptied_folders(session: AsyncSession, folder_ids: set) -> int:
-    """删完用例后，把**因此变空**的目录一并收掉。返回清掉几个。
-
-    目录是建用例时按 module/submodule 顺带创建的，硬删用例却从不回收它 ——
-    实测 93 个目录里 51 个从来没装过用例。人打开用例导航看到一串
-    「前置资源 (0) / 分层验证 (0) / 闭环验证 (0)」，分不清哪些是真模块、
-    哪些只是上一轮调试的残留。
-
-    只收**这次删空的**，且必须同时满足：没有任何用例（含软删的）、没有子目录。
-    从没装过用例的那些不碰 —— 那可能是人手动搭的结构，替人删掉更糟。
-    """
-    from app.models.case import CaseFolder
-
-    pruned = 0
-    # 先子后父：删掉子目录后父目录才可能变空
-    for _ in range(3):   # 目录最深 3 层
-        if not folder_ids:
-            break
-        rows = (await session.execute(
-            select(CaseFolder).where(CaseFolder.id.in_(folder_ids))
-        )).scalars().all()
-        parents = set()
-        gone = set()
-        for f in rows:
-            has_case = (await session.execute(
-                select(sa_func.count()).select_from(Case).where(Case.folder_id == f.id)
-            )).scalar_one()
-            has_child = (await session.execute(
-                select(sa_func.count()).select_from(CaseFolder)
-                .where(CaseFolder.parent_id == f.id)
-            )).scalar_one()
-            if has_case or has_child:
-                continue
-            if f.parent_id:
-                parents.add(f.parent_id)
-            await session.delete(f)
-            gone.add(f.id)
-            pruned += 1
-        await session.flush()
-        if not gone:
-            break
-        folder_ids = parents
-    return pruned
-
-
 async def batch_hard_delete(session: AsyncSession, case_ids: list[uuid.UUID]) -> dict:
     """批量彻底删除已软删除的用例。"""
     succeeded = 0
@@ -471,14 +426,14 @@ async def batch_hard_delete(session: AsyncSession, case_ids: list[uuid.UUID]) ->
 
     # 先统一解引用，再逐条删除——避免删到一半撞外键导致整批回滚
     await _detach_blocking_refs(session, [cid for cid, _ in deletable])
-    touched_folders = {c.folder_id for _, c in deletable if c.folder_id}
     for _, case in deletable:
         await session.delete(case)
         succeeded += 1
     await session.flush()
-    pruned = await _prune_emptied_folders(session, touched_folders)
-    return {"succeeded": succeeded, "failed": failed, "errors": errors,
-            "prunedFolders": pruned}
+    # 不动目录。目录是**模块分类**，不是用例的容器 —— 删掉最后一条用例
+    # 不代表这个模块不存在了，替人把分类删掉是越权。
+    # 空目录攒多了由人在导航栏「清理空目录」里看着名单勾选处理。
+    return {"succeeded": succeeded, "failed": failed, "errors": errors}
 
 
 async def empty_trash(session: AsyncSession, branch_id: uuid.UUID) -> dict:
@@ -494,12 +449,10 @@ async def empty_trash(session: AsyncSession, branch_id: uuid.UUID) -> dict:
         return {"succeeded": 0, "failed": 0, "errors": []}
 
     await _detach_blocking_refs(session, [c.id for c in cases])
-    touched_folders = {c.folder_id for c in cases if c.folder_id}
     for case in cases:
         await session.delete(case)
     await session.flush()
-    pruned = await _prune_emptied_folders(session, touched_folders)
-    return {"succeeded": len(cases), "failed": 0, "errors": [], "prunedFolders": pruned}
+    return {"succeeded": len(cases), "failed": 0, "errors": []}
 
 
 async def copy_cases_from_branch(

@@ -383,10 +383,22 @@ export default function CaseManagement() {
     if (!globalBranchId) { message.warning('请先选择分支'); return }
     setExporting(true)
     try {
+      // 跟页面看到的一致：勾了行就只导勾的，没勾就带上当前所有筛选。
+      // 此前只传 keyword/automationStatus/folderId，筛「待审核」照样导全部 105 条。
       const params = new URLSearchParams()
-      if (keyword) params.set('keyword', keyword)
-      if (statusFilter) params.set('automationStatus', statusFilter)
-      if (selectedFolderId) params.set('folderId', selectedFolderId)
+      if (selectedRowKeys.length) {
+        params.set('caseIds', selectedRowKeys.join(','))
+      } else {
+        if (keyword) params.set('keyword', keyword)
+        if (selectedFolderId) params.set('folderId', selectedFolderId)
+        if (statusFilter === 'pending_review') params.set('reviewStatus', 'pending_review')
+        else if (['draft', 'done', 'deprecated'].includes(statusFilter)) params.set('lifecycleStatus', statusFilter)
+        else if (statusFilter && statusFilter !== 'deleted') params.set('automationStatus', statusFilter)
+        if (readyFilter) {
+          const [dim, st] = readyFilter.split(':')
+          params.set(`${dim}Status`, st)
+        }
+      }
 
       const token = await getValidToken()
       const res = await fetch(`/api/projects/${projectId}/branches/${globalBranchId}/cases/export/excel?${params}`, {
@@ -779,7 +791,13 @@ export default function CaseManagement() {
                   <Button icon={<SearchOutlined />} onClick={() => handleQualityReview()}>AI 评审</Button>
                 </Tooltip>
                 <Button icon={<UploadOutlined />} size="small" onClick={() => setImportOpen(true)}>导入</Button>
-                <Button icon={<DownloadOutlined />} size="small" onClick={handleExport} loading={exporting}>导出</Button>
+                <Tooltip title={selectedRowKeys.length
+                  ? `导出勾选的 ${selectedRowKeys.length} 条`
+                  : '导出当前筛选下的全部用例（含手动步骤、前置条件、预期结果；接口场景和 UI 脚本正文不在表格里）'}>
+                  <Button icon={<DownloadOutlined />} size="small" onClick={handleExport} loading={exporting}>
+                    导出{selectedRowKeys.length ? ` (${selectedRowKeys.length})` : ''}
+                  </Button>
+                </Tooltip>
                 <Button type="primary" icon={<PlusOutlined />} size="small" onClick={() => {
                   createCaseForm.resetFields()
                   if (selectedFolderId) {
