@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox, Dropdown } from 'antd'
-import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, RobotOutlined, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined } from '@ant-design/icons'
+import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, RobotOutlined, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, getValidToken } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
@@ -296,6 +296,32 @@ export default function CaseManagement() {
   const [reviewLoading, setReviewLoading] = useState(false)
   const [reviewResult, setReviewResult] = useState(null)
   const [reviewSteps, setReviewSteps] = useState([])
+
+  // 空目录清理：目录是建用例时顺带创建的，硬删用例从不回收它（已在后端修掉），
+  // 加上手动建了没用的，攒下来一屏 (0)，人分不清哪些是真模块。
+  // 只列不自动删 —— 空目录也可能是人先搭好的结构。
+  const [emptyFolders, setEmptyFolders] = useState(null)
+  const [emptyPicked, setEmptyPicked] = useState([])
+
+  const openEmptyFolders = async () => {
+    try {
+      const res = await api.get(`/projects/${projectId}/branches/${globalBranchId}/folders/empty`)
+      const list = res.data || []
+      if (!list.length) { message.info('没有空目录'); return }
+      setEmptyFolders(list)
+      setEmptyPicked(list.map(f => f.id))
+    } catch (e) { message.error(e.message || '加载失败') }
+  }
+
+  const doPruneFolders = async () => {
+    try {
+      const res = await api.post(`/projects/${projectId}/branches/${globalBranchId}/folders/prune-empty`,
+        { folderIds: emptyPicked })
+      message.success(`已清理 ${res.data?.pruned ?? 0} 个空目录`)
+      setEmptyFolders(null)
+      fetchFolders()
+    } catch (e) { message.error(e.message || '清理失败') }
+  }
 
   // 就地审核：列表上看到「待审」就能在列表上处理掉，不用绕去生成向导的第 5 步。
   // 打回**必须带理由**——后端 case_service 会硬校验 review_reason.category，
@@ -629,6 +655,9 @@ export default function CaseManagement() {
                   <Button type="text" size="small" icon={<ReloadOutlined />} onClick={() => { fetchFolders(); fetchCases() }} style={{ color: '#c9cdd4' }} />
                 </Tooltip>
                 <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => setFolderModalOpen(true)} style={{ color: '#0ea5a0' }} />
+                <Tooltip title="清理空目录">
+                  <Button type="text" size="small" icon={<ClearOutlined />} onClick={openEmptyFolders} style={{ color: '#c9cdd4' }} />
+                </Tooltip>
                 <Tooltip title="收起导航">
                   <Button type="text" size="small" icon={<MenuFoldOutlined />} onClick={() => setNavCollapsed(true)} style={{ color: '#c9cdd4' }} />
                 </Tooltip>
@@ -1075,6 +1104,32 @@ export default function CaseManagement() {
         onClose={() => setTestforgeOpen(false)}
         onImported={() => fetchCases()}
       />
+
+      {/* 空目录清理：名单摆出来，勾了才删 */}
+      <Modal title="清理空目录" open={!!emptyFolders} onCancel={() => setEmptyFolders(null)}
+        okText={`删除选中的 ${emptyPicked.length} 个`} cancelText="取消"
+        okButtonProps={{ danger: true, disabled: !emptyPicked.length }}
+        onOk={doPruneFolders} width={440}>
+        <div style={{ padding: '4px 0' }}>
+          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 10, lineHeight: 1.7 }}>
+            下面这些目录没有任何用例、也没有子目录。多数是彻底删除用例后留下的空壳；
+            但也可能是你先搭好的结构 —— 不想删的取消勾选。
+          </div>
+          <div style={{ maxHeight: 300, overflow: 'auto' }}>
+            <Checkbox.Group value={emptyPicked} onChange={setEmptyPicked}
+              style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {(emptyFolders || []).map(f => (
+                <Checkbox key={f.id} value={f.id}>
+                  {f.name}
+                  <span style={{ fontSize: 11, color: '#c9cdd4', marginLeft: 8 }}>
+                    {f.createdAt ? new Date(f.createdAt).toLocaleDateString('zh-CN') : ''}
+                  </span>
+                </Checkbox>
+              ))}
+            </Checkbox.Group>
+          </div>
+        </div>
+      </Modal>
 
       {/* 打回理由 —— 分类是必填项，后端拿它做质量归因统计 */}
       <Modal title="打回这条用例" open={!!rejectFor} onCancel={() => setRejectFor(null)}

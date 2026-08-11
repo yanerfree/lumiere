@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from fastapi import APIRouter, Depends, Query, UploadFile, File
+from fastapi import APIRouter, Body, Depends, Query, UploadFile, File
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_201_CREATED
@@ -610,6 +610,39 @@ async def list_folders(
     """目录树（含用例计数）"""
     tree = await folder_service.list_folder_tree(session, branch_id)
     return {"data": tree}
+
+
+@folders_router.get("/empty")
+async def list_empty_folders(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    """列出可以清掉的空目录（没有用例、也没有子目录）。
+
+    只列不删 —— 空目录不一定是垃圾，可能是人先把结构搭好还没往里放用例。
+    让人看清名单再决定，比替他判断安全。
+    """
+    return {"data": await folder_service.list_empty_folders(session, branch_id)}
+
+
+@folders_router.post("/prune-empty")
+async def prune_empty_folders(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    folder_ids: list[uuid.UUID] = Body(..., embed=True, alias="folderIds"),
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer")),
+):
+    """按**明确给出的 id 名单**删空目录。
+
+    不接受"删掉所有空目录"这种指令 —— 名单是人在页面上看过并勾过的，
+    服务端再各判一次是否真的空。
+    """
+    n = await folder_service.prune_empty_folders(session, branch_id, folder_ids)
+    await session.commit()
+    return {"data": {"pruned": n}}
 
 
 @folders_router.post("", status_code=HTTP_201_CREATED)

@@ -950,6 +950,10 @@ class GenerateRequest(BaseSchema):
     env_id: str | None = None
     folder_id: str | None = None
     case_id: str | None = None
+    # 该用例已有接口场景时怎么办：append 接到后面 / replace 换掉步骤。
+    # 不传 = 已存在就报错，逼调用方明确表态（此前是静默新建第二条，
+    # 而用例页面只显示步骤最多的那一条，另一条就此隐身）。
+    on_existing: str | None = Field(default=None, pattern="^(append|replace)$")
 
 
 @router.post("/generate")
@@ -991,6 +995,7 @@ async def generate_api_tests(
                 env_variables=env_vars or None,
                 folder_id=uuid.UUID(body.folder_id) if body.folder_id else None,
                 case_id=uuid.UUID(body.case_id) if body.case_id else None,
+                on_existing=body.on_existing,
                 ai_config=ai_config,
                 session=session,
                 user_id=current_user.id,

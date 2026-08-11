@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from typing import AsyncIterator
 
-from sqlalchemy import select, func as sa_func
+from sqlalchemy import delete as sa_delete, func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_test import ApiTestScenario, ApiTestStep
@@ -25,6 +25,22 @@ class GenEvent:
     data: dict
 
 
+def resolve_existing_action(has_existing: bool, on_existing: str | None) -> str:
+    """这次生成该怎么落：create / append / replace / refuse。
+
+    抽成纯函数是为了能直接测这条判据。它管的事只有一件：
+    **绑了用例时不许悄悄多建一条场景**。前端认定"一个用例一条"
+    （只显示步骤最多的那条），多出来的在用例页面上根本看不见，
+    却照样躺在分支的接口测试模块里被批量执行捞走；如果新的步骤更多，
+    还会把原来那条已经跑通的顶掉。所以已存在时必须让调用方明确表态。
+    """
+    if not has_existing:
+        return "create"
+    if on_existing in ("append", "replace"):
+        return on_existing
+    return "refuse"
+
+
 async def generate_api_test(
     *,
     project_id: uuid.UUID,
@@ -34,11 +50,55 @@ async def generate_api_test(
     env_variables: dict | None,
     folder_id: uuid.UUID | None = None,
     case_id: uuid.UUID | None = None,
+    on_existing: str | None = None,
     ai_config: ResolvedAIConfig,
     session: AsyncSession,
     user_id: uuid.UUID,
 ) -> AsyncIterator[GenEvent]:
-    """生成接口测试场景。"""
+    """生成接口测试场景。
+
+    `on_existing` —— 该用例**已经有**接口场景时怎么办。前端的约定是
+    「一个用例 = 一个接口场景」（LinkedApiScenarios 只显示步骤最多的那一条），
+    可这里原先无条件新建，于是：多出来的那条在用例页面上根本看不见，
+    却照样躺在分支的接口测试模块里被批量执行选中；如果新的步骤更多，
+    反而把**原来那条已经跑通的顶掉**。而且全程没有任何提示。
+
+    - None      → 已存在就拒绝，让调用方明确表态（MCP 等非交互调用不该悄悄改数据）
+    - "append"  → 生成的步骤接到现有场景后面
+    - "replace" → 保留场景本身（id/编号/报告关联都不动），只把步骤换掉，
+                  并把状态打回 draft —— 内容换了，之前那次验证就不作数了
+    """
+
+    # 先把"这个用例已经有场景了"这件事定下来，再花钱调 AI ——
+    # 拒绝的话没必要先生成一遍。
+    existing_sc = None
+    if case_id:
+        rows = (await session.execute(
+            select(ApiTestScenario).where(ApiTestScenario.source_case_id == case_id)
+        )).scalars().all()
+        if rows:
+            # 和前端 LinkedApiScenarios 挑的是同一条：步骤最多的那条。
+            # 两边挑不一样的话，人在页面上看到的和这里改的就不是同一个东西。
+            counts = {}
+            for sc in rows:
+                counts[sc.id] = (await session.execute(
+                    select(sa_func.count()).select_from(ApiTestStep)
+                    .where(ApiTestStep.scenario_id == sc.id)
+                )).scalar_one()
+            existing_sc = max(rows, key=lambda sc: counts[sc.id])
+        if resolve_existing_action(existing_sc is not None, on_existing) == "refuse":
+            yield GenEvent(type="error", data={
+                "message": (
+                    f"该用例已有接口场景「{existing_sc.title}」"
+                    f"（{counts[existing_sc.id]} 步，状态 {existing_sc.status}）。"
+                    "请指定 onExisting=append（接到后面）或 replace（换掉步骤）。"
+                ),
+                "existing": {
+                    "id": str(existing_sc.id), "title": existing_sc.title,
+                    "status": existing_sc.status, "stepCount": counts[existing_sc.id],
+                },
+            })
+            return
 
     yield GenEvent(type="step_start", data={"step": 1, "title": "读取接口定义和环境变量"})
 
@@ -204,6 +264,27 @@ async def generate_api_test(
         except Exception as e:
             logger.warning("回写 UUID 变量为引用失败: %s", e)
 
+    # 绑了用例就只能落**一条**场景 —— 前端 LinkedApiScenarios 认定"一个用例一条"，
+    # 多出来的在用例页面上看不见，却照样被分支的批量执行捞走。AI 一次返回多个场景
+    # 时（没有 case_id 的入口是允许的），这里把它们的步骤并进同一条。
+    single_target = None
+    if case_id and existing_sc is not None:
+        single_target = existing_sc
+        if on_existing == "replace":
+            await session.execute(
+                sa_delete(ApiTestStep).where(ApiTestStep.scenario_id == existing_sc.id)
+            )
+            # 步骤换了，之前那次"跑通"就不代表这一版 —— 状态跟着回到草稿
+            existing_sc.status = "draft"
+        await session.flush()
+
+    next_sort = 0
+    if single_target is not None:
+        next_sort = (await session.execute(
+            select(sa_func.coalesce(sa_func.max(ApiTestStep.sort_order), -1) + 1)
+            .where(ApiTestStep.scenario_id == single_target.id)
+        )).scalar_one()
+
     for sc in parsed:
         sc_folder_id = folder_id
         if not sc_folder_id:
@@ -226,28 +307,34 @@ async def generate_api_test(
                     sc_folder_id = folder.id
                     auto_folders[module_name] = folder.id
 
-        scenario = ApiTestScenario(
-            project_id=project_id,
-            branch_id=branch_id,
-            code=f"AT-{code_seq:04d}",
-            title=sc.get("title", "未命名场景"),
-            priority=sc.get("priority", "P1"),
-            description=sc.get("description", ""),
-            status="draft",
-            source_api_ids=api_ids,
-            source_case_id=case_id,
-            env_variables=env_variables,
-            folder_id=sc_folder_id,
-            created_by=user_id,
-        )
-        session.add(scenario)
-        await session.flush()
+        if single_target is not None:
+            scenario = single_target
+        else:
+            scenario = ApiTestScenario(
+                project_id=project_id,
+                branch_id=branch_id,
+                code=f"AT-{code_seq:04d}",
+                title=sc.get("title", "未命名场景"),
+                priority=sc.get("priority", "P1"),
+                description=sc.get("description", ""),
+                status="draft",
+                source_api_ids=api_ids,
+                source_case_id=case_id,
+                env_variables=env_variables,
+                folder_id=sc_folder_id,
+                created_by=user_id,
+            )
+            session.add(scenario)
+            await session.flush()
+            # 后续 parsed 项并进这一条，不再各建各的
+            if case_id:
+                single_target = scenario
 
         for i, step in enumerate(sc.get("steps", [])):
             assertions = _normalize_assertions(step.get("assertions", []))
             session.add(ApiTestStep(
                 scenario_id=scenario.id,
-                sort_order=i,
+                sort_order=next_sort + i,
                 group_name=step.get("group"),
                 name=step.get("name", f"步骤{i+1}"),
                 method=step.get("method", "GET"),
@@ -258,7 +345,9 @@ async def generate_api_test(
                 variables_extract=step.get("variables_extract"),
             ))
 
-        created_ids.append(str(scenario.id))
+        next_sort += len(sc.get("steps", []))
+        if str(scenario.id) not in created_ids:
+            created_ids.append(str(scenario.id))
         code_seq += 1
 
         await session.commit()

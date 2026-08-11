@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import select, delete as sa_delete, update as sa_update
+from sqlalchemy import delete as sa_delete, func as sa_func, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
@@ -407,6 +407,51 @@ async def hard_delete_case(session: AsyncSession, case_id: uuid.UUID) -> None:
     await session.flush()
 
 
+async def _prune_emptied_folders(session: AsyncSession, folder_ids: set) -> int:
+    """删完用例后，把**因此变空**的目录一并收掉。返回清掉几个。
+
+    目录是建用例时按 module/submodule 顺带创建的，硬删用例却从不回收它 ——
+    实测 93 个目录里 51 个从来没装过用例。人打开用例导航看到一串
+    「前置资源 (0) / 分层验证 (0) / 闭环验证 (0)」，分不清哪些是真模块、
+    哪些只是上一轮调试的残留。
+
+    只收**这次删空的**，且必须同时满足：没有任何用例（含软删的）、没有子目录。
+    从没装过用例的那些不碰 —— 那可能是人手动搭的结构，替人删掉更糟。
+    """
+    from app.models.case import CaseFolder
+
+    pruned = 0
+    # 先子后父：删掉子目录后父目录才可能变空
+    for _ in range(3):   # 目录最深 3 层
+        if not folder_ids:
+            break
+        rows = (await session.execute(
+            select(CaseFolder).where(CaseFolder.id.in_(folder_ids))
+        )).scalars().all()
+        parents = set()
+        gone = set()
+        for f in rows:
+            has_case = (await session.execute(
+                select(sa_func.count()).select_from(Case).where(Case.folder_id == f.id)
+            )).scalar_one()
+            has_child = (await session.execute(
+                select(sa_func.count()).select_from(CaseFolder)
+                .where(CaseFolder.parent_id == f.id)
+            )).scalar_one()
+            if has_case or has_child:
+                continue
+            if f.parent_id:
+                parents.add(f.parent_id)
+            await session.delete(f)
+            gone.add(f.id)
+            pruned += 1
+        await session.flush()
+        if not gone:
+            break
+        folder_ids = parents
+    return pruned
+
+
 async def batch_hard_delete(session: AsyncSession, case_ids: list[uuid.UUID]) -> dict:
     """批量彻底删除已软删除的用例。"""
     succeeded = 0
@@ -426,11 +471,14 @@ async def batch_hard_delete(session: AsyncSession, case_ids: list[uuid.UUID]) ->
 
     # 先统一解引用，再逐条删除——避免删到一半撞外键导致整批回滚
     await _detach_blocking_refs(session, [cid for cid, _ in deletable])
+    touched_folders = {c.folder_id for _, c in deletable if c.folder_id}
     for _, case in deletable:
         await session.delete(case)
         succeeded += 1
     await session.flush()
-    return {"succeeded": succeeded, "failed": failed, "errors": errors}
+    pruned = await _prune_emptied_folders(session, touched_folders)
+    return {"succeeded": succeeded, "failed": failed, "errors": errors,
+            "prunedFolders": pruned}
 
 
 async def empty_trash(session: AsyncSession, branch_id: uuid.UUID) -> dict:
@@ -446,10 +494,12 @@ async def empty_trash(session: AsyncSession, branch_id: uuid.UUID) -> dict:
         return {"succeeded": 0, "failed": 0, "errors": []}
 
     await _detach_blocking_refs(session, [c.id for c in cases])
+    touched_folders = {c.folder_id for c in cases if c.folder_id}
     for case in cases:
         await session.delete(case)
     await session.flush()
-    return {"succeeded": len(cases), "failed": 0, "errors": []}
+    pruned = await _prune_emptied_folders(session, touched_folders)
+    return {"succeeded": len(cases), "failed": 0, "errors": [], "prunedFolders": pruned}
 
 
 async def copy_cases_from_branch(

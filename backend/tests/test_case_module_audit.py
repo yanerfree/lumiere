@@ -258,3 +258,202 @@ def test_打回分类和生成向导保持同一套():
 
     assert cats("pages/cases/CaseManagement.jsx") == \
         cats("pages/scenario-gen/components/Stage5Review.jsx")
+
+
+# ── 抓包过滤：接口视图 91% 是噪音的那个洞 ──────────────────────────
+
+def _har(entries):
+    """把 (url, mime, method) 拼成一份最小 HAR。"""
+    return {"log": {"entries": [
+        {"startedDateTime": "2026-08-10T10:00:00Z", "time": 5,
+         "request": {"method": m, "url": u, "headers": []},
+         "response": {"status": 200, "content": {"mimeType": t, "text": "{}"}}}
+        for u, t, m in entries
+    ]}}
+
+
+def _parse(entries):
+    import json
+    import os
+    import tempfile
+
+    from app.engine.har import parse_har
+
+    fd, path = tempfile.mkstemp(suffix=".har")
+    os.write(fd, json.dumps(_har(entries)).encode())
+    os.close(fd)
+    try:
+        return [r["url"] for r in parse_har(path)]
+    finally:
+        os.unlink(path)
+
+
+def test_前端源码模块不算接口():
+    """实测一次登录+建项目抓到 75 条，其中 **68 条是前端源码模块**，
+    真接口只有 7 条。人要在 75 行里挑出那 7 行 —— 等于没给。
+
+    漏的两处：`.jsx/.tsx/.ts/.vue` 不在扩展名表里；dev server 发的是
+    `text/javascript`，而 mime 表里只有 `application/javascript`。
+    """
+    got = _parse([
+        ("http://h/api/projects", "application/json", "POST"),
+        ("http://h/src/main.jsx?t=1786354198555", "text/javascript", "GET"),
+        ("http://h/src/pages/cases/CaseDetail.jsx?t=1", "text/javascript", "GET"),
+        ("http://h/src/utils/i18n.ts", "text/javascript", "GET"),
+        ("http://h/src/App.vue", "text/javascript", "GET"),
+    ])
+    assert got == ["http://h/api/projects"], got
+
+
+def test_扩展名这条路径单独也要拦得住():
+    """埋雷时发现：只测 `text/javascript` 的话，把扩展名表改回旧版测试照样绿 ——
+    两条路径互相兜底，等于只验了一条。
+
+    所以这里故意给一个**不在 mime 名单里**的类型，逼着扩展名那条规则单独生效。
+    真实场景确实会遇到：有的服务器给 .ts/.vue 返回 application/octet-stream。
+    """
+    got = _parse([
+        ("http://h/api/x", "application/json", "GET"),
+        ("http://h/src/main.jsx?t=1", "application/octet-stream", "GET"),
+        ("http://h/src/a.tsx", "application/octet-stream", "GET"),
+        ("http://h/src/b.vue", "application/octet-stream", "GET"),
+        ("http://h/src/c.ts", "application/octet-stream", "GET"),
+    ])
+    assert got == ["http://h/api/x"], got
+
+
+def test_mime这条路径单独也要拦得住():
+    """反过来：没有扩展名、只能靠 mime 认出来的那些。"""
+    got = _parse([
+        ("http://h/api/x", "application/json", "GET"),
+        ("http://h/module/abc123", "text/javascript", "GET"),
+        ("http://h/style/abc123", "text/css", "GET"),
+    ])
+    assert got == ["http://h/api/x"], got
+
+
+def test_开发服务器自己的请求不算接口():
+    """这些没有扩展名，光靠扩展名和 mime 都拦不住。"""
+    got = _parse([
+        ("http://h/api/login", "application/json", "POST"),
+        ("http://h/@vite/client", "text/javascript", "GET"),
+        ("http://h/@react-refresh", "text/javascript", "GET"),
+        ("http://h/node_modules/.vite/deps/antd.js", "text/javascript", "GET"),
+        ("http://h/_next/static/chunks/main.js", "text/javascript", "GET"),
+    ])
+    assert got == ["http://h/api/login"], got
+
+
+def test_不按api前缀做白名单():
+    """被测系统的接口前缀是什么，我们不该假设 —— `/v1/`、`/gateway/` 都得留。
+
+    反过来做成白名单的话，那类系统的接口视图会整个空掉。
+    """
+    got = _parse([
+        ("http://h/v1/gateway/services", "application/json", "GET"),
+        ("http://h/login", "text/html", "GET"),
+    ])
+    assert got == ["http://h/v1/gateway/services", "http://h/login"], got
+
+
+# ── 已有接口场景时点「编排」 ────────────────────────────────────────
+
+@pytest.mark.parametrize("has_existing,mode,expect,why", [
+    (False, None,      "create",  "没有就新建，跟以前一样"),
+    (False, "append",  "create",  "没有可追加的，还是新建"),
+    (True,  None,      "refuse",  "★已有却没表态 → 拒绝。此前是静默多建一条"),
+    (True,  "append",  "append",  "接到现有场景后面"),
+    (True,  "replace", "replace", "换掉现有步骤"),
+    (True,  "merge",   "refuse",  "不认识的取值当没表态，别猜"),
+])
+def test_已有场景时怎么落(has_existing, mode, expect, why):
+    """静默多建一条的后果不是"多了个东西"：用例页面只显示步骤最多的那条，
+    多出来的既看不见也删不掉，却照样被分支批量执行捞走；新的步骤更多时，
+    反而把原来跑通的那条顶掉 —— 全程无提示。
+    """
+    from app.services.ai.api_scenario_gen_service import resolve_existing_action
+
+    assert resolve_existing_action(has_existing, mode) == expect, why
+
+
+def test_接口层只认append和replace():
+    """乱传一个字符串不能被当成"表态"放行。"""
+    from app.api.api_test import GenerateRequest
+
+    assert GenerateRequest(on_existing="append").on_existing == "append"
+    assert GenerateRequest(on_existing="replace").on_existing == "replace"
+    assert GenerateRequest().on_existing is None
+    with pytest.raises(Exception):
+        GenerateRequest(on_existing="drop")
+
+
+# ── 空目录 ──────────────────────────────────────────────────────────
+
+def test_硬删用例后会回收变空的目录():
+    """目录是建用例时按 module 顺带创建的，硬删用例却从不回收它 ——
+    实测 93 个目录里 51 个从来没装过用例，人打开导航看到一屏 (0)，
+    分不清哪些是真模块。"""
+    import inspect
+
+    from app.services import case_service
+
+    for fn in (case_service.batch_hard_delete, case_service.empty_trash):
+        src = inspect.getsource(fn)
+        assert "_prune_emptied_folders" in src, f"{fn.__name__} 没回收目录"
+        assert "touched_folders" in src, f"{fn.__name__} 没收集受影响的目录"
+
+
+def test_只回收这次删空的_不碰从没装过用例的():
+    """从没装过用例的目录可能是人先搭好的结构，替他删掉更糟。
+
+    判据是"这次删除波及到的目录"，不是"所有空目录"。
+    """
+    import inspect
+
+    from app.services import case_service
+
+    src = inspect.getsource(case_service._prune_emptied_folders)
+    assert "folder_ids" in src.split("\n")[0] or "folder_ids: set" in src
+    # 必须同时看"有没有用例"和"有没有子目录"，只看其一会把父目录连坐删掉
+    assert "Case.folder_id == f.id" in src
+    assert "CaseFolder.parent_id == f.id" in src
+
+
+def test_批量清空目录不接受删光指令():
+    """服务端按**给定的 id 名单**删，而且逐个重判一次是否真的空 ——
+    页面拉到名单和点确认之间，别人可能刚往里放了用例。"""
+    import inspect
+
+    from app.services import folder_service
+
+    src = inspect.getsource(folder_service.prune_empty_folders)
+    assert "folder_ids" in src
+    assert "CaseFolder.id.in_(folder_ids)" in src, "必须限定在名单内"
+    assert "if cases or children:" in src, "必须服务端重判，不能信名单"
+
+
+def test_HMR的websocket不算接口_但真websocket要留():
+    """vite 的 HMR socket 是 `ws://host:5173/?token=xxx`，握手 101。
+
+    不能一刀切把 101 全滤掉 —— 被测系统自己的实时功能也走 websocket，
+    把那些证据丢了，实时相关的失败就再也查不出来。判据是**根路径**。
+    """
+    import json
+    import os
+    import tempfile
+
+    from app.engine.har import parse_har
+
+    har = {"log": {"entries": [
+        {"startedDateTime": "2026-08-10T10:00:00Z", "time": 1,
+         "request": {"method": "GET", "url": u, "headers": []},
+         "response": {"status": 101, "content": {"mimeType": ""}}}
+        for u in ["ws://h:5173/?token=abc", "ws://h:5173/socket.io/?EIO=4", "wss://h/ws/notify"]
+    ]}}
+    fd, path = tempfile.mkstemp(suffix=".har")
+    os.write(fd, json.dumps(har).encode()); os.close(fd)
+    try:
+        got = [r["url"] for r in parse_har(path)]
+    finally:
+        os.unlink(path)
+    assert got == ["ws://h:5173/socket.io/?EIO=4", "wss://h/ws/notify"], got

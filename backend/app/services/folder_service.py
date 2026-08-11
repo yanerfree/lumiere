@@ -172,3 +172,72 @@ async def _collect_descendant_ids(session: AsyncSession, parent_id: uuid.UUID) -
     for cid in child_ids:
         all_ids.extend(await _collect_descendant_ids(session, cid))
     return all_ids
+
+
+async def list_empty_folders(session: AsyncSession, branch_id: uuid.UUID) -> list[dict]:
+    """空目录：没有任何用例（含软删的）、也没有子目录。
+
+    为什么会攒出一堆：目录是建用例时按 module 顺带创建的，而彻底删除用例
+    从不回收目录（已在 case_service 修掉），加上手动建了没用的。实测某库
+    93 个目录里 51 个从来没装过用例 —— 打开用例导航一屏 (0)，
+    分不清哪些是真模块。
+    """
+    from sqlalchemy import func
+
+    from app.models.case import Case
+
+    rows = (await session.execute(
+        select(CaseFolder).where(CaseFolder.branch_id == branch_id)
+    )).scalars().all()
+
+    out = []
+    for f in rows:
+        cases = (await session.execute(
+            select(func.count()).select_from(Case).where(Case.folder_id == f.id)
+        )).scalar_one()
+        children = (await session.execute(
+            select(func.count()).select_from(CaseFolder).where(CaseFolder.parent_id == f.id)
+        )).scalar_one()
+        if cases or children:
+            continue
+        out.append({
+            "id": str(f.id), "name": f.name, "path": f.path, "depth": f.depth,
+            "createdAt": f.created_at.isoformat() if f.created_at else None,
+        })
+    return out
+
+
+async def prune_empty_folders(
+    session: AsyncSession, branch_id: uuid.UUID, folder_ids: list[uuid.UUID]
+) -> int:
+    """删掉名单里**当前确实为空**的目录。返回删掉几个。
+
+    服务端重判一次而不是信名单：页面拉到名单和点确认之间，别人可能刚往里
+    放了用例。删错一个目录会连带把用例的归属抹掉，宁可少删。
+    """
+    from sqlalchemy import func
+
+    from app.models.case import Case
+
+    if not folder_ids:
+        return 0
+    rows = (await session.execute(
+        select(CaseFolder).where(
+            CaseFolder.id.in_(folder_ids), CaseFolder.branch_id == branch_id
+        )
+    )).scalars().all()
+
+    pruned = 0
+    for f in rows:
+        cases = (await session.execute(
+            select(func.count()).select_from(Case).where(Case.folder_id == f.id)
+        )).scalar_one()
+        children = (await session.execute(
+            select(func.count()).select_from(CaseFolder).where(CaseFolder.parent_id == f.id)
+        )).scalar_one()
+        if cases or children:
+            continue
+        await session.delete(f)
+        pruned += 1
+    await session.flush()
+    return pruned

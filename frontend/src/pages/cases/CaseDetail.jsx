@@ -1077,6 +1077,53 @@ function ScenarioEditor({
                       <Button size="small" type="primary" disabled={selectedApis.length === 0} loading={apiArranging}
                         style={{ background: '#0ea5a0', borderColor: '#0ea5a0' }}
                         onClick={async () => {
+                          // 先看这条用例是不是已经有场景了。
+                          // 「一个用例 = 一个接口场景」是这个页面的前提（下面只显示步骤最多的
+                          // 那一条），所以已有的时候必须问清楚是接上去还是换掉 ——
+                          // 此前是默默再建一条：新的步骤多就把原来跑通的那条顶掉，
+                          // 步骤少就自己隐身，两种都不出声。
+                          let mode = null
+                          try {
+                            const ex = await api.get(`/projects/${projectId}/branches/${branchId}/api-tests?source_case_id=${caseId}`)
+                            const list = ex.data || []
+                            if (list.length) {
+                              const head = [...list].sort((a, b) => (b.stepCount || 0) - (a.stepCount || 0))[0]
+                              mode = await new Promise(resolve => {
+                                const m = Modal.confirm({
+                                  title: '这条用例已经有接口场景了',
+                                  width: 460,
+                                  icon: null,
+                                  content: (
+                                    <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+                                      <div style={{ padding: '8px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 8, marginBottom: 10 }}>
+                                        <b>{head.title}</b>
+                                        <div style={{ fontSize: 12, color: '#86909c' }}>
+                                          {head.stepCount || 0} 步 · 状态 {scenarioStatusMap[head.status]?.label || head.status}
+                                          {list.length > 1 && ` · 该用例下另有 ${list.length - 1} 条（页面只显示步骤最多的这条）`}
+                                        </div>
+                                      </div>
+                                      一个用例只保留一条接口场景。这次生成的 {selectedApis.length} 个接口要怎么处理？
+                                      <div style={{ fontSize: 12, color: '#86909c', marginTop: 6 }}>
+                                        换掉会把现有步骤删干净，状态回到草稿（内容变了，之前跑通的不算数）。
+                                      </div>
+                                    </div>
+                                  ),
+                                  onCancel: () => resolve(null),
+                                  // 三选一自己画：默认按钮那套只给得了两个，
+                                  // 把第三个藏进正文里等于没给。
+                                  footer: () => (
+                                    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+                                      <Button onClick={() => { resolve(null); m.destroy() }}>取消</Button>
+                                      <Button danger onClick={() => { resolve('replace'); m.destroy() }}>换掉现有步骤</Button>
+                                      <Button type="primary" style={{ background: '#0ea5a0', borderColor: '#0ea5a0' }}
+                                        onClick={() => { resolve('append'); m.destroy() }}>接到后面</Button>
+                                    </div>
+                                  ),
+                                })
+                              })
+                              if (!mode) return
+                            }
+                          } catch { /* 查不到就按新建走，后端还有一道 */ }
                           setApiArranging(true)
                           try {
                             const selected = selectedApis.map(idx => debugResult.captured_requests[idx])
@@ -1095,7 +1142,7 @@ function ScenarioEditor({
                             const resp = await fetch(`/api/projects/${projectId}/branches/${branchId}/api-tests/generate`, {
                               method: 'POST',
                               headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-                              body: JSON.stringify({ apiInfo, folderName: caseTitle || 'UI流量提取', caseId }),
+                              body: JSON.stringify({ apiInfo, folderName: caseTitle || 'UI流量提取', caseId, onExisting: mode }),
                             })
                             if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
                             const reader = resp.body.getReader()

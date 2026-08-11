@@ -24,14 +24,35 @@ logger = logging.getLogger(__name__)
 
 # 静态资源黑名单：按扩展名和 mimeType 排除。剩下的一律保留——
 # 不做 "/api/" 白名单，被测系统的接口前缀是什么我们不该假设。
+#
+# ⚠ 这份名单漏一类，「接口视图」就废了：实测一次登录+建项目抓到 75 条，
+# 其中 **68 条是前端源码模块**（`/src/App.jsx?t=…`、`/@vite/client`），
+# 真接口只有 7 条。人要在 75 行里挑出那 7 行，等于没给。
+# 漏的两处：`.jsx/.tsx/.ts/.vue` 不在扩展名里；dev server 发的是
+# `text/javascript`，而 mime 名单只有 `application/javascript`。
 _STATIC_EXT_RE = re.compile(
-    r"\.(?:png|jpe?g|gif|svg|webp|ico|bmp|css|js|mjs|map|woff2?|ttf|eot|otf|mp4|webm|wasm)(?:\?|$)",
+    r"\.(?:png|jpe?g|gif|svg|webp|ico|bmp|avif|css|less|scss"
+    r"|js|mjs|cjs|jsx|ts|tsx|mts|cts|vue|svelte|map"
+    r"|woff2?|ttf|eot|otf|mp4|webm|mp3|wav|wasm)(?:\?|$)",
     re.I,
 )
 _STATIC_MIME_RE = re.compile(
-    r"^(?:image|font|video|audio)/|^text/css|^application/(?:javascript|x-javascript|font-)",
+    r"^(?:image|font|video|audio)/"
+    r"|^text/(?:css|javascript|ecmascript)"
+    r"|^application/(?:javascript|ecmascript|x-javascript|font-)",
     re.I,
 )
+# 开发服务器自己的东西：没有扩展名，mimeType 也常常是 text/javascript 之外的花样。
+# 被测系统跑在 vite/webpack dev 上时，这些能占到抓包的一大半。
+_DEV_TOOLING_RE = re.compile(
+    r"/@(?:vite|react-refresh|id|fs|vite-plugin)|/node_modules/"
+    r"|/__vite|/sockjs-node|hot-update|/__webpack|/_next/static|/@hmr",
+    re.I,
+)
+# HMR 的 websocket：`ws://host:5173/?token=xxx`，握手返回 101。
+# 只认**根路径**上的升级请求 —— 被测系统自己的 websocket 有具体路径
+# （/ws、/socket.io…），不能一刀切把 101 全滤掉，那会把实时功能的证据也丢了。
+_HMR_SOCKET_RE = re.compile(r"^wss?://[^/]+/(?:\?|$)", re.I)
 
 _SECRET_KEY_RE = re.compile(
     r"(password|passwd|pwd|token|secret|api[_-]?key|authorization|auth|credential|cookie|session)",
@@ -112,10 +133,12 @@ def parse_har(har_path: str | Path | None) -> list[dict]:
         resp = e.get("response", {}) or {}
         url = req.get("url", "")
         mime = ((resp.get("content", {}) or {}).get("mimeType") or "")
-        if _STATIC_EXT_RE.search(url) or _STATIC_MIME_RE.search(mime):
+        status = resp.get("status")
+        if (_STATIC_EXT_RE.search(url) or _STATIC_MIME_RE.search(mime)
+                or _DEV_TOOLING_RE.search(url)
+                or (status == 101 and _HMR_SOCKET_RE.match(url))):
             continue
         post = req.get("postData") or {}
-        status = resp.get("status")
         # body 只在真正用得上的时候留：非 2xx（出错了要看返回了什么）或写操作
         # （要看提交了什么）。一次登录+CRUD 抓 70+ 条，全留 body 一行能到 300KB+，
         # 而这一行还要经 MCP 进 CC 的上下文。分类要的是 method/url/status/时间。
