@@ -22,6 +22,28 @@ const statusMap = { automated: '已自动化', pending: '待自动化', script_r
 const statusColors = { automated: '#0ea5a0', pending: '#faad14', script_removed: '#e8453c', archived: '#bfbfbf' }
 const statusBg = { automated: 'transparent', pending: 'transparent', script_removed: 'transparent', archived: 'transparent' }
 // 状态体系 v2
+
+// 六个存储态收敛成三档给人看。
+//
+// **存储保留六态是有理由的**：pending_review（跑绿了、等人确认）承载着
+// 「轮到人了」这个信号，`_owes` 的断点续跑靠它才收敛 —— 折成 debugging 的话，
+// CC 会把等人审的用例一遍遍捡回来重做，那个循环永远停不下来。
+// 但人不需要看六个词：他只关心「这一维有没有东西 / 能不能进回归」。
+//
+// 手动维度特殊：manual_status 没有任何代码会自动推进它（唯一写入点是人在编辑页
+// 手填），所以写了 9 步它照样显示「未开始」—— 实测被指出来的就是这个。
+// 手动步骤不是执行物、没有「跑通」这回事，所以按**有没有写**判，不看那个字段。
+const TIER = {
+  none:      { label: '无',     color: '#c9cdd4', bg: 'rgba(0,0,0,0.04)' },
+  debugging: { label: '调试中', color: '#faad14', bg: 'rgba(250,173,20,0.12)' },
+  published: { label: '已发布', color: '#0ea5a0', bg: 'rgba(14,165,160,0.12)' },
+}
+const tierOf = (status, hasContent) => {
+  if (status === 'executable') return 'published'
+  if (['debugging', 'pending_review', 'needs_fix'].includes(status)) return 'debugging'
+  return hasContent ? 'debugging' : 'none'
+}
+
 const lifecycleMap = {
   draft: { label: '草稿', color: '#86909c', bg: 'rgba(0,0,0,0.03)' },
   done: { label: '完成', color: '#0ea5a0', bg: '#e0f7f6' },
@@ -564,40 +586,33 @@ export default function CaseManagement() {
     { key: 'type', title: '类型', dataIndex: 'type', width: 50, defaultVisible: true, render: v => <span style={{ fontSize: 11, color: '#86909c' }}>{v?.toUpperCase()}</span> },
     // 三个标签各有各的真实来源，后端 list_case_assets 已经把两个存储取过并集了。
     // 别再回头读 row.apiScenario —— 那只是其中一个存储，MCP 回推的场景不在里面。
-    { key: 'scenarios', title: '场景', width: 112, defaultVisible: true, render: (_, row) => {
-      const apiSt = row.apiScenarioStatus
-      const uiSt = row.uiScenarioStatus
-      const apiColor = apiSt === 'completed' ? '#0ea5a0' : apiSt === 'debugging' ? '#faad14' : '#86909c'
-      const uiColor = uiSt === 'completed' ? '#7c5cbf' : uiSt === 'debugging' ? '#faad14' : '#86909c'
-      const none = !row.hasManual && !row.hasApi && !row.hasUi
-      if (none) return <span style={{ fontSize: 11, color: '#c9cdd4' }}>空壳</span>
-      return (
-        <Space size={2}>
-          {row.hasManual && <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#e0f7f6', color: '#0ea5a0', margin: 0 }}>手动</Tag>}
-          {row.hasApi && <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#e0f7f6', color: apiColor, margin: 0 }}>
-            {row.isApiTemplate && <StarFilled style={{ fontSize: 9, color: '#faad14', marginRight: 2 }} />}接口
-          </Tag>}
-          {row.hasUi && <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#f5f0ff', color: uiColor, margin: 0 }}>
-            {row.isUiTemplate && <StarFilled style={{ fontSize: 9, color: '#faad14', marginRight: 2 }} />}UI
-          </Tag>}
-        </Space>
-      )
-    }},
+    // 「场景」列已并入下面的「三件套」列 —— 「有没有」是「什么状态」的子集：
+    // 状态只要不是「无」就说明有。两列并排是把同一件事说两遍，而且它们
+    // 各自读不同字段，实测出现过一列说有、另一列说未开始。
     { key: 'priority', title: '优先级', dataIndex: 'priority', width: 56, align: 'center', defaultVisible: true, render: v => <Tag style={{ background: priorityBg[v], color: priorityColors[v], border: 'none', margin: 0 }}>{v}</Tag> },
     { key: 'module', title: '模块', dataIndex: 'module', width: 100, defaultVisible: false, render: v => <span style={{ fontSize: 12 }}>{v || '-'}</span> },
     { key: 'subModule', title: '子模块', dataIndex: 'subModule', width: 100, defaultVisible: false, render: v => <span style={{ fontSize: 12 }}>{v || '-'}</span> },
     { key: 'lifecycleStatus', title: '状态', dataIndex: 'lifecycleStatus', width: 68, defaultVisible: true, render: v => { const m = lifecycleMap[v] || lifecycleMap.draft; return <Tag style={{ background: m.bg, color: m.color, border: 'none', margin: 0, fontSize: 11 }}>{m.label}</Tag> } },
     // 三个维度挤成 10px 的小圆点，得逐个 hover 才知道是什么 —— 字号提到 11、
     // 整组一个 tooltip 一次说清三维，不用挨个悬停
-    { key: 'dimStatus', title: '手动/UI/接口', dataIndex: 'manualStatus', width: 150, defaultVisible: true, render: (_, r) => {
-      const dims = [['手', '手动', r.manualStatus], ['U', 'UI', r.uiStatus], ['接', '接口', r.apiStatus]]
+    { key: 'dimStatus', title: '三件套', dataIndex: 'manualStatus', width: 214, defaultVisible: true, render: (_, r) => {
+      const dims = [
+        ['手动', tierOf(r.manualStatus, r.hasManual)],
+        ['UI', tierOf(r.uiStatus, r.hasUi)],
+        ['接口', tierOf(r.apiStatus, r.hasApi)],
+      ]
       return (
-        <Tooltip title={dims.map(([, full, st]) => `${full}：${(dimStatusMap[st] || dimStatusMap.not_started).label}`).join('　')}>
-          <span style={{ display: 'inline-flex', gap: 5 }}>
-            {dims.map(([k, , st]) => {
-              const m = dimStatusMap[st] || dimStatusMap.not_started
-              return <span key={k} style={{ fontSize: 11, padding: '0 5px', borderRadius: 6, background: m.color + '1f', color: m.color, lineHeight: '18px' }}>{k}</span>
-            })}
+        <Tooltip title={<span style={{ fontSize: 12 }}>
+          {dims.map(([n, t]) => `${n}：${TIER[t].label}`).join('　')}
+          <br />只有「已发布」才进回归。跑绿之后勾选用例点「发布」，不用逐条开详情页。
+        </span>}>
+          <span style={{ display: 'inline-flex', gap: 4 }}>
+            {dims.map(([n, t]) => (
+              <span key={n} style={{
+                fontSize: 11, padding: '0 6px', borderRadius: 6, lineHeight: '18px',
+                background: TIER[t].bg, color: TIER[t].color,
+              }}>{n}·{TIER[t].label}</span>
+            ))}
           </span>
         </Tooltip>
       )
@@ -632,7 +647,10 @@ export default function CaseManagement() {
       } },
     // 「待审」以前只是个标签：列表里看得到，却只能去 AI 生成用例的第 5 步才审得了。
     // 看得见 ≠ 做得了 —— 在哪看到就在哪能处理，点标签直接通过/打回。
-    { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center', defaultVisible: true, render: (v, row) => {
+    // review_status 只对平台侧 AI 流水线产的那批用例有意义（那条路已下线，
+    // 47 条停在待审、只有 1 条被点过通过）。CC 回推的用例走的是三件套维度状态，
+    // 两套审核并排显示，人分不清该看哪个 —— 默认收起，要看的人自己在齿轮里开。
+    { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center', defaultVisible: false, render: (v, row) => {
       if (!v) return null
       if (v === 'approved') return <Tag style={{ fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none', margin: 0 }}>已审</Tag>
       if (v === 'rejected') return <Tag color="error" style={{ fontSize: 10, margin: 0 }}>已拒</Tag>
@@ -936,6 +954,41 @@ export default function CaseManagement() {
                   onClick={openBatchExec}>
                   批量执行
                 </Button>
+                <div style={{ width: 1, height: 16, background: 'rgba(0,0,0,0.1)' }} />
+                {/* 发布 = 人拍板说"这一维能进回归了"。**只有人能做这件事** ——
+                    CC 改不了状态，它说"能跑了"等于自证。
+                    但人也不该为此一条条开详情页：实测 257 条用例里只有 1 条到了
+                    可执行，整个回归池等于是空的，就是被这个摩擦卡住的。 */}
+                <Select size="small" placeholder="发布到回归" style={{ width: 122 }} value={null}
+                  onChange={async (dim) => {
+                    try {
+                      const r = await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/batch`,
+                        { caseIds: selectedRowKeys, action: 'publish', dimension: dim || undefined })
+                      // 0 条也报"已发布，能进回归了"就是句假话 —— 空维度会被
+                      // 跳过（发布一个没东西的维度，它进回归必挂，是条假的绿）。
+                      const n = r.data?.succeeded ?? 0
+                      if (n) message.success(`已发布 ${n} 条 —— 这一维现在能进回归了`)
+                      else message.warning('一条都没发布：勾选的用例在这一维还是「无」，先把内容做出来')
+                      setSelectedRowKeys([]); fetchCases()
+                    } catch (e) { message.error(e.message || '发布失败') }
+                  }}
+                  options={[
+                    { value: '', label: '发布·三维一起' },
+                    { value: 'manual', label: '发布·手动' },
+                    { value: 'ui', label: '发布·UI' },
+                    { value: 'api', label: '发布·接口' },
+                  ]} />
+                <Popconfirm title={`把 ${selectedRowKeys.length} 条打回调试？打回后不再进回归。`}
+                  onConfirm={async () => {
+                    try {
+                      const r = await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/batch`,
+                        { caseIds: selectedRowKeys, action: 'unpublish' })
+                      message.success(`已打回 ${r.data?.succeeded ?? 0} 条`)
+                      setSelectedRowKeys([]); fetchCases()
+                    } catch (e) { message.error(e.message || '操作失败') }
+                  }}>
+                  <Button size="small" type="link">打回调试</Button>
+                </Popconfirm>
                 <div style={{ width: 1, height: 16, background: 'rgba(0,0,0,0.1)' }} />
                 <Popconfirm title={`确定归档 ${selectedRowKeys.length} 条用例？`} onConfirm={async () => {
                   try {

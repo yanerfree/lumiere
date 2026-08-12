@@ -1480,3 +1480,77 @@ def test_知识库接口是路径参数不是查询参数():
            / "frontend/src/pages/settings/AutomationData.jsx").read_text(encoding="utf-8")
     assert "/knowledge?projectId=" not in jsx, "又写成查询参数了，页面会静默空白"
     assert "/projects/${projectId}/knowledge" in jsx
+
+
+# ── 状态：六态存储、三档展示、人一键发布 ──────────────────────────
+
+def test_发布只能人来做_CC碰不到():
+    """`executable` = 能进回归。这条线只有人能跨 —— CC 说「能跑了」等于自证。
+
+    但人也不该为此逐条开详情页：实测 257 条用例里只有 1 条到了可执行，
+    整个回归池等于空的，就是被这个摩擦卡住的。所以给批量入口，不给 CC 入口。
+    """
+    from app.schemas.case import BatchCaseRequest
+
+    actions = BatchCaseRequest.model_fields["action"].annotation.__args__
+    assert "publish" in actions and "unpublish" in actions
+
+    from app.mcp.tools.test_cases import update_case
+    import inspect
+    assert "ui_status" not in inspect.signature(update_case).parameters
+
+
+def test_空维度不给发布():
+    """那一维压根没东西，发布了它会进回归然后必挂 —— 一条假的绿。"""
+    from app.services import case_service
+
+    body = _code_of(case_service, "batch_cases")
+    assert "'debugging', 'pending_review', 'needs_fix'" in body, "发布的前置判断没了"
+    assert "没东西可发布" in body, "空维度被跳过却不说，用户以为发布成功了"
+
+
+def test_发布数只数真改了的():
+    """外面那句 `succeeded += 1` 数的是"处理了几条"。拿它当发布数，
+    空维度也会报「已发布 1 条，能进回归了」—— 而那一维根本没东西。
+    实测被自己的反向用例照出来过。
+    """
+    from app.services import case_service
+
+    body = _code_of(case_service, "batch_cases")
+    assert "touched" in body and "if not touched:" in body, "发布数还是在数「处理了几条」"
+
+
+def test_三档展示不改存储的六态():
+    """六态里 pending_review（跑绿了、等人）承载着「轮到人了」这个信号，
+    `_owes` 的断点续跑靠它才收敛 —— 折掉它，CC 会把等人审的用例一遍遍
+    捡回来重做，那个循环永远停不下来。
+
+    所以收敛发生在**展示层**：人看三档，代码留六态。
+    """
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/cases/CaseManagement.jsx").read_text(encoding="utf-8")
+    # 连等号一起钉：只找 `const tierOf` 的话，改名成 tierOfX 也含这个前缀，
+    # 守卫照样绿（子串匹配的坑，本轮第十次）。
+    assert "const tierOf = " in jsx, "没有三档映射"
+    for tier in ("'无'", "'调试中'", "'已发布'"):
+        assert tier in jsx, f"三档里缺 {tier}"
+    # 「场景」列必须已经并掉 —— 它和状态列是同一件事说两遍
+    assert "key: 'scenarios', title: '场景'" not in jsx, "重复的「场景」列又回来了"
+    # 手动维度按有没有内容判，不看那个没人维护的字段
+    assert "tierOf(r.manualStatus, r.hasManual)" in jsx
+
+
+def test_审核列默认收起():
+    """review_status 只对平台侧 AI 流水线那批用例有意义（那条路已下线，
+    47 条停在待审、只有 1 条被点过通过）。和三件套维度状态并排显示，
+    人分不清该看哪个。
+    """
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/cases/CaseManagement.jsx").read_text(encoding="utf-8")
+    block = jsx[jsx.index("key: 'reviewStatus'"):]
+    block = block[:block.index("\n")]
+    assert "defaultVisible: false" in block, "审核列又默认显示了"

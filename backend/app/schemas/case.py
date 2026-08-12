@@ -66,8 +66,11 @@ class UpdateCaseRequest(BaseSchema):
 
 class BatchCaseRequest(BaseSchema):
     """批量操作请求"""
-    action: Literal["move", "archive", "unarchive", "set_priority", "set_flaky", "unset_flaky", "delete", "hard_delete"]
+    action: Literal["move", "archive", "unarchive", "set_priority", "set_flaky", "unset_flaky",
+                    "delete", "hard_delete", "publish", "unpublish"]
     case_ids: list[uuid.UUID] = Field(min_length=1)
+    # publish / unpublish 作用在哪一维（manual / ui / api）。不传 = 三维一起。
+    dimension: Literal["manual", "ui", "api"] | None = None
     folder_id: uuid.UUID | None = None      # action=move 时必填
     priority: Literal["P0", "P1", "P2", "P3"] | None = None  # action=set_priority 时必填
 

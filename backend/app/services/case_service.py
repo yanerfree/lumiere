@@ -345,6 +345,7 @@ async def batch_cases(
     case_ids: list[uuid.UUID],
     folder_id: uuid.UUID | None = None,
     priority: str | None = None,
+    dimension: str | None = None,
 ) -> dict:
     """批量操作用例。返回 { succeeded, failed, errors }。"""
     succeeded = 0
@@ -382,6 +383,36 @@ async def batch_cases(
         elif action == "delete":
             case.deleted_at = datetime.now(timezone.utc)
             case.folder_id = None
+        elif action in ("publish", "unpublish"):
+            # 人拍板：把某一维（或三维）推到「可执行」= 能进回归，或打回调试。
+            #
+            # 这是**唯一**能推到 executable 的路径 —— CC 改不了状态（红线：
+            # 它说"能跑了"等于自证）。但人也不该为此一条条开详情页：
+            # 一批用例跑绿之后，逐条点进去改状态，几次之后就没人改了，
+            # 于是整个回归池永远是空的（实测：257 条里只有 1 条 executable）。
+            dims = [dimension] if dimension else ["manual", "ui", "api"]
+            touched = False
+            for d in dims:
+                attr = f"{d}_status"
+                cur = getattr(case, attr, None)
+                if action == "publish":
+                    # 「无」的那一维不给发布 —— 那一维压根没东西，
+                    # 发布了它会进回归然后必挂，是一条假的绿。
+                    if cur in ("debugging", "pending_review", "needs_fix"):
+                        setattr(case, attr, "executable"); touched = True
+                    elif d == "manual" and (case.steps or []) and cur != "executable":
+                        setattr(case, attr, "executable"); touched = True
+                else:
+                    if cur == "executable":
+                        setattr(case, attr, "debugging"); touched = True
+            # **只数真改了的**。外面那句 succeeded += 1 数的是"处理了几条"，
+            # 拿它当发布数，空维度也会报「已发布 1 条，能进回归了」——
+            # 而那一维根本没东西，这是句假话。实测被自己的反向用例照出来。
+            if not touched:
+                failed += 1
+                errors.append({"caseId": str(case.id),
+                               "error": "这一维还是「无」，没东西可发布"})
+                continue
 
         succeeded += 1
 

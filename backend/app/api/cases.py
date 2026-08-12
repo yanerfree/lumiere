@@ -593,6 +593,7 @@ async def batch_cases(
         case_ids=body.case_ids,
         folder_id=body.folder_id,
         priority=body.priority,
+        dimension=body.dimension,
     )
     await write_audit_log(session, action=body.action, target_type="case", changes={"count": len(body.case_ids)})
     return {"data": result}
