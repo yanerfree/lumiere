@@ -1299,3 +1299,120 @@ def test_卡片上的复制按钮不能顺手改勾选():
     # 这个坑本轮已经踩到第五次了，每次都是"断言的那个串正好出现在解释它的注释里"。
     code = "\n".join(ln for ln in block.splitlines() if not ln.strip().startswith("//"))
     assert "e.stopPropagation()" in code, "点复制会顺手改掉这个项目的 CC 工具范围"
+
+
+# ── CC 得能改自己写错的东西 ──────────────────────────────────────────
+
+def test_改用例的同名检查要排除自己():
+    """不排除自己的话，原样保存一条已存在的用例会被判成「和自己标题完全一样，
+    重复入库」——**这条用例就永远改不动了**。而改用例正是 CC 修正自己笔误的
+    唯一途径（实测：标题里混进一个俄语词、步骤 8 写的是想当然的页面行为）。
+    """
+    import inspect
+
+    from app.services import intake_gate
+
+    sig = inspect.signature(intake_gate.check_one)
+    assert "exclude_case_id" in sig.parameters, "门禁没法排除自己，改用例必被自己拦住"
+    body = _code_of(intake_gate, "check_one")
+    assert "Case.id != exclude_case_id" in body, "参数收了但查询没用上"
+
+
+def test_改用例不许碰状态():
+    """红线：状态由平台按执行事实推进、或由人拍板。
+
+    CC 想说「这条能跑了」，就去跑一遍让执行结果说话 —— 让它自己改状态，
+    等于自证。参数里根本不收这三个字段，传了会被 MCP 层直接拒。
+    """
+    import inspect
+
+    from app.mcp.tools.test_cases import update_case
+
+    params = set(inspect.signature(update_case).parameters)
+    for forbidden in ("ui_status", "api_status", "manual_status", "review_status"):
+        assert forbidden not in params, f"改用例居然能改 {forbidden} —— 破了红线"
+
+
+def test_改了步骤要说预期确认已失效():
+    """`update_case` 服务层会在步骤/预期变化时清掉「预期已确认」标记。
+    清了不说，CC 以为还确认着，下次报告里会写「预期已跟用户确认过」——
+    那是句假话。
+    """
+    from app.mcp.tools import test_cases
+
+    body = _code_of(test_cases, "update_case")
+    # 钉住**判断本身**，不是"函数里出现过这几个字" —— 那两个串在函数别处也有，
+    # 把整个 if 改成 False 都不会红（本轮第七次踩这个坑）。
+    assert "'steps' in changed or 'expectedResult' in changed" in body, (
+        "没在步骤/预期变化时给出提醒")
+    assert "预期已确认" in body, "提醒里没说清失效的是哪个标记"
+
+
+def test_改用例过的是同一套门禁():
+    """建用例拦模糊词、拦同名、自动拆粗步骤；改用例不拦的话，
+    从建那条路堵住的东西会从改这条路灌进来。
+    """
+    from app.mcp.tools import test_cases
+
+    body = _code_of(test_cases, "update_case")
+    for fn in ("_validate_case_quality", "check_one", "_split_coarse_steps"):
+        assert fn in body, f"改用例没过 {fn}，门禁被绕开了"
+
+
+# ── 失败得说清为什么：CC 反馈「没法调试」的三条通道 ────────────────
+
+def test_断言求值要记下实际值():
+    """实际值在求值时**本来就算出来了**，以前在最后 append 时被丢掉，
+    于是断言明细永远是 `actual: null`。
+
+    「期望 success」说不出「实际是 pushing」的话，就分不清这是**抢跑**
+    （配置还在下发中）还是**真错**。实测这一条正是 CC 卡住的地方。
+    """
+    from app.services.api_test_runner import _check_assertions
+
+    out = _check_assertions(
+        [{"type": "body_field", "field": "data.status", "operator": "==", "value": "success"}],
+        200, {"data": {"status": "pushing"}},
+    )
+    assert out[0]["passed"] is False
+    assert out[0]["actual"] == "pushing", f"实际值没记下来：{out[0]}"
+
+    ok = _check_assertions([{"type": "status", "value": 200}], 404, {})
+    assert ok[0]["actual"] == 404, "状态码断言也要带实际值"
+
+
+def test_失败原因写成人话而不是内部类型名():
+    """CC 拿到 `断言未通过: body_field` 只知道"某个字段不对"，
+    不知道哪个字段、期望什么、实际什么 —— 只能猜或者绕过。
+    """
+    from app.services.api_test_runner import describe_assertion, failure_detail
+
+    a = {"type": "body_field", "field": "data.status", "operator": "==",
+         "value": "success", "actual": "pushing", "passed": False}
+    desc = describe_assertion(a)
+    assert "响应字段" in desc and "data.status" in desc and "success" in desc
+    assert "body_field" not in desc, "内部类型名漏到界面上了"
+
+    d = failure_detail([a], None)
+    assert "pushing" in d["why"], f"没说实际值：{d['why']}"
+    assert d["failedAssertions"][0]["actual"] == "pushing"
+
+
+def test_接口执行给CC的返回要带失败原因():
+    """之前每一步只回 {step,status,statusCode,duration}，于是 CC 看到
+    「status=fail / statusCode=200」——200 却失败，无从查起。
+    而 error / assertions / responseBody 本来就在事件里带着。
+
+    同时钉住**通过的步骤保持精简**：十几步全带响应体，CC 的 context
+    会被这一个返回值吃掉。
+    """
+    from app.mcp.tools import api_tests
+
+    body = _code_of(api_tests, "run_api_test")
+    # 钉调用表达式，不是"函数里出现过这个名字" —— import 行也含这个名字，
+    # 只把调用删掉、import 留着，守卫照样绿（本轮第八次踩这个坑）。
+    assert "row.update(failure_detail(" in body, "失败步骤没带失败原因"
+    assert "responseSample" in body, "失败步骤没带响应片段"
+    assert "if row['status'] == 'fail'" in body, (
+        "没有区分通过/失败 —— 要么都不带（没法查），要么都带（撑爆 context）")
+    assert "precheck_result" in body, "共享资源探测结果没回给 CC"

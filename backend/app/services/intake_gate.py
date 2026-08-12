@@ -76,19 +76,27 @@ def _similar(a: str, b: str) -> float:
 
 async def check_one(
     session: AsyncSession, branch_id: uuid.UUID, title: str, module: str, priority: str,
+    exclude_case_id: uuid.UUID | None = None,
 ) -> tuple[list[str], list[str]]:
-    """单条入库校验。返回 (硬错误, 软警告)。"""
+    """单条入库校验。返回 (硬错误, 软警告)。
+
+    `exclude_case_id` 给**改用例**用：不排除自己的话，原样保存一条已存在的用例
+    会被判成"和自己标题完全一样，重复入库"，于是这条用例永远改不动 ——
+    而改用例正是 CC 修正自己笔误的唯一途径。
+    """
     errors: list[str] = []
     warns: list[str] = []
 
     # 闸 1 语义去重 —— 同模块下相似标题
-    rows = (await session.execute(
+    stmt = (
         select(Case.case_code, Case.title)
         .join(CaseFolder, CaseFolder.id == Case.folder_id, isouter=True)
         .where(Case.branch_id == branch_id, Case.deleted_at.is_(None),
                CaseFolder.name == module)
-        .limit(500)
-    )).all()
+    )
+    if exclude_case_id is not None:
+        stmt = stmt.where(Case.id != exclude_case_id)
+    rows = (await session.execute(stmt.limit(500))).all()
     nt = _norm(title)
     best = (0.0, None, None)
     exact = None

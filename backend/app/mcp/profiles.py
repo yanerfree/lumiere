@@ -46,7 +46,7 @@ _LABELS = {
 _CHAIN = ["live", "uiscript", "regression", "triage"]
 
 _LIVE = _LOCATE + [
-    "tb_list_cases", "tb_get_case", "tb_get_folder_tree", "tb_create_case",
+    "tb_list_cases", "tb_get_case", "tb_get_folder_tree", "tb_create_case", "tb_update_case",
     "tb_list_api_tree", "tb_get_api_node",
     "tb_list_environments", "tb_get_merged_variables",
     "tb_get_sync_spec", "tb_list_global_data",

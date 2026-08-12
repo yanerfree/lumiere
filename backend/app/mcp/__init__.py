@@ -301,6 +301,12 @@ _register(
 )
 
 _register(
+    test_cases.update_case,
+    name="tb_update_case",
+    description="改一条已有用例的内容（只传要改的字段，没传的原样不动）。**你写错了自己改，别喊人** —— 标题打错字、步骤和实测不符（比如写「跳转回列表」、实际跳的是详情页），都用这个修。过的是和建用例同一套门禁（模糊词硬拒、同模块同名硬拒、步骤粒度自动拆），同名检查会排除自己。**改不了状态**：ui_status/api_status/manual_status 一概不收 —— 状态由平台按执行事实推进或由人拍板；你要说「这条能跑了」，就去跑一遍让结果说话。改了步骤或预期结果会自动清掉「预期已确认」标记（返回里会提醒），要重新跟用户对一遍。参数: case_id(用例UUID), title, priority, preconditions, steps([{seq,action,expected}]), expected_result, target_level(spec/spec_api/full), expected_confirmed_by, expected_confirmed_note",
+)
+
+_register(
     test_cases.get_folder_tree,
     name="tb_get_folder_tree",
     description="用例目录树 + 每层用例数。决定新用例该放哪个模块时用。参数: branch_id(分支UUID)",

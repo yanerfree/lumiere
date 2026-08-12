@@ -16,6 +16,33 @@ const SRC_COLOR = {
   auto_token: '#fa8c16', unknown: '#c9cdd4',
 }
 
+// 断言类型 → 人话。**必须和后端 _ASSERT_LABELS 一致**（api_test_runner.py）——
+// 两处各写一份的话，同一条断言在报告里和这个抽屉里叫两个名字。
+const ASSERT_LABELS = {
+  status: '状态码', body_field: '响应字段', body_contains: '响应包含',
+  not_contains: '响应不含', header: '响应头', json_path: 'JSONPath', duration: '耗时',
+}
+
+/** 一条断言写成人话（通过/没过都用它）：{标签} {字段} {操作符} {期望}，实际 {实际值}
+ *
+ * 原来只翻译 status 一种，其余一律印成 `断言未通过: body_field` —— 只有内部
+ * 类型名，不说是哪个字段、期望什么、实际什么。实测 CC 拿到这句话没法自己修，
+ * 只能绕过；而 field/operator/value/actual 这些**本来就在断言对象里带着**，
+ * 是被这行代码扔掉的。
+ */
+function assertText(a, statusCode) {
+  const label = ASSERT_LABELS[a.type] || a.type || '断言'
+  const field = a.field ? ` ${a.field}` : ''
+  const op = a.operator || '=='
+  const want = a.value !== undefined && a.value !== null ? a.value : a.expected
+  // status 类型的"实际"就是这一步的状态码，断言对象里未必带 actual
+  const got = a.actual !== undefined && a.actual !== null
+    ? a.actual : (a.type === 'status' ? statusCode : undefined)
+  const wantTxt = want === undefined ? '' : ` ${op} ${JSON.stringify(want)}`
+  const gotTxt = got === undefined ? '' : `，实际 ${JSON.stringify(got)}`
+  return `${label}${field}${wantTxt}${gotTxt}`
+}
+
 function fmt(ms) {
   if (!ms && ms !== 0) return '-'
   if (ms < 1000) return `${ms}ms`
@@ -134,11 +161,11 @@ function ConsoleLines({ extracted, preScript, postScript }) {
 /** 断言结果：期望 + 实际，一行一条 */
 function Assertions({ items, statusCode }) {
   if (!items?.length) return <div style={{ fontSize: 12, color: '#c9cdd4' }}>本步没有断言</div>
-  const desc = (a) =>
-    a.type === 'status' ? `状态码 ${a.operator || '=='} ${JSON.stringify(a.value)}（实际 ${statusCode}）` :
-    a.type === 'body_contains' ? `响应${a.operator === 'not_contains' ? '不' : ''}包含 ${JSON.stringify(a.value)}` :
-    a.type === 'body_field' ? `${a.field} ${a.operator || '=='} ${JSON.stringify(a.expected ?? a.value)}${a.actual !== undefined ? `（实际 ${JSON.stringify(a.actual)}）` : ''}` :
-    JSON.stringify(a)
+  // 和收起行用**同一个**渲染器：两处各写一份的话，同一条断言在两个地方
+  // 说法不一样；而且这里原本只认 status/body_contains/body_field 三种，
+  // 其余（header / json_path / duration / not_contains）直接把整个对象
+  // JSON.stringify 甩给用户看。
+  const desc = (a) => assertText(a, statusCode)
   return (
     <div>
       {items.map((a, j) => (
@@ -298,7 +325,7 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
           // 状态码也没有耗时，不写出来这一行就完全不说话。
           const failHint = isFail
             ? (r.error || (r.assertions || []).filter(a => !a.passed)
-                .map(a => a.type === 'status' ? `状态码期望 ${a.operator || '=='} ${JSON.stringify(a.value)}，实际 ${r.statusCode}` : `断言未通过: ${a.type}`)
+                .map(a => assertText(a, r.statusCode))
                 .join('；'))
             : null
 

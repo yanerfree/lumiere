@@ -232,6 +232,103 @@ async def create_case(
     return result
 
 
+async def update_case(
+    session: AsyncSession,
+    case_id: str,
+    title: str | None = None,
+    priority: str | None = None,
+    preconditions: str | None = None,
+    steps: list | None = None,
+    expected_result: str | None = None,
+    target_level: str | None = None,
+    expected_confirmed_by: str | None = None,
+    expected_confirmed_note: str | None = None,
+) -> dict:
+    """改一条已有用例的内容。只传要改的字段，没传的原样不动。
+
+    **为什么要有这个工具**：实测撞到过 —— CC 自己把标题打错了一个字、步骤 8 写的
+    是想当然的页面行为（说跳列表，实测跳详情页），发现之后**改不掉**，只能让人
+    去平台上手工修。一个能写不能改的通道，等于每个笔误都要惊动人一次。
+
+    过的是和建用例**同一套门禁**（模糊词、同模块同名、步骤粒度），但同名检查会
+    排除自己 —— 否则原样保存都会被判成"重复入库"。
+
+    **不能改状态**：ui_status / api_status / manual_status 一概不收。状态由平台
+    按执行事实推进，或由人拍板，这是红线；你要说"这条现在能跑了"，去跑一遍，
+    让执行结果说话。
+    """
+    from sqlalchemy import select
+
+    from app.schemas.case import UpdateCaseRequest
+    from app.services import case_service, intake_gate
+
+    cid = uuid.UUID(case_id)
+    case = await case_service.get_case(session, cid)
+    if not case:
+        return {"error": f"用例 {case_id} 不存在"}
+
+    # module 用来做同名检查，取用例当前所在目录 —— 改标题不改目录是常态
+    module = None
+    if case.folder_id:
+        from app.models.case import CaseFolder
+        module = (await session.execute(
+            select(CaseFolder.name).where(CaseFolder.id == case.folder_id)
+        )).scalar_one_or_none()
+
+    new_title = title if title is not None else case.title
+    new_priority = priority if priority is not None else case.priority
+    warnings = _validate_case_quality(
+        new_title, module or "", new_priority,
+        preconditions if preconditions is not None else case.preconditions,
+        steps if steps is not None else case.steps,
+        expected_result if expected_result is not None else case.expected_result,
+    )
+
+    if title is not None and module:
+        gate_errors, gate_warns = await intake_gate.check_one(
+            session, case.branch_id, new_title, module, new_priority, exclude_case_id=cid,
+        )
+        if gate_errors:
+            return {"error": "改完没通过入库门禁，改好再传：", "problems": gate_errors}
+        warnings = list(warnings) + list(gate_warns)
+
+    if steps is not None:
+        steps = _split_coarse_steps(steps)
+        warnings = list(warnings) + _split_warnings(steps)
+        for i, s in enumerate(steps):
+            if not s.get("seq"):
+                s["seq"] = i + 1
+
+    if target_level is not None and target_level not in ("spec", "spec_api", "full"):
+        return {"error": "target_level 只能是 spec / spec_api / full"}
+
+    changed = [k for k, v in (("title", title), ("priority", priority),
+                              ("preconditions", preconditions), ("steps", steps),
+                              ("expectedResult", expected_result)) if v is not None]
+    data = UpdateCaseRequest(
+        title=title, priority=priority, preconditions=preconditions,
+        steps=steps, expected_result=expected_result,
+    )
+    case = await case_service.update_case(session, cid, data)
+    if target_level is not None:
+        case.target_level = target_level
+    if (expected_confirmed_note or "").strip():
+        from datetime import datetime, timezone
+        case.expected_confirmed_note = expected_confirmed_note.strip()[:2000]
+        case.expected_confirmed_actor = (expected_confirmed_by or "未署名").strip()[:100]
+        case.expected_confirmed_at = datetime.now(timezone.utc)
+    await session.commit()
+
+    result = {**_case_to_dict(case), "targetLevel": case.target_level, "changed": changed}
+    # 改了步骤或预期，平台会把"预期已确认"标记清掉 —— 说出来，否则 CC 以为还确认着
+    if ("steps" in changed or "expectedResult" in changed) and not case.expected_confirmed_at:
+        warnings = list(warnings) + [
+            "步骤/预期改动了，之前的「预期已确认」标记已失效 —— 要重新跟用户对一遍。"]
+    if warnings:
+        result["_qualityWarnings"] = warnings
+    return result
+
+
 _FUZZY_WORDS = ["操作成功", "显示正常", "无报错", "符合预期", "正确显示", "成功返回", "正常运行", "有效数据", "合法数据"]
 _API_PATTERNS = ["POST /", "GET /", "PUT /", "DELETE /", "PATCH /", "返回 2", "返回 4", "返回 5", "HTTP ", "curl "]
 

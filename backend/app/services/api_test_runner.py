@@ -308,6 +308,11 @@ def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> li
     results = []
     for a in assertions:
         passed = False
+        # 实际值：下面几个分支本来就算出来了，以前在最后 append 时被丢掉，
+        # 于是断言明细里永远是 `actual: null` —— 报告和 MCP 都只能说
+        # 「期望 success」，说不出「实际是 pushing」。而"实际是什么"恰恰是
+        # 判断"这是抢跑还是真错"的唯一依据。
+        actual = None
         a_type = a.get("type")
         operator = a.get("operator") or _DEFAULT_OP.get(a_type, "==")
 
@@ -342,6 +347,8 @@ def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> li
             op = operator if operator in ("contains", "not_contains") else "contains"
             hit = str(contain_val) in str(resp_body)
             passed = hit if op == "contains" else not hit
+            # 响应体可能很大，只给前 120 字当"实际" —— 够判断是不是完全不沾边
+            actual = str(resp_body)[:120] if not passed else None
         elif a_type == "body_field":
             actual = _extract_value(resp_body, field_path) if field_path else resp_body
             if operator == "==":
@@ -355,7 +362,7 @@ def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> li
             elif operator == "not_contains":
                 passed = expected is not None and str(expected) not in str(actual)
 
-        results.append({**a, "passed": passed})
+        results.append({**a, "passed": passed, "actual": actual})
     return results
 
 
@@ -788,6 +795,51 @@ _ASSERT_LABELS = {
 }
 
 
+def describe_assertion(a: dict) -> str:
+    """一条断言写成人话：`响应字段 data.total == 3`。
+
+    断言原文是 `{type, operator, value/expected, field, actual, passed}`。
+    只印 type（"✓ status"、"断言未通过: body_field"）等于没说 —— 人要看的是
+    "断言了什么、期望多少、实际多少"。实测 CC 拿到 `断言未通过: body_field`
+    没法自己修，只能绕过，而这些字段本来就在对象里带着。
+
+    **这是唯一的渲染口径**：报告轨迹、MCP 返回都用它，前端 RunResultPanel 里
+    那份是它的镜像（改了这儿记得同步，两处说法不一样比不说更糟）。
+    """
+    return a.get("message") or " ".join(
+        str(x) for x in (
+            _ASSERT_LABELS.get(a.get("type"), a.get("type") or "断言"),
+            a.get("field") or "",
+            a.get("operator") or "==",
+            a.get("value") if a.get("value") is not None else a.get("expected"),
+        ) if str(x) != ""
+    )
+
+
+def failure_detail(assertions, error) -> dict:
+    """把一步失败的原因整理成给调用方看的东西。
+
+    给 MCP 用：CC 那边只拿到 `{step, status, statusCode}` 时，看到"200 却 fail"
+    是完全无解的 —— 实测就卡在这儿。
+    """
+    bad = [a for a in (assertions or []) if isinstance(a, dict) and not a.get("passed")]
+    why = "；".join(
+        describe_assertion(a) + (f"，实际 {a.get('actual')!r}" if a.get("actual") is not None else "")
+        for a in bad
+    )
+    if error:
+        why = f"{why}｜{error}" if why else str(error)
+    return {
+        "why": why or "没有断言失败也没有错误信息 —— 这种情况本身就该报 bug",
+        "failedAssertions": [{
+            "type": a.get("type"), "field": a.get("field"),
+            "operator": a.get("operator") or "==",
+            "expected": a.get("value") if a.get("value") is not None else a.get("expected"),
+            "actual": a.get("actual"),
+        } for a in bad],
+    }
+
+
 def _first_error(result: ScenarioResult) -> str | None:
     """第一个挂掉的步骤的错误。摘要只留一条——列表里那一列本来就只显示一行。"""
     for s in result.steps:
@@ -811,16 +863,7 @@ def _readable_trace(result: ScenarioResult) -> str:
         for a in (s.assertions or []):
             if not isinstance(a, dict):
                 continue
-            # 断言原文是 {type, operator, value, field, passed}。只印 type
-            # （"✓ status"）等于没说——人要看的是"断言了什么"，所以拼成一句话。
-            desc = a.get("message") or " ".join(
-                str(x) for x in (
-                    _ASSERT_LABELS.get(a.get("type"), a.get("type") or "断言"),
-                    a.get("field") or "",
-                    a.get("operator") or "==",
-                    a.get("value") if a.get("value") is not None else a.get("expected"),
-                ) if str(x) != ""
-            )
+            desc = describe_assertion(a)
             if a.get("passed"):
                 lines.append(f"      ✓ {desc}")
             else:

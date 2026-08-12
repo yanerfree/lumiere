@@ -177,12 +177,37 @@ async def run_api_test(
     results = []
     async for event in run_batch(ids, session, base_env=base_env):
         if event.type == "step_result":
-            results.append({
+            row = {
                 "step": event.data.get("stepName"),
                 "status": event.data.get("status"),
                 "statusCode": event.data.get("statusCode"),
                 "duration": event.data.get("duration"),
-            })
+            }
+            # 挂了的步骤要说清为什么。**通过的步骤保持精简** —— 十几步全带上
+            # 响应体，CC 的 context 直接被这一个返回值吃掉。
+            #
+            # 之前这里只回 {step,status,statusCode,duration}，于是 CC 看到的是
+            # 「确认推送已收敛到全部网关节点 / status=fail / statusCode=200」——
+            # 200 却失败，它完全不知道该改什么，只能绕过。而 error / assertions /
+            # responseBody 这些**本来就在事件里带着**，是这几行给扔了。
+            if row["status"] == "fail":
+                from app.services.api_test_runner import failure_detail
+                row.update(failure_detail(event.data.get("assertions"), event.data.get("error")))
+                body = event.data.get("responseBody")
+                if body is not None:
+                    row["responseSample"] = str(body)[:400]
+            results.append(row)
+        elif event.type == "precheck_result":
+            # 共享资源探测：探不到的话后面引用 ${资源名} 的步骤会直接不发请求。
+            # 不回给调用方，CC 只能看到"某一步 statusCode=null"，无从查起。
+            miss = event.data.get("missing") or []
+            if miss:
+                results.append({
+                    "precheck": "共享资源没探到 —— 引用 ${资源名} 的步骤会直接不发请求（statusCode 为空）",
+                    "missing": miss,
+                    "howToFix": "按 tb_list_global_data(probe=true) 看它的 createDef 自己把资源造出来；"
+                                "或检查 exists_check.extract 的 JSONPath 是不是没抽到值。",
+                })
         elif event.type == "scenario_done":
             results.append({
                 "scenario": event.data.get("title"),
