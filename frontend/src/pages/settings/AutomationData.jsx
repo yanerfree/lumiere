@@ -2,11 +2,11 @@ import { useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   Card, Table, Button, Modal, Form, Input, Switch, Tag, Tooltip,
-  Popconfirm, message, Space, Typography, Empty, Alert,
+  Popconfirm, message, Space, Typography, Empty, Alert, Select,
 } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, DatabaseOutlined,
-  KeyOutlined, ReloadOutlined,
+  KeyOutlined, ReloadOutlined, BulbOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 
@@ -179,6 +179,69 @@ export default function AutomationData() {
     },
   ]
 
+
+  // ---- 项目须知 ----
+  // 写用例的人（和 CC）**必须知道、但接口文档里看不出来**的那些事：
+  // 「404 有两种，只断状态码会误判」「offline 会连带把 enabled 置 false」。
+  // 它们过去只活在某一次会话的上下文里，会话一结束就没了，下一轮从零再踩一遍。
+  const NOTE_CATS = [
+    { value: 'api_note', label: '接口/系统行为' },
+    { value: 'bug_pattern', label: '踩过的坑' },
+    { value: 'custom', label: '其它' },
+  ]
+  const NOTE_MAX = 200   // 和后端 project_notes.MAX_CONTENT 一致
+  const [notes, setNotes] = useState([])
+  const [noteLoading, setNoteLoading] = useState(false)
+  const [noteOpen, setNoteOpen] = useState(false)
+  const [noteForm] = Form.useForm()
+  const [editingNote, setEditingNote] = useState(null)
+
+  const loadNotes = useCallback(async () => {
+    setNoteLoading(true)
+    try {
+      // 路由是 /api/projects/{id}/knowledge —— **路径参数不是查询参数**。
+      // 写成 ?projectId= 会 404，而拦截器把它吞了：页面只是空着，不报错。
+      const res = await api.get(`/projects/${projectId}/knowledge`)
+      // review_feedback 是 AI 评审自己写的，不是项目知识 —— 混在一起
+      // 人分不清"系统的事实"和"对用例的意见"
+      setNotes((res.data || []).filter(n => n.category !== 'review_feedback'))
+    } catch { /* 拦截器已弹错 */ } finally { setNoteLoading(false) }
+  }, [projectId])
+  useEffect(() => { if (projectId) loadNotes() }, [loadNotes, projectId])
+
+  const saveNote = async () => {
+    const v = await noteForm.validateFields()
+    try {
+      if (editingNote) await api.delete(`/projects/${projectId}/knowledge/${editingNote.id}`)
+      await api.post(`/projects/${projectId}/knowledge`, v)
+      message.success(editingNote ? '已更新' : '已添加')
+      setNoteOpen(false); setEditingNote(null); noteForm.resetFields(); loadNotes()
+    } catch (e) { message.error(e.message || '保存失败') }
+  }
+
+  const noteCols = [
+    { title: '分类', dataIndex: 'category', width: 110,
+      render: c => <Tag color={c === 'bug_pattern' ? 'orange' : c === 'api_note' ? 'blue' : 'default'}>
+        {NOTE_CATS.find(x => x.value === c)?.label || c}</Tag> },
+    { title: '一句话说清', dataIndex: 'title', width: 260,
+      render: t => <span style={{ fontWeight: 500 }}>{t}</span> },
+    { title: '正文', dataIndex: 'content',
+      render: c => <span style={{ fontSize: 12, color: '#4e5969', whiteSpace: 'pre-wrap' }}>{c}</span> },
+    { title: '谁写的', dataIndex: 'source', width: 90,
+      render: s => <Tag color={s === 'cc' ? 'cyan' : 'default'}>{s === 'cc' ? 'CC 回写' : '人工'}</Tag> },
+    { title: '操作', width: 90, render: (_, r) => (
+      <Space size={4}>
+        <Button type="text" size="small" icon={<EditOutlined />}
+          onClick={() => { setEditingNote(r); noteForm.setFieldsValue(r); setNoteOpen(true) }} />
+        <Popconfirm title="删掉这条须知？" onConfirm={async () => {
+          await api.delete(`/projects/${projectId}/knowledge/${r.id}`); message.success('已删除'); loadNotes()
+        }} okText="删除" cancelText="取消">
+          <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+        </Popconfirm>
+      </Space>
+    ) },
+  ]
+
   // ---- 凭证概览（只读，聚合各环境的凭证类变量，多角色） ----
   const [creds, setCreds] = useState([])
   const [credLoading, setCredLoading] = useState(false)
@@ -252,6 +315,30 @@ export default function AutomationData() {
         />
       </Card>
 
+
+      <Card
+        style={{ marginBottom: 16 }}
+        title={<span><BulbOutlined /> 项目须知</span>}
+        extra={<Space>
+          <Button icon={<ReloadOutlined />} size="small" onClick={loadNotes}>刷新</Button>
+          <Button type="primary" icon={<PlusOutlined />} size="small"
+            onClick={() => { setEditingNote(null); noteForm.resetFields(); setNoteOpen(true) }}>新增须知</Button>
+        </Space>}
+      >
+        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+          message={<span style={{ fontSize: 12.5 }}>
+            写用例必须知道、但接口文档里看不出来的那些事 —— 比如「404 有两种，
+            上游的 404 和网关无路由的 404 不是一回事，只断状态码会误判成没生效」。
+            人和 Claude Code 都能往里写（CC 用 tb_add_project_note），
+            动手写用例之前 CC 会先读一遍。
+            一条只说一件事、正文 {NOTE_MAX} 字以内 —— 这些内容每次生成都要整个喂给 CC，
+            长了直接挤占它的上下文。
+          </span>} />
+        <Table rowKey="id" size="small" loading={noteLoading} columns={noteCols}
+          dataSource={notes} pagination={false}
+          locale={{ emptyText: <Empty description="还没有项目须知。跑一轮下来「原来这个接口是这样」的那些发现，写进来，下一轮就不用再踩一遍。" /> }} />
+      </Card>
+
       <Card
         title={<span><KeyOutlined /> 凭证概览（只读）</span>}
         extra={<Button icon={<ReloadOutlined />} size="small" onClick={loadCreds}>刷新</Button>}
@@ -310,6 +397,26 @@ export default function AutomationData() {
           </Form.Item>
         </Form>
       </Modal>
+    
+      <Modal open={noteOpen} title={editingNote ? '编辑须知' : '新增须知'}
+        onCancel={() => { setNoteOpen(false); setEditingNote(null) }} onOk={saveNote}
+        okText="保存" cancelText="取消" destroyOnHidden>
+        <Form form={noteForm} layout="vertical" initialValues={{ category: 'api_note' }}>
+          <Form.Item name="category" label="分类" rules={[{ required: true }]}>
+            <Select options={NOTE_CATS} />
+          </Form.Item>
+          <Form.Item name="title" label="一句话说清是什么" rules={[{ required: true, max: 200 }]}
+            extra="例如「404 有两种，别只看状态码」">
+            <Input placeholder="现象是什么" />
+          </Form.Item>
+          <Form.Item name="content" label="正文" extra={`一条只说一件事，写成「现象 + 别踩的坑」。${NOTE_MAX} 字以内 —— 这些内容每次生成都会整个喂给 CC。`}
+            rules={[{ required: true }, { max: NOTE_MAX, message: `超过 ${NOTE_MAX} 字了，拆成两条` }]}>
+            <Input.TextArea rows={4} showCount maxLength={NOTE_MAX}
+              placeholder="转发路径不填=按路由原样转发，上游无此路径回 404（上游的 404，HTML）；和网关「无此路由」的 404 完全不同。只断状态码会误判成「没生效」。" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
     </div>
   )
 }

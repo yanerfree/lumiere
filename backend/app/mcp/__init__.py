@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes
 
 mcp = FastMCP(
     name="testBench",
@@ -299,6 +299,21 @@ _register(
     name="tb_create_case",
     description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。**入库要过门禁**：标题完全同名硬拒、标题含模糊词（操作成功/显示正常/无报错/符合预期）硬拒。标题相似只提醒不拦。**P0 三件套不拦你**：同源生成的三份产物容易互相一致而不正确（典型是把「创建成功」做成「返回 200」），所以建议先在对话里跟用户确认这个场景到底要验什么，再把确认内容用 expected_confirmed_by / expected_confirmed_note 带上来 —— 平台只记录、不拦截，没带只回一句提醒。参数: branch_id, title, module(中文如'服务管理'), case_type(e2e/api), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result, target_level(这条要做到什么程度: spec只要步骤/spec_api步骤+接口/full三件套，默认spec), expected_confirmed_by(跟谁确认的), expected_confirmed_note(确认了什么，把对话里那句原话带上来)",
 )
+
+_section("项目须知")
+
+_register(
+    project_notes.list_project_notes,
+    name="tb_list_project_notes",
+    description="列出项目须知 —— **动手写用例之前先读一遍**。里面是前人（和你自己上几轮）踩出来的坑：接口哪个行为反直觉、哪个状态会连带改别的字段、哪个角色走的是另一条路径。不知道这些就会写出错的断言，然后把「被测系统本来就这样」当成 bug 报上去。参数: project_id(项目UUID), category(可选: api_note接口/系统行为 / bug_pattern踩过的坑 / custom其它)",
+)
+
+_register(
+    project_notes.add_project_note,
+    name="tb_add_project_note",
+    description="把这一轮撞出来的坑写回项目须知，别让下一轮再踩一遍。**一条只说一件事，正文 200 字以内**（超了直接拒，不截断），写成「现象 + 别踩的坑」。只记你亲手撞到的**事实**（「这个接口 404 有两种：上游的 404 和网关无路由的 404，只断状态码会误判」），不记判断结论（结论会过期，事实不会）。同标题覆盖。参数: project_id, title, content, category(api_note/bug_pattern/custom，默认 api_note)",
+)
+
 
 _register(
     test_cases.update_case,

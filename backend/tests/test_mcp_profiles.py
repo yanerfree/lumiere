@@ -58,8 +58,13 @@ def test_全链路档大_但仍然挡住那几条岔路():
         ("tb_get_doc_spec", "写文档是另一件活"),
     ]:
         assert forbidden not in tools, f"{forbidden} 不该进全链路档：{why}"
-    # 也不能大到跟全量没区别，那样等于没分
-    assert len(tools) < len(NAMES) * 0.85, "全链路档已经接近全量，重新想想它排除了什么"
+    # 也不能大到跟全量没区别。**按"排除了几个"判，不按比例判** ——
+    # 比例的分母是全部工具数，砍掉 5 个 docgen 之后分母变小，比例自己就涨了，
+    # 而全链路档一个岔路都没多放。守卫该盯的是"还挡着几条岔路"，不是百分比。
+    excluded = set(NAMES) - tools
+    assert len(excluded) >= 5, (
+        f"全链路档只排除了 {len(excluded)} 个工具（{sorted(excluded)}）——"
+        "接近全量了，重新想想它到底排除了什么")
 
 
 def test_全链路档覆盖整条链的每一步():

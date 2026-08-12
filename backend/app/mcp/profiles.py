@@ -29,6 +29,10 @@ from __future__ import annotations
 
 # 每条链都要先定位到项目/分支，单列出来避免各档位重复抄
 _LOCATE = ["tb_list_projects", "tb_list_branches"]
+# 项目须知：动手前该读的那些「被测系统就是这样」。读放进 _LOCATE 之外
+# 单列，是因为归因档也要读（判断"这是缺陷还是系统本来如此"全靠它），
+# 但归因档刻意不给任何写库工具。
+_NOTES_READ = ["tb_list_project_notes"]
 
 # 档位名单列出来：全链路那一档的说明要**逐字引用**这四个名字拼出来。
 # 手写一句"写用例 → 回填接口场景和 UI 脚本 → 组计划跑一轮 → 读报告 → 提归因"
@@ -45,7 +49,7 @@ _LABELS = {
 # 又得回头猜哪个才算数。test_四段的排列顺序和说明一致 钉住了这条。
 _CHAIN = ["live", "uiscript", "regression", "triage"]
 
-_LIVE = _LOCATE + [
+_LIVE = _LOCATE + _NOTES_READ + ["tb_add_project_note"] + [
     "tb_list_cases", "tb_get_case", "tb_get_folder_tree", "tb_create_case", "tb_update_case",
     "tb_list_api_tree", "tb_get_api_node",
     "tb_list_environments", "tb_get_merged_variables",
@@ -56,7 +60,7 @@ _LIVE = _LOCATE + [
     "tb_list_api_tests", "tb_get_api_test", "tb_run_api_test",
 ]
 
-_UISCRIPT = _LOCATE + [
+_UISCRIPT = _LOCATE + _NOTES_READ + [
     "tb_list_cases", "tb_get_case",
     "tb_get_sync_spec", "tb_list_global_data",
     "tb_list_scenario_variables", "tb_upsert_scenario_variables",
@@ -64,7 +68,7 @@ _UISCRIPT = _LOCATE + [
     "tb_sync_ui_script", "tb_run_ui_script", "tb_get_ui_script_result",
 ]
 
-_TRIAGE = _LOCATE + [
+_TRIAGE = _LOCATE + _NOTES_READ + [
     "tb_list_plans", "tb_list_reports", "tb_get_report_summary",
     "tb_get_failed_scenarios", "tb_get_ui_script_result", "tb_get_case",
     "tb_submit_analysis", "tb_list_pending_confirm",

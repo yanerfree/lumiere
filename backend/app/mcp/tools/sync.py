@@ -115,8 +115,24 @@ def _collect_refs(*objs: Any) -> set[str]:
     return names
 
 
-def _looks_hardcoded(value: str) -> bool:
-    """疑似写死的业务数据（启发式，宁保守勿滥报——只软警告，不拦截）。"""
+# 字段名一看就是"枚举槽位"的。这些位置上的短小写标识符是**被测系统的契约**，
+# 写死才是对的 —— 把 service_type="api"、protocol="http" 标成"疑似写死"，
+# 等于在教人把常量也做成变量，那比写死更糟。实测被误报过这两个。
+_ENUM_FIELD_RE = re.compile(
+    r"(^|[._])(type|protocol|status|state|mode|method|scheme|kind|level|role|"
+    r"category|format|action|strategy|policy|direction|unit)$", re.I)
+# 枚举值长什么样：短的小写标识符。`api` / `http` / `round_robin` / `not_started`
+_ENUM_VALUE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,20}$")
+
+
+def _looks_hardcoded(value: str, field_path: str = "") -> bool:
+    """疑似写死的业务数据（启发式，宁保守勿滥报——只软警告，不拦截）。
+
+    `field_path` 是这个值在 body 里的位置（如 `config.protocol`）。**判据里最准的
+    信号是字段名**：枚举槽位上的短标识符不算业务数据，那是接口契约的一部分。
+    没有它就只能看值本身，于是 `api`、`http` 这种一律误报 —— 而误报的代价不只是
+    噪音：警告多了人就不看了，真正写死的 id 反而被淹掉。
+    """
     s = value.strip()
     if not s or "${" in s or "{{" in s:      # 有引用/模板 → 不算写死
         return False
@@ -127,6 +143,10 @@ def _looks_hardcoded(value: str) -> bool:
     if s.lower() in _STRUCT_ENUM:
         return False
     if re.fullmatch(r"[\d.\-:+eE]+", s):      # 纯数字/时间戳/小数
+        return False
+    # 枚举字段上的枚举值 —— 该写死，不报
+    leaf = (field_path or "").rsplit("[", 1)[0]
+    if _ENUM_FIELD_RE.search(leaf) and _ENUM_VALUE_RE.fullmatch(s):
         return False
     return bool(re.search(r"[A-Za-z一-鿿]", s))  # 含字母或中文才像业务数据
 
@@ -451,7 +471,7 @@ async def sync_orchestrated_scenario(
                 dangling.append({"step": i + 1, "name": st.get("name") or f"step{i + 1}", "variable": name})
         # body 里疑似写死的业务数据 → 软警告
         for path, val in _iter_strings(st.get("body")):
-            if _looks_hardcoded(val):
+            if _looks_hardcoded(val, path):
                 warnings.append({"step": i + 1, "field": f"body.{path}" if path else "body", "value": val[:60]})
         # 本步提取物在其后步骤可用
         extra = st.get("variables_extract")

@@ -1416,3 +1416,67 @@ def test_接口执行给CC的返回要带失败原因():
     assert "if row['status'] == 'fail'" in body, (
         "没有区分通过/失败 —— 要么都不带（没法查），要么都带（撑爆 context）")
     assert "precheck_result" in body, "共享资源探测结果没回给 CC"
+
+
+# ── 项目须知：被测系统的行为知识 ──────────────────────────────────
+
+def test_写死告警不报枚举值():
+    """`service_type="api"`、`protocol="http"` 是**被测系统的契约**，写死才是对的。
+    把它们标成"疑似写死"，等于在教人把常量也做成变量。
+
+    误报的代价不只是噪音：警告多了人就不看了，真正写死的 id 反而被淹掉。
+    """
+    from app.mcp.tools.sync import _looks_hardcoded
+
+    for field, val in (("service_type", "api"), ("config.protocol", "http"),
+                       ("load_balance.strategy", "round_robin"), ("status", "active")):
+        assert not _looks_hardcoded(val, field), f"{field}={val} 是枚举值，不该报"
+    # 反向：同样的字符串换到非枚举字段上，仍然要报
+    assert _looks_hardcoded("api", "name"), "name=api 是业务数据，该报"
+    assert _looks_hardcoded("httpbin-upstream", "upstreamName")
+    assert _looks_hardcoded("b3f1c2d4-1111-2222-3333-444455556666", "upstream_id")
+
+
+def test_项目须知正文超长是拒不是截断():
+    """这些条目每次生成都会整个喂给下一轮 CC，长了直接挤占它的 context。
+    截断会把最关键的后半句悄悄吃掉 —— 所以明着拒，并说清该怎么压。
+    """
+    from app.mcp.tools import project_notes
+
+    assert project_notes.MAX_CONTENT == 200
+    body = _code_of(project_notes, "add_project_note")
+    # 钉条件本身。只找 "MAX_CONTENT" 的话，错误消息的 f-string 里也有它，
+    # 把整个 if 改成 False 都不会红（本轮第九次踩这个坑）。
+    assert "len(content) > MAX_CONTENT" in body, "没有长度上限"
+    assert "[:MAX_CONTENT]" not in body and "[:200]" not in body, (
+        "截断了 —— 该拒的时候别偷偷砍掉后半句")
+
+
+def test_CC不能写评审反馈那一类():
+    """review_feedback 是 AI 评审对**用例**的意见，项目须知记的是**被测系统的事实**。
+    混在一起，读的人分不清哪条是"系统就是这样"、哪条是"这条用例写得不好"。
+    """
+    from app.mcp.tools.project_notes import _CC_CATEGORIES
+
+    assert "review_feedback" not in _CC_CATEGORIES
+    assert "api_note" in _CC_CATEGORIES
+
+
+def test_知识库接口是路径参数不是查询参数():
+    """前端写成 `/knowledge?projectId=` 会 404，而拦截器把它吞了 ——
+    页面只是**空着**，不报错。实测就这么骗过了一次自测：后端 9/9 全过、
+    页面上一条都没有。
+    """
+    from pathlib import Path
+
+    from fastapi.routing import APIRoute
+
+    from app.main import app
+
+    paths = {r.path for r in app.routes if isinstance(r, APIRoute)}
+    assert "/api/projects/{project_id}/knowledge" in paths
+
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/settings/AutomationData.jsx").read_text(encoding="utf-8")
+    assert "/knowledge?projectId=" not in jsx, "又写成查询参数了，页面会静默空白"
+    assert "/projects/${projectId}/knowledge" in jsx
