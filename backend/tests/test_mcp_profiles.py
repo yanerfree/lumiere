@@ -236,3 +236,81 @@ def test_下线的只是入口_实现和数据没动():
     from app.models.case import Case
 
     assert hasattr(Case, "generation_task_id"), "用例上的批次外键被删了，老数据会失联"
+
+
+# ── 选题纪律：CC 第一版按接口字段切碎片，被用户当场打回 ────────────
+
+def test_接入指令教了怎么挑场景():
+    """实测打回原话：「不够场景化，也不够核心，边缘化，随便挑几个」。
+
+    根因不在模型：它拿到的输入全是接口维度（接口树、字段定义），
+    平台没有任何东西告诉它"用户在页面上看得见什么"，按字段排列组合是必然的。
+    所以这几条必须在指令里，而不是靠人每次口头纠正。
+    """
+    from app.mcp.profiles import render_prompt
+
+    got = render_prompt("live", mcp_url="http://h/mcp/")
+    assert "页面上用户能做的事" in got, "没让它先盘功能，它只会从接口列表出发"
+    assert "碎片" in got, "没点破「按接口字段切出来的是碎片」这个具体错法"
+    assert "完整流程" in got, "没说清一条用例的单位是什么"
+
+
+def test_接入指令给了合还是拆的判据():
+    """「可以合并的合并，复杂的或前置很麻烦的不建议合并」——
+    光说这句 CC 判不了，得给判据。
+
+    判据：**合并的唯一代价是「一挂全挂」**。所以只在"前面挂了后面本来也测不了"
+    的天然链条上合，那时不丢信息；互不依赖的两个功能合成一条只是互相绑架。
+    """
+    from app.mcp.profiles import render_prompt
+
+    got = render_prompt("live", mcp_url="http://h/mcp/")
+    assert "一挂全挂" in got, "没给合并的代价，CC 只能凭感觉合"
+    assert "互不依赖" in got, "没说清什么时候不该合"
+    assert "前置很重" in got and "拆开" in got, "没给拆开的触发条件"
+
+
+def test_接入指令要求覆盖状态切换之后():
+    """只写「创建成功」是漏了大头 —— 状态类功能的价值全在切换之后：
+    切过去能不能用、切回来对不对、切到不可用状态后是不是真的访问不通。
+    """
+    from app.mcp.profiles import render_prompt
+
+    got = render_prompt("live", mcp_url="http://h/mcp/")
+    assert "切换之后" in got
+    assert "访问不通" in got, "没要求验「下线之后真的调不通」这类反向断言"
+
+
+def test_接入指令管了标题怎么写():
+    """标题是列表页唯一露出来的东西。写成「异常场景」，
+    几百条之后所有人都得点进详情才知道在测什么。
+    """
+    from app.mcp.profiles import render_prompt
+
+    got = render_prompt("live", mcp_url="http://h/mcp/")
+    assert "对象 + 做了什么 + 预期结果" in got, "没给标题的格式"
+    assert "异常场景" in got, "没给反例，光说「要清晰」没用"
+
+
+def test_清单有用户可见落点那一列():
+    """这一列是筛子：说不出"用户在哪儿看得到"的，基本就是接口碎片。
+    放在报清单之前，CC 自己就能划掉一批，不用等人看完全部步骤才发现。
+    """
+    from app.mcp.profiles import render_prompt
+
+    got = render_prompt("live", mcp_url="http://h/mcp/")
+    # 断言整行四列，不是光找这五个字 —— 下面还有一句解释这一列是干嘛的，
+    # 只判 `in got` 的话，把列去掉、解释留着，守卫照样绿（本轮第六次踩这个坑）。
+    assert "场景名称 | 这条验什么 | 用户在哪儿看得到 | 库里已有吗" in got
+
+
+def test_这些纪律在instructions里也有一份():
+    """接入指令要用户手动复制粘贴；instructions 是 CC 一连上就读的。
+    只写在指令里的话，没粘贴的那些会话完全不受约束。
+    """
+    from app.mcp import mcp
+
+    ins = mcp.instructions
+    for key in ("页面上用户能做的事", "一挂全挂", "切换之后",
+                "对象 + 做了什么 + 预期结果", "用户在哪儿看得到"):
+        assert key in ins, f"instructions 里缺「{key}」，没粘指令的会话就管不住"
