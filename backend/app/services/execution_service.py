@@ -184,24 +184,14 @@ async def record_manual_result(
     return scenario, all_done
 
 
-async def complete_execution(session: AsyncSession, plan_id: uuid.UUID) -> Plan:
-    """确认完成 — 计算汇总，更新计划状态。
+async def recompute_report_stats(session: AsyncSession, report: TestReport) -> dict[str, int]:
+    """按 test_report_scenarios 的实际状态重算一份报告的汇总，返回各状态计数。
 
-    如果还有 pending 的手动用例，状态改为 pending_manual 而非 completed。
+    抽出来是因为**崩溃恢复也要算这一份**：执行崩了以后如果只把行改成 error、
+    不重算汇总，报告页看到的是 0 通过 0 失败、通过率空白 —— 和"这次啥也没跑"
+    长得一模一样，用户分不出是空报告还是崩了的报告。
+    抽成一个函数而不是复制一份，是为了不让两处口径日后漂移。
     """
-    result = await session.execute(select(Plan).where(Plan.id == plan_id))
-    plan = result.scalar_one_or_none()
-    if plan is None:
-        raise NotFoundError(code="PLAN_NOT_FOUND", message="计划不存在")
-
-    report_result = await session.execute(
-        select(TestReport).where(TestReport.plan_id == plan_id).order_by(TestReport.created_at.desc())
-    )
-    report = report_result.scalars().first()
-    if report is None:
-        raise ValidationError(code="NO_REPORT", message="未找到执行报告")
-
-    # 汇总
     stats = await session.execute(
         select(TestReportScenario.status, func.count())
         .where(TestReportScenario.report_id == report.id)
@@ -226,6 +216,27 @@ async def complete_execution(session: AsyncSession, plan_id: uuid.UUID) -> Plan:
     denominator = report.passed + report.failed + report.error + report.flaky
     if denominator > 0:
         report.pass_rate = Decimal(str(round(report.passed / denominator * 100, 2)))
+    return status_counts
+
+
+async def complete_execution(session: AsyncSession, plan_id: uuid.UUID) -> Plan:
+    """确认完成 — 计算汇总，更新计划状态。
+
+    如果还有 pending 的手动用例，状态改为 pending_manual 而非 completed。
+    """
+    result = await session.execute(select(Plan).where(Plan.id == plan_id))
+    plan = result.scalar_one_or_none()
+    if plan is None:
+        raise NotFoundError(code="PLAN_NOT_FOUND", message="计划不存在")
+
+    report_result = await session.execute(
+        select(TestReport).where(TestReport.plan_id == plan_id).order_by(TestReport.created_at.desc())
+    )
+    report = report_result.scalars().first()
+    if report is None:
+        raise ValidationError(code="NO_REPORT", message="未找到执行报告")
+
+    status_counts = await recompute_report_stats(session, report)
 
     # 检查是否有待手动录入的用例
     pending_manual = status_counts.get("pending", 0)

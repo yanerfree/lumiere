@@ -41,7 +41,15 @@ async def run_automated_execution(
             )
         except asyncio.TimeoutError:
             await set_task_status(task_id, "failed", message=f"执行超时（{_EXECUTION_TIMEOUT}s）")
+            await _release_stuck(plan_id, report_id, f"执行超时（{_EXECUTION_TIMEOUT}s）")
             return {"error": "timeout"}
+
+
+async def _release_stuck(plan_id: str, report_id: str, why: str) -> None:
+    """执行崩了/超时了，把计划和报告从「执行中」放回去。见 stuck_recovery 的说明。"""
+    from app.services.stuck_recovery import release_execution
+
+    await release_execution(report_id, why, plan_id=plan_id)
 
 
 async def _run_execution_inner(task_id: str, plan_id: str, report_id: str, user_id: str) -> dict:
@@ -54,10 +62,17 @@ async def _run_execution_inner(task_id: str, plan_id: str, report_id: str, user_
         async with session_factory() as session:
             result = await _execute(session, task_id, plan_id, report_id, user_id)
             await session.commit()
-            return result
+        # 没抛异常不代表收尾了：_execute 里有几条 return 发生在 complete_execution
+        # 之前（无用例可执行 / 创建沙箱失败），走那儿出来计划会一直停在 executing。
+        from app.services.stuck_recovery import ensure_finalized
+
+        why = str(result["error"])[:300] if isinstance(result, dict) and result.get("error") else "执行提前结束"
+        await ensure_finalized(report_id, plan_id, why)
+        return result
     except Exception as e:
         logger.exception("Execution task failed")
         await set_task_status(task_id, "failed", message=f"执行异常: {str(e)[:200]}")
+        await _release_stuck(plan_id, report_id, str(e)[:200])
         return {"error": str(e)}
     finally:
         await engine.dispose()
@@ -124,8 +139,14 @@ async def _execute(
                 lambda: create_sandbox(bare_repo, sandbox_dir, branch.last_commit_sha)
             )
         except Exception as e:
-            await set_task_status(task_id, "failed", message=f"创建沙箱失败: {str(e)[:200]}")
-            return {"error": str(e)}
+            # 说清楚"哪儿坏了、去哪儿改"。原文案只有一句"目标路径不是有效的 Git 仓库"，
+            # 落到报告里就是每条用例都写着这句 —— 看的人不知道这说的是项目配置，
+            # 更不知道该去哪个页面改，只会以为是自己的用例写坏了。
+            why = (f"项目「{project.name}」配的脚本库路径不可用（{project.script_base_path}）："
+                   f"{str(e)[:120]}。去「项目设置 → 脚本库路径」改成有效的 Git 仓库；"
+                   f"这批用例若已改用平台内脚本，把它们的旧脚本文件引用清掉即可绕开。")
+            await set_task_status(task_id, "failed", message=why[:500])
+            return {"error": why}
 
     # 4. 逐条执行
     total = len(plan_cases)

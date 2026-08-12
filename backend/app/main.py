@@ -129,6 +129,10 @@ async def lifespan(app):
             restore_task = asyncio.create_task(_restore_mock_services())
             # 功能场景测试模块：孤儿任务扫描 + 看门狗（NFR17）
             maintenance_task = scenario_gen_pipeline.start_background_maintenance()
+            # 执行是进程内的后台任务：进程被 kill 时一行 except 都不会跑，
+            # 计划会永远停在 executing 再也触发不了。这个看门狗负责收拾现场。
+            from app.services import stuck_recovery
+            stuck_task = await stuck_recovery.start_watchdog()
             # MCP 独立端口（给 Claude Code 连接，避免与主服务 8756 端口混用）
             mcp_server = _start_standalone_mcp_server()
             yield
@@ -136,6 +140,7 @@ async def lifespan(app):
                 mcp_server.should_exit = True
             restore_task.cancel()
             maintenance_task.cancel()
+            stuck_task.cancel()
 
 
 def _start_standalone_mcp_server():

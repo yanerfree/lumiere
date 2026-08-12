@@ -186,6 +186,18 @@ async def _run_new_style_script(session: AsyncSession, case, test_type: str, bas
 
 
 
+async def _close_broken_report(report_id: str, why: str) -> None:
+    """执行崩了/超时了，把报告收口。
+
+    批量执行没有计划，但报告一样会卡：用例行停在 running、没有 completed_at，
+    页面上一直转圈、通过率算不出来，还看不出是"在跑"还是"早死了"。
+    见 stuck_recovery 的说明。
+    """
+    from app.services.stuck_recovery import release_execution
+
+    await release_execution(report_id, why)
+
+
 async def run_adhoc_execution(
     task_id: str,
     report_id: str,
@@ -204,6 +216,7 @@ async def run_adhoc_execution(
             )
         except asyncio.TimeoutError:
             await set_task_status(task_id, "failed", message=f"执行超时（{_EXECUTION_TIMEOUT}s）")
+            await _close_broken_report(report_id, f"执行超时（{_EXECUTION_TIMEOUT}s）")
             return {"error": "timeout"}
 
 
@@ -223,10 +236,17 @@ async def _run_adhoc_inner(
                 user_id,
             )
             await session.commit()
-            return result
+        # 同 execution.py：沙箱建不起来那条 return 在收尾之前，走那儿出来
+        # 报告会一直没有 completed_at，页面上转圈转到天荒地老。
+        from app.services.stuck_recovery import ensure_finalized
+
+        why = str(result["error"])[:200] if isinstance(result, dict) and result.get("error") else "执行提前结束"
+        await ensure_finalized(report_id, None, why)
+        return result
     except Exception as e:
         logger.exception("Adhoc execution task failed")
         await set_task_status(task_id, "failed", message=f"执行异常: {str(e)[:200]}")
+        await _close_broken_report(report_id, str(e)[:200])
         return {"error": str(e)}
     finally:
         await engine.dispose()
@@ -296,8 +316,12 @@ async def _execute_adhoc(
                 lambda: create_sandbox(bare_repo, sandbox_dir, branch.last_commit_sha)
             )
         except Exception as e:
-            await set_task_status(task_id, "failed", message=f"创建沙箱失败: {str(e)[:200]}")
-            return {"error": str(e)}
+            # 同 execution.py：这句会原样落进报告的每一行，得让人知道去哪儿改
+            why = (f"项目「{project.name}」配的脚本库路径不可用（{project.script_base_path}）："
+                   f"{str(e)[:120]}。去「项目设置 → 脚本库路径」改成有效的 Git 仓库；"
+                   f"这批用例若已改用平台内脚本，把它们的旧脚本文件引用清掉即可绕开。")
+            await set_task_status(task_id, "failed", message=why[:500])
+            return {"error": why}
 
     total = len(cases)
     executed = 0

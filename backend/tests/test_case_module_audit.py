@@ -995,3 +995,243 @@ def test_自动拆步骤不编预期():
             assert w not in (s["expected"] or ""), f"平台自己注了模糊词 {w}"
     # 而且要告诉回推方哪几步需要补
     assert _split_warnings(out), "留空了却不说，等于偷偷改了人的输入"
+
+
+# ── 执行崩了以后，卡住的计划得放出来 ────────────────────────────────
+
+def _handlers_calling(func_src: str, func_name: str, callee: str) -> list[str]:
+    """func_name 的哪些 except 分支里调了 callee。
+
+    用 AST 而不是搜文本：这一版的说明注释里就写着函数名，`in src` 那种断言
+    会被注释直接喂饱（这个坑本轮已经踩过三次）。
+    """
+    import ast
+
+    tree = ast.parse(func_src)
+    fn = next((n for n in ast.walk(tree)
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == func_name), None)
+    assert fn is not None, f"没找到函数 {func_name}"
+    hit = []
+    for h in (n for n in ast.walk(fn) if isinstance(n, ast.ExceptHandler)):
+        called = {c.func.id if isinstance(c.func, ast.Name) else getattr(c.func, "attr", "")
+                  for c in ast.walk(h) if isinstance(c, ast.Call)}
+        if callee in called:
+            hit.append(ast.unparse(h.type) if h.type else "bare except")
+    return hit
+
+
+def test_执行超时和崩溃两条路都要放开计划():
+    """执行是**进程内**的后台任务。它崩了/超时了如果不主动放，计划就停在
+    executing，而 start_execution 只收 draft/completed/paused —— 这个计划
+    再也触发不了。人工出口只剩「终止」，那会把没跑的用例全记成「跳过」，
+    等于拿一次假结果换回一个能用的计划。
+    """
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[1] / "app/engine/tasks/execution.py").read_text()
+    assert _handlers_calling(src, "run_automated_execution", "_release_stuck"), "超时那条路没放"
+    assert _handlers_calling(src, "_run_execution_inner", "_release_stuck"), "崩溃那条路没放"
+
+    adhoc = (Path(__file__).resolve().parents[1] / "app/engine/tasks/adhoc_execution.py").read_text()
+    # 批量执行没有计划，但报告一样会卡在 running / 没有 completed_at
+    assert _handlers_calling(adhoc, "run_adhoc_execution", "_close_broken_report"), "批量超时没收口"
+    assert _handlers_calling(adhoc, "_run_adhoc_inner", "_close_broken_report"), "批量崩溃没收口"
+
+
+def test_释放用的是独立连接():
+    """崩溃现场那个 session 在 flush 失败之后事务是脏的，再拿它写，
+    恢复动作会跟着一起回滚 —— 看着调了，实际没生效。
+    """
+    import ast
+    import inspect
+
+    from app.services import stuck_recovery
+
+    fn = next(n for n in ast.walk(ast.parse(inspect.getsource(stuck_recovery)))
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "release_execution")
+    calls = {getattr(c.func, "id", "") or getattr(c.func, "attr", "") for c in ast.walk(fn) if isinstance(c, ast.Call)}
+    assert "create_async_engine" in calls, "复用了崩溃现场的 session，恢复会被一起回滚"
+    assert "dispose" in calls, "自己开的引擎不关，连接池会漏"
+
+
+def test_看门狗不按计划年龄扫():
+    """**这条是反向守卫，比正向更重要。**
+
+    reopen_plan（重新打开已完成的计划）和 resume_plan（恢复暂停的计划）也会把
+    状态置成 executing 且不跑任何后台任务，两者都不更新 executed_at。
+    一旦看门狗改成"按计划停在 executing 多久"来扫，用户前脚点「恢复」，
+    它后脚就把计划又收回 completed，而且悄无声息。
+
+    判据只能是 test_report_scenarios.status == 'running'：这个值只有两个执行器
+    在真跑某条用例的那几秒里写，写的同时一定写 started_at。
+    """
+    from app.services import stuck_recovery
+
+    body = _code_of(stuck_recovery, "sweep_orphaned")  # 剥掉 docstring 再断言
+    assert "TestReportScenario.status" in body and "'running'" in body, "扫描判据不是 running 行"
+    assert "started_at" in body and "cutoff" in body, "没有年龄门槛"
+    # 计划年龄不能成为独立的扫描入口
+    assert "Plan.executed_at" not in body, (
+        "按 executed_at 扫计划会把用户刚点「恢复」的计划又收回去")
+
+
+def test_年龄门槛必须盖过一次执行的上限():
+    """门槛低于执行上限的话，扫的就不是"死了的"，是"还在跑的"。
+
+    刚踩过一次真事：误起了第二个后端进程，它绑不上端口退出了，但 lifespan
+    已经跑过 —— 也就是说它的看门狗对着同一个库扫过一遍。门槛不够，
+    它就会把真后端正在跑的执行给收了。
+    """
+    from app.engine.tasks.execution import _EXECUTION_TIMEOUT
+    from app.services.stuck_recovery import STUCK_AFTER
+
+    assert STUCK_AFTER.total_seconds() > _EXECUTION_TIMEOUT, (
+        f"门槛 {STUCK_AFTER.total_seconds()}s 没盖过执行上限 {_EXECUTION_TIMEOUT}s")
+
+
+def test_崩溃的报告要重算统计而不是留一片0():
+    """只把行改成 error、不重算汇总的话，报告页显示 0 通过 0 失败、通过率空白，
+    和"这次啥也没跑"长得一模一样，用户分不出是空报告还是崩了的报告。
+    """
+    import ast
+    import inspect
+
+    from app.services import stuck_recovery
+
+    fn = next(n for n in ast.walk(ast.parse(inspect.getsource(stuck_recovery)))
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "close_report")
+    calls = {getattr(c.func, "id", "") or getattr(c.func, "attr", "") for c in ast.walk(fn) if isinstance(c, ast.Call)}
+    assert "recompute_report_stats" in calls, "没重算统计，崩掉的报告会显示成空报告"
+
+
+def test_统计口径只有一份():
+    """正常收尾和崩溃恢复要用同一个函数算，否则两边口径迟早漂移
+    （flaky 进不进分母这种事，改一处漏一处根本看不出来）。
+    """
+    import ast
+    import inspect
+
+    from app.services import execution_service
+
+    fn = next(n for n in ast.walk(ast.parse(inspect.getsource(execution_service)))
+              if isinstance(n, ast.AsyncFunctionDef) and n.name == "complete_execution")
+    calls = {getattr(c.func, "id", "") or getattr(c.func, "attr", "") for c in ast.walk(fn) if isinstance(c, ast.Call)}
+    assert "recompute_report_stats" in calls, "正常收尾自己算了一份，和恢复那份会漂移"
+
+
+def test_执行提前返回也要收尾():
+    """**这条是实测撞出来的，不是想出来的。**
+
+    `_execute` 里有两条 return 发生在 complete_execution 之前：「无用例可执行」
+    和「创建沙箱失败」。走那儿出来，计划一直停在 executing，报告永远没有
+    completed_at —— 而且看门狗抓不到：一行都没进过 running。
+    随手跑一个现成计划就撞上了第二条（项目上留着个过期的 script_base_path）。
+
+    所以判据放在**出口**上，不逐条补：出来了、计划还在 executing，就是漏了。
+    逐条补的话，下一个人加第三条 return 时照样漏。
+    """
+    import ast
+    from pathlib import Path
+
+    for f, fn_name in (("app/engine/tasks/execution.py", "_run_execution_inner"),
+                       ("app/engine/tasks/adhoc_execution.py", "_run_adhoc_inner")):
+        tree = ast.parse((Path(__file__).resolve().parents[1] / f).read_text())
+        fn = next(n for n in ast.walk(tree)
+                  if isinstance(n, ast.AsyncFunctionDef) and n.name == fn_name)
+        # 兜底必须在 try 的正常出口上，不能只写在 except 里
+        normal = [n for n in fn.body if isinstance(n, ast.Try)]
+        assert normal, f"{fn_name} 没有 try"
+        called = {getattr(c.func, "id", "") or getattr(c.func, "attr", "")
+                  for c in ast.walk(normal[0]) if isinstance(c, ast.Call)}
+        assert "ensure_finalized" in called, f"{f} 的正常返回路径没有兜底收口"
+
+
+def _code_of(module, fn_name: str) -> str:
+    """函数的**代码**，不含 docstring。
+
+    直接 `ast.unparse(fn)` 会把 docstring 一起吐出来 —— 而说明里往往正好写着
+    要断言的那个串（本轮已经被这么骗过四次）。剥掉再断言，守卫才是守卫。
+    """
+    import ast
+    import inspect
+
+    fn = next(n for n in ast.walk(ast.parse(inspect.getsource(module)))
+              if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == fn_name)
+    body = fn.body
+    if (body and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant) and isinstance(body[0].value.value, str)):
+        body = body[1:]
+    return "\n".join(ast.unparse(n) for n in body)
+
+
+def test_没轮到就崩的自动化行记成skipped而不是等人录():
+    """崩的时候还没轮到的自动化用例，状态是 pending。
+
+    把它算成"待人工录入"，计划就会挂上 pending_manual，页面提示用户去录一批
+    他根本没打算手动做的用例；算成 failed 又是冤枉用例（它压根没跑）。
+    只有 skipped 是对的：不进通过率分母，且写明为什么没跑。
+    真正等人录的手动行（execution_type='manual'）必须原样留着。
+    """
+    from app.services import stuck_recovery
+
+    body = _code_of(stuck_recovery, "close_report")
+    assert "'automated'" in body and "execution_type" in body, (
+        "收 pending 行时没有区分自动化/手动，会把等人录的手动用例一起判死")
+    assert "'skipped'" in body, "没跑过的行不该记成 failed/error"
+
+    rel_body = _code_of(stuck_recovery, "release_plan")
+    assert "'manual'" in rel_body, (
+        "pending_manual 的判据必须只数手动行，否则崩一次就挂上假的待录入")
+
+
+def test_沙箱失败要告诉人去哪儿改():
+    """这句话会原样落进报告的每一行。
+
+    原文案只有「目标路径不是有效的 Git 仓库」——看的人不知道说的是项目配置，
+    更不知道去哪个页面改，只会以为自己的用例写坏了。
+    """
+    from pathlib import Path
+
+    for f in ("app/engine/tasks/execution.py", "app/engine/tasks/adhoc_execution.py"):
+        src = (Path(__file__).resolve().parents[1] / f).read_text()
+        assert "脚本库路径" in src and "项目设置" in src, f"{f} 的沙箱失败文案没说去哪儿改"
+
+
+def test_一条没跑的报告不许显示红色0通过率():
+    """实测截图为证：沙箱建不起来导致整批没开跑，库里 `pass_rate` 是 NULL，
+    页面却画了个**鲜红的 0%** —— 看着像全挂了，其实一条都没跑。
+
+    根因是那个环没用外面按规范口径算好的 rate，自己拿 `passed / total` 又算了
+    一遍，而这个分母含 skipped。同一份文件里下面几行还写着"skipped 不进分母"。
+    """
+    from pathlib import Path
+
+    jsx = Path(__file__).resolve().parents[2] / "frontend/src/pages/report/ReportDetail.jsx"
+    src = jsx.read_text(encoding="utf-8")
+    ring = src[src.index("function PassRateRing"):]
+    ring = ring[:ring.index("\n}")]
+    assert "passed / total" not in ring.replace(" ", " "), "环又自己拿含跳过的分母算通过率了"
+    assert "rate != null" in ring, "没判 rate 为空，算不出来的通过率会被画成 0%"
+    assert "'未执行'" in ring, "算不出来时要说「未执行」，不能默认成 0%"
+
+    # 失败率同理：分母为 0 时给「-」，不给「0.0%」
+    line = next(ln for ln in src.splitlines() if "const failRate" in ln)
+    assert "null" in line, f"分母为 0 时失败率仍写死了数字：{line.strip()}"
+
+
+def test_没跑的原因用户读得到():
+    """那句"去哪儿改"写在后半句，而列表那一列只有 200px，必被截断。
+
+    收起时得有 Tooltip，展开时得有完整段落 —— 否则我把提示写得再好，
+    用户也只能看到「项目「测试平台」配…」。
+    """
+    from pathlib import Path
+
+    jsx = Path(__file__).resolve().parents[2] / "frontend/src/pages/report/ReportDetail.jsx"
+    src = jsx.read_text(encoding="utf-8")
+    assert "<Tooltip title={s.errorSummary}" in src, (
+        "截断的原因没被 Tooltip 包住（title 必须是完整原文），后半句永远读不到")
+
+    # 展开区：skipped 也要给出原因，不能只认 failed
+    assert "status === 'skipped'" in src[src.index("{/* 失败原因"):src.index("{/* 失败原因") + 400], (
+        "展开区只认 failed，被跳过的用例展开后什么都不说")

@@ -58,9 +58,16 @@ function fmt(ms) {
 function PassRateRing({ rate, passed, total, size = 160, running = false, done = 0 }) {
   const r = size / 2 - 10
   const c = 2 * Math.PI * r
-  const pct = running ? (total > 0 ? (done / total) * 100 : 0) : (total > 0 ? (passed / total) * 100 : 0)
+  // 通过率用外面按规范口径算好的 rate（skipped / xfail 不进分母），这里不再自己
+  // 拿 passed/total 算一遍 —— 那个分母含跳过，于是"一条没跑、跳过 2 条"的报告会
+  // 显示成**红色的 0%**，看着像全挂了。实测：沙箱建不起来导致整批没开跑，
+  // 库里 pass_rate 是 NULL，页面却是个鲜红的 0%。
+  const hasRate = !running && rate != null
+  const pct = running ? (total > 0 ? (done / total) * 100 : 0) : (hasRate ? Number(rate) : 0)
   const offset = c - (c * pct) / 100
-  const color = running ? '#0ea5a0' : pct >= 95 ? '#0ea5a0' : pct >= 80 ? '#faad14' : '#e8453c'
+  const color = running ? '#0ea5a0'
+    : !hasRate ? '#c9cdd4'
+    : pct >= 95 ? '#0ea5a0' : pct >= 80 ? '#faad14' : '#e8453c'
   return (
     <svg width={size} height={size} style={{ display: 'block', flexShrink: 0 }}>
       <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(0,0,0,0.04)" strokeWidth={10} />
@@ -73,10 +80,11 @@ function PassRateRing({ rate, passed, total, size = 160, running = false, done =
           上会显示「已完成 0」，和旁边的「执行: 1」直接打架。而且通过数右边已经
           单独列了一份，环里重复一遍没有信息增量。 */}
       <text x={size/2} y={size/2 - 14} textAnchor="middle" dominantBaseline="central"
-        style={{ fontSize: 13, fill: running ? '#0ea5a0' : '#86909c' }}>{running ? '执行中' : '通过率'}</text>
+        style={{ fontSize: 13, fill: running ? '#0ea5a0' : '#86909c' }}>
+        {running ? '执行中' : hasRate ? '通过率' : '未执行'}</text>
       <text x={size/2} y={size/2 + 10} textAnchor="middle" dominantBaseline="central"
-        style={{ fontSize: running ? 22 : 28, fontWeight: 700, fill: '#1d2129' }}>
-        {running ? `${done}/${total}` : `${pct.toFixed(pct % 1 === 0 ? 0 : 1)}%`}
+        style={{ fontSize: running ? 22 : 28, fontWeight: 700, fill: hasRate || running ? '#1d2129' : '#c9cdd4' }}>
+        {running ? `${done}/${total}` : hasRate ? `${pct.toFixed(pct % 1 === 0 ? 0 : 1)}%` : '—'}
       </text>
     </svg>
   )
@@ -381,12 +389,16 @@ function ScenarioExpanded({ scenario, projectId, onConfirmed }) {
         )}
       </div>
 
-      {/* 失败原因 */}
-      {isFailed && (errorSummary || parsed.errorLines.length > 0) && (
+      {/* 失败原因。
+          skipped 也要走这儿：一条用例"为什么没跑"和"为什么挂了"同样需要交代，
+          而列表里那句被截成 200px 宽的省略号，用户根本读不到后半句
+          （沙箱失败那条恰恰把"去哪儿改"写在后半句）。 */}
+      {(isFailed || status === 'skipped') && (errorSummary || parsed.errorLines.length > 0) && (
         <div>
-          <div style={{ fontSize: 12, color: '#e8453c', marginBottom: 6, fontWeight: 600 }}>失败原因</div>
+          <div style={{ fontSize: 12, color: isFailed ? '#e8453c' : '#86909c', marginBottom: 6, fontWeight: 600 }}>
+            {isFailed ? '失败原因' : '未执行的原因'}</div>
           {errorSummary && (
-            <div style={{ fontSize: 13, color: '#e8453c', padding: '10px 14px', background: '#fff2f0', borderRadius: 12, border: '1px solid rgba(232,69,60,0.15)', marginBottom: parsed.errorLines.length > 0 ? 8 : 0, lineHeight: 1.6 }}>
+            <div style={{ fontSize: 13, color: isFailed ? '#e8453c' : '#4e5969', padding: '10px 14px', background: isFailed ? '#fff2f0' : 'rgba(0,0,0,0.02)', borderRadius: 12, border: `1px solid ${isFailed ? 'rgba(232,69,60,0.15)' : 'rgba(0,0,0,0.06)'}`, marginBottom: parsed.errorLines.length > 0 ? 8 : 0, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
               {errorSummary}
             </div>
           )}
@@ -609,7 +621,9 @@ export default function ReportDetail() {
   // 统一成规范口径：passed + failed + error + flaky；skipped 和 xfail 不进分母。
   const denom = livePassed + liveFailed + liveFlaky
   const liveRate = doneCount > 0 && denom > 0 ? (livePassed / denom * 100).toFixed(1) : null
-  const failRate = denom > 0 ? (liveFailed / denom * 100).toFixed(1) : '0.0'
+  // 分母为 0 时给 null 而不是 '0.0'：一条没跑的报告写「失败 0 (0.0%)」，
+  // 读起来像"跑了、没失败"，其实是压根没跑。和上面通过率的「-」保持同一口径。
+  const failRate = denom > 0 ? (liveFailed / denom * 100).toFixed(1) : null
 
   const renderScenarioRow = (s) => {
     const cfg = statusCfg[s.status] || statusCfg.pending
@@ -655,9 +669,13 @@ export default function ReportDetail() {
               <Tag style={{ color: '#faad14', border: 'none', background: 'transparent', fontSize: 11 }}>{s.remark}</Tag>
             )}
             {s.errorSummary && (
-              <span style={{ fontSize: 12, color: '#e8453c', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {s.errorSummary}
-              </span>
+              // 这一列只有 200px，长一点的原因必然被截。不给 Tooltip 的话，
+              // 后半句（往往正是"该去哪儿改"）就永远读不到了。
+              <Tooltip title={s.errorSummary} styles={{ root: { maxWidth: 480 } }}>
+                <span style={{ fontSize: 12, color: s.status === 'skipped' ? '#86909c' : '#e8453c', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'help' }}>
+                  {s.errorSummary}
+                </span>
+              </Tooltip>
             )}
             {/* 已确认的原因盖过现象 —— 人确认过之后，现象就不是最该看的那一层了 */}
             {s.confirmedCause ? (
@@ -811,7 +829,7 @@ export default function ReportDetail() {
             </div>
             <div style={{ paddingLeft: 18 }}>
               <span style={{ fontSize: 16, fontWeight: 600 }}>{liveFailed}</span>
-              <span style={{ color: '#86909c', marginLeft: 6 }}>({failRate}%)</span>
+              <span style={{ color: '#86909c', marginLeft: 6 }}>({failRate != null ? `${failRate}%` : '-'})</span>
             </div>
           </div>
 
@@ -822,7 +840,10 @@ export default function ReportDetail() {
             </div>
             <div>
               <div style={{ color: '#86909c', fontSize: 13, marginBottom: 4 }}>{isRunning ? '进度' : '总用例'}</div>
-              <div style={{ fontSize: 18, fontWeight: 600 }}>{isRunning ? `${doneCount} / ${liveTotal}` : `执行: ${liveTotal}`}</div>
+              {/* 「执行: N」以前直接印总用例数 —— 一条没跑、全被跳过的报告上写着
+                  「执行: 2」，和旁边「跳过 2」当场打架。这一格标的是总数，
+                  真跑了几条另说。 */}
+              <div style={{ fontSize: 18, fontWeight: 600 }}>{isRunning ? `${doneCount} / ${liveTotal}` : liveTotal}</div>
             </div>
             <div>
               <div style={{ color: '#86909c', fontSize: 13, marginBottom: 4 }}>错误</div>
