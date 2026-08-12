@@ -46,7 +46,6 @@ import MCPTools from './pages/settings/MCPTools'
 import Exploratory from './pages/exploratory/Exploratory'
 import Documents from './pages/documents/Documents'
 import ApiTest from './pages/api-test/ApiTest'
-import ScenarioGen from './pages/scenario-gen/ScenarioGen'
 import SystemServices from './pages/settings/SystemServices'
 
 const { Header, Sider, Content } = Layout
@@ -101,7 +100,6 @@ function AppLayout() {
       icon: <RobotOutlined />,
       label: t('menu.ai'),
       children: [
-        { key: `/projects/${projectId}/scenario-gen`, icon: <ThunderboltOutlined />, label: t('menu.ai.scenarioGen') },
         { key: `/projects/${projectId}/settings/ai-capabilities`, icon: <ThunderboltOutlined />, label: t('menu.ai.capabilities') },
         { key: `/projects/${projectId}/settings/skills`, icon: <FileTextOutlined />, label: t('menu.ai.skills') },
         { key: `/projects/${projectId}/settings/mcp-tools`, icon: <ApiOutlined />, label: t('menu.ai.mcp') },
@@ -281,7 +279,6 @@ function AppLayout() {
             <Route path="/projects/:projectId/exploratory" element={<Exploratory />} />
             <Route path="/projects/:projectId/documents" element={<Documents />} />
             <Route path="/projects/:projectId/api-test" element={<ApiTest />} />
-            <Route path="/projects/:projectId/scenario-gen" element={<ScenarioGen />} />
             <Route path="/settings/services" element={<SystemServices />} />
             <Route path="/settings/env" element={<EnvConfig />} />
             <Route path="/settings/channels" element={<ChannelConfig />} />

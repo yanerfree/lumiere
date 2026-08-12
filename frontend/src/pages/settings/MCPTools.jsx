@@ -8,6 +8,7 @@ import {
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
+import { useBranch } from '../../utils/branch'
 
 const { Text } = Typography
 
@@ -65,9 +66,13 @@ function ToolRow({ t, checked, disabled, onToggle }) {
 }
 
 /** 一张「活」卡片。多选，勾上的活所需的工具自动并起来。 */
-function ActivityCard({ p, checked, disabled, recommended, includedBy, total, onToggle }) {
+function ActivityCard({ p, checked, disabled, recommended, includedBy, total, onToggle, onCopyPrompt }) {
+  const [hover, setHover] = useState(false)
   return (
-    <div onClick={() => !disabled && onToggle(p, !checked)} style={{
+    <div onClick={() => !disabled && onToggle(p, !checked)}
+      onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}
+      style={{
+      position: 'relative',
       cursor: disabled ? 'default' : 'pointer', borderRadius: 10, padding: '12px 14px',
       transition: 'all .15s', opacity: disabled ? 0.55 : 1,
       border: checked ? '1.5px solid #0ea5a0' : '1px solid rgba(0,0,0,0.09)',
@@ -76,6 +81,19 @@ function ActivityCard({ p, checked, disabled, recommended, includedBy, total, on
       // 只挂一个小标签的话人扫过去看不见（实测：用户说"没看到已包含标签"）。
       borderLeft: includedBy ? '3px solid rgba(14,165,160,0.45)' : undefined,
     }}>
+      {onCopyPrompt && (
+        // 整张卡片本身是勾选控件，所以这个按钮：①放右上角不跟标题抢位置
+        // ②hover 才显形，不勾选时几乎不可见 ③必须 stopPropagation，
+        // 否则点"复制"会顺手把这一档勾上或取消掉。
+        <Tooltip title="复制这一档的接入指令">
+          <Button type="text" size="small" icon={<CopyOutlined />}
+            onClick={e => { e.stopPropagation(); onCopyPrompt(p.prompt) }}
+            style={{
+              position: 'absolute', top: 6, right: 6, opacity: hover ? 1 : 0.35,
+              transition: 'opacity .15s', color: checked ? '#0ea5a0' : '#9aa0aa',
+            }} />
+        </Tooltip>
+      )}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 9 }}>
         <Checkbox checked={checked} disabled={disabled} style={{ marginTop: 1, pointerEvents: 'none' }} />
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -141,7 +159,7 @@ function deriveChosen(profiles, toolNames) {
  * 多选的语义：勾上 = 这件活要能干（并上它的工具）；取消 = 去掉它的工具，
  * 于是别的活如果因此缺了工具，也会跟着自动取消 —— 这条自然成立，不用特判。
  */
-function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSave }) {
+function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSave, onCopyPrompt, promptCards = [] }) {
   const savedUnlimited = !scope?.allowedTools
   const savedList = scope?.allowedTools || []
   const allNames = tools.map(t => t.name)
@@ -260,7 +278,8 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
         {acts.map(p => (
           <ActivityCard key={p.key} p={p} total={tools.length} disabled={unlimited}
             recommended={p.key === 'fullloop'} checked={isOn(p)} includedBy={includedBy(p)}
-            onToggle={toggleAct} />
+            onToggle={toggleAct}
+            onCopyPrompt={p.prompt && onCopyPrompt && promptCards.includes(p.key) ? onCopyPrompt : null} />
         ))}
       </div>
 
@@ -341,6 +360,7 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
 
 export default function MCPTools() {
   const { projectId } = useParams()
+  const [branchId] = useBranch(projectId)
   const mcpUrl = `http://${window.location.hostname}:18800/mcp/`
   const [apiKeys, setApiKeys] = useState([])
   const [tools, setTools] = useState([])
@@ -355,13 +375,19 @@ export default function MCPTools() {
   useEffect(() => {
     if (!projectId) return
     fetchKeys(); fetchTools(); fetchProfiles(); fetchScope()
-  }, [projectId])
+  }, [projectId, branchId])
   const fetchKeys = async () => { try { setApiKeys((await api.get('/mcp-keys')).data || []) } catch { /* 拦截器已弹错，这里不重复报 */ } }
   // 工具目录来自后端注册表，不再前端硬编码（曾经写死 20 条、后端实际 32 条）
   const fetchTools = async () => { try { setTools((await api.get('/mcp-keys/tools')).data || []) } catch { /* 同上 */ } }
   const fetchProfiles = async () => {
     try {
-      const d = (await api.get('/mcp-keys/profiles')).data || {}
+      // 带上项目/分支/地址：后端据此把接入指令里的上下文填好。
+      // **指令正文一律后端拼**——前端自己拼一份的话，改了档位说明忘了改模板，
+      // 页面上写的和复制出去的就成了两回事，而没人会把两处对着看。
+      const q = new URLSearchParams({ mcpUrl })
+      if (projectId) q.set('projectId', projectId)
+      if (branchId) q.set('branchId', branchId)
+      const d = (await api.get(`/mcp-keys/profiles?${q}`)).data || {}
       setProfiles(d.profiles || [])
     } catch { /* 拉不到就只剩工具列表，不至于开天窗 */ }
   }
@@ -414,6 +440,16 @@ export default function MCPTools() {
 
   const copy = (text) => copyToClipboard(text).then(() => message.success('已复制'))
 
+  // 复制接入指令。提示语要回答用户拿到这段话之后的那个问题：「然后呢，粘哪儿？」
+  // —— 这是新用户唯一真会卡住的地方，一句话就够。
+  const copyPrompt = (text) => copyToClipboard(text).then(
+    () => message.success({ content: '已复制，粘到你项目里的 Claude Code 就行', duration: 4 })
+  )
+  const fullloopPrompt = (profiles.find(p => p.key === 'fullloop') || {}).prompt
+  // 只有这三档给卡片级入口：它们是"能直接开干"的三种活。10 张卡片全给按钮的话，
+  // 10 个同名按钮长得一样、复制内容却不一样，等于给用户出了道原本不存在的选择题。
+  const PROMPT_CARDS = ['fullloop', 'live', 'triage']
+
   const onlineCount = projectKeys.filter(k => k.lastUsedAt && Date.now() - new Date(k.lastUsedAt).getTime() < 30 * 60 * 1000).length
   const mcpConfig = JSON.stringify({ mcpServers: { testbench: { type: "streamable-http", url: mcpUrl, headers: { Authorization: "Bearer <你的API Key>" } } } }, null, 2)
 
@@ -437,6 +473,15 @@ export default function MCPTools() {
             </span>
           </div>
           <Space size={16}>
+            {/* 页面到这儿本来是断的：用户看完 10 张卡片知道了"开放了哪些工具"，
+                然后合上页面、回到自己的终端，面对空白 prompt 还得自己想怎么说。
+                指令里带着地址、项目分支、这档要干的活、以及三条纪律（先查已有场景 /
+                报清单等确认 / 回推带证据）——**平台侧写好的防错知识，终于送到执行者手里**。 */}
+            <Tooltip title="复制一段可以直接粘给 Claude Code 的话：连接地址 + 这次要干的活 + 三条纪律">
+              <Button size="small" type="primary" icon={<CopyOutlined />}
+                disabled={!fullloopPrompt}
+                onClick={() => copyPrompt(fullloopPrompt)}>复制接入指令</Button>
+            </Tooltip>
             <Button size="small" icon={<CopyOutlined />} onClick={() => copy(mcpUrl)}>复制地址</Button>
             <Space split={<span style={{ color: '#e0e0e3' }}>|</span>}>
               <Text type="secondary" style={{ fontSize: 12 }}>{onlineCount}/{projectKeys.length} 在线</Text>
@@ -565,7 +610,8 @@ export default function MCPTools() {
               key={scope ? (scope.allowedTools ? scope.allowedTools.join(',') : 'unlimited') : 'loading'}
               tools={tools} byCategory={byCategory} profiles={profiles}
               scope={scope} keyCount={scope?.keyCount ?? projectKeys.length}
-              saving={savingScope} onSave={saveScope} />
+              saving={savingScope} onSave={saveScope}
+              onCopyPrompt={copyPrompt} promptCards={PROMPT_CARDS} />
           ),
         },
         {

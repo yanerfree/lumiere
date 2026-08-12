@@ -156,3 +156,83 @@ def test_四段的排列顺序和说明一致():
     order = [p["key"] for p in PROFILES]
     got = [k for k in order if k in _CHAIN]
     assert got == _CHAIN, f"卡片顺序 {got} 和说明里的顺序 {_CHAIN} 对不上"
+
+
+# ── 接入指令：把档位渲染成能直接粘给 CC 的一段话 ──────────────────
+
+def test_接入指令正文是档位字段拼出来的_不是另写一份():
+    """**这一条是这个功能的验收线。**
+
+    模板一旦允许写独立文案，就成了第四个孤岛：改了档位说明忘了改模板，
+    页面上写的和复制出去的成了两回事，而没人会把两处对着看。
+    所以正文必须逐字含 task，措辞要改就去改 PROFILES。
+    """
+    from app.mcp.profiles import render_prompt
+
+    for p in PROFILES:
+        got = render_prompt(p["key"], mcp_url="http://h/mcp/")
+        if p["tools"] is None:
+            assert got is None, f"{p['key']} 是「全量」档，没有具体要干的活，不该渲染出指令"
+            continue
+        assert got, f"{p['key']} 渲染不出指令"
+        assert p["task"] in got, f"{p['key']} 的指令没逐字带上 task —— 另写了一份文案"
+        assert p["hint"] in got, f"{p['key']} 的 hint 没送到 CC 手上"
+
+
+def test_接入指令带齐三句纪律():
+    """先查 / 报清单 / 带证据。三句和干哪种活无关，是纪律，每档都得有。
+
+    「先查」那句尤其关键：平台只硬拒同模块下**标题完全相同**的用例，
+    换个说法就绕过去了 —— 真正防重复的是 CC 动手之前那一眼。
+    """
+    from app.mcp.profiles import MODULE_SLOT, render_prompt
+
+    for p in PROFILES:
+        if p["tools"] is None:
+            continue
+        got = render_prompt(p["key"], mcp_url="http://h/mcp/")
+        assert "tb_list_cases" in got, f"{p['key']} 没让 CC 先查已有场景"
+        assert MODULE_SLOT in got, f"{p['key']} 没留模块占位符，用户不知道要填什么"
+        assert "清单" in got, f"{p['key']} 没要求动库前先报清单"
+        assert "证据" in got, f"{p['key']} 没要求回推带证据"
+
+
+def test_接入指令带上下文而不是让用户自己填():
+    """项目/分支平台自己知道，填死；只留一个占位符。
+
+    留两个以上用户就会漏填，而漏掉的占位符会被 CC 当字面量执行。
+    """
+    from app.mcp.profiles import render_prompt
+
+    got = render_prompt("fullloop", mcp_url="http://h:18800/mcp/",
+                        project_name="网关管理系统", branch_name="default")
+    assert "http://h:18800/mcp/" in got, "地址没带上，用户得复制两次"
+    assert "网关管理系统" in got and "default" in got
+    # 占位符**只能有一个**
+    import re
+    assert len(set(re.findall(r"\{[^}]+\}", got))) == 1, "留了不止一个占位符，用户会漏填"
+
+
+# ── 需求→用例流水线已下线 ──────────────────────────────────────────
+
+def test_下线的流水线工具没有偷偷回来():
+    """入口下线之后工具还留着的话，CC 走「全量」档仍能开出一个任务，
+    而平台上已经没有页面能看它跑到哪了 —— 比不下线更糟。
+    """
+    dead = {"tb_create_scenario_task", "tb_confirm_and_generate", "tb_get_scenario_task",
+            "tb_query_coverage_matrix", "tb_get_generation_stats"}
+    back = dead & NAMES
+    assert not back, f"这些工具又被注册回来了：{sorted(back)}"
+    assert not any(p["key"] == "docgen" for p in PROFILES), "docgen 档位又回来了"
+
+
+def test_下线的只是入口_实现和数据没动():
+    """删表会伤到 49 条还挂着 generation_task_id 的老用例。
+    所以服务层和模型必须还在 —— 这条钉住"下线 ≠ 删库"。
+    """
+    import importlib
+
+    assert importlib.import_module("app.models.scenario_gen").GenerationTask is not None
+    from app.models.case import Case
+
+    assert hasattr(Case, "generation_task_id"), "用例上的批次外键被删了，老数据会失联"

@@ -185,8 +185,19 @@ async def list_cases(
     manual_status: str | None = None,
     ui_status: str | None = None,
     api_status: str | None = None,
+    pushed_within: str | None = None,
 ) -> tuple[list[Case], int]:
-    """分页查询用例列表，支持多条件筛选。返回 (cases, total)。"""
+    """分页查询用例列表，支持多条件筛选。返回 (cases, total)。
+
+    `pushed_within`（today / week）筛「最近由外部 Claude Code 回推的」。
+    CC 是**写一条推一条**、没有批量接口，所以一次会话的产出在时间上天然连成一片 ——
+    用时间窗就能把"这一轮干了什么"聚出来，不需要再造一个批次实体。
+    判据是 `source='ai' 且没有生成批次`：平台侧那条「喂需求文档批量产用例」的
+    流水线用的也是 source='ai'，靠 generation_task_id 才分得开（它的产物挂着批次，
+    CC 回推的没有）。那条路的入口已经下线，所以这个判据只会越来越准。
+    """
+    from datetime import datetime, timedelta, timezone
+
     from sqlalchemy import func, or_
 
     base = select(Case).where(Case.branch_id == branch_id)
@@ -195,6 +206,18 @@ async def list_cases(
         base = base.where(Case.deleted_at.is_not(None))
     else:
         base = base.where(Case.deleted_at.is_(None))
+
+    if pushed_within in ("today", "week"):
+        now = datetime.now(timezone.utc).astimezone()
+        if pushed_within == "today":
+            since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            since = now - timedelta(days=7)
+        base = base.where(
+            Case.created_at >= since,
+            Case.source == "ai",
+            Case.generation_task_id.is_(None),
+        )
 
     if case_type:
         base = base.where(Case.type == case_type)

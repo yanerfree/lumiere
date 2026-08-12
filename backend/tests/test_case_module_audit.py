@@ -1235,3 +1235,67 @@ def test_没跑的原因用户读得到():
     # 展开区：skipped 也要给出原因，不能只认 failed
     assert "status === 'skipped'" in src[src.index("{/* 失败原因"):src.index("{/* 失败原因") + 400], (
         "展开区只认 failed，被跳过的用例展开后什么都不说")
+
+
+# ── 回推时间筛选：看这一轮 CC 干了什么 ──────────────────────────────
+
+def test_回推筛选要能把老docgen产物排除掉():
+    """判据必须是 `source='ai' 且没有生成批次`。
+
+    只判 source='ai' 的话，平台侧那条「喂需求文档批量产用例」流水线的 49 条产物
+    会一起混进来 —— 两边用的是**同一个 source 值**，靠 generation_task_id 才分得开
+    （它的产物挂着批次，CC 回推的没有）。实测：API自测项目 72 条全是老产物，
+    判据写错的话「近 7 天回推的」会把它们全捞出来。
+    """
+    from app.services import case_service
+
+    body = _code_of(case_service, "list_cases")
+    assert "pushed_within" in body, "筛选没接上"
+    assert "generation_task_id" in body, (
+        "只按 source 判的话，老 docgen 产物会混进「CC 回推」里")
+    assert "Case.source == 'ai'" in body
+
+
+def test_回推筛选只认认识的值():
+    """乱传一个值应当等同于不筛，而不是筛出空列表 ——
+    后者会让人以为"这一轮什么都没推"，比报错还糟。
+    """
+    from app.services import case_service
+
+    body = _code_of(case_service, "list_cases")
+    assert "('today', 'week')" in body, "没有白名单，未知值的行为不可预期"
+
+
+def test_平台侧AI生成用例的入口都撤了():
+    """两个入口：侧边栏菜单项，和用例管理页顶部那个 primary 按钮。
+    只撤一个的话，用户照样点得到 —— 而那条路一个月没人用、8 个批次卡了 3 个。
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "frontend/src"
+    app = (root / "App.jsx").read_text(encoding="utf-8")
+    assert "scenario-gen" not in app, "路由/菜单里还留着入口"
+
+    cases = (root / "pages/cases/CaseManagement.jsx").read_text(encoding="utf-8")
+    assert "scenario-gen?taskId=new" not in cases, "用例页顶部那个按钮还在"
+    # 别误伤：「从接口生成」是另一条路（只有接口文档时用），它保留
+    assert "从接口生成" in cases
+
+
+def test_卡片上的复制按钮不能顺手改勾选():
+    """整张档位卡片是勾选控件，复制图标叠在它上面。
+
+    不 stopPropagation 的话，用户点「复制」会连带把这一档勾上或取消掉 ——
+    他以为自己只是复制了段文字，实际改了这个项目的 CC 工具范围。
+    """
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/settings/MCPTools.jsx").read_text(encoding="utf-8")
+    block = jsx[jsx.index("{onCopyPrompt && ("):]
+    block = block[:block.index("</Tooltip>")]
+    # **注释行必须先剥掉。** 上面那段说明里就写着"必须 stopPropagation"，
+    # 直接 `in block` 会被自己的注释喂饱 —— 埋雷把 onClick 改掉，守卫照样绿。
+    # 这个坑本轮已经踩到第五次了，每次都是"断言的那个串正好出现在解释它的注释里"。
+    code = "\n".join(ln for ln in block.splitlines() if not ln.strip().startswith("//"))
+    assert "e.stopPropagation()" in code, "点复制会顺手改掉这个项目的 CC 工具范围"

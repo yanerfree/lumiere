@@ -215,6 +215,7 @@ async def list_cases(
     manual_status: str | None = Query(default=None, alias="manualStatus"),
     ui_status: str | None = Query(default=None, alias="uiStatus"),
     api_status: str | None = Query(default=None, alias="apiStatus"),
+    pushed_within: str | None = Query(default=None, alias="pushedWithin"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
 ):
@@ -225,7 +226,7 @@ async def list_cases(
         automation_status=automation_status, is_flaky=is_flaky, keyword=keyword,
         include_deleted=include_deleted, review_status=review_status,
         lifecycle_status=lifecycle_status, manual_status=manual_status,
-        ui_status=ui_status, api_status=api_status,
+        ui_status=ui_status, api_status=api_status, pushed_within=pushed_within,
     )
     assets = await case_service.list_case_assets(session, [c.id for c in cases])
     data = []

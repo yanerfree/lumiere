@@ -6,7 +6,7 @@ import logging
 import secrets
 import uuid
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,7 +18,7 @@ from app.deps.auth import get_current_user, require_project_role
 from app.core.exceptions import NotFoundError
 from app.models.user import User
 from app.models.mcp_api_key import McpApiKey
-from app.models.project import Project
+from app.models.project import Branch, Project
 
 logger = logging.getLogger(__name__)
 
@@ -73,19 +73,42 @@ async def list_available_tools(_: User = Depends(get_current_user)):
 
 
 @router.get("/profiles")
-async def list_tool_profiles(_: User = Depends(get_current_user)):
-    """按「活」分的工具档位。
+async def list_tool_profiles(
+    project_id: uuid.UUID | None = Query(default=None, alias="projectId"),
+    branch_id: uuid.UUID | None = Query(default=None, alias="branchId"),
+    mcp_url: str | None = Query(default=None, alias="mcpUrl"),
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+):
+    """按「活」分的工具档位，外加每档可直接粘给 CC 的接入指令。
 
     档位定义放后端，和 TOOL_CATALOG 同一个进程 —— 之前工具列表就是因为
     前端硬编码而漂移过（写死 20 条、后端实际 32 条）。这里顺带把校验结果
     一起回给前端：档位里写了但没注册的工具名，不该等到 Key 建出来才发现。
+
+    `prompt` 同理必须在后端渲染：它由 task/hint 拼出来，前端自己拼一份的话，
+    改了 task 忘了改模板，页面上写的和复制出去的就成了两回事。
+    传 projectId/branchId 就把项目分支名填进去，不传则只留占位符。
     """
     from app.mcp import TOOL_CATALOG
-    from app.mcp.profiles import PROFILES, uncovered_tools, unknown_tools
+    from app.mcp.profiles import PROFILES, render_prompt, uncovered_tools, unknown_tools
+
+    project_name = branch_name = None
+    if project_id:
+        project_name = (await session.execute(
+            select(Project.name).where(Project.id == project_id))).scalar_one_or_none()
+    if branch_id:
+        branch_name = (await session.execute(
+            select(Branch.name).where(Branch.id == branch_id))).scalar_one_or_none()
 
     names = {t["name"] for t in TOOL_CATALOG}
+    url = mcp_url or "（见页面顶部的 MCP 服务地址）"
     return {"data": {
-        "profiles": PROFILES,
+        "profiles": [
+            {**p, "prompt": render_prompt(p["key"], mcp_url=url,
+                                          project_name=project_name, branch_name=branch_name)}
+            for p in PROFILES
+        ],
         "totalTools": len(names),
         "uncovered": uncovered_tools(names),
         "unknown": [{"profile": k, "tool": n} for k, n in unknown_tools(names)],

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox, Dropdown } from 'antd'
-import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, RobotOutlined, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons'
+import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, getValidToken } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
@@ -60,6 +60,7 @@ export default function CaseManagement() {
   const [keyword, setKeyword] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [readyFilter, setReadyFilter] = useState('')
+  const [pushedWithin, setPushedWithin] = useState('')   // '' | today | week
   const [selectedRowKeys, setSelectedRowKeys] = useState([])
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
@@ -145,11 +146,14 @@ export default function CaseManagement() {
         params.set(`${dim}Status`, st)
       }
       if (selectedFolderId) params.set('folderId', selectedFolderId)
+      // 「刚回推的」——CC 是写一条推一条、没有批量接口，所以一次会话的产出在
+      // 时间上天然连成一片，用时间窗就能看到"这一轮干了什么"。
+      if (pushedWithin) params.set('pushedWithin', pushedWithin)
       const res = await api.get(`/projects/${projectId}/branches/${globalBranchId}/cases?${params}`)
       setCases(res.data || [])
       setTotal(res.pagination?.total || 0)
     } catch { /* */ } finally { setLoading(false) }
-  }, [projectId, globalBranchId, page, pageSize, keyword, statusFilter, readyFilter, selectedFolderId])
+  }, [projectId, globalBranchId, page, pageSize, keyword, statusFilter, readyFilter, selectedFolderId, pushedWithin])
 
   useEffect(() => { fetchFolders() }, [fetchFolders])
   useEffect(() => { fetchCases() }, [fetchCases])
@@ -838,6 +842,16 @@ export default function CaseManagement() {
                 <Radio.Button value="pending_review">待审核</Radio.Button>
                 <Radio.Button value="deleted">已删除</Radio.Button>
               </Radio.Group>
+              {/* 「刚回推的」= 看一眼这一轮 CC 干了什么。用的是成果切片而不是进度条：
+                  CC 会话是一次性的，平台侧没有长期计划实体，"进展 3/10" 那个分母
+                  只能是当场编的；而"今天推上来这 7 条"是查得出来的事实。 */}
+              <Select size="small" value={pushedWithin} onChange={v => { setPushedWithin(v); setPage(1) }}
+                style={{ width: 140 }} popupMatchSelectWidth={false}
+                options={[
+                  { value: '', label: '回推时间：不限' },
+                  { value: 'today', label: '今天回推的' },
+                  { value: 'week', label: '近 7 天回推的' },
+                ]} />
               <Select size="small" value={readyFilter} onChange={v => { setReadyFilter(v); setPage(1) }}
                 style={{ width: 150 }} popupMatchSelectWidth={false}
                 options={[
@@ -850,12 +864,11 @@ export default function CaseManagement() {
                 ]} />
               <span style={{ flex: 1 }} />
               <Space size={6} wrap>
-                <Tooltip title="粘贴需求文档（PRD/用户故事），AI 自动生成手工测试用例（操作步骤+预期结果）">
-                  <Button type="primary" icon={<RobotOutlined />}
-                    onClick={() => navigate(`/projects/${projectId}/scenario-gen?taskId=new`)}>
-                    AI 生成用例
-                  </Button>
-                </Tooltip>
+                {/* 「AI 生成用例」（喂需求文档走平台侧流水线）已下线。
+                    实测：8 个批次里 3 个卡在 model_ready 半路、2 个 failed，最近一次 07-13，
+                    一个月无人问津 —— 那条路的形态（先喂文档、先建任务、再确认、再等平台跑）
+                    对着一个手上就有 Claude Code 的用户，仪式太重。
+                    实现和数据一概没动，下线的只是入口；用例仍由外部 CC 活体验证后回推。 */}
                 <Tooltip title="从 API 接口定义生成手工测试用例，需要接口信息">
                   <Button ghost icon={<ApiOutlined />} onClick={() => setTestforgeOpen(true)}>从接口生成</Button>
                 </Tooltip>

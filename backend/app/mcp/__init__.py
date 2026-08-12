@@ -14,9 +14,17 @@ mcp = FastMCP(
 【先看这里·选对工具，别搞混】
 ═══════════════════════════════════════════════════════════
 
-① 生成「步骤用例」（功能用例）走哪条路？
-   · 手上只有需求文档，要批量产出        → tb_create_scenario_task + tb_confirm_and_generate（AI 流水线，多阶段质量管控）
-   · 已在被测系统里活体验证过，要回写成果 → tb_create_case（一条条显式建）
+① 生成「步骤用例」（功能用例）只有一条路：
+   **先在被测系统里活体验证过，再用 tb_create_case 一条条回写成果。**
+   （平台侧「喂需求文档批量产用例」那条流水线已下线 —— 凭文档想象出来的用例
+     跑不通，也没人认。）
+
+①-0 【动手之前先查这个模块已经有什么】调 tb_list_cases 带上 module 筛选，
+   看清楚已有哪些场景（返回里带 title / 预期结果，还有 owes 告诉你每条还欠
+   manual/api/ui 哪几维）。**同一个场景已经存在就不要再建一条**，该补的是它欠的
+   那一维。想接着上次没干完的活，传 pending_only=true。
+   —— 平台会硬拒同模块下标题完全相同的用例，但换个说法就绕过去了，
+   真正防重复的是你动手之前那一眼。
 
 ② 「接口测试」有两种，不是一回事，别混：
    · 【接口测试模块·单接口】tb_generate_api_test
@@ -103,10 +111,19 @@ mcp = FastMCP(
    多推只会互相覆盖。一条用例要覆盖多个流程时，应该拆成多条用例。
    返回值里的 replacedExisting 告诉你这次是覆盖还是新建。
 
-⑦ 【动库之前先报方案，等用户确认】调用任何写库工具（tb_create_case /
-   tb_sync_orchestrated_scenario / tb_upsert_scenario_variables / tb_create_api_node /
-   tb_create_scenario_task）之前，先用一段话向用户说明：准备建几条、分别是什么、
-   用哪些工具、怎么验证。**得到确认再执行**。宁可多问一句，也别批量写错再回头清理。
+⑦ 【动库之前先报清单，等用户确认】调用任何写库工具（tb_create_case /
+   tb_sync_orchestrated_scenario / tb_upsert_scenario_variables / tb_create_api_node）
+   之前，先把清单列给用户看，**得到确认再执行**。清单一条一行，三列：
+
+     场景名称 | 这条验什么（一句话） | 库里已有吗（调 ①-0 查出来的，标出相似的那条编号）
+
+   「验什么」那一列不能省 —— 光看场景名，用户判断不出你有没有理解跑偏，
+   而这正是这道确认唯一拦得住的事故。也要让用户能只改其中几条（"去掉 3、5"），
+   只给"确认/取消"的话，他发现一条不对就只能整个推倒，几次之后就闭眼确认了。
+
+⑧ 【回推必须带你亲手跑过的证据】接口场景带上真实请求/响应，UI 脚本带上本地
+   跑通的结果。红线是「回推的是脚本不是结论」—— 没跑过就回推，等于把想象
+   写进了事实库，而它长得和真验过的一模一样，事后分辨不出来。
 
 ═══════════════════════════════════════════════════════════
 
@@ -406,35 +423,21 @@ _register(
 )
 
 
-# ── 功能场景测试工具 ──────────────────────────────
-
-_section("需求→用例流水线")
-
-_register(
-    scenario_gen.create_scenario_task,
-    name="tb_create_scenario_task",
-    description="""创建功能测试用例生成任务（推荐方式，质量最高）。AI 自动提取需求点→生成场景模型→批量展开用例，有多阶段质量管控。
-创建后需调用 tb_confirm_and_generate 推进流程。
-参数: project_id(项目UUID), branch_id(分支UUID), title(任务名称), content_markdown(需求文档Markdown内容)""",
-)
-
-_register(
-    scenario_gen.get_scenario_task,
-    name="tb_get_scenario_task",
-    description="查询功能场景测试生成任务的状态与进度。参数: task_id(任务UUID)",
-)
-
-_register(
-    scenario_gen.confirm_and_generate,
-    name="tb_confirm_and_generate",
-    description="确认需求点和场景模型，自动推进到用例展开。在 tb_create_scenario_task 创建任务后调用。可多次调用查看进度。参数: task_id(任务UUID)",
-)
-
-_register(
-    scenario_gen.query_coverage_matrix,
-    name="tb_query_coverage_matrix",
-    description="查询覆盖矩阵：需求点 × 测试维度的覆盖状态。参数: task_id(任务UUID), branch_id(分支UUID)",
-)
+# ── 需求→用例流水线：已下线 ────────────────────────
+#
+# `tb_create_scenario_task` / `tb_confirm_and_generate` / `tb_get_scenario_task` /
+# `tb_query_coverage_matrix` / `tb_get_generation_stats` 五个工具已摘除，
+# 平台侧「AI 生成用例」的页面入口同时下线。
+#
+# 原因是实测数据：8 个批次里 3 个卡在 model_ready 半路、2 个 failed，最近一次
+# 07-13。**一半批次卡在中间态，一个月无人问津** —— 这条路的形态（先喂文档、
+# 先建任务、再确认、再等平台跑）对着一个手上就有 Claude Code 的用户，仪式太重，
+# 用户用脚投票了。留着它的代价不只是死代码：CC 走「全量」档时还能开出一个
+# 没有页面可以看的任务，跑到一半没人知道。
+#
+# **实现和数据一概不动**：`app/services/scenario_gen/`、`generation_tasks` 等 7 张表、
+# `/api/scenario-gen/*` 接口全部保留。49 条老用例还挂着 `generation_task_id`，
+# 删表会伤到它们。这里下线的只是**入口**。
 
 
 # ── 项目与分支查询工具 ──────────────────────────────
@@ -451,12 +454,6 @@ _register(
     projects.list_branches,
     name="tb_list_branches",
     description="列出项目下的活跃分支。用例和接口场景都挂在分支上，branch_id 从这里拿。参数: project_id(项目UUID)",
-)
-
-_register(
-    scenario_gen.get_generation_stats,
-    name="tb_get_generation_stats",
-    description="AI 生成用例的质量统计：通过率 / 拒绝率 / 总数。看流水线产出质量用。参数: branch_id(分支UUID)",
 )
 
 
