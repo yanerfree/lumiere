@@ -50,6 +50,13 @@ class ApiTestStep(Base):
     assertions: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     variables_extract: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    # 发请求前先等多久。被测系统的配置下发常是异步的（实测网关 0.06~0.5s 且抖动），
+    # 而步骤之间只隔几毫秒 —— "发布完立刻打网关"必然抢跑，第一版就是这么红的。
+    wait_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    # 断言没过就整步重发，直到过了或超时。**比固定 wait 更该用这个** ——
+    # 固定等待要么白等要么不够，换台机器就崩；重试是"等到它真的好了为止"。
+    retry_timeout_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    retry_interval_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=300, server_default="300")
     pre_script: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     post_script: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     last_status: Mapped[str | None] = mapped_column(String(10), nullable=True)  # pass | fail | skip

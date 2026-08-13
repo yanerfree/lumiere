@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
-import { Input, Select, Button, Tag, Space, Tooltip, Dropdown, Popover, Checkbox, Spin, message, AutoComplete, Modal } from 'antd'
+import { Input, Select, Button, Tag, Space, Tooltip, Dropdown, Popover, Checkbox, Spin, message, AutoComplete, Modal , InputNumber} from 'antd'
 import {
   PlusOutlined, DeleteOutlined, HolderOutlined, CaretRightOutlined, CaretDownOutlined,
   FolderOutlined, RetweetOutlined, BranchesOutlined, ApiOutlined,
@@ -1196,6 +1196,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
     { key: 'auth', label: 'Auth', count: hasAuth ? 1 : 0, icon: <LockOutlined style={{ fontSize: 10, marginRight: 2 }} /> },
     { key: 'pre', label: '前置操作', count: preCount },
     { key: 'post', label: '后置操作', count: postCount },
+    { key: 'timing', label: '等待/重试', count: (step.retryTimeoutMs > 0 || step.waitMs > 0) ? 1 : 0 },
     ...(response ? [{ key: 'response', label: 'Response', count: 0, highlight: true }] : []),
   ]
 
@@ -1351,6 +1352,36 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
           </div>
         )}
         {activeTab === 'auth' && <AuthEditor auth={step.auth} onChange={v => up('auth', v)} />}
+        {activeTab === 'timing' && (
+          <div style={{ padding: '8px 4px', fontSize: 12, color: '#4e5969', lineHeight: 1.9 }}>
+            {/* 不做成隐形魔法：一步为什么慢、为什么会重发，页面上得看得见 */}
+            <div style={{ marginBottom: 10, color: '#86909c' }}>
+              被测系统的配置下发常是异步的（实测网关 0.06~0.5s 且抖动），而步骤之间只隔几毫秒 ——
+              「发布完立刻打网关」会抢跑，跑出来是红的，但那不是缺陷。
+              <b style={{ color: '#4e5969' }}>优先用重试，别用固定等待</b> —— 固定等待要么白等要么不够，换台机器就崩。
+            </div>
+            <Space size={16} wrap>
+              <span>发请求前先等
+                <InputNumber size="small" min={0} max={60000} step={100}
+                  value={step.waitMs || 0} style={{ width: 92, margin: '0 4px' }}
+                  onChange={v => up('waitMs', v || 0)} /> ms</span>
+              <span>断言没过就重发，最多等
+                <InputNumber size="small" min={0} max={120000} step={500}
+                  value={step.retryTimeoutMs || 0} style={{ width: 100, margin: '0 4px' }}
+                  onChange={v => up('retryTimeoutMs', v || 0)} /> ms（0=不重试）</span>
+              <span>每隔
+                <InputNumber size="small" min={50} max={10000} step={100}
+                  value={step.retryIntervalMs || 300} style={{ width: 88, margin: '0 4px' }}
+                  onChange={v => up('retryIntervalMs', v || 300)} /> ms 重发</span>
+            </Space>
+            {step.retryTimeoutMs > 0 && !['GET', 'HEAD', 'OPTIONS'].includes((step.method || 'GET').toUpperCase()) && (
+              <div style={{ marginTop: 10, color: '#e8453c' }}>
+                ⚠ {step.method} 上开了重试 —— 重试会<b>重发请求</b>，写操作重发会造出多份数据。
+                确认这个接口幂等再用，否则该把重试放到后面那个「读回来确认」的步骤上。
+              </div>
+            )}
+          </div>
+        )}
         {activeTab === 'pre' && (
           <OperationList
             operations={preOps}

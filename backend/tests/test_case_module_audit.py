@@ -1554,3 +1554,70 @@ def test_审核列默认收起():
     block = jsx[jsx.index("key: 'reviewStatus'"):]
     block = block[:block.index("\n")]
     assert "defaultVisible: false" in block, "审核列又默认显示了"
+
+
+# ── 抢跑假红：步骤级等待/重试 ───────────────────────────────────────
+
+def test_步骤有等待和重试字段():
+    """被测系统的配置下发是异步的（实测网关 0.06~0.5s 且抖动），而步骤之间只隔
+    几毫秒 —— 「发布完立刻打网关」必然抢跑。本轮真跑复现过两次。
+
+    **假红比漏测更毒**：它让整份报告不可信，人看两次就不看了。
+    """
+    from app.models.api_test import ApiTestStep
+
+    for col in ("wait_ms", "retry_timeout_ms", "retry_interval_ms"):
+        assert hasattr(ApiTestStep, col), f"步骤上没有 {col}"
+
+
+def test_重试是重发整步而不是只等一下():
+    """固定等待要么白等要么不够，换台机器就崩 —— CC 自己的原话是「很脆」。
+    重试等的是「它真的好了」，所以必须**重发请求并重新断言**，不是 sleep 完拉倒。
+    """
+    from app.services import api_test_runner
+
+    body = _code_of(api_test_runner, "run_step")
+    assert "run_single_step" in body and "while" in body, "没有重发循环，只是等一下"
+    assert "retry_timeout_ms" in body and "monotonic" in body, "没有超时上界"
+
+
+def test_重试成功要说重试了几次():
+    """一次就过和试了 8 次才过不是一回事 —— 后者说明这个窗口快不够了，
+    早晚变成偶发红。吞掉这个信息就是把「快要坏了」藏起来。
+    """
+    from app.services import api_test_runner
+
+    body = _code_of(api_test_runner, "run_step")
+    # 钉只在**成功路径**出现的那句。只找"重试"两个字的话，失败消息里也有，
+    # 把成功那行删掉守卫照样绿（本轮第十一次）。
+    assert "次后通过" in body, "重试成功了却不说试了几次"
+    assert "attempts" in body
+
+
+def test_写操作开重试要警告():
+    """重试会**重发请求**。POST 重发就是多造一份数据 ——
+    这不是风格问题，是会在被测系统里留下垃圾。
+    """
+    from app.mcp.tools import sync
+
+    body = _code_of(sync, "sync_orchestrated_scenario")
+    # ast.unparse 会把引号统一成单引号，按源码里的双引号断言必然落空
+    assert "retry_timeout_ms" in body and "('GET', 'HEAD', 'OPTIONS')" in body, (
+        "写操作上开重试没有任何提示")
+
+
+def test_等待重试字段前后端都不丢():
+    """适配器漏一个字段，页面上就是「设了但看不见、一保存还被清零」——
+    实测就这么丢过一次：接口返回 6000，编辑器里是空的。
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "frontend/src"
+    adapter = (root / "pages/cases/apiStepAdapter.js").read_text(encoding="utf-8")
+    # 两个方向都要有：读出来给编辑器、写回去给后端
+    assert adapter.count("retryTimeoutMs") >= 2, "适配器只做了单向，另一向会把值清零"
+    assert "st.retryTimeoutMs ?? st.retry_timeout_ms" in adapter
+
+    api = (Path(__file__).resolve().parents[1] / "app/api/api_test.py").read_text(encoding="utf-8")
+    assert '"retryTimeoutMs": st.retry_timeout_ms' in api, "接口不返回，编辑器拿不到"
+    assert "'wait_ms', 'retry_timeout_ms', 'retry_interval_ms'" in api, "接口不收，改了存不下"

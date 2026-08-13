@@ -61,6 +61,9 @@ def _step_to_dict(st: ApiTestStep) -> dict:
         "body": st.body,
         "assertions": st.assertions,
         "variablesExtract": st.variables_extract,
+        "waitMs": st.wait_ms,
+        "retryTimeoutMs": st.retry_timeout_ms,
+        "retryIntervalMs": st.retry_interval_ms,
         "enabled": st.enabled,
         "preScript": st.pre_script,
         "postScript": st.post_script,
@@ -570,6 +573,10 @@ class UpdateStepRequest(BaseSchema):
     body: dict | list | str | None = None
     assertions: list | None = None
     variables_extract: dict | None = None
+    # 异步下发导致的抢跑假红靠这三个解决，见 api_test_runner.run_step
+    wait_ms: int | None = None
+    retry_timeout_ms: int | None = None
+    retry_interval_ms: int | None = None
     enabled: bool | None = None
     group_name: str | None = None
     pre_script: dict | None = None
@@ -626,7 +633,8 @@ async def update_step(
     step = await session.get(ApiTestStep, step_id)
     if not step or step.scenario_id != scenario_id:
         raise NotFoundError(code="NOT_FOUND", message="步骤不存在")
-    for field in ['name', 'method', 'url', 'headers', 'body', 'assertions', 'variables_extract', 'enabled', 'group_name', 'pre_script', 'post_script']:
+    for field in ['name', 'method', 'url', 'headers', 'body', 'assertions', 'variables_extract', 'enabled', 'group_name', 'pre_script', 'post_script',
+                  'wait_ms', 'retry_timeout_ms', 'retry_interval_ms']:
         val = getattr(payload, field, None)
         if val is not None:
             setattr(step, field, val)

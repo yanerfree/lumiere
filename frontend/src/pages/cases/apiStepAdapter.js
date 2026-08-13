@@ -69,6 +69,11 @@ export function stepToNode(st, i) {
     groupName: st.groupName || st.group_name || null,
     enabled: st.enabled !== false,
     lastStatus: st.lastStatus || st.last_status || null,
+    // 等待/重试：适配器漏一个字段，页面上就是"设了但看不见、一保存还被清零"。
+    // 这三个是解决异步下发抢跑假红的，见 api_test_runner.run_step。
+    waitMs: st.waitMs ?? st.wait_ms ?? 0,
+    retryTimeoutMs: st.retryTimeoutMs ?? st.retry_timeout_ms ?? 0,
+    retryIntervalMs: st.retryIntervalMs ?? st.retry_interval_ms ?? 300,
     lastResponse: st.lastResponse || st.last_response || null,
   }
 }
@@ -117,6 +122,9 @@ export function nodeToStepPatch(node) {
     body,
     assertions,
     variablesExtract,
+    waitMs: node.waitMs ?? 0,
+    retryTimeoutMs: node.retryTimeoutMs ?? 0,
+    retryIntervalMs: node.retryIntervalMs ?? 300,
     enabled: node.enabled !== false,
   }
 }

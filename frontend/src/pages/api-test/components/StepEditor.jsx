@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Button, Tag, Space, Input, Select, Tabs, Popconfirm, Typography, message } from 'antd'
+import { Button, Tag, Space, Input, Select, Tabs, Popconfirm, Typography, message , InputNumber} from 'antd'
 import {
   DeleteOutlined, CaretRightOutlined, LoadingOutlined,
   CheckCircleOutlined, CloseCircleOutlined, SendOutlined, PlusOutlined,
@@ -379,6 +379,40 @@ export default function StepEditor({
                   readonly={readonly}
                   onSave={v => onSaveStep(step.id, { variablesExtract: v })}
                 />
+              ),
+            },
+            {
+              key: 'timing',
+              label: <span>等待/重试 {(step.retryTimeoutMs > 0 || step.waitMs > 0) && <Tag color="#fa8c16" style={{ fontSize: 10, padding: '0 4px', lineHeight: '16px' }}>已设</Tag>}</span>,
+              children: (
+                <div style={{ padding: '4px 2px', fontSize: 12, color: '#4e5969', lineHeight: 1.9 }}>
+                  {/* 不做成隐形魔法：一步为什么慢、为什么重试，得在页面上看得见 */}
+                  <div style={{ marginBottom: 10, color: '#86909c' }}>
+                    被测系统的配置下发常是异步的（实测网关 0.06~0.5s 且抖动），而步骤之间只隔几毫秒 ——
+                    「发布完立刻打网关」会抢跑，跑出来是红的，但那不是缺陷。
+                    <b style={{ color: '#4e5969' }}>优先用重试，别用固定等待</b>：固定等待要么白等要么不够，换台机器就崩。
+                  </div>
+                  <Space size={16} wrap>
+                    <span>发请求前先等
+                      <InputNumber size="small" min={0} max={60000} step={100} disabled={readonly}
+                        value={step.waitMs || 0} style={{ width: 96, margin: '0 4px' }}
+                        onChange={v => onSaveStep(step.id, { waitMs: v || 0 })} /> ms</span>
+                    <span>断言没过就重发，最多等
+                      <InputNumber size="small" min={0} max={120000} step={500} disabled={readonly}
+                        value={step.retryTimeoutMs || 0} style={{ width: 104, margin: '0 4px' }}
+                        onChange={v => onSaveStep(step.id, { retryTimeoutMs: v || 0 })} /> ms（0=不重试）</span>
+                    <span>每隔
+                      <InputNumber size="small" min={50} max={10000} step={100} disabled={readonly}
+                        value={step.retryIntervalMs || 300} style={{ width: 90, margin: '0 4px' }}
+                        onChange={v => onSaveStep(step.id, { retryIntervalMs: v || 300 })} /> ms 重发一次</span>
+                  </Space>
+                  {step.retryTimeoutMs > 0 && !['GET', 'HEAD', 'OPTIONS'].includes((step.method || 'GET').toUpperCase()) && (
+                    <div style={{ marginTop: 10, color: '#e8453c' }}>
+                      ⚠ {step.method} 上开了重试 —— 重试会<b>重发请求</b>，写操作重发会造出多份数据。
+                      确认这个接口幂等再用，否则该把重试放到后面那个「读回来确认」的步骤上。
+                    </div>
+                  )}
+                </div>
               ),
             },
             {

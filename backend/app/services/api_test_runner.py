@@ -521,6 +521,55 @@ async def run_single_step(
         )
 
 
+
+async def run_step(
+    step: ApiTestStep,
+    env: dict,
+    client: httpx.AsyncClient,
+    token_cache: "TokenCache | None" = None,
+    origins: dict | None = None,
+    step_index: int = 0,
+) -> StepResult:
+    """跑一步，带**等待**和**重试**。
+
+    被测系统的配置下发常是异步的（实测网关从「发布成功」到真能转发要 0.06~0.5s
+    且抖动），而步骤之间只隔几毫秒 —— 「发布完立刻打网关」必然抢跑，跑出来是红的，
+    但那不是缺陷，是这条用例自己没等。**假红比漏测更毒**：它让整份报告不可信，
+    人看两次就不看了。
+
+    - `wait_ms`：发之前先等。下策 —— 要么白等要么不够，换台机器就崩。
+    - `retry_timeout_ms`：断言没过就整步重发，直到过了或超时。等的是"它真的好了"。
+
+    ⚠ 重试会**重发请求**。写操作（POST/PUT/DELETE）上开重试会造出多份数据 ——
+    所以只该用在"读回来确认"的那种步骤上。回推工具里对写操作开重试会软警告。
+    """
+    if getattr(step, "wait_ms", 0):
+        await asyncio.sleep(step.wait_ms / 1000)
+
+    timeout_ms = getattr(step, "retry_timeout_ms", 0) or 0
+    result = await run_single_step(step, env, client, token_cache, origins=origins, step_index=step_index)
+    if timeout_ms <= 0 or result.status != "fail":
+        return result
+
+    interval = (getattr(step, "retry_interval_ms", 0) or 300) / 1000
+    deadline = time.monotonic() + timeout_ms / 1000
+    attempts = 1
+    while time.monotonic() < deadline:
+        await asyncio.sleep(interval)
+        attempts += 1
+        result = await run_single_step(step, env, client, token_cache, origins=origins, step_index=step_index)
+        if result.status != "fail":
+            # 说清"重试了几次才过" —— 一次就过和试了 8 次才过不是一回事，
+            # 后者说明这个等待窗口快不够了，早晚会变成偶发红。
+            result.error = (result.error or "") or None
+            result.step_name = f"{step.name}（重试 {attempts} 次后通过）"
+            return result
+    result.error = (f"重试 {attempts} 次、等了 {timeout_ms}ms 仍然没过。"
+                    f"要么被测系统真有问题，要么这个窗口还不够长。\n"
+                    + (result.error or ""))
+    return result
+
+
 async def _resolve_automation_resources(session, scenario, env: dict, token_cache=None) -> dict:
     """把项目级前置资源（automation_resources）的 extract 值解析成变量。
 
@@ -654,7 +703,7 @@ async def run_scenario(
         results = []
         async with httpx.AsyncClient(timeout=30, verify=False) as client:
             for i, step in enumerate(steps):
-                result = await run_single_step(step, env, client, token_cache, origins=origins, step_index=i)
+                result = await run_step(step, env, client, token_cache, origins=origins, step_index=i)
                 results.append(result)
 
                 step.last_status = result.status

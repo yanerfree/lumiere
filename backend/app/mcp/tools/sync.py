@@ -469,6 +469,15 @@ async def sync_orchestrated_scenario(
         for name in sorted(refs):
             if name not in allow and name not in extracted:
                 dangling.append({"step": i + 1, "name": st.get("name") or f"step{i + 1}", "variable": name})
+        # 写操作上开重试 → 软警告：重试会**重发请求**，POST 重发就是多造一份数据
+        if int(st.get("retry_timeout_ms") or 0) > 0 and \
+                (st.get("method") or "GET").upper() not in ("GET", "HEAD", "OPTIONS"):
+            warnings.append({
+                "step": i + 1, "field": "retry_timeout_ms",
+                "value": f"{st.get('method')} 上开了重试 —— 重试会重发请求，"
+                         f"写操作重发会造出多份数据。确认这个接口幂等再用，"
+                         f"否则该把重试放在后面那个「读回来确认」的步骤上。",
+            })
         # body 里疑似写死的业务数据 → 软警告
         for path, val in _iter_strings(st.get("body")):
             if _looks_hardcoded(val, path):
@@ -572,6 +581,11 @@ async def sync_orchestrated_scenario(
             assertions=st.get("assertions"),
             variables_extract=st.get("variables_extract"),
             enabled=st.get("enabled", True),
+            # 异步下发那种"发布完立刻打网关会抢跑"的场景靠这三个字段解决，
+            # 不用再插一堆假步骤去占时间窗
+            wait_ms=int(st.get("wait_ms") or 0),
+            retry_timeout_ms=int(st.get("retry_timeout_ms") or 0),
+            retry_interval_ms=int(st.get("retry_interval_ms") or 300),
         ))
 
     # 回写用例的「接口」维度状态：挂上了活体验证过的编排场景，还显示"未开始"会误导
