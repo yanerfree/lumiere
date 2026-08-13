@@ -675,8 +675,19 @@ export default function CaseManagement() {
     { key: 'teaId', title: 'TEA ID', dataIndex: 'teaId', width: 150, defaultVisible: false, render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v || '-'}</span> },
     { key: 'createdAt', title: '创建时间', dataIndex: 'createdAt', width: 150, defaultVisible: false, render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v ? new Date(v).toLocaleString('zh-CN') : '-'}</span> },
     { key: 'updatedAt', title: '更新时间', dataIndex: 'updatedAt', width: 150, defaultVisible: false, render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v ? new Date(v).toLocaleString('zh-CN') : '-'}</span> },
-    { key: 'actions', title: '操作', width: 80, align: 'center', defaultVisible: true, render: (_, row) => (
+    { key: 'actions', title: '操作', width: statusFilter === 'deleted' ? 128 : 80, align: 'center', defaultVisible: true, render: (_, row) => (
       statusFilter === 'deleted' ? (
+        <Space size={2}>
+        {/* 误删一条就得整条重写，那这一步缓冲就白设了 */}
+        <Popconfirm title="恢复这条用例？" onConfirm={async () => {
+          try {
+            await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/batch`, { caseIds: [row.id], action: 'restore' })
+            message.success('已恢复')
+            fetchCases(); fetchFolders()
+          } catch (e) { message.error(e.message || '恢复失败') }
+        }}>
+          <Button type="link" size="small" style={{ fontSize: 12, padding: '0 4px', color: '#0ea5a0' }}>恢复</Button>
+        </Popconfirm>
         <Popconfirm title="确定彻底删除此用例？此操作不可恢复！" onConfirm={async () => {
           try {
             await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/batch`, { caseIds: [row.id], action: 'hard_delete' })
@@ -686,6 +697,7 @@ export default function CaseManagement() {
         }}>
           <Button type="link" size="small" danger style={{ fontSize: 12, padding: '0 4px' }}>彻底删除</Button>
         </Popconfirm>
+        </Space>
       ) : (
         <Space size={6}>
           <Tooltip title="复制用例">
@@ -940,7 +952,19 @@ export default function CaseManagement() {
             {selectedRowKeys.length > 0 && (
               <div style={{ marginTop: 10, padding: '8px 12px', background: statusFilter === 'deleted' ? '#fff2f0' : '#e0f7f6', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span style={{ fontSize: 13, color: statusFilter === 'deleted' ? '#e8453c' : '#0ea5a0' }}>已选 {selectedRowKeys.length} 条</span>
-                {statusFilter === 'deleted' ? (
+                {statusFilter === 'deleted' ? (<>
+                  {/* 回收站没有恢复 = 它不是回收站，是「延迟删除」。
+                      误删之后唯一的出路是彻底删掉重写一遍，那这一步缓冲就白设了。 */}
+                  <Popconfirm title={`把 ${selectedRowKeys.length} 条恢复回用例列表？`} onConfirm={async () => {
+                    try {
+                      const r = await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/batch`,
+                        { caseIds: selectedRowKeys, action: 'restore' })
+                      message.success(`已恢复 ${r.data?.succeeded ?? 0} 条`)
+                      setSelectedRowKeys([]); fetchCases(); fetchFolders()
+                    } catch (e) { message.error(e.message || '恢复失败') }
+                  }}>
+                    <Button size="small" type="link" style={{ color: '#0ea5a0' }}>恢复</Button>
+                  </Popconfirm>
                   <Popconfirm title={`确定彻底删除 ${selectedRowKeys.length} 条用例？此操作不可恢复！`} onConfirm={async () => {
                     try {
                       await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/batch`, { caseIds: selectedRowKeys, action: 'hard_delete' })
@@ -949,7 +973,7 @@ export default function CaseManagement() {
                   }}>
                     <Button size="small" type="link" danger>批量彻底删除</Button>
                   </Popconfirm>
-                ) : (<>
+                </>) : (<>
                 <Button size="small" type="primary" icon={<PlayCircleOutlined />}
                   onClick={openBatchExec}>
                   批量执行

@@ -67,7 +67,7 @@ class UpdateCaseRequest(BaseSchema):
 class BatchCaseRequest(BaseSchema):
     """批量操作请求"""
     action: Literal["move", "archive", "unarchive", "set_priority", "set_flaky", "unset_flaky",
-                    "delete", "hard_delete", "publish", "unpublish"]
+                    "delete", "hard_delete", "publish", "unpublish", "restore"]
     case_ids: list[uuid.UUID] = Field(min_length=1)
     # publish / unpublish 作用在哪一维（manual / ui / api）。不传 = 三维一起。
     dimension: Literal["manual", "ui", "api"] | None = None

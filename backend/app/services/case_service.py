@@ -353,9 +353,11 @@ async def batch_cases(
     errors = []
 
     for cid in case_ids:
-        result = await session.execute(
-            select(Case).where(Case.id == cid, Case.branch_id == branch_id, Case.deleted_at.is_(None))
-        )
+        # 恢复操作要找的恰恰是**已软删**的行，别的操作只认活着的
+        q = select(Case).where(Case.id == cid, Case.branch_id == branch_id)
+        q = q.where(Case.deleted_at.is_not(None) if action == "restore"
+                    else Case.deleted_at.is_(None))
+        result = await session.execute(q)
         case = result.scalar_one_or_none()
         if case is None:
             failed += 1
@@ -382,7 +384,12 @@ async def batch_cases(
             case.is_flaky = False
         elif action == "delete":
             case.deleted_at = datetime.now(timezone.utc)
-            case.folder_id = None
+            # **不清 folder_id**。原来清掉是为了让目录计数掉下去，但计数本来就
+            # 过滤软删（folder_service 里两处都带 deleted_at.is_(None)）——
+            # 清它没有任何收益，却销毁了「这条属于哪个模块」这唯一的记录，
+            # 于是恢复出来的用例回不到原目录。
+        elif action == "restore":
+            case.deleted_at = None
         elif action in ("publish", "unpublish"):
             # 人拍板：把某一维（或三维）推到「可执行」= 能进回归，或打回调试。
             #

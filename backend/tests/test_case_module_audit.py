@@ -1737,3 +1737,67 @@ def test_Mock是独立一档不塞进用例档():
     assert "tb_llm_mock_status" not in live["tools"], "又塞回 live 了"
     full = next(p for p in PROFILES if p["key"] == "fullloop")
     assert "tb_llm_mock_status" in full["tools"], "全链路档反而没有，选它的人用不上"
+
+
+# ── 回收站得能出来 ──────────────────────────────────────────────────
+
+def test_回收站要有恢复这条路():
+    """没有恢复的回收站不是回收站，是**延迟删除** —— 误删之后唯一的出路是
+    彻底删掉重写一遍，那这一步缓冲就白设了。
+
+    实测发现全后端三处写 deleted_at 全是往里放，一处往回置空的都没有；
+    批量 action 里 archive/unarchive 是成对的，唯独 delete 是单向的。
+    """
+    from app.schemas.case import BatchCaseRequest
+
+    actions = BatchCaseRequest.model_fields["action"].annotation.__args__
+    assert "restore" in actions, "回收站出不来"
+
+    from app.services import case_service
+    body = _code_of(case_service, "batch_cases")
+    assert "'restore'" in body and "case.deleted_at = None" in body
+
+
+def test_恢复要查得到软删的行():
+    """批量循环原本硬过滤 `deleted_at IS NULL` —— 恢复要找的恰恰是已删的那些，
+    不放宽的话按钮点了永远报"用例不存在"。
+    """
+    from app.services import case_service
+
+    body = _code_of(case_service, "batch_cases")
+    assert "is_not(None) if action == 'restore'" in body, (
+        "恢复还是只查活着的行，永远找不到要恢复的那条")
+
+
+def test_软删不许清掉目录归属():
+    """`module` 不是列，它是从目录名推出来的 —— 删除时清空 folder_id
+    就**销毁了「这条属于哪个模块」唯一的记录**，恢复出来回不到原目录。
+
+    而目录计数本来就过滤软删（folder_service 两处都带 deleted_at.is_(None)），
+    清它没有任何收益。
+    """
+    from app.services import case_service
+
+    body = _code_of(case_service, "batch_cases")
+    seg = body[body.index("elif action == 'delete'"):]
+    seg = seg[:seg.index("elif action ==", 10)]
+    assert "folder_id = None" not in seg, "软删又把目录归属清掉了，恢复回不到原处"
+
+
+def test_编号靠清空回收站归零而不是过滤软删():
+    """`_next_case_code` 取 MAX(case_code) 且不看 deleted_at ——
+    **不能简单加个过滤**：uq_case_branch_code 唯一约束还在，软删的行仍占着
+    那个号，重新生成同号会直接撞约束。正解是让彻底删除真能删掉。
+    """
+    import inspect
+
+    from app.services import import_service
+
+    src = inspect.getsource(import_service._next_case_code)
+    assert "deleted_at" not in src, (
+        "给编号加了 deleted_at 过滤 —— 会撞 uq_case_branch_code 唯一约束")
+
+    from app.services.case_service import _detach_blocking_refs
+    body = inspect.getsource(_detach_blocking_refs)
+    assert "PlanCase" in body and "TestReportScenario" in body, (
+        "彻底删除的两个卡点外键没解开，回收站清不掉，编号就永远归不了零")
