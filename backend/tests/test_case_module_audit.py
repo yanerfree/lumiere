@@ -1801,3 +1801,26 @@ def test_编号靠清空回收站归零而不是过滤软删():
     body = inspect.getsource(_detach_blocking_refs)
     assert "PlanCase" in body and "TestReportScenario" in body, (
         "彻底删除的两个卡点外键没解开，回收站清不掉，编号就永远归不了零")
+
+
+def test_范围过期要在页面上说出来():
+    """项目级范围落库存的是**展开后的显式工具名单**（语义可审计），
+    代价是平台加了新工具，已有项目的名单不会自动跟上。
+
+    而页面只显示「31 / 45 个工具已开放」，看起来像"你有意只开 31 个"，
+    不像"名单过期了" —— 实测埋过一次：一轮加了 8 个工具，项目范围一个都没跟上，
+    CC 全看不见，页面上毫无提示，差点让整轮工作白做。
+
+    ⚠ 判据**不能用 chosen**：deriveChosen 要求完全覆盖才算勾选，档位一缺工具
+    就掉出 chosen，那样永远检测不到（第一版就是这么写错的，Playwright 照出来的）。
+    """
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/settings/MCPTools.jsx").read_text(encoding="utf-8")
+    blk = jsx[jsx.index("const staleProfiles"):]
+    blk = blk[:blk.index("const staleMissing")]
+    assert "chosen.includes" not in blk, (
+        "又用 chosen 判过期了 —— 档位缺工具时它已经掉出 chosen，永远检测不到")
+    assert ">= 0.7" in blk, "没有覆盖率判据"
+    assert "范围还没跟上" in jsx and "一键补齐" in jsx, "检测到了却不告诉人、也不给一键修"

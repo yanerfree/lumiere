@@ -227,6 +227,24 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
     applySel(v => on ? [...new Set([...v, ...names])] : v.filter(n => !names.includes(n)))
   }
 
+
+  // 落库存的是**展开后的显式工具名单**（纪律 2：语义可审计、改档位定义不会让
+  // 已有项目的范围悄悄变）。代价是：平台加了新工具，已有项目的名单**不会自动跟上**。
+  //
+  // 而页面只显示「31 / 45 个工具已开放」，看起来像"你有意只开 31 个"，不像
+  // "名单过期了" —— 实测就这么埋过一次：一轮加了 8 个工具，项目范围一个都没跟上，
+  // CC 全看不见，页面上毫无提示。
+  //
+  // ⚠ 判据不能用 `chosen`：deriveChosen 要求**完全覆盖**才算勾选，档位一缺工具
+  // 就掉出 chosen 了，那样 staleProfiles 永远是空（第一版就是这么写错的）。
+  // 改成按覆盖率判：覆盖 ≥70% 却没覆盖满的，几乎一定是"当初勾过、后来这档长大了"。
+  const staleProfiles = savedUnlimited ? [] : acts.filter(p => {
+    const miss = p.tools.filter(n => !savedList.includes(n))
+    return miss.length > 0 && (p.tools.length - miss.length) / p.tools.length >= 0.7
+  })
+  const staleMissing = [...new Set(staleProfiles.flatMap(
+    p => p.tools.filter(n => !savedList.includes(n))))]
+
   const collapseItems = byCategory.map(([cat, items]) => {
     const names = items.map(t => t.name)
     const n = names.filter(x => selSet.has(x)).length
@@ -284,6 +302,21 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
         ))}
       </div>
 
+      {staleMissing.length > 0 && (
+        <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+          message={`平台新增了 ${staleMissing.length} 个工具，本项目的范围还没跟上`}
+          description={<span style={{ fontSize: 12.5 }}>
+            「{staleProfiles.map(p => p.label.split(/[：:]/)[0]).join('」「')}」这{staleProfiles.length > 1 ? '几' : ''}档现在需要
+            <b> {staleMissing.join('、')} </b>
+            ，但它们不在已保存的名单里 —— <b>CC 现在看不到、也调不动</b>。
+            落库存的是展开后的显式工具名，所以平台加了新工具不会自动进来。
+            点下面的「保存」重新展开一次就好。
+          </span>}
+          action={<Button size="small" type="primary" loading={saving}
+            onClick={() => onSave(unlimited ? null : [...new Set([...sel, ...staleMissing])])}>
+            一键补齐并保存
+          </Button>} />
+      )}
       <Card size="small" style={{ ...cardStyle, background: 'rgba(14,165,160,0.035)', marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <div>
