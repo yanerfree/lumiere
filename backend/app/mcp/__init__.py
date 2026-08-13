@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks
 
 mcp = FastMCP(
     name="testBench",
@@ -299,6 +299,39 @@ _register(
     name="tb_create_case",
     description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。**入库要过门禁**：标题完全同名硬拒、标题含模糊词（操作成功/显示正常/无报错/符合预期）硬拒。标题相似只提醒不拦。**P0 三件套不拦你**：同源生成的三份产物容易互相一致而不正确（典型是把「创建成功」做成「返回 200」），所以建议先在对话里跟用户确认这个场景到底要验什么，再把确认内容用 expected_confirmed_by / expected_confirmed_note 带上来 —— 平台只记录、不拦截，没带只回一句提醒。参数: branch_id, title, module(中文如'服务管理'), case_type(e2e/api), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result, target_level(这条要做到什么程度: spec只要步骤/spec_api步骤+接口/full三件套，默认spec), expected_confirmed_by(跟谁确认的), expected_confirmed_note(确认了什么，把对话里那句原话带上来)",
 )
+
+_section("Mock 与观测")
+
+_register(
+    mocks.llm_mock_status,
+    name="tb_llm_mock_status",
+    description="LLM Mock 服务在不在、有哪些路由、被测网关的上游地址该填什么。测 AI 网关绕不开它：用真上游测网关又慢又费钱又不确定，挂了还分不清是网关的锅还是模型的锅。",
+)
+
+_register(
+    mocks.upsert_llm_mock_route,
+    name="tb_upsert_llm_mock_route",
+    description="建/改一条 LLM Mock 路由，决定「上游怎么答」——status_code(429/500 测重试降级熔断)、delay_ms(测超时)、finish_reason(stop/length/content_filter 测透传)、prompt_tokens/completion_tokens(**测网关的计费/配额统计算得对不对**)、model(测模型映射)。按 path 幂等。**path 必须带你自己的前缀**（如 /mock/TC-XXX-00001/v1/chat/completions）：直接占用 /v1/chat/completions 会被拒，那是所有用例共用的，你配成 429 别人就跟着挂、还偶发。参数: name, path, status_code(默认200), delay_ms, response_body, finish_reason, prompt_tokens, completion_tokens, model",
+)
+
+_register(
+    mocks.llm_mock_requests,
+    name="tb_llm_mock_requests",
+    description="**网关到底往上游发了什么** —— 断言用的。鉴权头有没有正确注入、模型名有没有按映射改写、参数有没有被篡改，这些在网关下游根本看不见（客户端只能看到最终响应），这是唯一的观测点。断言前先 tb_llm_mock_reset 清一次。参数: path(可选), limit(默认20)",
+)
+
+_register(
+    mocks.llm_mock_reset,
+    name="tb_llm_mock_reset",
+    description="清掉上游请求记录。**断言「上游收到几次」之前必须先清** —— 不清的话上一轮的记录还在，「只应收到 1 次」会假过，而假过比假红更难发现。参数: path(可选，不传清全部)",
+)
+
+_register(
+    mocks.proxy_capture,
+    name="tb_proxy_capture",
+    description="代理观测抓到的真实请求 —— 写接口场景的素材来源。活体验证最费劲的一步是「这个页面动作到底发了哪些请求、body 长什么样」，自己开 devtools 抄又慢又容易抄错，而平台的代理已经记下来了。参数: limit(默认50)",
+)
+
 
 _section("项目须知")
 

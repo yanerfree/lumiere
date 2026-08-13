@@ -60,6 +60,15 @@ _LIVE = _LOCATE + _NOTES_READ + ["tb_add_project_note"] + [
     "tb_list_api_tests", "tb_get_api_test", "tb_run_api_test",
 ]
 
+# Mock 上游 / 抓真实请求。**单独一档而不是塞进 live**：
+# ①不是每个项目都测 AI 网关，塞进去会让所有人的 live 档白白变大
+# ②单独一张卡片，这个能力才**被看得见** —— 平台自己的工具没人知道怎么用，
+#   多半不是因为难用，是因为它只存在于某个菜单深处
+_MOCKS = [
+    "tb_llm_mock_status", "tb_upsert_llm_mock_route",
+    "tb_llm_mock_requests", "tb_llm_mock_reset", "tb_proxy_capture",
+]
+
 _UISCRIPT = _LOCATE + _NOTES_READ + [
     "tb_list_cases", "tb_get_case",
     "tb_get_sync_spec", "tb_list_global_data",
@@ -88,7 +97,7 @@ _REGRESSION = _LOCATE + [
 # 它比别的档大得多（三十多个），这是有意的：这一档挡的不是"工具多"，而是那几条
 # **会把人带偏的岔路** —— tb_generate_api_test（凭文档造，绕开亲手验证）、
 # Skill 存取、文档规范。（需求文档流水线那条岔路已整体下线，不用再挡了）
-_FULLLOOP = sorted(set(_LIVE + _UISCRIPT + _REGRESSION + _TRIAGE))
+_FULLLOOP = sorted(set(_LIVE + _UISCRIPT + _REGRESSION + _TRIAGE + _MOCKS))
 _FULLLOOP_TASK = "下面这四件活连起来干完：" + " → ".join(
     f"{n}{_LABELS[k]}" for n, k in zip("①②③④", _CHAIN)
 )
@@ -128,6 +137,15 @@ PROFILES: list[dict] = [
         "task": "拿失败用例的证据包（截图/流量/现象）判断为什么挂，把归因提交到待确认队列",
         "hint": "刻意不含任何写用例/脚本的工具 —— CC 的归因不改任何状态，人拍板才算数",
         "tools": _TRIAGE,
+    },
+    {
+        "key": "mocks",
+        "label": "Mock 上游 / 抓真实请求",
+        "task": "把被测系统的上游换成可控的 Mock（造 429、超时、截断、自定义 token 用量），"
+                "并断言它到底往上游发了什么；或者用代理抓真实请求当写用例的素材",
+        "hint": "测 AI 网关绕不开这一档 —— 用真上游又慢又费钱又不确定，"
+                "而且「网关往上游发了什么」只有 Mock 看得见（客户端只看得到最终响应）",
+        "tools": _LOCATE + _MOCKS,
     },
     # 「需求文档批量生成用例」档已删 —— 那条流水线的入口整体下线了，
     # 原因见 app/mcp/__init__.py 里「需求→用例流水线：已下线」那段注释。

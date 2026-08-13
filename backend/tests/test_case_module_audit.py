@@ -1683,3 +1683,57 @@ def test_详情页不再两组标签说同一件事():
            / "frontend/src/pages/cases/CaseDetail.jsx").read_text(encoding="utf-8")
     assert "手动 ({steps.length}步)" not in jsx, "重复的覆盖指示器又回来了"
     assert "const dimTier = " in jsx, "详情页没用和列表页同一套三档口径"
+
+
+# ── Mock 上游：测 AI 网关绕不开的那一半 ────────────────────────────
+
+def test_mock路由不许抢占共享路径():
+    """`/v1/chat/completions` 是所有用例共用的。谁把它配成 429，
+    别人的用例就跟着挂 —— 而且是偶发的、最难查的那种。
+
+    这就是平台自己 ④-0 判据的落地：**会被改的别共享**。
+    """
+    from app.mcp.tools.mocks import _SHARED_PATHS
+
+    assert "/v1/chat/completions" in _SHARED_PATHS
+    from app.mcp.tools import mocks
+    body = _code_of(mocks, "upsert_llm_mock_route")
+    assert "_SHARED_PATHS" in body and "howTo" in body, (
+        "抢占共享路径没被拦，或者拦了却不说该怎么办")
+
+
+def test_断言上游收到什么这条路必须在():
+    """鉴权头有没有正确注入、模型名有没有按映射改写、参数有没有被篡改 ——
+    这些在网关**下游**根本看不见，客户端只能看到最终响应。
+    没有这条，「网关把请求转对了没有」压根验不了。
+    """
+    from app.mcp.tools import mocks
+
+    body = _code_of(mocks, "llm_mock_requests")
+    for field in ("requestHeaders", "requestBody", "requestModel"):
+        assert field in body, f"上游请求记录里没有 {field}，断言不了网关发了什么"
+
+
+def test_清记录这件事要说清为什么():
+    """不清的话上一轮的记录还在，「上游只应收到 1 次」这种断言会**假过**
+    —— 而假过比假红更难发现。
+    """
+    from app.mcp.tools import mocks
+
+    doc = mocks.llm_mock_reset.__doc__ or ""
+    assert "假过" in doc, "没说清不清会怎样，人就不会清"
+
+
+def test_Mock是独立一档不塞进用例档():
+    """两个理由：①不是每个项目都测 AI 网关，塞进 live 会让所有人的档位白白变大
+    ②**单独一张卡片，这个能力才被看得见** —— 平台自己的工具没人用，
+    多半不是难用，是它只存在于某个菜单深处。
+    """
+    from app.mcp.profiles import PROFILES
+
+    keys = {p["key"] for p in PROFILES}
+    assert "mocks" in keys, "Mock 没有自己的档位卡片，等于藏起来了"
+    live = next(p for p in PROFILES if p["key"] == "live")
+    assert "tb_llm_mock_status" not in live["tools"], "又塞回 live 了"
+    full = next(p for p in PROFILES if p["key"] == "fullloop")
+    assert "tb_llm_mock_status" in full["tools"], "全链路档反而没有，选它的人用不上"

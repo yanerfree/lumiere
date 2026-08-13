@@ -19,7 +19,7 @@ const CAT_COLORS = {
   '定位项目/分支': 'green', '用例·手工步骤': 'blue', '接口库·只记怎么调': 'cyan',
   '接口场景·可执行': 'geekblue', '环境与变量': 'orange', '回推入库': 'red',
   '需求→用例流水线': 'magenta', 'UI 脚本': 'volcano', '执行报告': 'purple',
-  '项目须知': 'magenta',
+  '项目须知': 'magenta', 'Mock 与观测': 'cyan',
   '文档规范': 'gold', 'Skill 共享': 'lime', '失败归因': 'error', '其它': 'default',
 }
 

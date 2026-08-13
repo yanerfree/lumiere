@@ -1,0 +1,182 @@
+"""MCP 工具 — LLM Mock（造上游行为 + 断言网关发了什么）。
+
+## 为什么把它接给 CC
+
+被测系统是 **AI 网关**，上游 LLM 不是外围依赖，是**每条调用链测试都绕不开的
+东西**。用真上游测网关：慢、费钱、不确定，挂了还分不清是网关的锅还是模型的锅。
+
+而这个 mock 同时是两样东西：
+
+**① 造上游行为** —— 让网关的异常分支可测
+   `status_code`（429/500 → 测重试降级熔断）、`delay_ms`（测超时）、
+   `finish_reason`（stop/length/content_filter → 测透传）、
+   自定义 token 用量（**测网关的计费/配额统计算得对不对**）、
+   `model_mode`（测模型映射）、SSE 分片参数（代码注释里就写着
+   「对接网关时分片数本身是被验证的指标」）。
+
+**② 断言网关往上游发了什么** —— 这才是决定性的那半
+   请求头有没有正确注入鉴权、模型名有没有按映射改写、参数有没有被篡改 ——
+   这些在网关**下游**根本看不见，客户端只能看到最终响应。
+   没有这个 mock，「网关把请求转对了没有」这条压根验不了。
+
+## 共享资源纪律
+
+mock 路由是**会被改的共享资源**（平台自己的 ④-0 判据：会被改的别共享）。
+两条用例同时把 `/v1/chat/completions` 配成不同状态码就会互相打架、还偶发。
+所以 `upsert_llm_mock_route` 强制要求路径带一段用例自己的前缀
+（`/mock/<用例编号>/...`），天然隔离，不用清理。
+"""
+from __future__ import annotations
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.llm_mock import MockRequestLog, MockRoute
+
+# 路由必须带一段自己的前缀 —— 见模块说明里的共享资源纪律
+_SHARED_PATHS = {"/v1/chat/completions", "/v1/completions", "/v1/embeddings"}
+
+
+async def llm_mock_status(session: AsyncSession) -> dict:
+    """LLM Mock 服务在不在、有哪些路由、上游地址填什么。"""
+    from app.services.llm_mock_manager import mock_server as mgr
+
+    rows = (await session.execute(select(MockRoute).order_by(MockRoute.sort_order))).scalars().all()
+    return {
+        "running": getattr(mgr, "running", None),
+        "port": getattr(mgr, "port", 28100),
+        "upstreamBaseUrl": f"http://<平台所在主机>:{getattr(mgr, 'port', 28100)}",
+        "routes": [{"id": str(r.id), "name": r.name, "method": r.method, "path": r.path,
+                    "enabled": r.enabled, "statusCode": r.status_code,
+                    "delayMs": r.delay_ms, "finishReason": r.finish_reason} for r in rows],
+        "usage": "把被测网关的上游地址指到 upstreamBaseUrl + 你这条路由的 path，"
+                 "就能自己决定上游怎么答（慢/429/截断/自定义 token 用量），"
+                 "再用 tb_llm_mock_requests 断言网关到底往上游发了什么。",
+    }
+
+
+async def upsert_llm_mock_route(
+    session: AsyncSession,
+    name: str,
+    path: str,
+    status_code: int = 200,
+    delay_ms: int = 0,
+    response_body: str | None = None,
+    finish_reason: str = "stop",
+    prompt_tokens: int | None = None,
+    completion_tokens: int | None = None,
+    model: str | None = None,
+) -> dict:
+    """建/改一条 LLM Mock 路由 —— 决定"上游怎么答"。
+
+    按 `path` 幂等：同一条路径重复调是覆盖，不会堆出一串。
+
+    **path 必须带你自己的前缀**（如 `/mock/TC-FWGL-00001/v1/chat/completions`）。
+    直接占用 `/v1/chat/completions` 会被拒 —— 那是所有用例共用的路径，
+    你把它配成 429，别人的用例就跟着挂，而且是偶发的、最难查。
+    """
+    p = (path or "").strip()
+    if not p.startswith("/"):
+        return {"error": "path 要以 / 开头"}
+    if p in _SHARED_PATHS:
+        return {
+            "error": f"{p} 是所有用例共用的路径，不给独占。",
+            "why": "你把它配成 429/500，别人的用例就跟着挂，而且是偶发的、最难查。",
+            "howTo": f"带上你自己的前缀，比如 /mock/<用例编号>{p} —— "
+                     "天然隔离，跑完也不用清理。",
+        }
+
+    row = (await session.execute(select(MockRoute).where(MockRoute.path == p))).scalars().first()
+    created = row is None
+    if row is None:
+        row = MockRoute(path=p, name=name)
+        session.add(row)
+    row.name = name
+    row.method = "POST"
+    row.status_code = status_code
+    row.delay_ms = delay_ms
+    row.finish_reason = finish_reason
+    row.enabled = True
+    if response_body is not None:
+        row.response_body = response_body
+    if prompt_tokens is not None or completion_tokens is not None:
+        row.token_mode = "custom"
+        row.custom_prompt_tokens = prompt_tokens
+        row.custom_completion_tokens = completion_tokens
+    if model:
+        row.model_mode = "custom"
+        row.custom_model = model
+    await session.commit()
+    return {"id": str(row.id), "path": row.path, "created": created,
+            "note": "把被测网关这条链路的上游地址指到这个 path 上再跑。"}
+
+
+async def llm_mock_requests(
+    session: AsyncSession,
+    path: str | None = None,
+    limit: int = 20,
+) -> dict:
+    """**网关到底往上游发了什么** —— 这是断言用的，不是看热闹的。
+
+    鉴权头有没有正确注入、模型名有没有按映射改写、参数有没有被篡改 ——
+    这些在网关下游根本看不见，客户端只能看到最终响应。这条是唯一的观测点。
+    """
+    q = select(MockRequestLog).order_by(MockRequestLog.timestamp.desc()).limit(min(limit, 100))
+    if path:
+        q = q.where(MockRequestLog.path == path)
+    rows = (await session.execute(q)).scalars().all()
+    return {
+        "requests": [{
+            "at": r.timestamp.isoformat() if r.timestamp else None,
+            "method": r.method, "path": r.path,
+            "caller": r.caller, "ip": r.ip,
+            "requestHeaders": r.request_headers,
+            "requestBody": r.request_body,
+            "requestModel": r.request_model,
+            "responseModel": r.response_model,
+            "statusCode": r.status_code,
+        } for r in rows],
+        "total": len(rows),
+        "usage": "断言之前先调 tb_llm_mock_reset 清一次，否则上一轮的记录会混进来 —— "
+                 "「上游只应收到 1 次请求」这类断言会假过。",
+    }
+
+
+async def llm_mock_reset(session: AsyncSession, path: str | None = None) -> dict:
+    """清掉上游请求记录。
+
+    **断言"上游收到几次"之前必须先清**：不清的话上一轮的记录还在，
+    「只应收到 1 次」这种断言会假过 —— 而假过比假红更难发现。
+    """
+    from sqlalchemy import delete as sa_delete
+
+    stmt = sa_delete(MockRequestLog)
+    if path:
+        stmt = stmt.where(MockRequestLog.path == path)
+    res = await session.execute(stmt)
+    await session.commit()
+    return {"deleted": res.rowcount or 0, "path": path or "(全部)"}
+
+
+async def proxy_capture(limit: int = 50) -> dict:
+    """代理观测抓到的真实请求 —— 写接口场景的素材来源。
+
+    活体验证时最费劲的一步是"这个页面动作到底发了哪些请求、body 长什么样"。
+    自己开 devtools 抄一遍又慢又容易抄错，而平台的代理已经把它们记下来了。
+    """
+    from app.services import proxy_probe_manager as ppm
+
+    probe = getattr(ppm, "proxy_probe", None)
+    if probe is None or not getattr(probe, "running", False):
+        return {
+            "running": False,
+            "hint": "代理观测没在跑。到「测试工具 → 代理观测」启动它，"
+                    "把浏览器/被测客户端的代理指过去，再来取。",
+        }
+    # 内部字段名是 _records（不是 events）—— 拿错名字会静默返回空列表，
+    # 看起来像"代理开着但一条都没抓到"，而实际是取错了地方。
+    records = list(getattr(probe, "_records", []) or [])[-min(limit, 200):]
+    return {"running": True, "port": getattr(probe, "port", None),
+            "count": len(records), "requests": records,
+            "usage": "拿它当写接口场景的素材：真实的 method/url/headers/body 都在里面，"
+                     "不用自己开 devtools 抄一遍（抄错了后面全是错的）。"}
