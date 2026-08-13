@@ -354,8 +354,10 @@ function CompactApiRow({ step, index, isSelected, onClick, onRemove, onCopy, onD
         {subLabel && <div style={{ fontSize: 10, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{subLabel}</div>}
       </div>
       <div style={{ display: 'flex', gap: 2, flexShrink: 0, alignItems: 'center' }}>
-        {assertCount > 0 && <span title={`${assertCount} 个断言`} style={{ fontSize: 9, background: '#e0f7f6', color: '#0ea5a0', borderRadius: 8, padding: '0 4px', lineHeight: '16px', fontWeight: 600 }}>{assertCount}</span>}
-        {extractCount > 0 && <span title={`${extractCount} 个提取`} style={{ fontSize: 9, background: '#f9f0ff', color: '#7c5cbf', borderRadius: 8, padding: '0 4px', lineHeight: '16px', fontWeight: 600 }}>{extractCount}</span>}
+        {/* 光印两个数字（"3 2"），得逐个悬停才知道哪个是断言哪个是提取。
+            加一个汉字前缀，不悬停也读得出来。tooltip 保留给要看全称的人。 */}
+        {assertCount > 0 && <span title={`${assertCount} 个断言`} style={{ fontSize: 9, background: '#e0f7f6', color: '#0ea5a0', borderRadius: 8, padding: '0 4px', lineHeight: '16px', fontWeight: 600 }}>断{assertCount}</span>}
+        {extractCount > 0 && <span title={`${extractCount} 个提取物`} style={{ fontSize: 9, background: '#f9f0ff', color: '#7c5cbf', borderRadius: 8, padding: '0 4px', lineHeight: '16px', fontWeight: 600 }}>取{extractCount}</span>}
       </div>
       {hovered && (
         <div style={{ display: 'flex', gap: 0, flexShrink: 0 }} onClick={e => e.stopPropagation()}>

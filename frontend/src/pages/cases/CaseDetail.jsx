@@ -109,6 +109,14 @@ const dimStatusMap = {
   executable: { label: '可执行', color: '#0ea5a0', bg: '#e0f7f6' },
   needs_fix: { label: '待修改', color: '#e8453c', bg: '#fff2f0' },
 }
+// 和列表页同一套三档口径（CaseManagement 的 tierOf）。人不需要看六个词，
+// 他只关心「这一维有没有东西 / 能不能进回归」。存储仍是六态 ——
+// pending_review 承载「跑绿了等人」这个信号，断点续跑靠它才收敛。
+const dimTier = (status, hasContent) =>
+  status === 'executable' ? '已发布'
+  : ['debugging', 'pending_review', 'needs_fix'].includes(status) ? '调试中'
+  : hasContent ? '调试中' : '无'
+
 const DIM_STATUS_KEYS = ['not_started', 'draft', 'debugging', 'pending_review', 'executable', 'needs_fix']
 
 // 失败现象码 → 人话。
@@ -550,7 +558,12 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           {result && (
             <Tag color={result.passed ? 'success' : 'error'} style={{ margin: 0, cursor: 'pointer' }}
               onClick={() => setShowPanel(true)}>
-              {result.passed ? '通过' : '失败'} {result.passCount ?? 0}/{(result.passCount ?? 0) + (result.failCount ?? 0)} · 看详情
+              {/* 原来写「失败 12/13」——「失败」后面跟一个"通过数/总数"，
+                  读起来像"失败了 12 条"，而实际是"12 步通过、1 步失败"。
+                  挂了的时候人最想知道的是**挂了几步**，直接说那个数。 */}
+              {result.passed
+                ? `全通过 ${result.passCount ?? 0}/${(result.passCount ?? 0) + (result.failCount ?? 0)} 步`
+                : `${result.failCount ?? 0} 步失败（共 ${(result.passCount ?? 0) + (result.failCount ?? 0)} 步）`} · 看详情
             </Tag>
           )}
         </div>
@@ -941,14 +954,28 @@ function ScenarioEditor({
             <span style={{ fontSize: 13, fontWeight: 500, color: passed ? '#0ea5a0' : '#e8453c' }}>
               {passed ? '验证通过' : '验证失败'}
             </span>
-            {debugResult.durationMs && <span style={{ fontSize: 12, color: '#86909c' }}>{(debugResult.durationMs / 1000).toFixed(1)}s</span>}
+            {/* 原来用 `durationMs &&` 判：0 是 falsy，于是"跑得飞快"和"没记耗时"
+                都变成整块消失，抽屉里那一栏空着 —— 用户以为是坏了。
+                有值就显示，没有就明说"未记录"。 */}
+            <span style={{ fontSize: 12, color: '#86909c' }}>
+              {debugResult.durationMs != null
+                ? `${(debugResult.durationMs / 1000).toFixed(1)}s`
+                : '耗时未记录'}
+            </span>
             {debugResult.steps?.length > 0 && (
               <span style={{ fontSize: 12, color: '#86909c' }}>
                 {debugResult.steps.filter(s => s.status === 'passed').length}/{debugResult.steps.length} 步通过
               </span>
             )}
             {debugResult.captured_requests?.length > 0 && (
-              <span style={{ fontSize: 12, color: '#86909c' }}>{debugResult.captured_requests.length} 个接口</span>
+              // 这是本次**抓到的请求条数**，不是"覆盖了多少个接口"——
+              // 同一个接口被调 10 次也算 10 条。写成"个接口"会让人以为这脚本
+              // 覆盖了 93 个接口，实际可能就三五个。
+              <Tooltip title="本次执行期间抓到的 HTTP 请求条数（同一接口被调多次算多条），不是覆盖的接口数量">
+                <span style={{ fontSize: 12, color: '#86909c', borderBottom: '1px dotted #d9d9d9' }}>
+                  抓到 {debugResult.captured_requests.length} 条请求
+                </span>
+              </Tooltip>
             )}
             {/* 失败现象是平台按确定性规则判好的「是什么」，一直存在库里没送到页面。
                 人扫一眼就知道往哪看，不用去读一坨 pytest stdout。 */}
@@ -2016,8 +2043,14 @@ export default function CaseDetail() {
               items={['draft','done','deprecated'].map(s => ({ key: s, label: lifecycleMap[s].label, dot: 'circle', color: lifecycleMap[s].color }))} />
           </InlineProp>
           {/* 三维执行就绪度（手动/UI/接口 统一状态，可编辑）——批量执行按此判断能否跑 */}
-          {[['手动', manualStatus, setManualStatus], ['UI', uiStatus, setUiStatus], ['接口', apiStatus, setApiStatus]].map(([lbl, val, setter]) => (
-            <InlineProp key={lbl} value={`${lbl}·${dimStatusMap[val]?.label || val}`}
+          {/* 这一组和下面原来那组「场景覆盖指示器」说的是同一件事的两半：
+              一个说"什么状态"、一个说"有没有内容"，而"有没有"是"什么状态"的子集。
+              两组并排 = 同一件事说两遍，实测出现过一组说有、另一组说未开始。
+              合成这一组：状态词用和列表页一样的三档，括号里带内容量。 */}
+          {[['手动', manualStatus, setManualStatus, steps.length],
+            ['UI', uiStatus, setUiStatus, (uiScenario?.steps?.length || uiScenario?.lastResults?.length || 0)],
+            ['接口', apiStatus, setApiStatus, (apiScenario?.steps?.length || 0)]].map(([lbl, val, setter, n]) => (
+            <InlineProp key={lbl} value={`${lbl}·${dimTier(val, n)}${n ? ` (${n})` : ''}`}
               color={dimStatusMap[val]?.color} bg={dimStatusMap[val]?.bg}>
               <DropdownList activeKey={val} onSelect={setter}
                 items={DIM_STATUS_KEYS.map(s => ({ key: s, label: dimStatusMap[s].label, dot: 'circle', color: dimStatusMap[s].color }))} />
@@ -2158,42 +2191,8 @@ export default function CaseDetail() {
             <ReadonlyProp label="评分" value={caseData.qualityScore.total} />
           )}
 
-          {/* 场景覆盖指示器 — 显示状态 + 模板 */}
-          <div style={{ display: 'inline-flex', gap: 4, marginLeft: 8 }}>
-            <Tooltip title="手动测试步骤">
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 8px',
-                borderRadius: 12, fontSize: 11, fontWeight: 500,
-                background: '#e0f7f6', color: '#0ea5a0', border: '1px solid rgba(14,165,160,0.2)',
-              }}><CheckCircleOutlined style={{ fontSize: 10 }} /> 手动 ({steps.length}步)</span>
-            </Tooltip>
-            <Tooltip title={hasApi ? `接口场景 · ${(scenarioStatusMap[apiScenarioStatus] || {}).label || '草稿'}${isApiTemplate ? ' · 模板' : ''}` : '暂无接口测试场景，点击接口测试 Tab 创建'}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 8px',
-                borderRadius: 12, fontSize: 11, fontWeight: 500,
-                background: hasApi ? '#e0f7f6' : 'rgba(0,0,0,0.02)',
-                color: hasApi ? (scenarioStatusMap[apiScenarioStatus] || {}).color || '#0ea5a0' : '#c9cdd4',
-                border: `1px solid ${hasApi ? 'rgba(14,165,160,0.2)' : 'rgba(0,0,0,0.06)'}`,
-              }}>
-                {isApiTemplate && <StarFilled style={{ fontSize: 9, color: '#faad14' }} />}
-                <ApiOutlined style={{ fontSize: 10 }} /> API
-                {hasApi && <span>({apiScenario?.steps?.length || 0}步 · {(scenarioStatusMap[apiScenarioStatus] || {}).label || '草稿'})</span>}
-              </span>
-            </Tooltip>
-            <Tooltip title={hasUi ? `UI 场景 · ${(scenarioStatusMap[uiScenarioStatus] || {}).label || '草稿'}${isUiTemplate ? ' · 模板' : ''} · 括号内为脚本逻辑步骤数（≠ 实际执行轨迹步数）` : '暂无 UI 测试场景，点击 UI 测试 Tab 创建'}>
-              <span style={{
-                display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 8px',
-                borderRadius: 12, fontSize: 11, fontWeight: 500,
-                background: hasUi ? '#f5f0ff' : 'rgba(0,0,0,0.02)',
-                color: hasUi ? (scenarioStatusMap[uiScenarioStatus] || {}).color || '#7c5cbf' : '#c9cdd4',
-                border: `1px solid ${hasUi ? 'rgba(124,92,191,0.3)' : 'rgba(0,0,0,0.06)'}`,
-              }}>
-                {isUiTemplate && <StarFilled style={{ fontSize: 9, color: '#faad14' }} />}
-                <DesktopOutlined style={{ fontSize: 10 }} /> UI
-                {hasUi && <span>({(uiScenario?.steps?.length || uiScenario?.lastResults?.length || 0)}步 · {(scenarioStatusMap[uiScenarioStatus] || {}).label || '草稿'})</span>}
-              </span>
-            </Tooltip>
-          </div>
+          {/* 「场景覆盖指示器」已并进上面那组三维状态 —— 它只说"有没有"，
+              而那是"什么状态"的子集，并排显示是把同一件事说两遍。 */}
         </div>
       </Card>
 

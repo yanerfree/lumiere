@@ -1621,3 +1621,65 @@ def test_等待重试字段前后端都不丢():
     api = (Path(__file__).resolve().parents[1] / "app/api/api_test.py").read_text(encoding="utf-8")
     assert '"retryTimeoutMs": st.retry_timeout_ms' in api, "接口不返回，编辑器拿不到"
     assert "'wait_ms', 'retry_timeout_ms', 'retry_interval_ms'" in api, "接口不收，改了存不下"
+
+
+# ── 显示与文案：说的和实际是不是一回事 ────────────────────────────
+
+def test_抓包条数不叫接口数():
+    """UI 脚本验证后显示「93 个接口」—— 那是本次抓到的**请求条数**，
+    同一个接口被调 10 次也算 10 条。写成"个接口"会让人以为这脚本覆盖了
+    93 个接口，实际可能就三五个。
+    """
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/cases/CaseDetail.jsx").read_text(encoding="utf-8")
+    assert "captured_requests.length} 个接口" not in jsx, "又把抓包条数说成接口数了"
+    assert "条请求" in jsx
+
+
+def test_耗时为0不能整块消失():
+    """原来用 `durationMs &&` 判 —— 0 是 falsy，于是"跑得飞快"和"没记耗时"
+    都变成整块不见，抽屉里那一栏空着，用户以为是坏了。
+    """
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/cases/CaseDetail.jsx").read_text(encoding="utf-8")
+    assert "{debugResult.durationMs && <span" not in jsx, "0 耗时又会让整块消失"
+    assert "durationMs != null" in jsx
+
+
+def test_失败计数不写成通过数():
+    """原来写「失败 12/13」——「失败」后面跟的是"通过数/总数"，
+    读起来像"失败了 12 条"，实际是"12 步通过、1 步失败"。
+    挂了的时候人最想知道的是**挂了几步**。
+    """
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/cases/CaseDetail.jsx").read_text(encoding="utf-8")
+    assert "步失败（共" in jsx, "失败时没有直接说挂了几步"
+
+
+def test_步骤上的数字要说明是什么():
+    """光印两个数字（"3 2"），得逐个悬停才知道哪个是断言、哪个是提取。"""
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/components/ApiStepList.jsx").read_text(encoding="utf-8")
+    assert ">断{assertCount}<" in jsx and ">取{extractCount}<" in jsx, (
+        "步骤右边还是两个光秃秃的数字")
+
+
+def test_详情页不再两组标签说同一件事():
+    """「三维就绪度」说什么状态、「场景覆盖指示器」说有没有内容 ——
+    而"有没有"是"什么状态"的子集。两组并排 = 同一件事说两遍，
+    实测出现过一组说有、另一组说未开始。
+    """
+    from pathlib import Path
+
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/cases/CaseDetail.jsx").read_text(encoding="utf-8")
+    assert "手动 ({steps.length}步)" not in jsx, "重复的覆盖指示器又回来了"
+    assert "const dimTier = " in jsx, "详情页没用和列表页同一套三档口径"
