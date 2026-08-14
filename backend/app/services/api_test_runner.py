@@ -304,6 +304,44 @@ _VALID_OPS = {
 _DEFAULT_OP = {"status": "==", "body_field": "==", "body_contains": "contains"}
 
 
+def _scalar_eq(actual, expected) -> bool:
+    """标量相等 —— 一边是字符串一边是数字时按**数值**比。
+
+    **不是在放松断言，是在修一个必然的假红。** 变量插值出来的值永远是字符串
+    （`_resolve_variables` 用 str(...)），而 JSON 响应里的数字是 int/float。
+    于是「拿上一步提取的版本号比 data.version」这种再常见不过的写法**必然挂**，
+    而页面上显示的是「期望 2｜实际 2」—— 人完全看不出为什么失败。
+    实测撞到：`data.rolled_back_to_version == ${baseVersion}`，期望 "2" 实际 2。
+
+    只在**两边都能解析成数字**时按数值比；其余一律原样严格比较，
+    所以 "true" 不会等于 True，"01" 不会等于 "1" 之外的东西。
+    """
+    # bool 要在严格比较**之前**挡掉：Python 里 1 == True 本来就成立，
+    # 放过去的话「期望 true、实际 1」会被判相等，那是另一种假绿。
+    if isinstance(actual, bool) != isinstance(expected, bool):
+        return False
+    if actual == expected:
+        return True
+    if isinstance(actual, bool):
+        return False
+    a_num = _as_number(actual)
+    e_num = _as_number(expected)
+    return a_num is not None and e_num is not None and a_num == e_num
+
+
+def _as_number(v):
+    if isinstance(v, (int, float)):
+        return v
+    if isinstance(v, str):
+        t = v.strip()
+        if t:
+            try:
+                return float(t) if ("." in t or "e" in t.lower()) else int(t)
+            except ValueError:
+                return None
+    return None
+
+
 def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> list[dict]:
     results = []
     for a in assertions:
@@ -352,9 +390,9 @@ def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> li
         elif a_type == "body_field":
             actual = _extract_value(resp_body, field_path) if field_path else resp_body
             if operator == "==":
-                passed = actual == expected
+                passed = _scalar_eq(actual, expected)
             elif operator == "!=":
-                passed = actual != expected
+                passed = not _scalar_eq(actual, expected)
             elif operator == "not_empty":
                 passed = actual is not None and actual != ""
             elif operator == "contains":

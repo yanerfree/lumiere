@@ -1901,3 +1901,43 @@ def test_等待重试这个能力要送达CC():
     # 末尾那句指引里也有它，光判 `in desc` 会被喂饱（本轮第十三次）。
     params = desc[desc.index("steps([{"):desc.index("}])")]
     assert "retry_timeout_ms" in params, "steps 的参数列表里没有它，CC 不会传"
+
+
+def test_断言比较不能被变量插值的字符串坑死():
+    """`_resolve_variables` 用 str(...)，所以**变量插值出来的值永远是字符串**，
+    而 JSON 响应里的数字是 int/float。于是「拿上一步提取的版本号比 data.version」
+    这种再常见不过的写法**必然挂**，页面上还显示「期望 2｜实际 2」——
+    人完全看不出为什么失败。
+
+    实测撞到：`data.rolled_back_to_version == ${baseVersion}`，期望 "2" 实际 2。
+    修完那条真跑从 18/20 变 19/20。
+
+    ⚠ 但**不能宽松到 bool**：Python 里 1 == True 本来就成立，放过去的话
+    「期望 true、实际 1」会被判相等，那是另一种假绿。
+    """
+    from app.services.api_test_runner import _scalar_eq as eq
+
+    # 数字/字符串互比 —— 这是要修的
+    assert eq(2, "2") and eq("2", 2) and eq(2.0, "2") and eq(0, "0")
+    # 字符串仍然严格
+    assert not eq("v2", "2")
+    assert eq("abc", "abc") and not eq("abc", "abd")
+    # bool 一边一个类型 → 不等（防另一种假绿）
+    assert not eq(1, True) and not eq(True, "1")
+    assert eq(True, True) and eq(False, False)
+    # None 不等于空串
+    assert not eq(None, "")
+
+
+def test_不等号也要走同一套比较():
+    """上面那条测的是 `_scalar_eq` 函数本身的行为，**不保证调用点真的用了它** ——
+    实测埋雷时发现：把 `_check_assertions` 里的调用改回严格比较，上面那条照样绿。
+    所以这条钉的是**两个调用点**。
+
+    `!=` 尤其不能漏：还用严格比较的话会出现 `2 != "2"` 判成真，和 `==` 自相矛盾。
+    """
+    from app.services import api_test_runner
+
+    body = _code_of(api_test_runner, "_check_assertions")
+    assert "passed = _scalar_eq(actual, expected)" in body, "== 没走宽松比较"
+    assert "not _scalar_eq(actual, expected)" in body, "!= 没走同一套比较，会和 == 打架"
