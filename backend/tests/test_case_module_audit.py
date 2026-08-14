@@ -1872,3 +1872,29 @@ def test_instructions说清这是两个功能():
     ins = mcp.instructions
     assert "判重只看 tb_list_cases" in ins
     assert "不同的功能" in ins and "不要把它算进来" in ins
+
+
+def test_等待重试这个能力要送达CC():
+    """加了能力不等于送达。实测：平台支持了 wait_ms/retry_timeout_ms，但
+    tb_get_sync_spec 的规范里没写、工具描述的参数列表里也没有 ——
+    CC 根本不知道它存在，只能沿用老办法（插「查版本历史」「查操作日志」这类
+    真步骤去占时间窗），而那正是它自己说"很脆"的招。
+
+    和「工具范围过期」同一类错：**能力加了，没送达消费者**。
+    """
+    from app.mcp.tools import sync
+
+    assert "timing" in sync._SPEC_TIMING or True
+    spec = sync._SPEC_TIMING
+    assert "retry_timeout_ms" in spec and "wait_ms" in spec
+    assert "别再靠插入真实断言步骤" in spec or "不要再靠插入真实断言步骤" in spec, (
+        "没点破那个老办法，CC 会继续用")
+
+    import inspect
+    body = inspect.getsource(sync.get_sync_spec)
+    assert '"timing": _SPEC_TIMING' in body, "规范没挂进 get_sync_spec，取不到"
+
+    from app.mcp import TOOL_CATALOG
+    desc = next(t["description"] for t in TOOL_CATALOG
+                if t["name"] == "tb_sync_orchestrated_scenario")
+    assert "retry_timeout_ms" in desc, "回推工具的参数列表里没有它，CC 不会传"

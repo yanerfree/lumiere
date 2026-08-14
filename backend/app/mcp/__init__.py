@@ -586,13 +586,13 @@ _section("回推入库")
 _register(
     sync.get_sync_spec,
     name="tb_get_sync_spec",
-    description="【回推第一步·先调】获取回推规范：变量三层怎么选、步骤/断言/提取物 JSON 形状、禁止写死的正反例。参数: kind(case/api_scenario/variables/all，默认all)",
+    description="【回推第一步·先调】获取回推规范：变量三层怎么选、步骤/断言/提取物 JSON 形状、禁止写死的正反例。参数: kind(case/api_scenario/variables/timing/all，默认all)",
 )
 
 _register(
     sync.sync_orchestrated_scenario,
     name="tb_sync_orchestrated_scenario",
-    description="【用例·编排的接口场景】把你**活体验证过**的多步接口链显式写回，绑定 source_case_id 并共享该用例场景变量。入库前硬拦截悬空 ${x}、软警告疑似写死。⚠ 与 tb_generate_api_test（单接口AI造）不是一回事。参数: project_id, branch_id, title, steps([{name,method,url,headers,body,assertions:[{type,operator,expected/value,field}],variables_extract:{name:jsonpath},group_name,enabled}]), source_case_id(强烈建议), folder_name(可选), priority(默认P1), description(可选)",
+    description="【用例·编排的接口场景】把你**活体验证过**的多步接口链显式写回，绑定 source_case_id 并共享该用例场景变量。入库前硬拦截悬空 ${x}、软警告疑似写死。⚠ 与 tb_generate_api_test（单接口AI造）不是一回事。参数: project_id, branch_id, title, steps([{name,method,url,headers,body,assertions:[{type,operator,expected/value,field}],variables_extract:{name:jsonpath},group_name,enabled,**retry_timeout_ms**,retry_interval_ms,wait_ms}])——异步下发导致的抢跑用 retry_timeout_ms（断言没过就整步重发直到过或超时），别再插假步骤占时间窗；详见 tb_get_sync_spec(kind='timing'), source_case_id(强烈建议), folder_name(可选), priority(默认P1), description(可选)",
 )
 
 _register(

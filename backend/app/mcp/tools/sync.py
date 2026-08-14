@@ -299,6 +299,40 @@ variables_extract：`{变量名: JSONPath}`，把响应里的值抽成变量供*
 
 强烈建议传 source_case_id 关联对应功能用例——这样运行时会自动注入该用例的场景变量，UI 与接口共用一份定义。"""
 
+_SPEC_TIMING = """## 异步下发怎么办：别插假步骤占时间窗，用 wait_ms / retry_timeout_ms
+
+被测系统的配置下发常常是**异步**的（实测某网关从「发布成功」到真能转发要
+0.06~0.5s 且抖动），而接口场景的步骤之间只隔几毫秒 —— 「发布完立刻打网关」
+必然抢跑，跑出来是红的，但那**不是缺陷，是这条用例自己没等**。
+
+**假红比漏测更毒**：它让整份报告不可信，人看两次就不看了。
+
+步骤上有三个字段（`tb_sync_orchestrated_scenario` 的 steps 里直接传）：
+
+| 字段 | 干什么 | 什么时候用 |
+|---|---|---|
+| `retry_timeout_ms` | 断言没过就**整步重发**，直到过了或超时 | **首选**。等的是"它真的好了" |
+| `retry_interval_ms` | 两次重发间隔，默认 300 | 跟着上面用 |
+| `wait_ms` | 发请求前先固定等 | 下策 —— 要么白等要么不够，换台机器就崩 |
+
+```json
+{"name": "发布后打网关（应调通）", "method": "GET", "url": "...",
+ "assertions": [{"type": "status", "operator": "==", "value": 200}],
+ "retry_timeout_ms": 6000, "retry_interval_ms": 300}
+```
+
+重试成功时平台会如实报「重试 N 次后通过」—— 一次就过和试了 8 次才过不是一回事，
+后者说明这个窗口快不够了。
+
+⚠ **重试会重发请求**。写操作（POST/PUT/DELETE）上开重试会造出多份数据，
+所以只该用在「读回来确认」那种步骤上；在非幂等方法上开会收到软警告。
+
+❌ **不要再靠插入真实断言步骤去占时间窗**（查版本历史、查操作日志……）。
+那招能用但很脆：换台机器、网络慢一点就不够，而且把"等待"伪装成了"验证"，
+读用例的人分不出哪几步是真要验的。
+"""
+
+
 _SPEC_CASE = """## 步骤用例（tb_create_case，非本模块，但一并说明口径）
 
 活体验证后回写步骤用例：case_type=e2e，步骤是**页面操作**（点按钮/填表单），
@@ -369,6 +403,7 @@ async def get_sync_spec(kind: str = "all") -> dict:
         "api_scenario": _SPEC_API_SCENARIO,
         "ui_script": _SPEC_UI_SCRIPT,
         "case": _SPEC_CASE,
+        "timing": _SPEC_TIMING,
     }
     if kind in parts:
         selected = {kind: parts[kind]}
