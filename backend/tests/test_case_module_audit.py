@@ -1897,4 +1897,7 @@ def test_等待重试这个能力要送达CC():
     from app.mcp import TOOL_CATALOG
     desc = next(t["description"] for t in TOOL_CATALOG
                 if t["name"] == "tb_sync_orchestrated_scenario")
-    assert "retry_timeout_ms" in desc, "回推工具的参数列表里没有它，CC 不会传"
+    # 钉在 **steps 的参数列表**里，不是"描述里出现过这个词" ——
+    # 末尾那句指引里也有它，光判 `in desc` 会被喂饱（本轮第十三次）。
+    params = desc[desc.index("steps([{"):desc.index("}])")]
+    assert "retry_timeout_ms" in params, "steps 的参数列表里没有它，CC 不会传"
