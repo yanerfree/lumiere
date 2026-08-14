@@ -79,15 +79,35 @@ async def list_api_test_scenarios(
 
     result = await session.execute(q)
     scenarios = result.scalars().all()
-    return [{
-        "id": str(s.id),
-        "code": s.code,
-        "title": s.title,
-        "status": s.status,
-        "source": s.source,
-        "priority": s.priority,
-        "stepCount": await _count_steps(session, s.id),
-    } for s in scenarios]
+
+    # **分成两组返回，因为它们是两个功能**：
+    #   boundToCases —— 用例编排的接口场景（有 source_case_id），一个用例一条，
+    #                    这才是"这个用例的接口维度"
+    #   standalone   —— 接口测试模块里的独立场景（凭接口文档 AI 造的那种），
+    #                    和用例没有关系
+    #
+    # 混在一个平列表里回过一次，后果是 CC 判重时把 standalone 里的一条
+    # 当成"这个用例已经有了"，于是不写新的、改去"补用例重绑" —— 实测跑偏过。
+    # 孤儿（曾经绑过、用例被删了）也归进 standalone 并单独标出来：它无主，
+    # 不该被当作任何用例的既有产物。
+    rows = []
+    for sc in scenarios:
+        rows.append({
+            "id": str(sc.id), "code": sc.code, "title": sc.title,
+            "status": sc.status, "source": sc.source, "priority": sc.priority,
+            "stepCount": await _count_steps(session, sc.id),
+            "sourceCaseId": str(sc.source_case_id) if sc.source_case_id else None,
+        })
+    bound = [r for r in rows if r["sourceCaseId"]]
+    alone = [r for r in rows if not r["sourceCaseId"]]
+    return {
+        "boundToCases": bound,
+        "standalone": alone,
+        "total": len(rows),
+        "usage": "判「这个场景库里有没有」**只看 boundToCases** —— standalone 是"
+                 "接口测试模块的独立场景（另一个功能），或者用例已被删的孤儿，"
+                 "拿它判重会误判成「已经有了」。要判用例层有没有，用 tb_list_cases。",
+    }
 
 
 async def get_api_test_scenario(

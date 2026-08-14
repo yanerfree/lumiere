@@ -447,6 +447,22 @@ async def _detach_blocking_refs(session: AsyncSession, case_ids: list[uuid.UUID]
     """
     if not case_ids:
         return
+    # 用例编排的接口场景要**跟着一起删**。
+    #
+    # 外键是 SET NULL —— 用例没了，场景只是把 source_case_id 置空，于是它降级成
+    # 一条「独立接口场景」掉进接口测试模块的列表里。那是**另一个功能**
+    # （单接口 AI 造的场景），两边混在一起之后：
+    #   · 页面上「接口测试」列表全是别的功能的残骸
+    #   · CC 判重时读到这些孤儿，会把「已有一条全绿的 AT-0009」当成"用例已存在"，
+    #     于是不写新的、改去"补用例重绑" —— 实测就这么跑偏过一次
+    # 红线⑥说「一个用例 = 一条接口场景」，用例没了那条场景就是无主的，该一起走。
+    #
+    # 注意只在**彻底删除**时删：软删（进回收站）不动它，因为用例还能恢复。
+    from app.models.api_test import ApiTestScenario
+
+    await session.execute(
+        sa_delete(ApiTestScenario).where(ApiTestScenario.source_case_id.in_(case_ids))
+    )
     await session.execute(sa_delete(PlanCase).where(PlanCase.case_id.in_(case_ids)))
     await session.execute(
         sa_update(TestReportScenario)

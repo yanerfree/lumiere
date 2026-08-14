@@ -1824,3 +1824,51 @@ def test_范围过期要在页面上说出来():
         "又用 chosen 判过期了 —— 档位缺工具时它已经掉出 chosen，永远检测不到")
     assert ">= 0.7" in blk, "没有覆盖率判据"
     assert "范围还没跟上" in jsx and "一键补齐" in jsx, "检测到了却不告诉人、也不给一键修"
+
+
+# ── 「接口测试模块」和「用例的接口场景」是两个功能 ──────────────────
+
+def test_彻底删用例要带走绑定的接口场景():
+    """`source_case_id` 外键是 SET NULL —— 用例被彻底删掉后，场景只是把绑定
+    置空，于是它**降级成一条独立接口场景**掉进接口测试模块的列表里。
+
+    那是另一个功能（凭接口文档 AI 造的单接口场景）。两边混在一起之后：
+    页面上「接口测试」全是别的功能的残骸；CC 判重时读到这些孤儿，会把
+    「已有一条全绿的 AT-0009」当成"用例已存在"，于是不写新的、改去补用例重绑
+    —— 实测就这么跑偏过一次。
+
+    红线⑥说「一个用例 = 一条接口场景」，用例没了那条场景就是无主的。
+    只在**彻底删除**时删：软删（进回收站）不动它，因为用例还能恢复。
+    """
+    import inspect
+
+    from app.services.case_service import _detach_blocking_refs
+
+    body = inspect.getsource(_detach_blocking_refs)
+    # 钉真正的删除语句。只找 "ApiTestScenario"/"source_case_id" 的话，
+    # 上面那段注释和 import 行里都有，删掉整条 delete 也不会红（第十二次）。
+    assert "sa_delete(ApiTestScenario)" in body, (
+        "彻底删用例没带走绑定场景，它会变成孤儿混进接口测试模块")
+
+
+def test_接口场景列表要把两个功能分开():
+    """混在一个平列表里回给 CC，它就会拿另一个功能的东西判重。"""
+    from app.mcp.tools import api_tests
+
+    body = _code_of(api_tests, "list_api_test_scenarios")
+    # 钉分组那两行本身 —— "boundToCases"/"standalone" 只是返回字典的键，
+    # 把分组逻辑改成 `bound = []` 它们照样在。
+    assert "[r for r in rows if r['sourceCaseId']]" in body, "没有按绑定与否分组"
+    assert "[r for r in rows if not r['sourceCaseId']]" in body
+    assert "只看 boundToCases" in body, "分了组却不说该看哪组，等于没分"
+
+
+def test_instructions说清这是两个功能():
+    """接入指令和 instructions 都要写死这条 —— 光在返回值里分组，
+    模型未必意识到那是"另一个功能"。
+    """
+    from app.mcp import mcp
+
+    ins = mcp.instructions
+    assert "判重只看 tb_list_cases" in ins
+    assert "不同的功能" in ins and "不要把它算进来" in ins
