@@ -99,18 +99,25 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
             _audit_ui_traffic(last, risks)
 
     # ── 状态：轮到谁了 ──
+    # 维度只有三态：draft / debugging / completed。审核是**用例级**的单独标签
+    # （空=待提审、pending=待审、approved/rejected=人拍板）。
+    # 这里以前读的是 pending_review / not_started / executable —— 那几个态在
+    # 三态改造时就删了，于是 waiting_human 恒为空、判词里还在说「待发布」，
+    # 而「待发布」这个环节根本已经不存在。CC 照着这句话去找按钮会找不到。
     dim_status = {"manual": case.manual_status, "ui": case.ui_status, "api": case.api_status}
-    waiting_human = [d for d in owed_dims
-                     if dim_status.get(d) == "pending_review"]
-    not_ready = [d for d in owed_dims
-                 if dim_status.get(d) in ("not_started", "draft", "debugging")
-                 and d != "manual"]
+    waiting_human = case.review_status == "pending"
+    not_ready = [d for d in owed_dims if dim_status.get(d) in ("draft", "debugging")]
     if not_ready and not blockers:
-        # 没有硬阻塞却还没到 pending_review：多半是跑过但没经平台记账，
-        # 或者压根没在平台上跑过。说清楚，别让人以为是内容问题。
+        # 没有硬阻塞却维度没到「完成」：多半是跑过但没经平台记账，或者压根没在
+        # 平台上跑过。说清楚，别让人以为是内容问题。
+        # **manual 不能排除掉。** 它只会由人在页面上推进，所以确实推不动 ——
+        # 但「推不动」不等于「可以不说」：手动维度停在调试中，这条就进不了「待审」，
+        # 不报出来的话人只会看到它一直不冒头，不知道卡在哪。
         risks.append({"kind": "status_behind",
-                      "detail": f"{'、'.join(not_ready)} 维度状态还在 {[dim_status[d] for d in not_ready]}，"
-                                f"平台没记录到跑绿。在平台上跑一遍它会自己往前走。"})
+                      "detail": f"{'、'.join(not_ready)} 维度还在 "
+                                f"{'、'.join(dim_status[d] or '空' for d in not_ready)}。"
+                                f"接口/UI 在平台上跑一遍会自己往前走；"
+                                f"manual 只能人在页面上改。"})
 
     # 预期结果里写了 UI 落点，但这条不做 UI 维度 → 那句话没人验
     if target == "spec_api" and re.search(r"详情页|列表页|页面|回显|界面", case.expected_result or ""):
@@ -287,12 +294,13 @@ def _verdict(deliverable, blockers, risks, waiting_human, owed_dims, dim_status)
     if risks:
         parts.append(f"但有 {len(risks)} 项脆弱点，不修的话回归里会偶发红")
     if waiting_human:
-        parts.append(f"{'、'.join(waiting_human)} 维度是「待发布」，"
-                     f"进回归还要人在列表上勾选点「发布到回归」（这一步 CC 改不了）")
+        # 审核**不挡回归** —— 人可以不审，直接建计划跑。这句话要说清楚，
+        # 否则 CC 会以为还卡着一道人工闸口而停下来等。
+        parts.append("已进「待审」，等人拍板；审核不挡回归，现在就能建计划跑")
     else:
-        pending = [d for d in owed_dims if dim_status.get(d) != "executable" and d != "manual"]
+        pending = [d for d in owed_dims if dim_status.get(d) != "completed"]
         if pending:
-            parts.append(f"{'、'.join(pending)} 维度还没到「待发布」，先在平台上跑一遍")
+            parts.append(f"{'、'.join(pending)} 维度还没到「完成」，所以还没进「待审」")
     return "；".join(parts) + "。"
 
 

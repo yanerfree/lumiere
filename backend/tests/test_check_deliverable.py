@@ -52,8 +52,13 @@ def _case(**kw):
                 target_level="spec_api", lifecycle_status="draft",
                 steps=[{"seq": 1, "action": "a", "expected": "b"}],
                 expected_result="发布后网关返回 200",
-                manual_status="not_started", ui_status="not_started",
-                api_status="pending_review")
+                # 三态：draft / debugging / completed。审核是用例级单独标签
+                # （None=待提审、pending=待审、approved/rejected=人拍板）。
+                # 这里原来写的是 not_started / pending_review —— 那两个态在三态改造时
+                # 就删了，假 Case 却一直照旧，于是门禁读旧态名的 bug 被测试掩护着，
+                # 直到对着真数据看才发现（TC-FWGL-00002 manual 停在调试中却判可交付）。
+                manual_status="draft", ui_status="draft",
+                api_status="debugging", review_status=None)
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -81,7 +86,10 @@ def test_全绿且无脆弱点则可交付():
                    url="${BASE_URL}/api/v1/services/${sid}/push-status",
                    assertions=[{"type": "body_field", "field": "data.status", "expected": "success"}]),
              _step(3, "打网关应 200", retry=10000, url="${gatewayBase}/v1/x/echo")]
-    r = _run(FakeSession(case=_case(), scenario=_scenario(), steps=steps))
+    # 「全绿」得连维度状态也是完成 —— 原来这里用的是默认假 Case（维度还在草稿/调试中），
+    # 那压根不叫全绿，只是当时门禁把 manual 排除在外、又读着已删除的态名，才凑巧没报。
+    r = _run(FakeSession(case=_case(manual_status="completed", api_status="completed"),
+                         scenario=_scenario(), steps=steps))
     assert r["deliverable"] is True, r["blockers"]
     assert r["blockers"] == []
     assert r["risks"] == [], r["risks"]
@@ -139,7 +147,7 @@ def test_spec级别不要求接口和UI():
     """target_level=spec 只要手工步骤 —— 别把它判成欠维度。"""
     r = _run(FakeSession(case=_case(target_level="spec"), scenario=None))
     assert r["deliverable"] is True, r["blockers"]
-    assert r["dimStatus"] == {"manual": "not_started"}
+    assert r["dimStatus"] == {"manual": "draft"}
 
 
 # ── 脆弱点：交得了但会偶发红 ──────────────────────────────────────
@@ -227,12 +235,20 @@ def test_spec_api却在预期里写页面落点给提示():
 
 # ── 结论措辞：要说清"轮到谁了" ────────────────────────────────────
 
-def test_待发布要点明还需人工发布():
-    """CC 改不了 executable，这是红线。结论里必须说清下一步是谁的。"""
-    r = _run(FakeSession(case=_case(api_status="pending_review"),
+def test_进了待审要说清审核不挡回归():
+    """原来这条叫「待发布要点明还需人工发布」，测的是 api_status=pending_review →
+    判词说「去列表上点发布到回归」。那个环节在三态改造时删了 —— 现在是用例级的
+    审核标签，而且**审核不挡回归**：人可以不审，直接建计划跑。
+
+    说不清这一点的后果是 CC 停下来等一个并不存在的人工闸口。
+    """
+    r = _run(FakeSession(case=_case(manual_status="completed", api_status="completed",
+                                    review_status="pending"),
                          scenario=_scenario(), steps=[_step(0, "x")]))
-    assert r["waitingHuman"] == ["api"]
-    assert "发布到回归" in r["verdict"], r["verdict"]
+    assert r["waitingHuman"] is True
+    assert "待审" in r["verdict"], r["verdict"]
+    assert "审核不挡回归" in r["verdict"], r["verdict"]
+    assert "发布到回归" not in r["verdict"], "判词还在指向已经不存在的环节"
 
 
 def test_状态还没到位时说清是记账问题不是内容问题():

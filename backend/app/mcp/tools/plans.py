@@ -140,10 +140,9 @@ async def create_plan(
     }
 
 
-_DIM_LABEL = {
-    "not_started": "未开始", "draft": "草稿", "debugging": "调试中",
-    "pending_review": "待发布",
-}
+# 维度三态。not_started / pending_review / executable 在三态改造时删了 ——
+# 留着旧标签只会让「进不了回归」的原因印出一个不存在的环节名。
+_DIM_LABEL = {"draft": "草稿", "debugging": "调试中", "completed": "完成"}
 
 
 async def _not_executable(session, cases, test_type: str) -> list[tuple[str, str]]:
