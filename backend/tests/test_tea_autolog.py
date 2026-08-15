@@ -216,3 +216,43 @@ def test_普通字段照常印值():
     out = tea_autolog._fill_label(
         _loc('internal:attr=[placeholder="payment-api"i]'), ("tb-fwgl1-x",))
     assert "tb-fwgl1-x" in out
+
+
+# ── 收尾阶段的提示：必须靠确定信号，不许靠"沉默"猜 ──────────────
+
+def test_收尾提示走确定的teardown标记():
+    """最后一步跑完之后还有约 2.2 秒在关浏览器、把 HAR 落盘，期间一个事件都没有 ——
+    面板停在「37 步完成，等待中...」，**看着就是卡死了**，被当成 bug 报了两次。
+
+    前两版都是靠"沉默超过 N 秒"猜，两次都猜错：
+      · 第一版用「有过输出」判 → 启动阶段（起浏览器、加载首页）就有 2 秒沉默，
+        3.1 秒弹出「正在收尾」，那时才 0 步
+      · 第二版加「已跑过步骤」 → 中途 wait_for_url / expect 重试也能停 1.2 秒以上，
+        第 20 步时又弹了一次
+    而两次我的断言都只查"出现过收尾"，照样绿 —— **断言松，功能错了也看不出来**。
+
+    现在靠 conftest 的 `pytest_runtest_teardown` 打的 `##TEARDOWN##` 标记，
+    位置确定，不猜。
+    """
+    conftest = (Path(__file__).resolve().parents[1]
+                / "app/engine/pw_conftest.py").read_text(encoding="utf-8")
+    assert "pytest_runtest_teardown" in conftest, "conftest 没打收尾标记"
+    assert "##TEARDOWN##" in conftest
+
+    api = (Path(__file__).resolve().parents[1] / "app/api/scripts.py").read_text(encoding="utf-8")
+    assert '"##TEARDOWN##" in text' in api, "SSE 没转发收尾标记"
+    assert "event: finishing" in api, "没发 finishing 事件"
+    # 不许再退回"靠沉默猜"
+    assert "asyncio.wait_for(proc.stdout.readline()" not in api, \
+        "又在用读超时猜收尾了 —— 中途的正常停顿会被误判"
+
+
+def test_前端认收尾事件且新步骤会撤掉它():
+    """后端发了前端不认，等于没发（第一版就是这样：事件发出去，面板照旧「等待中」）。"""
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/cases/CaseDetail.jsx").read_text(encoding="utf-8")
+    assert "currentEvent === 'finishing'" in jsx, "前端不认 finishing 事件"
+    assert "setFinishingMsg" in jsx
+    # 新步骤到来要撤掉提示 —— 否则一旦误报就永远挂着
+    i = jsx.index("currentEvent === 'step_start'")
+    assert "setFinishingMsg(null)" in jsx[i:i + 400], "来了新步骤没撤掉收尾提示"

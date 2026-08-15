@@ -500,6 +500,19 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
     stderr_task = asyncio.create_task(drain_stderr())
 
     try:
+        # **沉默超过 1.2 秒就说一句在干什么。**
+        #
+        # 最后一步跑完之后还有一段：pytest 收尾、关 Playwright 上下文、把 HAR 落盘
+        # （98 条请求带响应体）。实测这段有 **2.2 秒**，期间一个事件都没有，
+        # 面板停在「37 步完成，等待中...」—— 看着就是卡死了，被当成 bug 报了两次。
+        #
+        # 第一版把提示放在这个循环**之后**才发 —— 而沉默恰恰发生在循环**里面**
+        # （stdout 还没关，只是没输出）。实测 finishing 在 14.02s 发出、done 在 14.06s，
+        # 只差 40ms，等于没显示。所以要靠"读超时"来判沉默，不能等循环结束。
+        # 收尾提示靠 conftest 的 `pytest_runtest_teardown` 打的 `##TEARDOWN##` 标记，
+        # **不靠"沉默超过 N 秒"猜** —— 实测收尾是 2.2 秒，而中途的 wait_for_url /
+        # expect 重试也能停 1.2 秒以上，用沉默判会在第 20 步时弹「正在收尾」，
+        # 那是句假话。前两版分别踩了"启动沉默"和"中途沉默"，都是猜出来的。
         async for line in proc.stdout:
             text = line.decode("utf-8", errors="ignore").rstrip()
             stdout_chunks.append(text)
@@ -507,17 +520,15 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
             # 不带换行（`test_ui.py::test_xxx[chromium] `），第一个标记被拼到那一行
             # 末尾，用 startswith 就匹配不到 —— 于是 step_start 永远比 step_end 少一个，
             # 面板上「N 步完成」永远差一步，最后一步看着像卡住了。实测就是这个现象。
+            if "##TEARDOWN##" in text:
+                yield ('event: finishing\ndata: '
+                       '{"message": "步骤跑完，正在收尾（关闭浏览器、保存本次流量）"}\n\n')
+                continue
             for marker, ev in (("##STEP_START##", "step_start"), ("##STEP_END##", "step_end")):
                 idx = text.find(marker)
                 if idx >= 0:
                     yield f"event: {ev}\ndata: {text[idx + len(marker):]}\n\n"
                     break
-
-        # 最后一步跑完之后还有一段：pytest 收尾、关浏览器上下文、把 HAR 落盘
-        # （98 条请求带响应体，几秒）、解析 junit。这段期间一个事件都没有，
-        # 面板停在「N 步完成，等待中...」——**看着就是卡住了**，实测被当成 bug 报上来。
-        # 明说一句在干什么，代价是一行。
-        yield 'event: finishing\ndata: {"message": "步骤跑完，正在收尾（关闭浏览器、保存本次流量）"}\n\n'
 
         try:
             await asyncio.wait_for(proc.wait(), timeout=10)

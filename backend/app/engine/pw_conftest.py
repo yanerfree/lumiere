@@ -50,6 +50,17 @@ def browser_context_args(browser_context_args):
         args["record_har_content"] = "embed"
     return args
 
+def pytest_runtest_teardown(item, nextitem):
+    """进入收尾阶段就打个标记 —— 平台据此告诉用户"在关浏览器、存流量"。
+
+    为什么要**确定的信号**而不是靠"沉默超过 N 秒"猜：实测收尾是 2.2 秒，
+    而中途的 wait_for_url / expect 重试也能停 1.2 秒以上 —— 用沉默判会在跑到
+    第 20 步时弹出「正在收尾」，那是句假话。这个 hook 在 teardown 一开始就调，
+    位置准确。
+    """
+    print("##TEARDOWN##", flush=True)
+
+
 @pytest.fixture(autouse=True)
 def set_timeout(page: Page):
     page.set_default_timeout(10000)

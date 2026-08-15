@@ -766,6 +766,10 @@ function ScenarioEditor({
 
   // 流式运行脚本 — 实时推送步骤进度
   const [liveSteps, setLiveSteps] = useState([])
+  // 收尾阶段的提示。最后一步跑完之后还有 2 秒左右在关浏览器、把 HAR 落盘、解析 junit，
+  // 这期间一个事件都没有 —— 面板停在「37 步完成，等待中...」，**看着就是卡死了**，
+  // 实测被当成 bug 报了两次。后端发了 finishing 事件，前端得认它。
+  const [finishingMsg, setFinishingMsg] = useState(null)
   const liveStepsRef = useRef([])
   const abortRef = useRef(null)
 
@@ -775,6 +779,7 @@ function ScenarioEditor({
       abortRef.current = null
     }
     setDebugRunning(false)
+    setFinishingMsg(null)
     setLiveSteps(prev => prev.map(s => s.status === 'running' ? { ...s, status: 'cancelled', error: '用户取消' } : s))
     setDebugResult(prev => prev ? { ...prev, status: 'cancelled' } : prev)
     message.info('已停止执行')
@@ -785,6 +790,7 @@ function ScenarioEditor({
     const controller = new AbortController()
     abortRef.current = controller
     setLiveSteps([])
+    setFinishingMsg(null)
     setDebugRunning(true)
     // 打开 Drawer 显示实时进度；保留生成时抓到的接口，别让「运行」把接口视图清空
     setDebugResult(prev => ({ status: 'running', _drawerOpen: true, steps: [], captured_requests: prev?.captured_requests || [] }))
@@ -813,10 +819,15 @@ function ScenarioEditor({
               try {
                 const data = JSON.parse(line.slice(6))
                 if (currentEvent === 'step_start') {
+                  // 又有步骤了 → 刚才那次沉默不是收尾，把提示撤掉。
+                  setFinishingMsg(null)
                   setLiveSteps(prev => { const n = [...prev, { ...data, status: 'running' }]; liveStepsRef.current = n; return n })
                 } else if (currentEvent === 'step_end') {
                   setLiveSteps(prev => { const n = prev.map(s => s.seq === data.seq ? { ...s, ...data } : s); liveStepsRef.current = n; return n })
+                } else if (currentEvent === 'finishing') {
+                  setFinishingMsg(data.message || '正在收尾…')
                 } else if (currentEvent === 'done') {
+                  setFinishingMsg(null)
                   // 优先用 liveSteps（有完整步骤名），fallback 到 data.steps
                   const live = liveStepsRef.current
                   const steps = live.length > 0 ? live : (data.steps || [])
@@ -1445,7 +1456,9 @@ function ScenarioEditor({
                   </div>
                   <div style={{ fontSize: 12, color: '#86909c', marginTop: 2 }}>
                     {isRunning
-                      ? `${liveSteps.filter(s => s.status === 'passed').length} 步完成，${liveSteps.filter(s => s.status === 'running').length > 0 ? '1 步执行中' : '等待中...'}`
+                      ? (finishingMsg
+                          ? `${liveSteps.filter(s => s.status === 'passed').length} 步全部完成 · ${finishingMsg}`
+                          : `${liveSteps.filter(s => s.status === 'passed').length} 步完成，${liveSteps.filter(s => s.status === 'running').length > 0 ? '1 步执行中' : '等待中...'}`)
                       : `耗时 ${debugResult.durationMs != null ? `${(debugResult.durationMs / 1000).toFixed(1)}s` : '-'}${stepList.length > 0 ? ` · ${stepList.filter(s => s.status === 'passed').length}/${stepList.length} 步通过` : ''}`
                     }
                   </div>
