@@ -20,6 +20,7 @@ from app.schemas.llm_mock import (
     ReorderRequest,
 )
 from app.services import llm_mock_service as svc
+from app.services import llm_mock_smart as smart
 from app.services import custom_preset_service as preset_svc
 from app.services.llm_mock_manager import mock_server
 from app.services.llm_mock_presets import get_preset, list_presets
@@ -111,6 +112,26 @@ async def get_preset_detail(key: str):
     if not p:
         return JSONResponse({"error": "Preset not found"}, status_code=404)
     return {"data": p}
+
+
+# ───── 智能应答契约 ─────
+# 前端的「指令契约面板」和「展开成规则」都从这里取，不在 JSX 里再抄一份 ——
+# 抄两份的话，改了一边忘了另一边，页面上写的和引擎实际干的就不是一回事了。
+
+@router.get("/smart-contract")
+async def get_smart_contract():
+    return {
+        "directives": smart.DIRECTIVE_CONTRACT,
+        # 「展开成规则」按钮拿它写进 match_rules
+        "expandableRules": smart.expand_to_rules(),
+        "defaultBody": smart.SMART_DEFAULT_BODY,
+        "checkerSample": smart.build_checker_verdict(
+            {"messages": [{"role": "user", "content":
+                           "Redact mode: detect_and_redact\nText to check: 客户身份证号是 11010119900101123X"}]}
+        )[0],
+        "bodyMarkers": list(smart.DEFAULT_BODY_MARKERS),
+        "slowChunkDelayMs": smart.SLOW_CHUNK_DELAY_MS,
+    }
 
 
 # ───── 自定义预设 ─────

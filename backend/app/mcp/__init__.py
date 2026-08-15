@@ -332,13 +332,13 @@ _register(
 _register(
     mocks.upsert_llm_mock_route,
     name="tb_upsert_llm_mock_route",
-    description="建/改一条 LLM Mock 路由，决定「上游怎么答」——status_code(429/500 测重试降级熔断)、delay_ms(测超时)、finish_reason(stop/length/content_filter 测透传)、prompt_tokens/completion_tokens(**测网关的计费/配额统计算得对不对**)、model(测模型映射)。按 path 幂等。**path 必须带你自己的前缀**（如 /mock/TC-XXX-00001/v1/chat/completions）：直接占用 /v1/chat/completions 会被拒，那是所有用例共用的，你配成 429 别人就跟着挂、还偶发。参数: name, path, status_code(默认200), delay_ms, response_body, finish_reason, prompt_tokens, completion_tokens, model",
+    description="建/改一条 LLM Mock 路由，决定「上游怎么答」——status_code(429/500 测重试降级熔断)、delay_ms(测超时)、finish_reason(stop/length/content_filter 测透传)、prompt_tokens/completion_tokens(**测网关的计费/配额统计算得对不对**)、model(测模型映射)。按 path 幂等。**path 必须带你自己的前缀**（如 /mock/TC-XXX-00001/v1/chat/completions）：直接占用 /v1/chat/completions 会被拒，那是所有用例共用的，你配成 429 别人就跟着挂、还偶发。**smart=true 开智能应答**：行为改由请求正文里的指令决定（SAY:原样回显 / MODE:HIT 输出含 VIOLATION / MODE:PII 输出侧敏感信息(请求里没有，验护栏查的是输出) / MODE:EMPTY 零内容流 / MODE:FILTER 空回复+content_filter / MODE:DEFY 无视 stream:false 硬返流 / MODE:SLOW 每片 250ms / MODE:LOOP 先 tool_calls 再终局)，一条路由演完所有场景，上面那些静态参数不生效；smart_role='checker'(或路径带 /checker) 演网关护栏调的那个检查模型，它把「本次待检正文多长、开头是什么」回显出来——网关喂给护栏什么，这是唯一观测点。参数: name, path, status_code(默认200), delay_ms, response_body, finish_reason, prompt_tokens, completion_tokens, model, smart(默认false), smart_role(auto/upstream/checker)",
 )
 
 _register(
     mocks.llm_mock_requests,
     name="tb_llm_mock_requests",
-    description="**网关到底往上游发了什么** —— 断言用的。鉴权头有没有正确注入、模型名有没有按映射改写、参数有没有被篡改，这些在网关下游根本看不见（客户端只能看到最终响应），这是唯一的观测点。断言前先 tb_llm_mock_reset 清一次。参数: path(可选), limit(默认20)",
+    description="**网关到底往上游发了什么** —— 断言用的。鉴权头有没有正确注入、模型名有没有按映射改写、参数有没有被篡改，这些在网关下游根本看不见（客户端只能看到最终响应），这是唯一的观测点。智能应答路由还返回 smartMeta：mode(命中哪条指令)、**stream(网关实际发出的值，流式降级有没有真发生只能看它)**、hasStreamOptions、loopStage，checker 角色再带 checkedLen/envelopeLen/verdict(护栏到底拿到了多长的正文)。断言前先 tb_llm_mock_reset 清一次。参数: path(可选), limit(默认20)",
 )
 
 _register(

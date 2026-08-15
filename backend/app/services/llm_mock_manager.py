@@ -16,6 +16,7 @@ from starlette.middleware.cors import CORSMiddleware
 from app.deps.db import async_session_factory
 from app.services import llm_mock_engine as engine
 from app.services import llm_mock_service as svc
+from app.services import llm_mock_smart as smart
 
 logger = logging.getLogger("llm_mock")
 
@@ -42,6 +43,9 @@ _FALLBACK_EMBEDDING_ROUTE: dict = {
     "sse_chunk_size": 1,
     "match_enabled": False,
     "match_rules": [],
+    "smart_enabled": False,
+    "smart_role": "auto",
+    "smart_body_marker": None,
 }
 
 
@@ -232,11 +236,23 @@ class MockServerManager:
             )
 
         route_dict = self._route_to_dict(matched_route)
-        # 条件应答：命中规则就把 response_body / status_code 换成规则自己的，
-        # 放在最前面是因为 status_code 会影响下面的流式判定和日志。
-        route_dict, hit_rule = engine.apply_matched_rule(route_dict, request_body)
-        if hit_rule is not None:
-            logger.info("命中条件应答规则: %s (路由 %s)", hit_rule.get("name") or hit_rule.get("id"), route_dict.get("name"))
+        # 智能应答开着就由它接管：行为全部由请求里的指令决定，条件应答规则不参与。
+        # 二选一而不是叠加 —— 两套都在的话，「这次到底是谁决定了响应」会变成猜。
+        smart_meta: dict | None = None
+        if route_dict.get("smart_enabled"):
+            route_dict, smart_meta = smart.apply_smart(route_dict, request_body, path)
+            logger.info(
+                "智能应答: 角色=%s 形状=%s 指令=%s (路由 %s)",
+                smart_meta.get("role"), smart_meta.get("shape"),
+                smart_meta.get("directive") or "无", route_dict.get("name"),
+            )
+        else:
+            # 条件应答：命中规则就把 response_body / status_code 换成规则自己的，
+            # 放在最前面是因为 status_code 会影响下面的流式判定和日志。
+            route_dict, hit_rule = engine.apply_matched_rule(route_dict, request_body)
+            if hit_rule is not None:
+                logger.info("命中条件应答规则: %s (路由 %s)", hit_rule.get("name") or hit_rule.get("id"), route_dict.get("name"))
+        shape = route_dict.get("_smart_shape") or "chat"
         is_embeddings = engine.is_embeddings_route(route_dict, path)
         # embeddings 没有流式、错误响应也不走流式，这两条压过 stream_mode
         if is_embeddings or route_dict["status_code"] >= 400:
@@ -261,9 +277,16 @@ class MockServerManager:
         first_byte_ms = (t_first_byte - t0) * 1000
 
         if is_stream:
+            if shape == "anthropic":
+                stream_builder = engine.build_anthropic_stream
+            elif shape == "text":
+                stream_builder = engine.build_text_completion_stream
+            else:
+                stream_builder = engine.build_response_stream
+
             async def stream_with_log():
                 body_parts = []
-                async for chunk in engine.build_response_stream(route_dict, request_body):
+                async for chunk in stream_builder(route_dict, request_body):
                     body_parts.append(chunk)
                     yield chunk
                 t_done = time.perf_counter()
@@ -272,6 +295,7 @@ class MockServerManager:
                         route_dict, request, request_body, method, path,
                         route_dict["status_code"], "".join(body_parts), {},
                         match_ms, first_byte_ms, (t_done - t_first_byte) * 1000, (t_done - t0) * 1000,
+                        smart_meta,
                     )
 
             headers = engine._build_headers(route_dict, "")
@@ -282,6 +306,10 @@ class MockServerManager:
         else:
             if is_embeddings:
                 resp_body, extra_headers = engine.build_embeddings_response(route_dict, request_body)
+            elif shape == "anthropic":
+                resp_body, extra_headers = engine.build_anthropic_message_json(route_dict, request_body)
+            elif shape == "text":
+                resp_body, extra_headers = engine.build_text_completion_json(route_dict, request_body)
             else:
                 resp_body, extra_headers = engine.build_response_json(route_dict, request_body)
             t_done = time.perf_counter()
@@ -294,7 +322,7 @@ class MockServerManager:
                 await self._log_request(
                     route_dict, request, request_body, method, path,
                     status, json.dumps(log_body, ensure_ascii=False), extra_headers,
-                    match_ms, first_byte_ms, body_ms, total_ms,
+                    match_ms, first_byte_ms, body_ms, total_ms, smart_meta,
                 )
             return JSONResponse(resp_body, status_code=status, headers=extra_headers)
 
@@ -359,12 +387,15 @@ class MockServerManager:
             "match_rules": route.match_rules,
             "response_type": route.response_type,
             "tool_calls": route.tool_calls,
+            "smart_enabled": route.smart_enabled,
+            "smart_role": route.smart_role,
+            "smart_body_marker": route.smart_body_marker,
         }
 
     async def _log_request(
         self, route_dict, request, request_body, method, path,
         status_code, response_body_str, resp_headers,
-        match_ms, first_byte_ms, body_ms, total_ms,
+        match_ms, first_byte_ms, body_ms, total_ms, smart_meta=None,
     ):
         req_headers = dict(request.headers) if request else {}
         caller = req_headers.get("user-agent", "")
@@ -403,6 +434,7 @@ class MockServerManager:
             "completion_tokens": usage.get("completion_tokens", 0),
             "total_tokens": usage.get("total_tokens", 0),
             "finish_reason": route_dict.get("finish_reason"),
+            "smart_meta": smart_meta if isinstance(smart_meta, dict) else None,
             "match_ms": round(match_ms, 2),
             "first_byte_ms": round(first_byte_ms, 2),
             "body_ms": round(body_ms, 2),

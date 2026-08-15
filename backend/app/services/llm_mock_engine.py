@@ -264,6 +264,11 @@ def apply_matched_rule(route: dict, request_body: dict) -> tuple[dict, dict | No
     sm = hit.get("stream_mode")
     if sm in ("auto", "force_stream", "force_json"):
         eff["stream_mode"] = sm
+    # 命中后单独改 finish_reason —— 「空回复 + content_filter」是上游侧内容过滤的形态，
+    # 只清空正文而不改 finish_reason 的话，那个形态就是假的。
+    fr = hit.get("finish_reason")
+    if fr in ("stop", "length", "tool_calls", "content_filter"):
+        eff["finish_reason"] = fr
     cs = hit.get("sse_chunk_size")
     if isinstance(cs, int) and not isinstance(cs, bool) and cs > 0:
         eff["sse_chunk_size"] = cs
@@ -457,6 +462,135 @@ async def build_response_stream(route: dict, request_body: dict) -> AsyncIterato
         yield _chunk({}, None, usage=usage_obj, choices_empty=True)
 
     yield "data: [DONE]\n\n"
+
+
+# ───── 另两种协议形状（legacy completions / Anthropic messages） ─────
+# 只有智能应答按路径判出来时才会走这里，普通路由一律还是 chat.completion —— 零影响。
+# 为什么要有：客户端 SDK 认形状不认内容，形状不对时报的错跟网关自己的 bug 长得一样，
+# 排查时分不开。
+
+def _resp_model(route: dict, request_body: dict, default: str) -> str:
+    req_model = request_body.get("model", default)
+    return req_model if route["model_mode"] == "follow_request" else (route.get("custom_model") or req_model)
+
+
+def _usage_pair(route: dict, request_body: dict, out_text: str) -> tuple[int, int]:
+    if route["token_mode"] == "custom":
+        return (route.get("custom_prompt_tokens") or 0, route.get("custom_completion_tokens") or 0)
+    prompt_text = json.dumps(request_body.get("messages") or request_body.get("prompt") or "", ensure_ascii=False)
+    return (estimate_tokens(prompt_text), estimate_tokens(out_text))
+
+
+def build_text_completion_json(route: dict, request_body: dict) -> tuple[dict, dict]:
+    """legacy /v1/completions —— object=text_completion，choice 用 `text` 而不是 message/delta。"""
+    completion_id = _gen_completion_id().replace("chatcmpl-", "cmpl-")
+    content = _resolve_body(route, request_body)
+    pt, ct = _usage_pair(route, request_body, content)
+    body = {
+        "id": completion_id,
+        "object": "text_completion",
+        "created": int(time.time()),
+        "model": _resp_model(route, request_body, "gpt-3.5-turbo-instruct"),
+        "choices": [{"index": 0, "text": content, "logprobs": None,
+                     "finish_reason": route.get("finish_reason", "stop")}],
+        "usage": {"prompt_tokens": pt, "completion_tokens": ct, "total_tokens": pt + ct},
+    }
+    return body, _build_headers(route, completion_id)
+
+
+async def build_text_completion_stream(route: dict, request_body: dict) -> AsyncIterator[str]:
+    completion_id = _gen_completion_id().replace("chatcmpl-", "cmpl-")
+    created = int(time.time())
+    model = _resp_model(route, request_body, "gpt-3.5-turbo-instruct")
+    chunk_delay = route.get("sse_chunk_delay_ms", 50) / 1000.0
+    content = _resolve_body(route, request_body)
+
+    def _frame(text: str, fr: str | None) -> str:
+        obj = {"id": completion_id, "object": "text_completion", "created": created, "model": model,
+               "choices": [{"index": 0, "text": text, "logprobs": None, "finish_reason": fr}]}
+        return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+    for piece in _split_chunks(content, route.get("sse_chunk_size") or 1):
+        yield _frame(piece, None)
+        await asyncio.sleep(chunk_delay)
+    yield _frame("", route.get("finish_reason", "stop"))
+    yield "data: [DONE]\n\n"
+
+
+# OpenAI 的 finish_reason → Anthropic 的 stop_reason
+_ANTHROPIC_STOP = {
+    "stop": "end_turn",
+    "length": "max_tokens",
+    "tool_calls": "tool_use",
+    "content_filter": "refusal",
+}
+
+
+def build_anthropic_message_json(route: dict, request_body: dict) -> tuple[dict, dict]:
+    """Anthropic /v1/messages —— content 是 block 数组，停止原因叫 stop_reason。"""
+    msg_id = f"msg_{uuid.uuid4().hex[:24]}"
+    response_type = route.get("response_type", "text")
+    content_blocks: list[dict] = []
+    out_text = ""
+
+    if response_type == "tool_calls":
+        for tc in route.get("tool_calls") or []:
+            try:
+                args = json.loads(tc.get("arguments") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                args = {"_raw": tc.get("arguments")}
+            content_blocks.append({"type": "tool_use", "id": _gen_call_id().replace("call_", "toolu_"),
+                                   "name": tc.get("name", "unknown"), "input": args})
+        out_text = json.dumps(content_blocks, ensure_ascii=False)
+    else:
+        out_text = _resolve_body(route, request_body)
+        # 空正文对应零内容响应：content 是空数组，不是一个空 text block
+        if out_text:
+            content_blocks.append({"type": "text", "text": out_text})
+
+    pt, ct = _usage_pair(route, request_body, out_text)
+    body = {
+        "id": msg_id,
+        "type": "message",
+        "role": "assistant",
+        "model": _resp_model(route, request_body, "claude-sonnet-5"),
+        "content": content_blocks,
+        "stop_reason": _ANTHROPIC_STOP.get(route.get("finish_reason", "stop"), "end_turn"),
+        "stop_sequence": None,
+        "usage": {"input_tokens": pt, "output_tokens": ct},
+    }
+    return body, _build_headers(route, msg_id)
+
+
+async def build_anthropic_stream(route: dict, request_body: dict) -> AsyncIterator[str]:
+    """Anthropic 事件流：message_start → content_block_* → message_delta → message_stop。
+
+    每帧都要带 `event:` 行 —— Anthropic SDK 是按事件名分派的，只发 data 它认不出来。
+    """
+    msg_id = f"msg_{uuid.uuid4().hex[:24]}"
+    model = _resp_model(route, request_body, "claude-sonnet-5")
+    chunk_delay = route.get("sse_chunk_delay_ms", 50) / 1000.0
+    content = _resolve_body(route, request_body)
+    pt, ct = _usage_pair(route, request_body, content)
+
+    def _ev(name: str, payload: dict) -> str:
+        return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    yield _ev("message_start", {"type": "message_start", "message": {
+        "id": msg_id, "type": "message", "role": "assistant", "model": model,
+        "content": [], "stop_reason": None, "stop_sequence": None,
+        "usage": {"input_tokens": pt, "output_tokens": 0}}})
+    yield _ev("content_block_start", {"type": "content_block_start", "index": 0,
+                                      "content_block": {"type": "text", "text": ""}})
+    for piece in _split_chunks(content, route.get("sse_chunk_size") or 1):
+        yield _ev("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                          "delta": {"type": "text_delta", "text": piece}})
+        await asyncio.sleep(chunk_delay)
+    yield _ev("content_block_stop", {"type": "content_block_stop", "index": 0})
+    yield _ev("message_delta", {"type": "message_delta", "delta": {
+        "stop_reason": _ANTHROPIC_STOP.get(route.get("finish_reason", "stop"), "end_turn"),
+        "stop_sequence": None}, "usage": {"output_tokens": ct}})
+    yield _ev("message_stop", {"type": "message_stop"})
 
 
 # ───── 向量 (Embeddings) ─────

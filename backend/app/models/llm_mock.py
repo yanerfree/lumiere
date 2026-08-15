@@ -64,6 +64,17 @@ class MockRoute(Base):
     # 内置那条「测试用例关键词 → 用例 JSON」也躺在这里，跟自建规则完全平权，可改可删。
     match_rules: Mapped[list | None] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
 
+    # 智能应答 —— 行为由请求里的指令决定（SAY: / MODE:xxx），而不是这张表上的静态配置。
+    # 开着的时候接管整条链路：条件应答规则、响应内容、状态码、finish_reason、流式这些全部旁路。
+    # 为什么单独一个模式而不是再加几条规则：规则的响应体是静态串，而护栏回显（要报本次
+    # 待检正文的长度/开头）、MODE:LOOP（要跨轮判断）、MODE:SLOW（按分片计时）这三样
+    # 的响应内容依赖请求内容，规则表达不了。
+    smart_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    # auto（按路径判）/ upstream（被测智能体的上游大模型）/ checker（网关护栏调用的检查模型）
+    smart_role: Mapped[str] = mapped_column(String(20), nullable=False, default="auto", server_default="auto")
+    # 护栏提示模板里「待检正文」的定位标记，空则用内置默认
+    smart_body_marker: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
     # Tool Calls 配置
     response_type: Mapped[str] = mapped_column(String(20), nullable=False, default="text")
     tool_calls: Mapped[list | None] = mapped_column(JSONB, nullable=True)
@@ -105,6 +116,10 @@ class MockRequestLog(Base):
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     finish_reason: Mapped[str | None] = mapped_column(String(30), nullable=True)
+
+    # 智能应答判定：这次请求被解析成了什么指令、走的哪种协议形状、stream 实际是什么、
+    # 护栏拿到的正文多长、判决是什么。「网关到底把什么喂给了护栏」这个证据就在这里。
+    smart_meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # 耗时
     match_ms: Mapped[float] = mapped_column(nullable=False, default=0.0)

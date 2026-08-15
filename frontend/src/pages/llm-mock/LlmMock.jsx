@@ -52,7 +52,14 @@ const NEW_ROUTE_PRESETS = [
   // Azure OpenAI：api-version=v1 走 /openai/v1/...，日期版本把部署名放在路径里
   { name: 'Azure Chat (api-version=v1)', path: '/openai/v1/chat/completions', presetMode: 'normal_text', statusCode: 200, responseType: 'text', finishReason: 'stop', responseBody: 'This is a mock response from the LLM Mock service.' },
   { name: 'Azure Chat (部署名通配)', path: '/openai/deployments/*/chat/completions', presetMode: 'normal_text', statusCode: 200, responseType: 'text', finishReason: 'stop', responseBody: 'This is a mock response from the LLM Mock service.' },
+  // 智能应答两个角色各一条 —— 一键建出来就能用，不用自己想路径该怎么写
+  { name: '智能应答 · 上游模型', path: '/mock-smart/v1/chat/completions', smartEnabled: true, smartRole: 'upstream', statusCode: 200, responseType: 'text', finishReason: 'stop', sseChunkSize: 6, sseChunkDelayMs: 20, responseBody: '', matchRules: [] },
+  { name: '智能应答 · 护栏检查模型', path: '/mock-smart/checker/v1/chat/completions', smartEnabled: true, smartRole: 'checker', statusCode: 200, responseType: 'text', finishReason: 'stop', responseBody: '', matchRules: [] },
 ]
+
+// 智能应答开着时被接管的配置：由请求里的指令决定，页面上改了也不生效，所以置灰。
+// 「置灰但看得见」是刻意的 —— 这块以前是个黑盒 bool，看不见改不了，所以被拆过一次。
+const SMART_ROLE_LABEL = { auto: '自动判断', upstream: '上游模型', checker: '护栏检查模型' }
 
 export default function LlmMock() {
   const [routes, setRoutes] = useState([])
@@ -61,6 +68,8 @@ export default function LlmMock() {
   const [originalForm, setOriginalForm] = useState(null)
   const [presets, setPresets] = useState([])
   const [customPresets, setCustomPresets] = useState([])
+  // 智能应答契约从后端取（单一真源），不在这里再抄一份指令表
+  const [smartContract, setSmartContract] = useState(null)
   const [savePresetOpen, setSavePresetOpen] = useState(false)
   const [ruleModalOpen, setRuleModalOpen] = useState(false)
   const [ruleDraft, setRuleDraft] = useState(null)
@@ -89,6 +98,7 @@ export default function LlmMock() {
     fetchRoutes()
     fetchPresets()
     fetchCustomPresets()
+    fetchSmartContract()
     fetchStatus()
     fetchLogs()
     pollRef.current = setInterval(() => { fetchStatus() }, 5000)
@@ -98,6 +108,7 @@ export default function LlmMock() {
   const fetchRoutes = async () => { try { const r = await api.get('/llm-mock/routes'); setRoutes(r.data || r || []) } catch {} }
   const fetchPresets = async () => { try { const r = await api.get('/llm-mock/presets'); setPresets(r.data?.data || r.data || []) } catch {} }
   const fetchCustomPresets = async () => { try { const r = await api.get('/llm-mock/custom-presets'); setCustomPresets(r.data?.data || r.data || []) } catch {} }
+  const fetchSmartContract = async () => { try { const r = await api.get('/llm-mock/smart-contract'); setSmartContract(r.data || r) } catch {} }
   const fetchStatus = async () => { try { const r = await api.get('/llm-mock/status'); setServiceStatus(r.data || r) } catch {} }
   const fetchLogs = async (page) => {
     try {
@@ -194,7 +205,8 @@ export default function LlmMock() {
     const keys = ['name', 'method', 'path', 'enabled', 'statusCode', 'responseType', 'finishReason',
       'responseBody', 'responseMode', 'presetMode', 'delayMs', 'sseChunkDelayMs', 'tokenMode',
       'customPromptTokens', 'customCompletionTokens', 'modelMode', 'customModel', 'responseFormat',
-      'streamMode', 'matchEnabled', 'sseChunkSize']
+      // 这三个不加进来，开了智能应答保存按钮不会亮，改了等于没改
+      'streamMode', 'matchEnabled', 'sseChunkSize', 'smartEnabled', 'smartRole', 'smartBodyMarker']
     for (const k of keys) {
       if (routeForm[k] !== originalForm[k]) return true
     }
@@ -443,6 +455,68 @@ export default function LlmMock() {
   const isEmbedding = routeForm?.responseType === 'embedding'
   const locked = !!routeForm?.locked
 
+  // ── 智能应答 ──
+  const smartOn = !!routeForm?.smartEnabled
+  // 被智能应答接管的配置一律置灰（锁定时也灰）。分成两个变量而不是直接用 locked：
+  // 路径、模型映射这些即使开着智能应答也还得能改
+  const cfgLocked = locked || smartOn
+
+  // 当前路径判出来的协议形状 / 角色 —— 与后端 detect_shape / resolve_role 同一套判据。
+  // 页面上必须显示出来：不显示的话「这条路由到底会按哪种形状回」只能靠猜，
+  // 而形状不对时客户端报的错跟网关自己的 bug 长得一样。
+  const smartShape = useMemo(() => {
+    const p = (routeForm?.path || '').split('?')[0].replace(/\/+$/, '')
+    if (p.endsWith('/messages')) return 'anthropic'
+    if (p.endsWith('/chat/completions')) return 'chat'
+    if (p.endsWith('/completions')) return 'text'
+    return 'chat'
+  }, [routeForm?.path])
+
+  const smartRole = useMemo(() => {
+    const explicit = routeForm?.smartRole || 'auto'
+    if (explicit !== 'auto') return explicit
+    const p = (routeForm?.path || '').toLowerCase()
+    return ['/checker', '/check', '/guard', '/guardrail', '/moderation'].some(h => p.includes(h))
+      ? 'checker' : 'upstream'
+  }, [routeForm?.smartRole, routeForm?.path])
+
+  const SHAPE_LABEL = {
+    chat: 'chat.completion（OpenAI Chat）',
+    text: 'text_completion（legacy completions，choice 用 text）',
+    anthropic: 'message（Anthropic，content 是 block 数组）',
+  }
+
+  // 逃生口：把能用规则表达的那几条落地成条件应答规则，然后关掉智能应答。
+  // 有这个按钮，智能应答才不算黑盒 —— 任何时候都能把控制权拿回来自己改。
+  const handleExpandToRules = () => {
+    const rules = smartContract?.expandableRules
+    if (!rules?.length) { message.warning('契约还没加载好，稍后再试'); return }
+    const notExpandable = (smartContract.directives || []).filter(d => !d.expandable && d.key)
+    setRouteForm(f => ({
+      ...f,
+      smartEnabled: false,
+      matchEnabled: true,
+      matchRules: [...(Array.isArray(f.matchRules) ? f.matchRules : []), ...rules],
+      responseBody: smartContract.defaultBody || f.responseBody,
+    }))
+    Modal.info({
+      title: `已展开 ${rules.length} 条规则，智能应答已关闭`,
+      width: 560,
+      content: (
+        <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+          <div>这几条现在是普通的条件应答规则，可看可改可删。记得点「保存」。</div>
+          <div style={{ marginTop: 10, color: '#fa8c16' }}>
+            但下面这些<b>规则表达不了</b>，展开后就没有了 —— 要它们得重新打开智能应答：
+          </div>
+          <ul style={{ margin: '6px 0 0 18px', color: '#8c8c8c' }}>
+            {notExpandable.map(d => <li key={d.key}>{d.key} —— {d.effect}</li>)}
+            <li>护栏检查模型的回显判决（响应里要带本次待检正文的长度和开头，必须现算）</li>
+          </ul>
+        </div>
+      ),
+    })
+  }
+
   // 响应内容里写了个纯数字数组 → 固定向量；否则按输入文本确定性生成
   const fixedVector = useMemo(() => {
     if (!isEmbedding || !routeForm?.responseBody?.trim().startsWith('[')) return null
@@ -454,6 +528,11 @@ export default function LlmMock() {
 
   const bodyHint = (() => {
     if (!routeForm) return ''
+    if (routeForm.smartEnabled) {
+      return smartRole === 'checker'
+        ? '智能应答接管：实际返回的是判决 JSON，长度和开头按每次请求现算'
+        : '智能应答接管：这是不带指令时返回的正文，带了指令按右边那张表走'
+    }
     const sc = routeForm.statusCode ?? 200
     if (sc >= 400) return '只需填写错误消息，系统自动包装为 OpenAI 错误格式'
     if (routeForm.responseType === 'refusal') return '填写拒绝理由，放入 message.refusal'
@@ -614,12 +693,85 @@ export default function LlmMock() {
             </div>
           )}
 
+          {/* 智能应答 —— 放在所有响应配置之前，因为它一开就接管了下面这一大片 */}
+          {!isEmbedding && (
+            <div style={{
+              display: 'flex', alignItems: 'flex-end', gap: 16, marginBottom: 14, flexWrap: 'wrap',
+              padding: '10px 12px', borderRadius: 12,
+              background: smartOn ? 'rgba(78,138,240,0.06)' : 'rgba(0,0,0,0.015)',
+              border: `1px solid ${smartOn ? 'rgba(78,138,240,0.3)' : 'rgba(0,0,0,0.06)'}`,
+            }}>
+              <div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                  智能应答
+                  <Tooltip title="让这条路由的行为由「请求里写的指令」决定，而不是这个页面上的配置：请求正文里写 MODE:PII 就返回带敏感信息的输出，写 SAY:你好 就回「你好」。为什么要这样：配置在服务端的话，每换一个场景都要改配置、等下发、重来一遍，对照实验做不起来。开启后下面被它接管的配置会置灰。">
+                    <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                  </Tooltip>
+                </div>
+                <Switch size="small" checked={smartOn} disabled={locked}
+                  checkedChildren="开" unCheckedChildren="关"
+                  onChange={v => setRouteForm(f => ({ ...f, smartEnabled: v }))} />
+              </div>
+              {smartOn && (<>
+                <div>
+                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                    这个假模型演谁
+                    <Tooltip title="上游模型 = 被测智能体调的那个大模型，演各种 MODE 场景。护栏检查模型 = 网关的「护栏 AI 检查」调的那个模型，它只回判决，并把「本次收到的待检正文有多长、开头是什么」回显出来 —— 网关到底把什么喂给了护栏，这是唯一的观测点。自动判断 = 路径里带 /checker、/guard 就算护栏。">
+                      <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                    </Tooltip>
+                  </div>
+                  <Select size="small" style={{ width: 150 }} disabled={locked}
+                    value={routeForm.smartRole || 'auto'}
+                    onChange={v => setRouteForm(f => ({ ...f, smartRole: v }))}>
+                    <Select.Option value="auto">自动判断（按路径）</Select.Option>
+                    <Select.Option value="upstream">上游模型</Select.Option>
+                    <Select.Option value="checker">护栏检查模型</Select.Option>
+                  </Select>
+                </div>
+                <div style={{ fontSize: 11, color: '#8c8c8c', paddingBottom: 4 }}>
+                  当前判定：<b style={{ color: '#4e8af0' }}>{SMART_ROLE_LABEL[smartRole]}</b>
+                  <span style={{ margin: '0 6px', color: '#d9d9d9' }}>|</span>
+                  协议形状 <b style={{ color: '#4e8af0' }}>{smartShape}</b>
+                </div>
+                {smartRole === 'checker' && (
+                  <div>
+                    <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                      待检正文定位标记
+                      <Tooltip title={`护栏把正文包在提示模板里发过来，要从信封里把正文抠出来才能回显它的长度。默认认这几种写法：${(smartContract?.bodyMarkers || []).join(' / ')}。模板不一样就填你自己的。抠不到时不会静默返回 0，而是把整个信封当正文并在日志里标 bodyFrom=fallback —— 否则「护栏到底拿没拿到正文」这个证据就被淹了。`}>
+                        <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                      </Tooltip>
+                    </div>
+                    <Input size="small" style={{ width: 180, fontFamily: MONO }} disabled={locked}
+                      placeholder={(smartContract?.bodyMarkers || ['Text to check:'])[0]}
+                      value={routeForm.smartBodyMarker || ''}
+                      onChange={e => setRouteForm(f => ({ ...f, smartBodyMarker: e.target.value || null }))} />
+                  </div>
+                )}
+                <span style={{ flex: 1 }} />
+                <Tooltip title="把能用条件应答规则表达的那几条落地成普通规则，然后关掉智能应答 —— 从此可看可改可删">
+                  <Button size="small" disabled={locked} onClick={handleExpandToRules}>展开成规则</Button>
+                </Tooltip>
+              </>)}
+            </div>
+          )}
+
+          {smartOn && (
+            <Alert type="info" showIcon style={{ fontSize: 12, marginBottom: 16 }}
+              message="智能应答已接管这条路由"
+              description={<span>
+                响应内容、状态码、结束原因、响应流式、条件应答规则这些都由<b>请求里的指令</b>决定，
+                页面上改了不生效，所以置灰了 —— 右边列着它认哪些指令。
+                这是一份与对接方共享的固定契约，改了两边就对不上、对照实验不成立；
+                想改就点「展开成规则」，落地成普通规则之后随你改。
+              </span>} />
+          )}
+
           {/* 响应模式 + 预设 + 状态码 + 响应类型 + 结束原因 */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应模式</div>
               <Radio.Group value={responseModeValue} onChange={e => setRouteForm(f => ({ ...f, responseMode: e.target.value }))}
-                buttonStyle="solid" size="small" disabled={locked}>
+                buttonStyle="solid" size="small" disabled={cfgLocked}>
                 <Radio.Button value="default">默认</Radio.Button>
                 <Radio.Button value="random">随机</Radio.Button>
                 <Radio.Button value="custom">自定义</Radio.Button>
@@ -628,12 +780,12 @@ export default function LlmMock() {
             <div style={{ minWidth: 80 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>状态码</div>
               <InputNumber value={routeForm.statusCode ?? 200} onChange={v => setRouteForm(f => ({ ...f, statusCode: v }))}
-                min={100} max={599} size="small" style={{ width: 80 }} disabled={locked} />
+                min={100} max={599} size="small" style={{ width: 80 }} disabled={cfgLocked} />
             </div>
             <div style={{ minWidth: 160 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应类型</div>
               <Select value={routeForm.responseType || 'text'} onChange={v => setRouteForm(f => ({ ...f, responseType: v }))}
-                size="small" style={{ width: 160 }} disabled={locked}>
+                size="small" style={{ width: 160 }} disabled={cfgLocked}>
                 <Select.Option value="text">文本回复</Select.Option>
                 <Select.Option value="tool_calls">Tool Calls</Select.Option>
                 <Select.Option value="refusal">模型拒绝</Select.Option>
@@ -644,7 +796,7 @@ export default function LlmMock() {
               <div style={{ minWidth: 110 }}>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>结束原因</div>
                 <Select value={routeForm.finishReason || 'stop'} onChange={v => setRouteForm(f => ({ ...f, finishReason: v }))}
-                  size="small" style={{ width: 110 }} disabled={locked}>
+                  size="small" style={{ width: 110 }} disabled={cfgLocked}>
                   <Select.Option value="stop">stop</Select.Option>
                   <Select.Option value="length">length</Select.Option>
                   <Select.Option value="tool_calls">tool_calls</Select.Option>
@@ -655,7 +807,7 @@ export default function LlmMock() {
             <div style={{ flex: 1, minWidth: 170, maxWidth: 250 }}>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>预设模式</div>
               <Select value={routeForm.presetMode} onChange={handlePresetChange}
-                placeholder="选择预设填充..." size="small" style={{ width: '100%' }} disabled={locked}
+                placeholder={smartOn ? '智能应答已接管' : '选择预设填充...'} size="small" style={{ width: '100%' }} disabled={cfgLocked}
                 allowClear onClear={() => setRouteForm(f => ({ ...f, presetMode: null }))}>
                 <Select.OptGroup label="正常响应 (200)">
                   {presets.filter(p => p.group === 'normal').map(p =>
@@ -693,13 +845,13 @@ export default function LlmMock() {
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={routeForm.delayMs ?? 0} onChange={v => setRouteForm(f => ({ ...f, delayMs: v }))}
-                min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" disabled={locked} />
+                min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" disabled={cfgLocked} />
             </div>
             {!isEmbedding && (
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>SSE 间隔 (ms)</div>
                 <InputNumber value={routeForm.sseChunkDelayMs ?? 50} onChange={v => setRouteForm(f => ({ ...f, sseChunkDelayMs: v }))}
-                  min={0} size="small" style={{ width: 80 }} placeholder="50" disabled={locked} />
+                  min={0} size="small" style={{ width: 80 }} placeholder="50" disabled={cfgLocked} />
               </div>
             )}
             {!isEmbedding && (
@@ -711,7 +863,7 @@ export default function LlmMock() {
                   </Tooltip>
                 </div>
                 <InputNumber value={routeForm.sseChunkSize ?? 1} onChange={v => setRouteForm(f => ({ ...f, sseChunkSize: v }))}
-                  min={1} size="small" style={{ width: 80 }} placeholder="1" disabled={locked} />
+                  min={1} size="small" style={{ width: 80 }} placeholder="1" disabled={cfgLocked} />
               </div>
             )}
             {!isEmbedding && (
@@ -723,7 +875,7 @@ export default function LlmMock() {
                   </Tooltip>
                 </div>
                 <Select value={routeForm.streamMode || 'auto'} onChange={v => setRouteForm(f => ({ ...f, streamMode: v }))}
-                  size="small" style={{ width: 130 }} disabled={locked}>
+                  size="small" style={{ width: 130 }} disabled={cfgLocked}>
                   <Select.Option value="auto">跟随请求</Select.Option>
                   <Select.Option value="force_stream">强制流式</Select.Option>
                   <Select.Option value="force_json">强制整包</Select.Option>
@@ -738,13 +890,13 @@ export default function LlmMock() {
                     <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
                   </Tooltip>
                 </div>
-                <Switch size="small" checked={routeForm.matchEnabled !== false}
-                  onChange={v => setRouteForm(f => ({ ...f, matchEnabled: v }))} disabled={locked} />
+                <Switch size="small" checked={smartOn ? false : routeForm.matchEnabled !== false}
+                  onChange={v => setRouteForm(f => ({ ...f, matchEnabled: v }))} disabled={cfgLocked} />
               </div>
             )}
             <div>
               <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Token 模式</div>
-              <Radio.Group value={routeForm.tokenMode || 'auto'} onChange={e => setRouteForm(f => ({ ...f, tokenMode: e.target.value }))} size="small" disabled={locked}>
+              <Radio.Group value={routeForm.tokenMode || 'auto'} onChange={e => setRouteForm(f => ({ ...f, tokenMode: e.target.value }))} size="small" disabled={cfgLocked}>
                 <Radio value="auto">自动</Radio>
                 <Radio value="custom">自定义</Radio>
               </Radio.Group>
@@ -752,12 +904,12 @@ export default function LlmMock() {
             {routeForm.tokenMode === 'custom' && (<>
               <div>
                 <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Prompt Tokens</div>
-                <InputNumber value={routeForm.customPromptTokens} onChange={v => setRouteForm(f => ({ ...f, customPromptTokens: v }))} min={0} size="small" style={{ width: 80 }} disabled={locked} />
+                <InputNumber value={routeForm.customPromptTokens} onChange={v => setRouteForm(f => ({ ...f, customPromptTokens: v }))} min={0} size="small" style={{ width: 80 }} disabled={cfgLocked} />
               </div>
               {!isEmbedding && (
                 <div>
                   <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Completion Tokens</div>
-                  <InputNumber value={routeForm.customCompletionTokens} onChange={v => setRouteForm(f => ({ ...f, customCompletionTokens: v }))} min={0} size="small" style={{ width: 80 }} disabled={locked} />
+                  <InputNumber value={routeForm.customCompletionTokens} onChange={v => setRouteForm(f => ({ ...f, customCompletionTokens: v }))} min={0} size="small" style={{ width: 80 }} disabled={cfgLocked} />
                 </div>
               )}
             </>)}
@@ -789,7 +941,10 @@ export default function LlmMock() {
 
           {/* 条件应答规则表 —— 「什么样的请求 → 回什么」，从上往下第一条命中的生效 */}
           {!isEmbedding && (
-            <div style={{ marginBottom: 16, border: '1px solid var(--border-color, #f0f0f0)', borderRadius: 8, overflow: 'hidden' }}>
+            <div style={{
+              marginBottom: 16, border: '1px solid var(--border-color, #f0f0f0)', borderRadius: 8, overflow: 'hidden',
+              opacity: smartOn ? 0.5 : 1,
+            }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', background: 'rgba(0,0,0,0.02)' }}>
                 <span style={{ fontSize: 12, fontWeight: 500 }}>问什么 · 答什么</span>
                 <span style={{ fontSize: 11, color: '#bfbfbf' }}>
@@ -797,16 +952,22 @@ export default function LlmMock() {
                 </span>
                 <span style={{ flex: 1 }} />
                 {matchRules.length > 0 && (
-                  <Tag color={routeForm.matchEnabled !== false ? 'green' : 'default'} style={{ marginInlineEnd: 0 }}>
+                  <Tag color={!smartOn && routeForm.matchEnabled !== false ? 'green' : 'default'} style={{ marginInlineEnd: 0 }}>
                     {matchRules.filter(r => r.enabled !== false).length} / {matchRules.length} 条开着
                   </Tag>
                 )}
-                <Button size="small" icon={<PlusOutlined />} disabled={locked} onClick={() => openRuleEditor(null)}>
+                <Button size="small" icon={<PlusOutlined />} disabled={cfgLocked} onClick={() => openRuleEditor(null)}>
                   添加规则
                 </Button>
               </div>
 
-              {routeForm.matchEnabled === false && matchRules.length > 0 && (
+              {smartOn && (
+                <div style={{ padding: '6px 12px', fontSize: 11, color: '#4e8af0', background: 'rgba(78,138,240,0.06)' }}>
+                  智能应答开着，这张规则表整个不参与匹配 —— 两套都生效的话，「这次到底是谁决定了响应」就只能靠猜了。
+                </div>
+              )}
+
+              {!smartOn && routeForm.matchEnabled === false && matchRules.length > 0 && (
                 <div style={{ padding: '6px 12px', fontSize: 11, color: '#faad14', background: 'rgba(250,173,20,0.06)' }}>
                   上面的「问什么答什么」开关是关的，下面这些规则现在一条都不起作用。
                 </div>
@@ -825,7 +986,7 @@ export default function LlmMock() {
                       borderTop: '1px solid var(--border-color, #f5f5f5)',
                       opacity: rule.enabled === false ? 0.45 : 1,
                     }}>
-                      <Switch size="small" checked={rule.enabled !== false} disabled={locked}
+                      <Switch size="small" checked={rule.enabled !== false} disabled={cfgLocked}
                         onChange={v => updateRule(idx, { enabled: v })} />
                       <span style={{ fontSize: 12, fontWeight: 500, minWidth: 96 }}>
                         {rule.name || `规则 ${idx + 1}`}
@@ -834,12 +995,14 @@ export default function LlmMock() {
                         {ruleSummary(rule)}
                       </span>
                       {rule.statusCode ? <Tag color="orange" style={{ marginInlineEnd: 0 }}>顺带返 {rule.statusCode}</Tag> : null}
+                      {rule.finishReason ? <Tag color="purple" style={{ marginInlineEnd: 0 }}>{rule.finishReason}</Tag> : null}
+                      {rule.streamMode ? <Tag color="geekblue" style={{ marginInlineEnd: 0 }}>{rule.streamMode === 'force_stream' ? '强制流式' : '强制整包'}</Tag> : null}
                       <span style={{ fontSize: 11, color: '#8c8c8c', maxWidth: 230, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         就回：{(rule.responseBody || '').replace(/\s+/g, ' ').slice(0, 34) || '（还没填回复内容）'}
                       </span>
-                      <Button size="small" type="text" disabled={locked} onClick={() => openRuleEditor(idx)}>编辑</Button>
-                      <Popconfirm title="删除这条规则？" onConfirm={() => removeRule(idx)} disabled={locked}>
-                        <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={locked} />
+                      <Button size="small" type="text" disabled={cfgLocked} onClick={() => openRuleEditor(idx)}>编辑</Button>
+                      <Popconfirm title="删除这条规则？" onConfirm={() => removeRule(idx)} disabled={cfgLocked}>
+                        <Button size="small" type="text" danger icon={<DeleteOutlined />} disabled={cfgLocked} />
                       </Popconfirm>
                     </div>
                   ))}
@@ -871,14 +1034,21 @@ export default function LlmMock() {
                   <span style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 500 }}>响应内容</span>
                   <span style={{ fontSize: 11, color: '#bfbfbf' }}>{bodyHint}</span>
                   <span style={{ flex: 1 }} />
-                  <Button size="small" icon={<StarOutlined />} disabled={locked}
+                  <Button size="small" icon={<StarOutlined />} disabled={cfgLocked}
                     onClick={() => { setSavePresetName(''); setSavePresetOpen(true) }}>保存为预设</Button>
                 </div>
                 {routeForm.responseType !== 'tool_calls' ? (
                   <TextArea spellCheck={false}
-                    value={routeForm.responseBody}
+                    // 智能应答下显示它实际会返回什么（看得见但改不了）—— 不写回 routeForm，
+                    // 免得关掉智能应答之后你自己原来填的东西没了。
+                    // 护栏角色返回的是判决 JSON 而不是那段默认正文，显示错了等于页面在骗人
+                    value={smartOn
+                      ? (smartRole === 'checker'
+                        ? (smartContract?.checkerSample || '')
+                        : (smartContract?.defaultBody || ''))
+                      : routeForm.responseBody}
                     onChange={e => setRouteForm(f => ({ ...f, responseBody: e.target.value }))}
-                    disabled={locked}
+                    disabled={cfgLocked}
                     style={{ fontFamily: MONO, fontSize: 12, flex: 1, minHeight: 200, resize: 'vertical' }}
                     placeholder={(routeForm.statusCode ?? 200) >= 400
                       ? '输入错误消息...\n如: Rate limit reached for gpt-4o...'
@@ -893,7 +1063,84 @@ export default function LlmMock() {
                 )}
               </div>
 
-              {/* 右：响应预览 */}
+              {/* 右：智能应答开着时是指令契约面板，否则是响应预览 */}
+              {smartOn ? (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                    <span style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 500 }}>它认这些指令</span>
+                    <span style={{ fontSize: 11, color: '#bfbfbf' }}>写在请求正文里（最后一条 user 消息）</span>
+                  </div>
+                  <div style={{
+                    flex: 1, minHeight: 200, maxHeight: 420, overflow: 'auto',
+                    border: '1px solid rgba(0,0,0,0.06)', borderRadius: 12, background: 'rgba(255,255,255,0.4)',
+                  }}>
+                    {smartRole === 'checker' ? (
+                      <div style={{ padding: 14, fontSize: 12, lineHeight: 1.8 }}>
+                        <div style={{ color: '#262626', fontWeight: 500, marginBottom: 6 }}>
+                          护栏检查模型不演场景，只回判决
+                        </div>
+                        <div style={{ color: '#8c8c8c', marginBottom: 10 }}>
+                          它把「本次收到的待检正文有多长、开头是什么」回显进 reason 里。
+                          <b style={{ color: '#fa8c16' }}>BODY_LEN 和 ENVELOPE_LEN 要分开看</b>：
+                          提示模板本身几百字，只看信封长度的话，正文为空时它仍是个大数字，
+                          「护栏到底拿没拿到正文」这个证据就被淹了。
+                        </div>
+                        <div style={{ color: '#8c8c8c', marginBottom: 4 }}>判决规则：</div>
+                        <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', marginBottom: 10 }}>
+                          <tbody>
+                            {[
+                              ['待检文本含 VIOLATION', 'verdict=false · mock_violation'],
+                              ['含身份证号 + 脱敏模式', 'verdict=true · id_card · 给 redacted_content'],
+                              ['含身份证号 + 仅检测', 'verdict=false · id_card'],
+                              ['其余', 'verdict=true'],
+                            ].map(([k, v]) => (
+                              <tr key={k}>
+                                <td style={{ padding: '3px 8px 3px 0', color: '#595959', whiteSpace: 'nowrap' }}>{k}</td>
+                                <td style={{ padding: '3px 0', color: '#8c8c8c', fontFamily: MONO }}>{v}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <div style={{ color: '#8c8c8c', marginBottom: 4 }}>返回样例：</div>
+                        <pre style={{
+                          ...CODE_BLOCK_STYLE, margin: 0, padding: 10, fontSize: 11, lineHeight: 1.6,
+                          whiteSpace: 'pre-wrap', wordBreak: 'break-all', borderRadius: 8,
+                        }}>{fmtJson(smartContract?.checkerSample)}</pre>
+                        <div style={{ marginTop: 10, color: '#fa8c16', fontSize: 11 }}>
+                          ⚠ 判「是不是脱敏模式」用的是<b>精确行匹配</b> <code>Redact mode: detect_and_redact</code>，
+                          不是子串包含 —— 系统提示本身就在解释这条规则，用包含会把每个「仅检测」请求都误判成脱敏，结论全反。
+                        </div>
+                      </div>
+                    ) : (
+                      <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                        <tbody>
+                          {(smartContract?.directives || []).map(d => (
+                            <tr key={d.key || 'none'} style={{ borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
+                              <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', verticalAlign: 'top', width: 120 }}>
+                                <code style={{ fontFamily: MONO, fontSize: 11, color: '#4e8af0' }}>
+                                  {d.key || '（不带指令）'}
+                                </code>
+                              </td>
+                              <td style={{ padding: '7px 10px 7px 0', color: '#595959', lineHeight: 1.6 }}>
+                                {d.effect}
+                                {!d.expandable && d.key && (
+                                  <Tag color="orange" style={{ marginLeft: 6, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>
+                                    规则表达不了
+                                  </Tag>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 11, color: '#8c8c8c', lineHeight: 1.7 }}>
+                    协议形状按<b>路径</b>判：<code style={{ fontFamily: MONO }}>{SHAPE_LABEL[smartShape]}</code>。
+                    入参三种写法都能读到指令：OpenAI 的字符串 content、Anthropic 的 block 数组、legacy 的 <code>prompt</code>。
+                  </div>
+                </div>
+              ) : (
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -921,6 +1168,7 @@ export default function LlmMock() {
                   {previewJson}
                 </pre>
               </div>
+              )}
             </div>
           )}
         </div>
@@ -1113,6 +1361,11 @@ export default function LlmMock() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
                     <span style={{ fontSize: 12, color: sel ? '#262626' : '#8c8c8c', fontWeight: sel ? 500 : 400 }}>{r.name}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      {r.smartEnabled && (
+                        <Tooltip title="智能应答：行为由请求里的指令决定">
+                          <Tag color="blue" style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', borderRadius: 8 }}>智能</Tag>
+                        </Tooltip>
+                      )}
                       <Tag style={{
                         margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px',
                         color: STATUS_COLOR(r.statusCode), borderColor: STATUS_COLOR(r.statusCode),
@@ -1248,6 +1501,50 @@ export default function LlmMock() {
               ))}
             </div>
 
+            {/* 智能应答判定 —— 这次请求被解析成了什么。`stream` 记的是**网关实际发出的值**，
+                流式降级到底有没有真发生，只能看这一格 */}
+            {expandedLogDetail.smartMeta && (
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#595959', marginBottom: 6 }}>智能应答判定</div>
+                <div style={{
+                  display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 24px', fontSize: 12,
+                  padding: '10px 12px', borderRadius: 12,
+                  background: 'rgba(78,138,240,0.06)', border: '1px solid rgba(78,138,240,0.2)',
+                }}>
+                  {(() => {
+                    const m = expandedLogDetail.smartMeta
+                    const rows = [
+                      ['角色', SMART_ROLE_LABEL[m.role] || m.role],
+                      ['协议形状', m.shape],
+                      ['命中指令', m.directive || '（无，走默认正文）'],
+                      ['请求 stream', String(m.stream)],
+                      ['stream_options', m.hasStreamOptions ? `有${m.includeUsage ? '（include_usage）' : ''}` : '无'],
+                    ]
+                    if (m.loopStage) rows.push(['Agent Loop 轮次', `第 ${m.loopStage} 轮`])
+                    if (m.role === 'checker') {
+                      rows.push(
+                        ['待检正文长度', `${m.checkedLen}${m.bodyFrom === 'fallback' ? '（⚠ 没按标记抠到，整个信封当正文了）' : ''}`],
+                        ['信封长度', String(m.envelopeLen)],
+                        ['脱敏模式', m.redactMode ? 'detect_and_redact' : '仅检测'],
+                        ['判决', m.verdict ? 'true（放行）' : 'false（拦截）'],
+                        ['命中类别', (m.categories || []).join(', ') || '（无）'],
+                        ['正文开头', m.bodyHead || '（空）'],
+                      )
+                    }
+                    return rows.map(([k, v]) => (
+                      <div key={k} style={{ display: 'flex', gap: 8, minWidth: 0 }}>
+                        <span style={{ color: '#8c8c8c', flexShrink: 0 }}>{k}</span>
+                        <span style={{
+                          color: k === '待检正文长度' && m.bodyFrom === 'fallback' ? '#fa8c16' : '#262626',
+                          fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>{v}</span>
+                      </div>
+                    ))
+                  })()}
+                </div>
+              </div>
+            )}
+
             {/* LLM 专属：按 role 上色的对话气泡，比裸 JSON 好读，所以单独留一块 */}
             {expandedLogDetail.requestBody?.messages && (
               <div>
@@ -1349,6 +1646,22 @@ export default function LlmMock() {
                   onChange={v => setRuleDraft(d => ({ ...d, streamMode: v || null }))}>
                   <Select.Option value="force_stream">强制流式</Select.Option>
                   <Select.Option value="force_json">强制整包</Select.Option>
+                </Select>
+              </div>
+              <div>
+                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                  顺带改结束原因
+                  <Tooltip title="一般不用填。「空回复 + content_filter」是上游侧内容过滤的形态 —— 只把回复清空而不改这里，那个形态就是假的，客户端根本分不出是被过滤了还是模型没话说。">
+                    <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                  </Tooltip>
+                </div>
+                <Select size="small" style={{ width: 140 }} value={ruleDraft.finishReason || ''} allowClear
+                  placeholder="沿用路由"
+                  onChange={v => setRuleDraft(d => ({ ...d, finishReason: v || null }))}>
+                  <Select.Option value="stop">stop</Select.Option>
+                  <Select.Option value="length">length</Select.Option>
+                  <Select.Option value="tool_calls">tool_calls</Select.Option>
+                  <Select.Option value="content_filter">content_filter</Select.Option>
                 </Select>
               </div>
             </div>

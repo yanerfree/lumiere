@@ -66,6 +66,8 @@ async def upsert_llm_mock_route(
     prompt_tokens: int | None = None,
     completion_tokens: int | None = None,
     model: str | None = None,
+    smart: bool = False,
+    smart_role: str = "auto",
 ) -> dict:
     """建/改一条 LLM Mock 路由 —— 决定"上游怎么答"。
 
@@ -74,6 +76,24 @@ async def upsert_llm_mock_route(
     **path 必须带你自己的前缀**（如 `/mock/TC-FWGL-00001/v1/chat/completions`）。
     直接占用 `/v1/chat/completions` 会被拒 —— 那是所有用例共用的路径，
     你把它配成 429，别人的用例就跟着挂，而且是偶发的、最难查。
+
+    **smart=True 开智能应答**：这条路由的行为改由**请求正文里的指令**决定，
+    上面那些 status_code / response_body / finish_reason 参数全部不生效。
+    一条路由就能演完所有场景，不用为每个场景各建一条：
+
+      SAY:<文本>   原样回显（只改一个变量做对照实验）
+      MODE:HIT     输出含 VIOLATION（不依赖模型的确定性对照）
+      MODE:PII     输出含身份证号+手机号，**请求里没有** —— 验护栏查的是输出不是输入
+      MODE:EMPTY   零内容事件流（合法形态，网关不该当错误）
+      MODE:FILTER  空回复 + finish_reason=content_filter
+      MODE:DEFY    无视 stream:false 硬返事件流（验 fail-closed）
+      MODE:SLOW    每片 250ms，非流式也按分片累计
+      MODE:LOOP    第一轮回 tool_calls，收到 role=tool 后回终局
+
+    `smart_role="checker"`（或路径里带 /checker）= 演**网关护栏调用的那个检查模型**：
+    它只回判决，并把「本次收到的待检正文有多长、开头是什么」回显进 reason。
+    网关到底把什么喂给了护栏，这是唯一的观测点 —— 断言时读
+    `tb_llm_mock_requests` 返回里的 `smartMeta.checkedLen`。
     """
     p = (path or "").strip()
     if not p.startswith("/"):
@@ -97,6 +117,8 @@ async def upsert_llm_mock_route(
     row.delay_ms = delay_ms
     row.finish_reason = finish_reason
     row.enabled = True
+    row.smart_enabled = bool(smart)
+    row.smart_role = smart_role if smart_role in ("auto", "upstream", "checker") else "auto"
     if response_body is not None:
         row.response_body = response_body
     if prompt_tokens is not None or completion_tokens is not None:
@@ -107,8 +129,16 @@ async def upsert_llm_mock_route(
         row.model_mode = "custom"
         row.custom_model = model
     await session.commit()
-    return {"id": str(row.id), "path": row.path, "created": created,
-            "note": "把被测网关这条链路的上游地址指到这个 path 上再跑。"}
+    out = {"id": str(row.id), "path": row.path, "created": created,
+           "note": "把被测网关这条链路的上游地址指到这个 path 上再跑。"}
+    if row.smart_enabled:
+        out["smart"] = {
+            "role": row.smart_role,
+            "usage": "行为由请求正文里的指令决定（SAY: / MODE:xxx），这条路由上的静态响应配置不生效。",
+            "assertOn": "跑完读 tb_llm_mock_requests 的 smartMeta：mode 是哪条指令、"
+                        "stream 是网关实际发出的值、checker 角色还带 checkedLen/verdict。",
+        }
+    return out
 
 
 async def llm_mock_requests(
@@ -135,6 +165,9 @@ async def llm_mock_requests(
             "requestModel": r.request_model,
             "responseModel": r.response_model,
             "statusCode": r.status_code,
+            # 智能应答路由才有。stream 记的是**网关实际发出的值**，流式降级有没有真发生只能看它；
+            # checker 角色还带 checkedLen / envelopeLen / verdict —— 护栏拿到了什么，这是唯一的观测点
+            "smartMeta": r.smart_meta,
         } for r in rows],
         "total": len(rows),
         "usage": "断言之前先调 tb_llm_mock_reset 清一次，否则上一轮的记录会混进来 —— "

@@ -26,6 +26,9 @@ class MatchRule(BaseSchema):
     # fail-closed，路由级开关做不到
     stream_mode: str | None = Field(default=None, pattern="^(auto|force_stream|force_json)$")
     sse_chunk_size: int | None = Field(default=None, ge=1, le=4096)
+    # 命中后连 finish_reason 一起改。「空回复 + content_filter」这个上游过滤形态，
+    # 只清空正文是做不出来的
+    finish_reason: str | None = Field(default=None, pattern="^(stop|length|tool_calls|content_filter)$")
 
 
 # ───── Mock Route Schemas ─────
@@ -56,6 +59,10 @@ class MockRouteCreate(BaseSchema):
     match_rules: list[MatchRule] | None = None
     response_type: str = Field(default="text")
     tool_calls: list | None = None
+    # 智能应答：默认关，开了才由请求里的指令决定行为（见 llm_mock_smart.py）
+    smart_enabled: bool = False
+    smart_role: str = Field(default="auto", pattern="^(auto|upstream|checker)$")
+    smart_body_marker: str | None = Field(default=None, max_length=200)
 
 
 class MockRouteUpdate(BaseSchema):
@@ -83,6 +90,9 @@ class MockRouteUpdate(BaseSchema):
     match_rules: list[MatchRule] | None = None
     response_type: str | None = None
     tool_calls: list | None = None
+    smart_enabled: bool | None = None
+    smart_role: str | None = Field(default=None, pattern="^(auto|upstream|checker)$")
+    smart_body_marker: str | None = Field(default=None, max_length=200)
 
 
 class MockRouteResponse(BaseSchema):
@@ -113,6 +123,9 @@ class MockRouteResponse(BaseSchema):
     match_rules: list[MatchRule]
     response_type: str
     tool_calls: list | None
+    smart_enabled: bool
+    smart_role: str
+    smart_body_marker: str | None
     hit_count: int
     last_hit_at: datetime | None
     created_at: datetime
@@ -138,6 +151,8 @@ class MockLogResponse(BaseSchema):
     completion_tokens: int
     total_tokens: int
     finish_reason: str | None
+    # 智能应答判定（没开智能应答时为 null）
+    smart_meta: dict | None = None
     match_ms: float
     first_byte_ms: float
     body_ms: float
