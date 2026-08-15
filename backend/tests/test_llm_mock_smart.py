@@ -393,3 +393,58 @@ def test_MODE_SLOW是唯一会顶掉SSE间隔的指令():
     assert eff["sse_chunk_delay_ms"] == smart.SLOW_CHUNK_DELAY_MS
     eff2, _ = smart.apply_smart(r, {**_msg("你好"), "stream": True}, "/v1/chat/completions")
     assert eff2["sse_chunk_delay_ms"] == 20
+
+
+# ───── MODE:LOOP 的工具名必须取自请求（对接方实测反馈）─────
+# 写死工具名的话，网关拿它去真执行会报 tool not found，把 "tool execution failed"
+# 当工具结果塞回模型 —— 迭代计数还能测，真实的 MCP 执行链路就测不了。
+
+def _tools(*names, **kw):
+    return [{"type": "function", "function": {"name": n, **kw}} for n in names]
+
+
+def test_LOOP工具名取自请求():
+    body = {**_msg("MODE:LOOP"), "tools": _tools("uag__get_skill_index", "uag__read_skill")}
+    eff, meta = smart.apply_smart(_route(), body, "/v1/chat/completions")
+    assert eff["tool_calls"][0]["name"] == "uag__get_skill_index"
+    assert meta["loopTool"] == "uag__get_skill_index"
+    assert meta["loopToolFromRequest"] is True
+
+
+def test_LOOP没带tools才用内置兜底名():
+    eff, meta = smart.apply_smart(_route(), _msg("MODE:LOOP"), "/v1/chat/completions")
+    assert eff["tool_calls"][0]["name"] == smart.SMART_LOOP_TOOL_CALLS[0]["name"]
+    assert meta["loopToolFromRequest"] is False
+
+
+def test_LOOP认Anthropic的工具形状():
+    body = {**_msg("MODE:LOOP"), "tools": [{"name": "read_file", "input_schema": {"type": "object"}}]}
+    eff, _ = smart.apply_smart(_route(), body, "/v1/messages")
+    assert eff["tool_calls"][0]["name"] == "read_file"
+
+
+def test_LOOP优先听tool_choice指名():
+    body = {**_msg("MODE:LOOP"), "tools": _tools("a", "b"),
+            "tool_choice": {"type": "function", "function": {"name": "b"}}}
+    eff, _ = smart.apply_smart(_route(), body, "/v1/chat/completions")
+    assert eff["tool_calls"][0]["name"] == "b", "指名了 b 却回 a，网关会判模型没听话"
+
+
+def test_LOOP按schema造最小入参():
+    """只填 required —— 多填可能撞上 additionalProperties:false 反而调不通。"""
+    body = {**_msg("MODE:LOOP"), "tools": _tools("f", parameters={
+        "type": "object",
+        "properties": {"path": {"type": "string"}, "n": {"type": "integer"},
+                       "mode": {"type": "string", "enum": ["fast", "slow"]},
+                       "opt": {"type": "string"}},
+        "required": ["path", "n", "mode"]})}
+    eff, _ = smart.apply_smart(_route(), body, "/v1/chat/completions")
+    args = json.loads(eff["tool_calls"][0]["arguments"])
+    assert args == {"path": "mock", "n": 1, "mode": "fast"}
+    assert "opt" not in args
+
+
+def test_LOOP工具无参数时给空对象():
+    body = {**_msg("MODE:LOOP"), "tools": _tools("ping")}
+    eff, _ = smart.apply_smart(_route(), body, "/v1/chat/completions")
+    assert json.loads(eff["tool_calls"][0]["arguments"]) == {}

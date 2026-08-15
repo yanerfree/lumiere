@@ -48,7 +48,13 @@
 | `MODE:FILTER` | 空回复 + `finish_reason=content_filter` | 上游侧内容过滤的形态；只清空正文不改 finish_reason，那个形态就是假的 |
 | `MODE:DEFY` | 无视 `stream:false` 照样回事件流 | 验网关的 fail-closed 守卫 |
 | `MODE:SLOW` | 每片 250ms，**非流式也按分片数累计** | 非流式不慢的话，量不出「全量缓冲把首字延迟推成完整生成耗时」这个降级代价 |
-| `MODE:LOOP` | 第一轮回 `tool_calls`，收到 `role=tool` 后回终局（终局含 VIOLATION） | 网关把中间迭代强制成非流式、只有终局是流式的，护栏是否介入终局只能这样验 |
+| `MODE:LOOP` | 第一轮回 `tool_calls`（**工具名取自请求的 `tools`**，优先听 `tool_choice`），收到 `role=tool` 后回终局（终局含 VIOLATION） | 网关把中间迭代强制成非流式、只有终局是流式的，护栏是否介入终局只能这样验 |
+
+> ⚠ LOOP 的工具名**不能写死**：网关是拿模型返回的工具名去真执行的（POST 给 MCP 执行端点）。
+> 名字不在请求的 `tools` 里，执行端点报错，网关把 "tool execution failed" 当工具结果塞回模型 ——
+> loop 照样转两轮，迭代计数 / 逐轮日志 / 终局是否流式都还能测，但**真实的工具执行链路
+> （MCP 调用 → 结果回填 → 工具结果缓存）测不了**。入参按工具自己的 schema 只填 `required`，
+> 多填可能撞上 `additionalProperties:false`。日志里 `smartMeta.loopTool` 回显用了哪个名字。
 
 同时出现 `SAY:` 和 `MODE:` 时 SAY 优先。协议形状按**路径**判，入参三种写法都能读到指令
 （OpenAI 字符串 `content` / Anthropic block 数组 / legacy `prompt`）。

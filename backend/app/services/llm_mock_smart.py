@@ -55,9 +55,86 @@ SMART_LOOP_FINAL_BODY = (
     "工具已返回查询结果。综合来看该账户存在 VIOLATION 风险，建议立即冻结并转人工复核。"
 )
 
+# 请求里没带 tools 时的兜底工具名
 SMART_LOOP_TOOL_CALLS = [
     {"name": "query_risk_profile", "arguments": '{"customer_id":"C10086","scope":"full"}'}
 ]
+
+# 按 JSON Schema 的类型造占位值
+_ARG_PLACEHOLDER = {"string": "mock", "integer": 1, "number": 1, "boolean": True, "array": [], "object": {}}
+
+
+def _mock_arguments(schema: dict | None) -> str:
+    """按工具自己的参数 schema 造一份最小入参。
+
+    只填 required 的：多填可能撞上 additionalProperties:false，反而调不通。
+    """
+    if not isinstance(schema, dict):
+        return "{}"
+    props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    required = schema.get("required") if isinstance(schema.get("required"), list) else []
+    out: dict = {}
+    for k in required:
+        if not isinstance(k, str):
+            continue
+        spec = props.get(k) if isinstance(props.get(k), dict) else {}
+        enum = spec.get("enum")
+        if isinstance(enum, list) and enum:
+            out[k] = enum[0]
+        else:
+            out[k] = _ARG_PLACEHOLDER.get(spec.get("type"), "mock")
+    return json.dumps(out, ensure_ascii=False)
+
+
+def loop_tool_calls(body: dict) -> list[dict]:
+    """MODE:LOOP 第一轮要回的 tool_calls。
+
+    **工具名必须取自请求**，不能写死。网关是拿模型返回的工具名去**真执行**的：
+    名字不在请求的 tools 里，执行端点直接报错，网关把 "tool execution failed"
+    当成工具结果塞回给模型 —— loop 照样转两轮，迭代计数、逐轮日志、终局是否流式
+    都还能测，但**真实的工具执行链路（MCP 调用 → 结果回填 → 工具结果缓存）测不了**。
+    对接方实测反馈的问题。
+
+    优先级：tool_choice 指名的 > tools 里第一个 > 内置兜底名。
+    """
+    if not isinstance(body, dict):
+        return [dict(tc) for tc in SMART_LOOP_TOOL_CALLS]
+
+    tools = body.get("tools") if isinstance(body.get("tools"), list) else []
+
+    def _spec(t) -> tuple[str, dict | None] | None:
+        if not isinstance(t, dict):
+            return None
+        fn = t.get("function")
+        if isinstance(fn, dict) and isinstance(fn.get("name"), str) and fn["name"]:
+            return fn["name"], fn.get("parameters")
+        # Anthropic 的形状：{name, input_schema}
+        if isinstance(t.get("name"), str) and t["name"]:
+            return t["name"], t.get("input_schema")
+        return None
+
+    # tool_choice 指名了某个工具就用它 —— 网关会拿这个来验「模型有没有听话」
+    choice = body.get("tool_choice")
+    wanted = None
+    if isinstance(choice, dict):
+        cf = choice.get("function")
+        if isinstance(cf, dict) and isinstance(cf.get("name"), str):
+            wanted = cf["name"]
+        elif isinstance(choice.get("name"), str):
+            wanted = choice["name"]
+    if wanted:
+        for t in tools:
+            sp = _spec(t)
+            if sp and sp[0] == wanted:
+                return [{"name": sp[0], "arguments": _mock_arguments(sp[1])}]
+        return [{"name": wanted, "arguments": "{}"}]
+
+    for t in tools:
+        sp = _spec(t)
+        if sp:
+            return [{"name": sp[0], "arguments": _mock_arguments(sp[1])}]
+
+    return [dict(tc) for tc in SMART_LOOP_TOOL_CALLS]
 
 # MODE:SLOW 每片固定 250ms。固定值而不是沿用路由配置，是为了和对接方那份脚本对得上 ——
 # 两边分片计时不一致的话，「全量缓冲把首字延迟推成完整生成耗时」这个降级代价量不出来。
@@ -412,8 +489,12 @@ def apply_smart(route: dict, request_body: dict, path: str) -> tuple[dict, dict]
         if stage == 1:
             eff["response_type"] = "tool_calls"
             eff["finish_reason"] = "tool_calls"
-            eff["tool_calls"] = [dict(tc) for tc in SMART_LOOP_TOOL_CALLS]
+            eff["tool_calls"] = loop_tool_calls(request_body)
             body = ""
+            # 回显用了哪个工具名、是不是从请求里取的 —— 拿它断言「网关执行的是不是同一个工具」
+            meta["loopTool"] = eff["tool_calls"][0]["name"]
+            meta["loopToolFromRequest"] = bool(
+                isinstance(request_body, dict) and request_body.get("tools"))
         else:
             body = SMART_LOOP_FINAL_BODY
 
