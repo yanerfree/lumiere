@@ -239,14 +239,24 @@ async def generate_api_test(
         yield GenEvent(type="error", data={"message": "无法解析 AI 返回的 JSON（已重试多次仍失败，请重试或减少所选接口数量）"})
         return
 
-    # 获取当前最大编号
+    # 下一个编号 = 分支内 **max(code) + 1**，不是 count()+1。
+    #
+    # 原来用 count()：删掉任何一条，下一次生成就会撞上已存在的号 —— 而 `code`
+    # 上没有唯一约束，撞了也不报错，两条场景顶着同一个 AT-####，从此按编号定位
+    # 全是错的。实测已经撞出来了：某分支的 AT-0024 / AT-0027 各有两条。
+    # 编号空间和「用例编排」那边共用（sync.py 也是 max+1），所以两边判据必须一致。
     max_code_result = await session.execute(
-        select(sa_func.count()).where(
-            ApiTestScenario.project_id == project_id,
+        select(sa_func.max(ApiTestScenario.code)).where(
             ApiTestScenario.branch_id == branch_id,
         )
     )
-    code_seq = (max_code_result.scalar() or 0) + 1
+    code_seq = 1
+    _max = max_code_result.scalar()
+    if _max:
+        try:
+            code_seq = int(str(_max).split("-")[1]) + 1
+        except (IndexError, ValueError):
+            pass
 
     created_ids = []
     auto_folders: dict[str, uuid.UUID] = {}

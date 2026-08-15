@@ -21,13 +21,15 @@ from app.services.script_run_service import DEBUG, REGRESSION, apply_case_status
 
 
 class _Case:
-    """只带状态字段的替身——apply_case_status 就只碰这几个。"""
+    """只带状态字段的替身 —— apply_case_status / sync_review_status 就只碰这几个。"""
+
+    review_status = None
+    target_level = "full"
+    steps = [{"seq": 1}]
 
     def __init__(self, **kw):
-        self.ui_status = kw.get("ui_status", "not_started")
-        self.api_status = kw.get("api_status", "not_started")
-        self.ui_scenario_status = kw.get("ui_scenario_status", "draft")
-        self.api_scenario_status = kw.get("api_scenario_status", "draft")
+        self.ui_status = kw.get("ui_status", "draft")
+        self.api_status = kw.get("api_status", "draft")
 
 
 # ── 维度状态推进：接口这一维此前整个是死的 ──────────────────────────
@@ -40,33 +42,32 @@ def test_接口跑通也会推进状态():
     """
     case = _Case(api_status="debugging")
     apply_case_status(case, "api", "passed", REGRESSION)
-    assert case.api_status == "pending_review"
-    assert case.api_scenario_status == "completed"
+    assert case.api_status == "completed"
+    # 那个重复的 api_scenario_status 已删 —— 见 test_不许再写第二份维度状态
 
 
 def test_接口跑挂_回归才打回_调试不打回():
     """和 UI 同一条纪律：调试是"我正在试"，试挂了不代表用例坏了。"""
-    debugging = _Case(api_status="executable")
+    debugging = _Case(api_status="completed")
     apply_case_status(debugging, "api", "failed", DEBUG)
-    assert debugging.api_status == "executable", "调试失败不该把状态打回去"
+    assert debugging.api_status == "completed", "调试失败不该把状态打回去"
 
-    regression = _Case(api_status="executable")
+    regression = _Case(api_status="completed")
     apply_case_status(regression, "api", "failed", REGRESSION)
     assert regression.api_status == "debugging"
 
 
 def test_两个维度互不串台():
     """推 api 不能顺手改了 ui —— 用 f-string 拼属性名最容易出这种错。"""
-    case = _Case(ui_status="executable", api_status="debugging")
+    case = _Case(ui_status="completed", api_status="debugging")
     apply_case_status(case, "api", "passed", REGRESSION)
-    assert case.ui_status == "executable"
-    assert case.ui_scenario_status == "draft"
+    assert case.ui_status == "completed"
 
 
 def test_不认识的类型直接跳过():
     case = _Case()
     apply_case_status(case, "manual", "passed", REGRESSION)
-    assert case.ui_status == "not_started" and case.api_status == "not_started"
+    assert case.ui_status == "draft" and case.api_status == "draft"
 
 
 # ── 报告的「执行方式」：三级回退 ────────────────────────────────────
@@ -877,17 +878,16 @@ def test_建计划和跑计划都要说清哪些不会执行():
 
 
 def test_不会执行的判据和执行器保持一致():
-    """这里报"会跑"、执行器却跳过，等于换个地方说谎。两边必须同一套判据。"""
-    import inspect
+    """MCP 的 `_not_executable` 和执行器必须用同一份判据 —— 上一版各写各的：
+    一边只看状态说"1 条会跑"，执行器还要求有产物，跑起来变成"0 条会跑"。
+    现在两边都只看**有没有产物**，而且都复用 `_has_new_style_script`。
+    """
+    from app.mcp.tools import plans
 
-    from app.mcp.tools.plans import _not_executable
-    from app.services import execution_service
-
-    mine = inspect.getsource(_not_executable)
-    theirs = inspect.getsource(execution_service._will_run_automated)
-    for key in ('"executable"', "script_ref_file", "automation_status"):
-        assert key in mine and key in theirs, f"两边判据对不上：{key}"
-
+    body = _code_of(plans, "_not_executable")
+    assert "_has_new_style_script" in body, "没复用执行器那个判据函数"
+    for dim in ("api_status", "ui_status"):
+        assert dim not in body, f"又在看 {dim} 了 —— 判据该是「有没有产物」"
 
 # ── 铺开体检抓到的：接口场景进不了回归 ──────────────────────────────
 
@@ -1500,13 +1500,7 @@ def test_发布只能人来做_CC碰不到():
     assert "ui_status" not in inspect.signature(update_case).parameters
 
 
-def test_空维度不给发布():
-    """那一维压根没东西，发布了它会进回归然后必挂 —— 一条假的绿。"""
-    from app.services import case_service
 
-    body = _code_of(case_service, "batch_cases")
-    assert "'debugging', 'pending_review', 'needs_fix'" in body, "发布的前置判断没了"
-    assert "没东西可发布" in body, "空维度被跳过却不说，用户以为发布成功了"
 
 
 def test_发布数只数真改了的():
@@ -1520,26 +1514,23 @@ def test_发布数只数真改了的():
     assert "touched" in body and "if not touched:" in body, "发布数还是在数「处理了几条」"
 
 
-def test_三档展示不改存储的六态():
-    """六态里 pending_review（跑绿了、等人）承载着「轮到人了」这个信号，
-    `_owes` 的断点续跑靠它才收敛 —— 折掉它，CC 会把等人审的用例一遍遍
-    捡回来重做，那个循环永远停不下来。
 
-    所以收敛发生在**展示层**：人看三档，代码留六态。
-    """
-    from pathlib import Path
 
-    jsx = (Path(__file__).resolve().parents[2]
-           / "frontend/src/pages/cases/CaseManagement.jsx").read_text(encoding="utf-8")
-    # 连等号一起钉：只找 `const tierOf` 的话，改名成 tierOfX 也含这个前缀，
-    # 守卫照样绿（子串匹配的坑，本轮第十次）。
-    assert "const tierOf = " in jsx, "没有三档映射"
-    for tier in ("'无'", "'调试中'", "'已发布'"):
-        assert tier in jsx, f"三档里缺 {tier}"
-    # 「场景」列必须已经并掉 —— 它和状态列是同一件事说两遍
-    assert "key: 'scenarios', title: '场景'" not in jsx, "重复的「场景」列又回来了"
-    # 手动维度按有没有内容判，不看那个没人维护的字段
-    assert "tierOf(r.manualStatus, r.hasManual)" in jsx
+def test_写步骤要推进manual_status():
+    """没有它，manual_status 永远停在 not_started（全库当时 255 条都是），
+    显示层只能靠派生盖住 —— 而派生就是对不上的根源。"""
+    from app.services import case_service
+
+    assert hasattr(case_service, "sync_manual_status"), "没有推进 manual_status 的入口"
+    # ⚠ 不能用 _code_of：create_case 带 @audit_log 装饰器，inspect 拿到的是 wrapper。
+    # 直接读源码文本，并确认两个入口各自都调了（不是只调了一处）。
+    import inspect
+    src = inspect.getsource(case_service)
+    assert src.count("sync_manual_status(case)") >= 2, \
+        f"建用例和改步骤两处都要同步，实际只有 {src.count('sync_manual_status(case)')} 处"
+    # 落在 create 的 session.add 之前 / update 的 case.steps 赋值之后
+    assert "sync_manual_status(case)\n    session.add(case)" in src, "建用例时没同步"
+    assert "case.steps = data.steps\n        sync_manual_status(case)" in src, "改步骤时没同步"
 
 
 def test_审核列默认收起():
@@ -1672,17 +1663,6 @@ def test_步骤上的数字要说明是什么():
         "步骤右边还是两个光秃秃的数字")
 
 
-def test_详情页不再两组标签说同一件事():
-    """「三维就绪度」说什么状态、「场景覆盖指示器」说有没有内容 ——
-    而"有没有"是"什么状态"的子集。两组并排 = 同一件事说两遍，
-    实测出现过一组说有、另一组说未开始。
-    """
-    from pathlib import Path
-
-    jsx = (Path(__file__).resolve().parents[2]
-           / "frontend/src/pages/cases/CaseDetail.jsx").read_text(encoding="utf-8")
-    assert "手动 ({steps.length}步)" not in jsx, "重复的覆盖指示器又回来了"
-    assert "const dimTier = " in jsx, "详情页没用和列表页同一套三档口径"
 
 
 # ── Mock 上游：测 AI 网关绕不开的那一半 ────────────────────────────
@@ -1941,3 +1921,122 @@ def test_不等号也要走同一套比较():
     body = _code_of(api_test_runner, "_check_assertions")
     assert "passed = _scalar_eq(actual, expected)" in body, "== 没走宽松比较"
     assert "not _scalar_eq(actual, expected)" in body, "!= 没走同一套比较，会和 == 打架"
+
+
+def test_三维只有三个态且四处叫法一致():
+    """三维从 5 态收到 3 态（草稿/调试中/完成）。
+
+    去掉的两个：`not_started`（和 draft 区分不出来）、
+    `pending_review`+`executable`（「跑绿了」和「人发布了」原来是两个态，而
+    executable **只有人能给** —— 回归池因此永远是空的，实测 257 条只有 1 条）。
+    现在放权 CC：跑绿直接置 completed，「要不要人审」拆到 review_status 独立标签。
+
+    **叫法必须四处一致**（详情页/列表页 × 状态表）—— 同一个值两个名字被指出过三次。
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "frontend/src/pages/cases"
+    for f in ("CaseDetail.jsx", "CaseManagement.jsx"):
+        src = (root / f).read_text(encoding="utf-8")
+        assert "completed: { label: '完成'" in src, f"{f} 缺「完成」态"
+        assert "debugging: { label: '调试中'" in src, f"{f} 缺「调试中」"
+        assert "draft: { label: '草稿'" in src, f"{f} 缺「草稿」"
+        # 旧态一个都不许残留在状态表里
+        for gone in ("'未开始'", "'待发布'", "'已发布'", "'可执行'", "'待审'　"):
+            assert gone not in src.split("const REVIEW")[0], f"{f} 状态表里还有旧态 {gone}"
+
+
+def test_不许再有档位派生():
+    """**这是三次「徽标和下拉对不上」的总根源。**
+
+    原来徽标显示"档位"（把 5 态压成 3~4 档，还掺了「有没有内容」），
+    下拉显示存储值 —— 只要有这层派生，两者就永远可能不一致：
+    实测手动维度徽标写「已写」而下拉高亮「未开始」。
+    三维收到 3 态之后没有压缩的必要了，档位表整个删掉，直接显示存储值。
+    """
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "frontend/src/pages/cases"
+    for f in ("CaseDetail.jsx", "CaseManagement.jsx"):
+        src = (root / f).read_text(encoding="utf-8")
+        for gone in ("DIM_TIER", "dimTierKey", "const tierOf", "const TIER = "):
+            assert gone not in src, f"{f} 档位派生又回来了：{gone}"
+
+
+def test_审核标签是独立的且不挡回归():
+    """审核从维度状态里拆出来，成为用例级的一个标签。
+
+    · NULL=待提审（**不存值** —— 绝大多数用例都在这个态，存了等于给每条挂灰标签）
+    · pending=待审：三维全完成**自动进**，没有「提交审核」那一下
+    · approved/rejected：人点，而且**可以不点** —— 回归门禁不看它
+    """
+    from app.services import script_run_service
+
+    assert hasattr(script_run_service, "sync_review_status"), "没有审核标签的推进入口"
+    import inspect
+    src = inspect.getsource(script_run_service.sync_review_status)
+    assert '"pending"' in src and "target_level" in src, "没按 target_level 判三维是否全完成"
+    assert '("approved", "rejected")' in src, "人审过的结论会被重跑抹掉"
+
+    # 回归门禁不许看审核，也不许看维度状态
+    # ⚠ 只查**函数体**，不查 docstring —— 说明里正好写着这两个词
+    # （本轮被自己的守卫骗过第五次，都是同一个坑）
+    import ast
+    mod = __import__("app.services.execution_service", fromlist=["x"])
+    fn = ast.parse(inspect.getsource(mod._will_run_automated)).body[0]
+    if isinstance(fn.body[0], ast.Expr) and isinstance(fn.body[0].value, ast.Constant):
+        fn.body.pop(0)
+    gate = ast.unparse(fn)
+    assert "review_status" not in gate, "回归门禁看审核了 —— 审核不该挡回归"
+    for dim in ("api_status", "ui_status", "manual_status"):
+        assert dim not in gate, f"回归门禁又在看 {dim} 了 —— 判据该是「有没有产物」"
+
+
+def test_跑绿就置完成_不再等人发布():
+    """放权 CC 的落点。原来跑绿只到 pending_review，要人点「发布到回归」才 executable，
+    而门禁看的就是 executable —— 回归池永远空的。"""
+    from app.services import script_run_service
+    import inspect
+
+    src = inspect.getsource(script_run_service.apply_case_status)
+    assert 'setattr(case, dim_attr, "completed")' in src, "跑绿没置完成"
+    assert "pending_review" not in src, "还在往 pending_review 推"
+    assert "sync_review_status(case)" in src, "推完没重算审核标签"
+
+
+def test_发布和打回的新语义():
+    """没有 executable 了，这两个动作退化成"人手动标完成 / 打回调试"。
+
+    · 空的那一维不给标完成 —— 标了会进回归然后必挂，是一条假的绿
+    · 打回把「完成」→「调试中」，并把总状态从「完成」退回「草稿」
+      （否则列表里会出现「总状态：完成」而三维全「调试中」，自相矛盾）
+    """
+    from app.services import case_service
+
+    body = _code_of(case_service, "batch_cases")
+    assert "'completed'" in body, "发布/打回的判断没了"
+    assert "没东西可标完成" in body, "空维度被跳过却不说，用户以为标成功了"
+    assert "没有可打回的" in body, "一条都没打回却不说"
+    assert "action == 'unpublish' and case.lifecycle_status == 'done'" in body, \
+        "打回不动总状态 —— 会留下「完成 + 三维调试中」这种自相矛盾的行"
+    assert "sync_review_status(case)" in body, "改完状态没重算审核标签"
+
+
+def test_不许再写第二份维度状态():
+    """`api_scenario_status` / `ui_scenario_status` 已删（2026-08）。
+
+    它们和 `api_status` / `ui_status` 说的是同一件事，`apply_case_status` 一直
+    **同时写两套** —— 实测 255 条里 0 处不一致，也就是说这两列从来没提供过任何
+    额外信息，只是多了一处会漏写的地方。两个字段表达一件事，迟早有一处漏写就开始
+    互相矛盾，而那时没人知道该信哪个。详情页上还各挂了一个下拉，改一处另一处不动。
+    """
+    import inspect
+
+    from app.models.case import Case
+    from app.services import script_run_service
+
+    cols = {c.name for c in Case.__table__.columns}
+    assert "api_scenario_status" not in cols and "ui_scenario_status" not in cols, \
+        "重复的场景状态列又回来了"
+    src = inspect.getsource(script_run_service.apply_case_status)
+    assert "scenario_status" not in src, "又在写第二份维度状态了"

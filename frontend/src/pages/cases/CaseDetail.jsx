@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table, Alert, Collapse } from 'antd'
 import {
   ArrowLeftOutlined, PlayCircleOutlined, SaveOutlined,
@@ -89,35 +89,80 @@ const _API_REASON_BADGE = {
   dependency: { label: '依赖', color: '#7c5cbf', bg: 'rgba(124,92,191,0.1)' },
   noise: { label: '噪音', color: '#c9cdd4', bg: 'transparent' },
 }
-const scenarioStatusMap = {
-  draft: { label: '草稿', color: '#86909c', bg: 'rgba(0,0,0,0.02)' },
-  debugging: { label: '调试中', color: '#faad14', bg: '#fffbe6' },
-  completed: { label: '已完成', color: '#0ea5a0', bg: '#e0f7f6' },
-}
 // 状态体系 v2
 const lifecycleMap = {
   draft: { label: '草稿', color: '#86909c', bg: 'rgba(0,0,0,0.03)' },
   done: { label: '完成', color: '#0ea5a0', bg: '#e0f7f6' },
   deprecated: { label: '废弃', color: '#e8453c', bg: '#fff2f0' },
 }
-// 三维统一状态（手动/UI/接口 共用）
+// 三维统一状态（手动/UI/接口 共用）。
+//
+// **名字必须和徽标档位一字不差。** 徽标写「待发布」而下拉里同一个值叫「待审」——
+// 人点开下拉看到高亮在「待审」，跟徽标对不上，只能理解成两个不同的东西。
+// 实测被指出来过：`pending_review` 一处叫待发布、一处叫待审。
+//
+// **去掉了 needs_fix（原「待修改」）。** 它和「调试中」表达的是同一件事
+// （这一维现在有问题、不能进回归），多一个态只是让人纠结该选哪个；
+// 有问题直接改「调试中」或「草稿」。库里一条都没有（全库 0 条），删掉零成本。
 const dimStatusMap = {
-  not_started: { label: '未开始', color: '#c9cdd4', bg: 'rgba(0,0,0,0.02)' },
   draft: { label: '草稿', color: '#86909c', bg: 'rgba(0,0,0,0.03)' },
   debugging: { label: '调试中', color: '#faad14', bg: '#fffbe6' },
-  pending_review: { label: '待审', color: '#4e8af0', bg: '#eef4ff' },
-  executable: { label: '可执行', color: '#0ea5a0', bg: '#e0f7f6' },
-  needs_fix: { label: '待修改', color: '#e8453c', bg: '#fff2f0' },
+  completed: { label: '完成', color: '#0ea5a0', bg: '#e0f7f6' },
 }
-// 和列表页同一套三档口径（CaseManagement 的 tierOf）。人不需要看六个词，
-// 他只关心「这一维有没有东西 / 能不能进回归」。存储仍是六态 ——
-// pending_review 承载「跑绿了等人」这个信号，断点续跑靠它才收敛。
-const dimTier = (status, hasContent) =>
-  status === 'executable' ? '已发布'
-  : ['debugging', 'pending_review', 'needs_fix'].includes(status) ? '调试中'
-  : hasContent ? '调试中' : '无'
+// 和列表页同一套口径（CaseManagement 的 tierOf，两处必须一致）。
+//
+// **原来是三档，把 pending_review 也归进「调试中」—— 那是错的。**
+// pending_review 的含义是"平台跑绿了，轮到人发布"，跟"还在调/挂着"是相反的状态。
+// 实测后果：AT-0011 19/19 全绿、api_status 已是 pending_review，徽标却写「接口·调试中」，
+// 人看到的结论跟事实反过来，只能理解成"CC 还没做完"。
+// 更别扭的是文字取自这里（三档）、颜色取自 dimStatusMap（六态），于是同样写
+// 「调试中」颜色却不同 —— 一个蓝一个黄，同一屏两个词自相矛盾。
+//
+// 现在四档，且**颜色跟着档位走**，不再跟 dimStatusMap 混用。
+// **档位只看存储的状态，不再拿 hasContent 派生。**
+//
+// 派生是三次「徽标和下拉对不上」的根源：徽标显示派生值、下拉显示存储值，
+// 只要有派生，两者就永远可能不一致（实测手动维度徽标「已写」、下拉「未开始」）。
+// 现在写步骤/跑脚本的时候就把状态落对（见后端 sync_manual_status / apply_case_status），
+// 显示层只负责翻译，不负责猜。
+//
+// 唯一保留的派生：状态是 not_started 但确实有内容 —— 那是**旧数据**
+// （2026-08 之前写的步骤没人推进过状态），标成「已写」比标「未开始」诚实。
+// **档位表没有了 —— 三维只有 3 态，直接显示存储值。**
+// 原来 5 态压成档位再显示，是三次「徽标和下拉对不上」的根源。
+// 现在 dimStatusMap 既是下拉的选项、也是徽标的文字和颜色，只有一份。
+const dimLabel = (status) => dimStatusMap[status] || dimStatusMap.draft
 
-const DIM_STATUS_KEYS = ['not_started', 'draft', 'debugging', 'pending_review', 'executable', 'needs_fix']
+// 审核标签（用例级，一个）。**NULL 就是「待提审」** —— 不存值，因为绝大多数用例
+// 都在这个态，存了等于给每条都挂个灰标签，列表上一片噪音。
+// 「待审」是三维全完成后**自动进**的，没有「提交审核」那一下。
+// 审没审**不挡回归**：建计划直接能跑。
+const REVIEW = {
+  pending:  { label: '待审',   color: '#4e8af0', bg: '#eef4ff' },
+  approved: { label: '已审',   color: '#0ea5a0', bg: '#e0f7f6' },
+  rejected: { label: '不通过', color: '#e8453c', bg: '#fff2f0' },
+}
+const REVIEW_KEYS = ['pending', 'approved', 'rejected']
+
+const DIM_STATUS_KEYS = ['draft', 'debugging', 'completed']
+
+// 步骤字段的**唯一归一化入口**。
+//
+// 同一个字段有两套名字，取决于数据从哪来：
+//   · 运行时（SSE step_start 事件）→ `action` / `phase` / `duration_ms`
+//   · 页面加载 / 执行历史（走 HTTP，被驼峰中间件改过）→ `stepName` / `stepPhase` / `durationMs`
+// 三个读取点原来各写一遍 `s.step_name || s.action || ...`，都漏了驼峰那一套，
+// 于是**刷新页面之后每一步都显示成「步骤 1 通过」** —— 名字、耗时、错误全丢，
+// 比不显示步骤更糟（看着像有信息，其实什么都没有）。实测被指出来。
+//
+// 所以只留这一个函数，谁要读步骤都从它拿。
+const stepInfo = (s, i) => ({
+  name: s.stepName || s.step_name || s.action || s.step || `步骤 ${i + 1}`,
+  phase: s.stepPhase || s.step_phase || s.phase,
+  ms: s.durationMs ?? s.duration_ms,
+  error: s.errorSummary || s.error_summary || s.error,
+  status: s.status,
+})
 
 // 失败现象码 → 人话。
 // ⚠ 这里的键是**数据**不是字段名，但响应层会把 JSON 里的字典键一并驼峰化
@@ -147,7 +192,13 @@ function InlineProp({ icon, value, color, bg, children }) {
   const [open, setOpen] = useState(false)
   return (
     <Popover open={open} onOpenChange={setOpen} trigger="click" placement="bottomLeft"
-      content={<div style={{ minWidth: 150 }} onClick={e => e.stopPropagation()}>{children}</div>}
+      // **必须有 maxWidth。** 只给 minWidth 的话，内容里一段长文本（「预期已确认」
+      // 那条备注就是一整段话）会把盒子撑到上千像素宽，而这些标签挨着头部右边，
+      // antd 放不下就往左挤 —— 实测整个气泡盖到左侧导航上，文字还溢出屏幕外。
+      // 限宽 + 允许折行，长文本自己换行，气泡就不会越界。
+      content={<div style={{ minWidth: 150, maxWidth: 460, whiteSpace: 'normal',
+        wordBreak: 'break-word', overflowWrap: 'anywhere' }}
+        onClick={e => e.stopPropagation()}>{children}</div>}
       arrow={false} styles={{ body: { padding: 8 } }}>
       <div style={{
         display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 10px 2px 6px',
@@ -478,6 +529,9 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   const [showPanel, setShowPanel] = useState(false)
   const [reportId, setReportId] = useState(null)
   const [precheck, setPrecheck] = useState(null)   // 跑前前置资源预检结论
+  // 「运行全部」跑哪几步。null = 全选（默认）；Set = 只跑这些 id。
+  // 只活在这次会话里，不落库 —— 步骤自己的 enabled 才是持久禁用。
+  const [runSelection, setRunSelection] = useState(null)
 
 
   const base = `/projects/${projectId}/branches/${branchId}/api-tests`
@@ -532,8 +586,16 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   const run = () => {
     if (!scenario) return
     if (!runEnv) { message.warning('请先选择执行环境（需要 BASE_URL）'); return }
+    // runSelection == null 就是全选，不传 stepIds（跟"每一步都勾着"等价，
+    // 但少一次把新增步骤漏掉的机会）。
+    if (runSelection != null && runSelection.size === 0) {
+      message.warning('一个步骤都没勾选，没有可执行的内容'); return
+    }
     setRunning(true); setResult(null); setStepResults([]); setReportId(null); setPrecheck(null); setShowPanel(true)
-    api.stream(`${base}/run`, { scenarioIds: [scenario.id], envId: runEnv }, {
+    api.stream(`${base}/run`, {
+      scenarioIds: [scenario.id], envId: runEnv,
+      ...(runSelection != null ? { stepIds: [...runSelection] } : {}),
+    }, {
       onChunk: (data) => {
         // 逐步推进：只显示汇总的话，失败了也不知道是哪一步、为什么
         if (data.type === 'precheck_result') setPrecheck(data)
@@ -553,7 +615,20 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <ApiOutlined style={{ color: '#0ea5a0' }} />
           <span style={{ fontSize: 13, fontWeight: 600, color: '#1d2129' }}>接口场景</span>
-          {scenario && <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#86909c' }}>{scenario.code}</span>}
+          {/* 编排场景**没有独立编号**，它的 code 就是用例编号 —— 一个用例只有一条
+              编排场景，再发一个 AT-0011 只是给同一件东西起第二个名字，而那个号还是
+              从「接口测试」模块的序列里领的（人去那个页面搜还搜不到）。
+              所以这里不再印编号：标题栏上方的面包屑已经写着用例编号了，重复一遍是噪音。
+              AT-#### 从此只属于单接口场景。 */}
+          {scenario && scenario.code && scenario.code.startsWith('AT-') && (
+            // 没绑用例的孤儿场景才会是 AT-####，这种要标出来 —— 它不属于任何用例。
+            <Tooltip title="这条场景的编号还是 AT-####，说明它没有绑定用例（孤儿场景）。正常回推的编排场景编号就是用例编号。">
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#fa8c16',
+                borderBottom: '1px dotted #ffd591', cursor: 'help' }}>
+                未绑定用例 · {scenario.code}
+              </span>
+            </Tooltip>
+          )}
           {scenario && <span style={{ fontSize: 12, color: '#86909c' }}>{(scenario.steps || []).length} 个请求</span>}
           {result && (
             <Tag color={result.passed ? 'success' : 'error'} style={{ margin: 0, cursor: 'pointer' }}
@@ -573,7 +648,16 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           <Button size="small" onClick={load} loading={loading}>刷新</Button>
           {scenario && (
             <Button size="small" type="primary" ghost icon={<PlayCircleOutlined />} loading={running}
-              style={{ color: '#0ea5a0', borderColor: '#0ea5a0' }} onClick={run}>运行全部</Button>
+              // 一个都没勾就直接禁用。留着能点、点了弹个告警，等于让人先做一次
+              // 无效操作再被告知 —— 按钮本身就该说明这时候没东西可跑。
+              disabled={runSelection != null && runSelection.size === 0}
+              style={runSelection != null && runSelection.size === 0
+                ? undefined : { color: '#0ea5a0', borderColor: '#0ea5a0' }}
+              onClick={run}>
+              {/* 勾掉过步骤就把真实条数写在按钮上 ——「运行全部」这四个字
+                  在只跑一部分的时候是句假话，而这正是最容易误读结果的时刻。 */}
+              {runSelection != null ? `运行选中 (${runSelection.size})` : '运行全部'}
+            </Button>
           )}
         </Space>
       </div>
@@ -592,6 +676,8 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           runEnv={runEnv}
           onChange={saveNodes}
           nodeTypes={['api']}   // api_test_steps 存不下控制流节点，只放 API 请求
+          runSelection={runSelection}
+          onRunSelectionChange={setRunSelection}
         />
       )}
 
@@ -639,7 +725,7 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
 }
 
 function ScenarioEditor({
-  scenario, setScenario, scenarioStatus, setScenarioStatus,
+  scenario, setScenario, dimStatus,
   isTemplate, setIsTemplate, type, accentColor,
   onImportTemplate, manualSteps, caseTitle,
   projectId, branchId, caseId,
@@ -664,6 +750,11 @@ function ScenarioEditor({
   const [debugHistory, setDebugHistory] = useState([])
   // 智能识别：从抓包里算出「编排一个场景」推荐勾选哪些接口 + 每条理由（写操作/依赖/噪音）
   const apiAnalysis = useMemo(() => analyzeApiRequests(debugResult?.captured_requests || []), [debugResult?.captured_requests])
+  // 流量被截断时后端会在末尾留一条标记（见 engine/har.py）。不显示的话
+  // 面板上的条数就是上限本身，人会当成真实条数。
+  const trunc = useMemo(
+    () => (debugResult?.captured_requests || []).find(r => r?.truncated) || null,
+    [debugResult?.captured_requests])
   const scriptEditorRef = useRef(null)
 
   const loadDebugHistory = async () => {
@@ -730,7 +821,10 @@ function ScenarioEditor({
                   const live = liveStepsRef.current
                   const steps = live.length > 0 ? live : (data.steps || [])
                   // 运行结果不含接口流量 → 保留生成时抓到的接口，别把「接口视图」清空
-                  setDebugResult(prev => ({ ...data, steps, captured_requests: (data.captured_requests?.length ? data.captured_requests : prev?.captured_requests) || [], _drawerOpen: true }))
+                  // 后端现在统一驼峰（SSE 也过 to_camel_case 了），两种都认 ——
+                  // 内部沿用 snake 那套键，跟 918 行的归一化保持一致。
+                  const cap = data.capturedRequests || data.captured_requests
+                  setDebugResult(prev => ({ ...data, steps, captured_requests: (cap?.length ? cap : prev?.captured_requests) || [], _drawerOpen: true }))
                   setDebugRunning(false)
                   setLiveSteps([]); liveStepsRef.current = []
                   scriptEditorRef.current?.refresh()
@@ -971,9 +1065,16 @@ function ScenarioEditor({
               // 这是本次**抓到的请求条数**，不是"覆盖了多少个接口"——
               // 同一个接口被调 10 次也算 10 条。写成"个接口"会让人以为这脚本
               // 覆盖了 93 个接口，实际可能就三五个。
-              <Tooltip title="本次执行期间抓到的 HTTP 请求条数（同一接口被调多次算多条），不是覆盖的接口数量">
-                <span style={{ fontSize: 12, color: '#86909c', borderBottom: '1px dotted #d9d9d9' }}>
-                  抓到 {debugResult.captured_requests.length} 条请求
+              //
+              // 截断了就必须说出来：此前静默截断，面板写「抓到 150 条」而 150 恰好
+              // 是上限，人读成"这次发了 150 条"。被丢掉的还是时间上更靠后、业务上
+              // 更关键的那些（实测丢了 publish）。
+              <Tooltip title={trunc
+                ? `这次实际发出 ${trunc.totalSeen} 条，只留存了前 ${trunc.kept} 条，后面的请求没有记录 —— 靠后的写操作可能不在里面`
+                : "本次执行期间抓到的 HTTP 请求条数（同一接口被调多次算多条），不是覆盖的接口数量"}>
+                <span style={{ fontSize: 12, color: trunc ? '#fa8c16' : '#86909c', borderBottom: '1px dotted #d9d9d9' }}>
+                  抓到 {debugResult.captured_requests.filter(r => !r.truncated).length} 条请求
+                  {trunc ? ` · 已截断（共 ${trunc.totalSeen} 条）` : ''}
                 </span>
               </Tooltip>
             )}
@@ -1020,9 +1121,9 @@ function ScenarioEditor({
                   const allSteps = liveSteps.length > 0 ? liveSteps : (debugResult?.steps || [])
                   // 探索类噪音（快照/JS求值/查找/网络/关闭浏览器/Glob）默认折叠，突出真实动作；失败步骤始终显示
                   const NOISE = /^(获取页面快照|执行 JS|关闭浏览器|Glob|browser_find|browser_network|browser_snapshot|browser_evaluate|Read|Bash)/
-                  const isNoise = (s) => NOISE.test(s.step_name || s.action || s.step || '') && s.status !== 'failed'
-                  const hiddenCount = allSteps.filter(isNoise).length
-                  const shownSteps = showNoiseSteps ? allSteps : allSteps.filter(s => !isNoise(s))
+                  const isNoise = (s, i) => NOISE.test(stepInfo(s, i).name) && s.status !== 'failed'
+                  const hiddenCount = allSteps.filter((s, i) => isNoise(s, i)).length
+                  const shownSteps = showNoiseSteps ? allSteps : allSteps.filter((s, i) => !isNoise(s, i))
                   return (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
                     <div style={{ padding: '6px 12px', marginBottom: 6, fontSize: 12, color: '#86909c', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', background: 'rgba(124,92,191,0.04)', borderRadius: 6 }}>
@@ -1043,7 +1144,7 @@ function ScenarioEditor({
                       const ok = s.status === 'passed'
                       const isRunning = s.status === 'running'
                       const phase = s.step_phase || s.phase
-                      const name = s.step_name || s.action || s.step || `步骤 ${i + 1}`
+                      const name = stepInfo(s, i).name
                       const error = s.error_summary || s.error
                       const phaseEmoji = { setup: '🔧', action: '👆', verify: '✅' }
                       return (
@@ -1082,7 +1183,7 @@ function ScenarioEditor({
               </div>
             )}]),
             ...(!(debugResult?.captured_requests?.length) ? [] : [
-            { key: 'api', label: `本次流量 (${debugResult.captured_requests.length})`, children: (
+            { key: 'api', label: `本次流量 (${debugResult.captured_requests.filter(r => !r.truncated).length})`, children: (
               debugResult?.captured_requests?.length > 0 ? (
                 <div style={{ padding: '8px 0' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -1125,7 +1226,7 @@ function ScenarioEditor({
                                       <div style={{ padding: '8px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 8, marginBottom: 10 }}>
                                         <b>{head.title}</b>
                                         <div style={{ fontSize: 12, color: '#86909c' }}>
-                                          {head.stepCount || 0} 步 · 状态 {scenarioStatusMap[head.status]?.label || head.status}
+                                          {head.stepCount || 0} 步 · 状态 {head.status}
                                           {list.length > 1 && ` · 该用例下另有 ${list.length - 1} 条（页面只显示步骤最多的这条）`}
                                         </div>
                                       </div>
@@ -1153,7 +1254,7 @@ function ScenarioEditor({
                           } catch { /* 查不到就按新建走，后端还有一道 */ }
                           setApiArranging(true)
                           try {
-                            const selected = selectedApis.map(idx => debugResult.captured_requests[idx])
+                            const selected = selectedApis.map(idx => debugResult.captured_requests.filter(r => !r.truncated)[idx])
                             // 传完整请求信息（含 query/请求体/响应样例），让生成的接口测试有真实字段而非只有 URL
                             const apiInfo = selected.map(r => {
                               const parts = [`${r.method} ${r.url} → ${r.status}`]
@@ -1213,15 +1314,15 @@ function ScenarioEditor({
                     <div style={{ display: 'flex', padding: '6px 12px', fontSize: 12, fontWeight: 600, color: '#86909c', background: 'rgba(0,0,0,0.02)', borderBottom: '1px solid rgba(0,0,0,0.04)', alignItems: 'center' }}>
                       <span style={{ width: 32 }}>
                         <input type="checkbox"
-                          checked={selectedApis.length === debugResult.captured_requests.length && selectedApis.length > 0}
-                          onChange={e => setSelectedApis(e.target.checked ? debugResult.captured_requests.map((_, i) => i) : [])}
+                          checked={selectedApis.length === debugResult.captured_requests.filter(r => !r.truncated).length && selectedApis.length > 0}
+                          onChange={e => setSelectedApis(e.target.checked ? debugResult.captured_requests.filter(r => !r.truncated).map((_, i) => i) : [])}
                           style={{ cursor: 'pointer' }} />
                       </span>
                       <span style={{ width: 60 }}>方法</span>
                       <span style={{ flex: 1 }}>URL</span>
                       <span style={{ width: 60, textAlign: 'right' }}>状态</span>
                     </div>
-                    {debugResult.captured_requests.map((r, i) => {
+                    {debugResult.captured_requests.filter(r => !r.truncated).map((r, i) => {
                       const reqBody = r.requestBody || r.post_data || ''
                       const respBody = r.responseBody || ''
                       const hasDetail = reqBody || respBody || (r.queryParams && Object.keys(r.queryParams).length)
@@ -1361,10 +1462,7 @@ function ScenarioEditor({
                   {stepList.map((s, i) => {
                     const ok = s.status === 'passed'
                     const isRunning = s.status === 'running'
-                    const phase = s.step_phase || s.phase
-                    const name = s.step_name || s.action || s.step || `步骤 ${i + 1}`
-                    const error = s.error_summary || s.error
-                    const ms = s.duration_ms
+                    const { name, phase, ms, error } = stepInfo(s, i)
                     const phaseEmoji = { setup: '🔧', action: '👆', verify: '✅' }
                     return (
                       <div key={i} style={{ display: 'flex', gap: 14 }}>
@@ -1521,13 +1619,12 @@ function ScenarioEditor({
               borderLeft: '1px solid rgba(0,0,0,0.06)',
             }}>代码视图</div>
           </div>
-          <Select size="small" value={scenarioStatus} onChange={setScenarioStatus} style={{ width: 100 }}
-            options={Object.entries(scenarioStatusMap).map(([k, v]) => ({
-              value: k, label: <span style={{ color: v.color }}>{v.label}</span>
-            }))} />
-          <Tooltip title={scenarioStatus === 'completed' ? (isTemplate ? '取消模板' : '标记为模板') : '仅已完成可标记'}>
+          {/* 原来这儿有个独立的「场景状态」下拉（api/ui_scenario_status）——
+              和头部那组三维状态说的是同一件事，两处并排必然出现一处改了另一处没改。
+              已删；模板开关直接看该维度的三维状态。 */}
+          <Tooltip title={dimStatus === 'completed' ? (isTemplate ? '取消模板' : '标记为模板') : '该维度到「完成」才能标模板'}>
             <Button size="small" type={isTemplate ? 'primary' : 'default'}
-              disabled={scenarioStatus !== 'completed'}
+              disabled={dimStatus !== 'completed'}
               icon={isTemplate ? <StarFilled /> : <StarOutlined />}
               onClick={() => setIsTemplate(!isTemplate)}
               style={isTemplate ? { background: '#fff7e6', borderColor: '#ffc069', color: '#fa8c16' } : {}}>
@@ -1729,6 +1826,7 @@ function TemplateModal({ open, onClose, projectId, branchId, scenarioType, onSel
 export default function CaseDetail() {
   const { projectId, caseId } = useParams()
   const navigate = useNavigate()
+  const location = useLocation()
 
   const searchParams = new URLSearchParams(window.location.search)
   const branchId = searchParams.get('branchId')
@@ -1756,9 +1854,11 @@ export default function CaseDetail() {
   const [subModule, setSubModule] = useState('')
   const [automationStatus, setAutomationStatus] = useState('pending')
   const [lifecycleStatus, setLifecycleStatus] = useState('draft')
-  const [manualStatus, setManualStatus] = useState('not_started')
-  const [uiStatus, setUiStatus] = useState('not_started')
-  const [apiStatus, setApiStatus] = useState('not_started')
+  // 审核标签（NULL = 待提审，不显示）
+  const [reviewStatus, setReviewStatus] = useState(null)
+  const [manualStatus, setManualStatus] = useState('draft')
+  const [uiStatus, setUiStatus] = useState('draft')
+  const [apiStatus, setApiStatus] = useState('draft')
   const [isCore, setIsCore] = useState(false)
   const [flaky, setFlaky] = useState(false)
 
@@ -1808,8 +1908,6 @@ export default function CaseDetail() {
   const [newVarInput, setNewVarInput] = useState('')
   const [apiScenario, setApiScenario] = useState(null)
   const [uiScenario, setUiScenario] = useState(null)
-  const [apiScenarioStatus, setApiScenarioStatus] = useState('draft')
-  const [uiScenarioStatus, setUiScenarioStatus] = useState('draft')
   const [isApiTemplate, setIsApiTemplate] = useState(false)
   const [isUiTemplate, setIsUiTemplate] = useState(false)
 
@@ -1873,14 +1971,13 @@ export default function CaseDetail() {
         variablesUsed: c.variablesUsed || [],
         apiScenario: c.apiScenario || null,
         uiScenario: c.uiScenario || null,
-        apiScenarioStatus: c.apiScenarioStatus || 'draft',
-        uiScenarioStatus: c.uiScenarioStatus || 'draft',
         isApiTemplate: c.isApiTemplate || false,
         isUiTemplate: c.isUiTemplate || false,
         lifecycleStatus: c.lifecycleStatus || 'draft',
-        manualStatus: c.manualStatus || 'not_started',
-        uiStatus: c.uiStatus || 'not_started',
-        apiStatus: c.apiStatus || 'not_started',
+        manualStatus: c.manualStatus || 'draft',
+        uiStatus: c.uiStatus || 'draft',
+        apiStatus: c.apiStatus || 'draft',
+        reviewStatus: c.reviewStatus || null,
         isCore: c.isCore || false,
       }
 
@@ -1889,12 +1986,16 @@ export default function CaseDetail() {
       setAutomationStatus(vals.automationStatus); setFlaky(vals.flaky)
       setLifecycleStatus(vals.lifecycleStatus); setManualStatus(vals.manualStatus)
       setUiStatus(vals.uiStatus); setApiStatus(vals.apiStatus)
+      // 这一行漏掉过：reviewStatus 进了 vals（也就进了 savedRef）和保存体，却没回填 state。
+      // 后果不只是审核徽标不显示 —— state 恒为 null 跟 savedRef 里的 'pending' 对不上，
+      // 用例一加载完就被判成「有未保存的修改」，点返回必弹确认框。
+      // 往 currentSnap 里加字段时，setter 必须跟着加。
+      setReviewStatus(vals.reviewStatus)
       setIsCore(vals.isCore)
       setPreconditions(vals.preconditions); setExpectedResult(vals.expectedResult)
       setScriptRefFile(vals.scriptRefFile); setScriptRefFunc(vals.scriptRefFunc)
       setRemark(vals.remark); setSteps(vals.steps); setVariablesUsed(vals.variablesUsed)
       setApiScenario(vals.apiScenario); setUiScenario(vals.uiScenario)
-      setApiScenarioStatus(vals.apiScenarioStatus); setUiScenarioStatus(vals.uiScenarioStatus)
       setIsApiTemplate(vals.isApiTemplate); setIsUiTemplate(vals.isUiTemplate)
 
       savedRef.current = JSON.stringify(vals)
@@ -1931,8 +2032,8 @@ export default function CaseDetail() {
     title, type, priority, module, subModule, automationStatus, flaky,
     preconditions, expectedResult, scriptRefFile, scriptRefFunc, remark,
     steps, variablesUsed, apiScenario, uiScenario,
-    apiScenarioStatus, uiScenarioStatus, isApiTemplate, isUiTemplate,
-    lifecycleStatus, manualStatus, uiStatus, apiStatus, isCore,
+    isApiTemplate, isUiTemplate,
+    lifecycleStatus, manualStatus, uiStatus, apiStatus, reviewStatus, isCore,
   })
   const isDirty = caseData && currentSnap !== savedRef.current
 
@@ -1965,13 +2066,21 @@ export default function CaseDetail() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [isDirty])
 
+  // location.key === 'default' 表示这条详情就是本次会话的第一条记录（直接开链接、
+  // 或刷新过），此时 navigate(-1) 会退出应用或原地不动 —— 按钮看着像点了没反应。
+  // 这种情况直接回列表。
+  const goBack = () => {
+    if (location.key === 'default') navigate(`/projects/${projectId}/cases`)
+    else navigate(-1)
+  }
+
   const handleBack = () => {
     if (isDirty) {
       Modal.confirm({
         title: '未保存的修改', content: '当前有未保存的修改，确定离开吗？',
-        okText: '离开', cancelText: '继续编辑', onOk: () => navigate(-1),
+        okText: '离开', cancelText: '继续编辑', onOk: goBack,
       })
-    } else navigate(-1)
+    } else goBack()
   }
 
   const addStep = () => setSteps(prev => [...prev, { seq: prev.length + 1, action: '', expected: '' }])
@@ -1984,8 +2093,8 @@ export default function CaseDetail() {
         title, type, priority, module, subModule, automationStatus,
         isFlaky: flaky, preconditions, expectedResult, scriptRefFile, scriptRefFunc,
         remark, steps, variablesUsed, apiScenario, uiScenario,
-        apiScenarioStatus, uiScenarioStatus, isApiTemplate, isUiTemplate,
-        lifecycleStatus, manualStatus, uiStatus, apiStatus, isCore,
+        isApiTemplate, isUiTemplate,
+        lifecycleStatus, manualStatus, uiStatus, apiStatus, reviewStatus, isCore,
       })
       savedRef.current = currentSnap
       setCaseData(prev => ({ ...prev }))
@@ -2003,8 +2112,12 @@ export default function CaseDetail() {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-        <Button type="text" icon={<ArrowLeftOutlined />} size="small" onClick={handleBack} style={{ color: '#86909c' }} />
-        <span style={{ fontSize: 12, color: '#c9cdd4' }}>用例管理</span>
+        {/* 箭头和「用例管理」合成一个按钮：原先箭头是 24×24 的独立小按钮，
+            旁边的文字不可点，实际很难瞄准。 */}
+        <Button type="text" icon={<ArrowLeftOutlined />} onClick={handleBack}
+          style={{ height: 32, padding: '0 10px 0 8px', color: '#86909c', fontSize: 12 }}>
+          用例管理
+        </Button>
         <span style={{ color: 'rgba(0,0,0,0.15)', fontSize: 12 }}>/</span>
         <span style={{ fontSize: 12, color: '#86909c', fontFamily: 'var(--font-mono)' }}>{caseCode}</span>
       </div>
@@ -2050,8 +2163,10 @@ export default function CaseDetail() {
           {[['手动', manualStatus, setManualStatus, steps.length],
             ['UI', uiStatus, setUiStatus, (uiScenario?.steps?.length || uiScenario?.lastResults?.length || 0)],
             ['接口', apiStatus, setApiStatus, (apiScenario?.steps?.length || 0)]].map(([lbl, val, setter, n]) => (
-            <InlineProp key={lbl} value={`${lbl}·${dimTier(val, n)}${n ? ` (${n})` : ''}`}
-              color={dimStatusMap[val]?.color} bg={dimStatusMap[val]?.bg}>
+            // 文字和颜色都取自同一个档位对象 —— 原来文字来自三档、颜色来自六态，
+            // 于是「调试中」会出现两种颜色，同一屏自相矛盾。
+            <InlineProp key={lbl} value={`${lbl}·${dimLabel(val).label}${n ? ` (${n})` : ''}`}
+              color={dimLabel(val).color} bg={dimLabel(val).bg}>
               <DropdownList activeKey={val} onSelect={setter}
                 items={DIM_STATUS_KEYS.map(s => ({ key: s, label: dimStatusMap[s].label, dot: 'circle', color: dimStatusMap[s].color }))} />
             </InlineProp>
@@ -2132,6 +2247,21 @@ export default function CaseDetail() {
               )}
             </div>
           </InlineProp>
+          {/* 审核标签。三维全完成才有意义 —— 没到的时候不显示（NULL=待提审）。 */}
+          {reviewStatus && (
+            <InlineProp icon={<CheckCircleOutlined />}
+              value={`审核·${REVIEW[reviewStatus]?.label || reviewStatus}`}
+              color={REVIEW[reviewStatus]?.color} bg={REVIEW[reviewStatus]?.bg}>
+              <div style={{ padding: '4px 8px', minWidth: 260, lineHeight: 1.8 }}>
+                <div style={{ fontSize: 12, color: '#4e5969' }}>
+                  三维都完成后自动进「待审」。<b>审核不挡回归</b> —— 不审也能建计划直接跑。
+                </div>
+                <DropdownList activeKey={reviewStatus} onSelect={setReviewStatus}
+                  items={REVIEW_KEYS.map(k => ({ key: k, label: REVIEW[k].label,
+                    dot: 'circle', color: REVIEW[k].color }))} />
+              </div>
+            </InlineProp>
+          )}
           {/* P0 才显示。挂接口/UI 之前必须有人过一遍「预期结果」这一列 ——
               三份产物同源生成必然互相一致，而一致会被当成已经验证过。
               这个标不显示的话，CC 回推被门禁拦住时，人在页面上根本找不到怎么解。 */}
@@ -2181,12 +2311,6 @@ export default function CaseDetail() {
             </InlineProp>
           )}
           <ReadonlyProp label="来源" value={caseData.source || 'manual'} />
-          {caseData.reviewStatus && (
-            <ReadonlyProp label="审核" value={
-              caseData.reviewStatus === 'approved' ? '✓ 已审核' :
-              caseData.reviewStatus === 'rejected' ? '✕ 已拒绝' : '◐ 待审核'
-            } />
-          )}
           {caseData.qualityScore?.total != null && (
             <ReadonlyProp label="评分" value={caseData.qualityScore.total} />
           )}
@@ -2264,7 +2388,7 @@ export default function CaseDetail() {
                 {hasApi && (
                   <ScenarioEditor
                     scenario={apiScenario} setScenario={setApiScenario}
-                    scenarioStatus={apiScenarioStatus} setScenarioStatus={setApiScenarioStatus}
+                    dimStatus={apiStatus}
                     isTemplate={isApiTemplate} setIsTemplate={setIsApiTemplate}
                     type="api" accentColor="#0ea5a0"
                     onImportTemplate={() => { setTemplateModalType('api'); setTemplateModalOpen(true) }}
@@ -2281,7 +2405,7 @@ export default function CaseDetail() {
             { key: 'ui', label: <span><DesktopOutlined style={{ marginRight: 4, color: hasUi ? '#7c5cbf' : undefined }} />UI 测试{hasUi && <Tooltip title="脚本逻辑步骤数（源自手动步骤）。实际执行步数见「执行轨迹」，两者通常不同"><span style={{ fontSize: 11, color: '#7c5cbf', marginLeft: 4, borderBottom: '1px dotted #7c5cbf' }}>({(uiScenario?.steps?.length || uiScenario?.lastResults?.length || 0)}步)</span></Tooltip>}</span>, children: (
               <ScenarioEditor
                 scenario={uiScenario} setScenario={setUiScenario}
-                scenarioStatus={uiScenarioStatus} setScenarioStatus={setUiScenarioStatus}
+                dimStatus={uiStatus}
                 isTemplate={isUiTemplate} setIsTemplate={setIsUiTemplate}
                 type="e2e" accentColor="#7c5cbf"
                 onImportTemplate={() => { setTemplateModalType('ui'); setTemplateModalOpen(true) }}
@@ -2330,6 +2454,54 @@ export default function CaseDetail() {
                                     脚本跑完没有报错{r.screenshots?.length ? `，留下 ${r.screenshots.length} 张截图` : ''}
                                   </span>}
                             </div>
+                            {/* 步骤级结果。这才是人展开执行历史想看的东西 ——
+                                原来这儿只有「脚本跑完没有报错」加一坨 pytest 横幅，
+                                脚本里十几个 expect() 验了什么、挂在第几步全看不到。
+                                平台会给普通 Playwright 脚本自动埋点（见 tea_autolog）。 */}
+                            {r.steps?.length > 0 && (
+                              <div style={{ marginBottom: 10, border: '1px solid rgba(0,0,0,0.06)',
+                                borderRadius: 10, overflow: 'hidden' }}>
+                                <div style={{ padding: '6px 10px', background: '#fafbfc', fontSize: 12,
+                                  color: '#4e5969', fontWeight: 600 }}>
+                                  执行步骤（{r.steps.filter(s => s.status === 'passed').length}/{r.steps.length} 通过）
+                                </div>
+                                <div style={{ maxHeight: 320, overflow: 'auto' }}>
+                                  {r.steps.map((s, i) => {
+                                    const bad = s.status && s.status !== 'passed'
+                                    const { name: sName, phase: ph, ms: sMs, error: sErr } = stepInfo(s, i)
+                                    return (
+                                      <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline',
+                                        padding: '4px 10px', fontSize: 12,
+                                        borderTop: i ? '1px solid rgba(0,0,0,0.03)' : 'none',
+                                        background: bad ? '#fff5f5' : 'transparent' }}>
+                                        <span style={{ color: '#c9cdd4', minWidth: 20, textAlign: 'right',
+                                          fontFamily: 'var(--font-mono)' }}>{i + 1}</span>
+                                        <span style={{ fontSize: 10, padding: '0 5px', borderRadius: 6,
+                                          lineHeight: '17px', flexShrink: 0,
+                                          background: ph === 'verify' ? 'rgba(78,138,240,0.1)' : 'rgba(0,0,0,0.04)',
+                                          color: ph === 'verify' ? '#4e8af0' : '#86909c' }}>
+                                          {ph === 'verify' ? '验证' : ph === 'setup' ? '前置' : '操作'}
+                                        </span>
+                                        <span style={{ flex: 1, color: bad ? '#e8453c' : '#1d2129',
+                                          wordBreak: 'break-all' }}>
+                                          {sName}
+                                          {sErr && (
+                                            <div style={{ color: '#e8453c', fontFamily: 'var(--font-mono)',
+                                              fontSize: 11, marginTop: 2 }}>
+                                              {sErr}
+                                            </div>
+                                          )}
+                                        </span>
+                                        <span style={{ color: '#c9cdd4', flexShrink: 0,
+                                          fontFamily: 'var(--font-mono)' }}>
+                                          {sMs != null ? `${sMs}ms` : ''}
+                                        </span>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              </div>
+                            )}
                             <Collapse ghost size="small" items={[{
                               key: 'raw',
                               label: <span style={{ fontSize: 12, color: '#86909c' }}>原始日志（pytest 输出，排查用）</span>,

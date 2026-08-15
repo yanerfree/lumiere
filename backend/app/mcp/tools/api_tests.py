@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from typing import NamedTuple
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -141,6 +142,22 @@ async def get_api_test_scenario(
             "assertions": st.assertions,
             "variablesExtract": st.variables_extract,
             "lastStatus": st.last_status,
+            # **写进去的等待/重试必须读得回来**。此前这三个字段没在返回里，
+            # 而 CC 唯一的读回通道就是这里 —— 它按工具说明写了 retry_timeout_ms，
+            # 读回来看不见，就判定「平台把它剥掉了」，转头退回插占位步骤凑时间窗，
+            # 正是 retry 想消灭的那个反模式。实测踩到：AT-0013 四步 retry=10000
+            # 确实落库也确实生效（跑日志「重试 2 次后通过」），CC 却报「被丢弃」。
+            #
+            # 恒为 0 的也照给 —— 缺字段和「值是 0」在读的人眼里是两回事，
+            # 省掉零值等于把「我没设过」和「平台没存住」重新混成一种。
+            "retryTimeoutMs": st.retry_timeout_ms,
+            "retryIntervalMs": st.retry_interval_ms,
+            "waitMs": st.wait_ms,
+            # 顺带给顺序和分组：CC 按 sort_order 定位「第几步」，
+            # 没有它就只能靠数组下标猜，禁用步骤一多就对不上。
+            "sortOrder": st.sort_order,
+            "groupName": st.group_name,
+            "enabled": st.enabled,
             # 只给 pass/fail 等于告诉 CC「挂了，自己猜」。跑挂之后最需要的三样：
             # 错误原文、实际状态码、每条提取到底取到没有 —— 都在 last_response 里，
             # 此前一个都没送出来，CC 只能去猜或者放弃。
@@ -172,6 +189,14 @@ def _last_run_facts(last_response: dict | None) -> dict:
     return out
 
 
+class _Finished(NamedTuple):
+    """一条场景跑完之后，落用例接口维度需要的那几样。"""
+    scenario_id: uuid.UUID
+    passed: bool
+    duration_ms: int
+    error_summary: str | None
+
+
 async def run_api_test(
     session: AsyncSession,
     scenario_ids: str,
@@ -195,6 +220,10 @@ async def run_api_test(
 
     ids = [uuid.UUID(sid.strip()) for sid in scenario_ids.split(",")]
     results = []
+    finished: list[_Finished] = []
+    # 批量跑多条时，耗时只能算「本场景的步骤」——从上一条 scenario_done 之后数起。
+    # 直接 sum(results) 会把前面场景的步骤一起算进来，越往后的场景耗时越离谱。
+    cursor = 0
     async for event in run_batch(ids, session, base_env=base_env):
         if event.type == "step_result":
             row = {
@@ -235,8 +264,89 @@ async def run_api_test(
                 "passCount": event.data.get("passCount"),
                 "failCount": event.data.get("failCount"),
             })
+            sid = event.data.get("scenarioId")
+            if sid:
+                mine = [r for r in results[cursor:] if "step" in r]
+                # 错误摘要给 failure_triage 判「现象」用。不给的话现象一律 unknown，
+                # 用例的执行历史里只剩一个红点，看不出是断言不符还是根本没发出请求。
+                bad = [r for r in mine if r.get("status") == "fail"]
+                err = "；".join(
+                    f"{r.get('step')}：{r.get('why') or r.get('error') or '断言未通过'}"
+                    for r in bad[:3]
+                ) or None
+                finished.append(_Finished(
+                    scenario_id=uuid.UUID(sid),
+                    passed=bool(event.data.get("passed")),
+                    duration_ms=sum(r.get("duration") or 0 for r in mine),
+                    error_summary=err,
+                ))
+            cursor = len(results)
 
-    return {"results": results, "totalSteps": len([r for r in results if "step" in r])}
+    applied = await _apply_case_dimension(session, finished)
+
+    out = {"results": results, "totalSteps": len([r for r in results if "step" in r])}
+    if applied:
+        out["caseStatus"] = applied
+    return out
+
+
+async def _apply_case_dimension(
+    session: AsyncSession,
+    finished: list[_Finished],
+) -> list[dict]:
+    """把这次执行落到**用例的接口维度**上：执行历史 + api_status。
+
+    为什么非做不可：此前这段只存在于 `_create_report()` 里，而它被
+    `if all_results and user_id:` 挡着 —— MCP 通道调 run_batch 不传 user_id，
+    于是整段跳过。后果是步骤级 last_status 存了，用例级一个字段都不动：
+    api_status 永远停在 debugging，而 `_owes()` 判它是「CC 还欠着」，
+    于是 pending_only 的断点续跑对接口维度**永不收敛** —— 已经跑绿的场景
+    每一轮都会被当成待办重做一遍。实测：AT-0013 跑到 19/19 全绿，
+    TC-FWGL-00003 的 owes 仍然返回 ["api"]。
+
+    **这里是「接口测试模块」和「用例接口维度」的分界线，只放编排场景过去。**
+    单接口场景（source_case_id 为空）是接口测试模块的本职产物，不属于任何用例，
+    它跑成什么样都不该改动任何用例的状态 —— 混过去的后果是用例的接口维度被一条
+    与它无关的场景推着走，页面上显示"这条用例的接口测好了"，而那条场景根本不测它。
+    孤儿场景（曾经绑过、用例已删）同样拦在外面：source_case_id 指向的用例取不到就跳过。
+
+    run_mode 用 DEBUG 而不是 REGRESSION：CC 手动跑一条是"我正在调"，
+    跑挂了不代表这条用例坏了。用 REGRESSION 会在失败时把状态打回 debugging，
+    而断点续跑正是靠状态判待办 —— 一次调试失败就能让已完成的用例被捡回来重做。
+    真回归（计划执行）仍走 _create_report 那条，那里该打回就打回。
+    """
+    if not finished:
+        return []
+
+    from app.models.api_test import ApiTestScenario
+    from app.models.case import Case
+    from app.services import script_run_service
+
+    applied: list[dict] = []
+    for fin in finished:
+        scenario = await session.get(ApiTestScenario, fin.scenario_id)
+        if scenario is None or scenario.source_case_id is None:
+            continue                      # ← 单接口场景到此为止，不碰用例
+        case = await session.get(Case, scenario.source_case_id)
+        if case is None:
+            continue                      # ← 孤儿场景同理
+        status = "passed" if fin.passed else "failed"
+        # executed_by=None：MCP 无登录上下文，record_run 内部兜底取一个真实
+        # active 用户，否则命中 executed_by 外键约束，跑通了却存不下。
+        await script_run_service.record_run(
+            session,
+            case_id=case.id, script_type="api",
+            result={"status": status, "duration_ms": fin.duration_ms,
+                    "error_summary": fin.error_summary},
+            executed_by=None, run_mode=script_run_service.DEBUG,
+        )
+        before = case.api_status
+        script_run_service.apply_case_status(case, "api", status, script_run_service.DEBUG)
+        applied.append({"caseCode": case.case_code, "apiStatus": case.api_status,
+                        "changed": before != case.api_status})
+
+    await session.commit()
+    return applied
 
 
 async def _count_steps(session: AsyncSession, scenario_id: uuid.UUID) -> int:

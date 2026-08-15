@@ -112,6 +112,8 @@ async def record_run(
             stdout=result.get("stdout"),
             screenshots=result.get("screenshots") or None,
             captured_requests=result.get("captured_requests") or None,
+            # 步骤要存下来 —— 执行历史展开读的是这一行，不存就只剩 pytest 那一坨。
+            steps=result.get("steps") or None,
             executed_by=uid if isinstance(uid, uuid.UUID) else uuid.UUID(str(uid)),
             run_mode=run_mode,
             attempt=attempt,
@@ -138,27 +140,49 @@ async def record_run(
 
 
 def apply_case_status(case, script_type: str, status: str, run_mode: str = DEBUG) -> None:
-    """按执行结果推进用例的维度状态。
+    """按执行结果推进用例的维度状态，并顺带算一次审核标签。
+
+    **跑绿就置「完成」—— 放权 CC，不再等人。** 原来跑绿只到「待人发布」那一态，
+    再要人在列表上勾选点「发布到回归」才变 executable，而回归门禁看的就是 executable。
+    代价是回归池永远是空的（实测 257 条里只有 1 条）。现在 CC 跑绿自己置 completed，
+    「要不要人审」拆到 review_status 那个独立标签上，**而且审核不挡回归**。
 
     **debug 跑只许向前推进，不许打回**：调试是"我正在试"，试挂了不代表这条用例坏了。
-    而断点续跑的判据是 `ui_status != executable`——调试失败一打回 debugging，
+    而断点续跑的判据是维度还在 draft/debugging —— 调试失败一打回，
     CC 下一轮就会把已经做完的用例又捡回来重做一遍。
-    只有 regression（计划/批量回归）失败才是真信号，才允许把状态打回 debugging。
+    只有 regression（计划/批量回归）失败才是真信号，才允许打回 debugging。
 
     **UI 和接口两维一视同仁**：此前这里写死 `script_type != "ui"` 直接 return，
-    于是接口场景跑通多少次 `api_status` 都停在 debugging，而「批量执行」的可执行判据
-    正是 `api_status == executable`——页面就报「0 个包含可执行脚本」。
-    它明明有脚本、还跑通了 69 次，文案却说没有。
+    于是接口场景跑通多少次 `api_status` 都停在 debugging，页面报「0 个包含可执行脚本」——
+    它明明有脚本、还跑通了 69 次。
     """
     if case is None or script_type not in ("ui", "api"):
         return
-    scenario_attr = f"{script_type}_scenario_status"
     dim_attr = f"{script_type}_status"
     passed = status == "passed"
     if passed:
-        setattr(case, scenario_attr, "completed")
-        if getattr(case, dim_attr) in ("debugging", "not_started", "draft", "needs_fix"):
-            setattr(case, dim_attr, "pending_review")
+        if getattr(case, dim_attr) in ("debugging", "draft"):
+            setattr(case, dim_attr, "completed")
     elif run_mode == REGRESSION:
-        setattr(case, scenario_attr, "debugging")
         setattr(case, dim_attr, "debugging")
+    sync_review_status(case)
+
+
+def sync_review_status(case) -> None:
+    """三维按 target_level 全部完成 → 审核标签自动进「待审」。
+
+    **自动，因为不该有人去点「提交审核」那一下** —— 那一步不产生任何信息
+    （三维状态已经说明白了），只是给人加一次操作。
+
+    往回也自动：任何一维被打回调试，标签退回 NULL（待提审）。但**人已经审过的
+    （approved/rejected）不动** —— 那是人的结论，不能被一次重跑悄悄抹掉。
+    """
+    if case is None:
+        return
+    if case.review_status in ("approved", "rejected"):
+        return
+    target = getattr(case, "target_level", None) or "spec"
+    dims = ["manual"] + (["api"] if target in ("spec_api", "full") else []) \
+        + (["ui"] if target == "full" else [])
+    all_done = all(getattr(case, f"{d}_status", None) == "completed" for d in dims)
+    case.review_status = "pending" if all_done else None

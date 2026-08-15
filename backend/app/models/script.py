@@ -86,6 +86,9 @@ class ScriptRun(Base):
     # "同一版本多次结果翻转"就永远攒不到。
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
     captured_requests: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # UI 脚本的步骤级结果（平台自动埋点产出）。接口场景不用这个 ——
+    # 它的每一步存在 api_test_steps.last_status/last_response 上。
+    steps: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     # ── 失败判断的三层，谁也不覆盖谁（见 o9c0d1e2f3a4 迁移的说明）──
     # 平台判的「现象」：确定性规则，每次执行自动算
     failure_phenomenon: Mapped[str | None] = mapped_column(String(32), nullable=True)

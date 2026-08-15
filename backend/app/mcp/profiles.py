@@ -58,6 +58,8 @@ _LIVE = _LOCATE + _NOTES_READ + ["tb_add_project_note"] + [
     "tb_upsert_automation_resource",
     "tb_sync_orchestrated_scenario",
     "tb_list_api_tests", "tb_get_api_test", "tb_run_api_test",
+    # 产出完自己先跑一遍交付门禁，别再自己宣布"这条可以交付了"
+    "tb_check_deliverable", "tb_check_branch",
 ]
 
 # Mock 上游 / 抓真实请求。**单独一档而不是塞进 live**：
@@ -75,6 +77,7 @@ _UISCRIPT = _LOCATE + _NOTES_READ + [
     "tb_list_scenario_variables", "tb_upsert_scenario_variables",
     "tb_list_environments", "tb_get_merged_variables",
     "tb_sync_ui_script", "tb_run_ui_script", "tb_get_ui_script_result",
+    "tb_check_deliverable", "tb_check_branch",
 ]
 
 _TRIAGE = _LOCATE + _NOTES_READ + [
@@ -87,6 +90,7 @@ _REGRESSION = _LOCATE + [
     "tb_list_cases", "tb_list_environments",
     "tb_create_plan", "tb_run_plan", "tb_list_plans",
     "tb_list_reports", "tb_get_report_summary", "tb_get_failed_scenarios",
+    "tb_check_deliverable", "tb_check_branch",
     "tb_run_ui_scripts_batch", "tb_list_api_tests", "tb_run_api_test",
 ]
 

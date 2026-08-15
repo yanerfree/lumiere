@@ -239,6 +239,9 @@ async def batch_operation(
 class RunBatchRequest(BaseSchema):
     scenario_ids: list[str]
     env_id: str | None = None
+    # 页面上勾选的步骤（运行时子集，不落库）。不传 = 全跑。
+    # 跟步骤自己的 `enabled` 是两件事：enabled 是持久禁用，这个只管这一次。
+    step_ids: list[str] | None = None
 
 
 @router.post("/run")
@@ -273,7 +276,8 @@ async def run_batch_scenarios(
 
     async def event_stream():
         try:
-            async for event in run_batch(scenario_uuids, session, user_id=current_user.id, project_id=project_id, base_env=base_env, branch_id=branch_id, env_name=env_name):
+            async for event in run_batch(scenario_uuids, session, user_id=current_user.id, project_id=project_id, base_env=base_env, branch_id=branch_id, env_name=env_name,
+                                        step_ids=set(body.step_ids) if body.step_ids is not None else None):
                 yield f"data: {json.dumps({'type': event.type, **event.data}, ensure_ascii=False)}\n\n"
         except Exception as e:
             logger.exception("run_batch failed")

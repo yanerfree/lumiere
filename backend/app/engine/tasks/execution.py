@@ -226,7 +226,7 @@ async def _execute(
             # 新式(该维度==executable + scripts表有活跃脚本) 优先；兼容旧式(script_ref_file+automated)
             _dim = case.api_status if plan.test_type == "api" else case.ui_status
             new_script = await _has_new_style_script(session, case.id, plan.test_type)
-            if new_script and _dim == "executable":
+            if new_script:
                 pass  # 新式可执行
             elif case.automation_status == "automated" and case.script_ref_file:
                 new_script = None  # 走旧式沙箱路径

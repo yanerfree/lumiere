@@ -125,6 +125,74 @@ _ENUM_FIELD_RE = re.compile(
 _ENUM_VALUE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,20}$")
 
 
+_BOOL_STRINGS = {"true", "false", "True", "False"}
+
+
+def _typo_assertions(seq: int, st: dict) -> list[dict]:
+    """断言的期望值被写成字符串，而响应里是布尔 —— **必然假红**。
+
+    为什么值得硬拦而不是软警告：这类错误只有跑起来才暴露，报错还长得像平台
+    在说胡话（「期望 data.enabled == true，实际 True」差一个大小写），于是人先去
+    怀疑判定逻辑，绕一圈才回到那对引号上。实测两轮各撞一次：
+    TC-FWGL-00006 的 `rolled_back_to_version` 期望写成 "2"（实际数字 2）、
+    TC-FWGL-00001 的 `data.enabled` 期望写成 "true"（实际布尔 true）。
+
+    数字那一类平台已经兜住（`_scalar_eq`：变量插值出来永远是字符串，不兜必然假红），
+    所以只拦布尔。布尔平台**故意不兜** —— 兜了「期望 true、实际 1」也会算相等，
+    那是假绿，比假红难发现得多。`${var}` 不拦，那本来就该是字符串。
+    """
+    out = []
+    for a in (st.get("assertions") or []):
+        if not isinstance(a, dict):
+            continue
+        exp = a.get("expected") if a.get("expected") is not None else a.get("value")
+        if not isinstance(exp, str) or "${" in exp:
+            continue
+        if exp in _BOOL_STRINGS:
+            out.append({
+                "step": seq, "name": st.get("name") or f"step{seq}",
+                "field": a.get("field") or a.get("type"),
+                "wrote": f'"{exp}"', "shouldBe": exp.lower(),
+                "why": "布尔写成了字符串。平台故意不做布尔兜底（兜了「期望 true、实际 1」"
+                       "就会算相等，那是假绿），所以这里必挂。",
+            })
+    return out
+
+
+# 异步下发之后立刻断言「已生效」的两种形状：读推送/同步状态，或直接打数据面。
+_ASYNC_FIELD_RE = re.compile(r"(push|sync)[-_]?status|data\.(status|phase|synced_count)", re.I)
+_DATA_PLANE_RE = re.compile(r"\$\{(gatewayBase|gateway_base|dataPlane|GATEWAY_URL)\}", re.I)
+
+
+def _needs_retry(seq: int, st: dict) -> dict | None:
+    """断的是「异步下发之后的结果」却没开重试 —— 抢跑假红，而且**时好时坏**。
+
+    实测这批：6 条编排场景 23 个数据面/收敛断言里只有 4 个开了重试，其余 19 个裸奔 ——
+    3 个当场挂、4 个**侥幸跑赢时间窗**。侥幸过的那几个最危险：看着是绿的，换台机器
+    或换个时刻就红，然后没人分得清是环境抖动还是真缺陷。
+
+    只警告不拦（有些接口确实是同步的，判不出来），但必须把建议值一起给出去 ——
+    否则 CC 会退回插「等待 N 毫秒」的占位步骤凑时间窗，那正是这个字段要消灭的东西。
+    """
+    if int(st.get("retry_timeout_ms") or 0) > 0:
+        return None
+    url = str(st.get("url") or "")
+    assertions = json.dumps(st.get("assertions") or [], ensure_ascii=False)
+    hits = []
+    if _DATA_PLANE_RE.search(url):
+        hits.append("这一步直接打数据面（网关），而配置下发是异步的")
+    if _ASYNC_FIELD_RE.search(url) or _ASYNC_FIELD_RE.search(assertions):
+        hits.append("这一步断的是推送/同步状态")
+    if not hits:
+        return None
+    return {
+        "step": seq, "field": "retry_timeout_ms",
+        "value": f"{'；'.join(hits)}，但没开重试 —— 断言会抢在收敛之前跑，时好时坏。"
+                 f"建议 retry_timeout_ms=10000（断言没过就整步重发，直到过或超时）。"
+                 f"**不要**改成插一个「等待」步骤占时间窗。",
+    }
+
+
 def _looks_hardcoded(value: str, field_path: str = "") -> bool:
     """疑似写死的业务数据（启发式，宁保守勿滥报——只软警告，不拦截）。
 
@@ -498,6 +566,7 @@ async def sync_orchestrated_scenario(
     # ── 逐步扫描：硬拦截悬空引用 + 软警告疑似写死 ──
     dangling: list[dict] = []
     warnings: list[dict] = []
+    bad_types: list[dict] = []
     extracted: set[str] = set()
     for i, st in enumerate(norm):
         refs = _collect_refs(st.get("url"), st.get("headers"), st.get("body"), st.get("assertions"))
@@ -517,10 +586,27 @@ async def sync_orchestrated_scenario(
         for path, val in _iter_strings(st.get("body")):
             if _looks_hardcoded(val, path):
                 warnings.append({"step": i + 1, "field": f"body.{path}" if path else "body", "value": val[:60]})
+        # 断言里把布尔/数字写成字符串 → 硬拦。见 _bool_typed_as_string。
+        bad_types.extend(_typo_assertions(i + 1, st))
+        # 异步下发的断言没开重试 → 软警告。见 _needs_retry。
+        r = _needs_retry(i + 1, st)
+        if r:
+            warnings.append(r)
         # 本步提取物在其后步骤可用
         extra = st.get("variables_extract")
         if isinstance(extra, dict):
             extracted.update(extra.keys())
+
+    if bad_types:
+        return {
+            "error": "断言的期望值类型写错了，已拒绝入库 —— 这类错误**必然假红**，"
+                     "而且报错长得像平台在说胡话（「期望 true｜实际 True」差一个大小写）。",
+            "badAssertions": bad_types,
+            "hint": "JSON 里 true/false 是布尔、123 是数字，加引号就变成字符串，"
+                    "和响应里的真值严格比较必挂。判定不会替你放松："
+                    "「期望 true、实际 1」如果算相等，那是另一种假绿。"
+                    "把引号去掉即可（expected: true，不是 \"true\"）。",
+        }
 
     if dangling:
         return {
@@ -576,17 +662,36 @@ async def sync_orchestrated_scenario(
         code = scenario.code
         replaced = True
     else:
-        # code = 分支内 AT-#### max+1
-        max_code = (await session.execute(
-            select(sa_func.max(ApiTestScenario.code)).where(ApiTestScenario.branch_id == bid)
-        )).scalar()
-        next_num = 1
-        if max_code:
-            try:
-                next_num = int(max_code.split("-")[1]) + 1
-            except (IndexError, ValueError):
-                pass
-        code = f"AT-{next_num:04d}"
+        # **编号就用用例自己的**，不从 AT-#### 序列里再领一个号。
+        #
+        # 一个用例 = 一条编排场景（按 source_case_id 幂等），所以它**没有独立身份** ——
+        # 再发一个 AT-0011 就是给同一件东西起第二个名字，而那个号还是从
+        # 「接口测试模块」的序列里拿的：人在用例详情里看到 AT-0011，去接口测试页面
+        # 搜却搜不到（那个页面默认只列单接口场景）。实测就是这么被问的：
+        # 「为什么要单独一个 ID，不是和用例同一个 id 吗」。
+        #
+        # 现在 code = 用例编号（TC-XXXX-00001）。AT-#### 序列从此只归单接口场景，
+        # 两个模块的编号空间彻底分开 —— 这也是「两块要分开」那条要求的根上。
+        # 没绑用例的（理论上不该走到这个工具）才回退到 AT-#### max+1。
+        code = None
+        if scid:
+            src_case = await session.get(Case, scid)
+            if src_case:
+                code = src_case.case_code
+        if not code:
+            max_code = (await session.execute(
+                select(sa_func.max(ApiTestScenario.code)).where(
+                    ApiTestScenario.branch_id == bid,
+                    ApiTestScenario.code.like("AT-%"),
+                )
+            )).scalar()
+            next_num = 1
+            if max_code:
+                try:
+                    next_num = int(max_code.split("-")[1]) + 1
+                except (IndexError, ValueError):
+                    pass
+            code = f"AT-{next_num:04d}"
         scenario = ApiTestScenario(
             project_id=pid,
             branch_id=bid,
@@ -625,7 +730,7 @@ async def sync_orchestrated_scenario(
 
     # 回写用例的「接口」维度状态：挂上了活体验证过的编排场景，还显示"未开始"会误导
     # （用例列表/详情都靠这个字段判断该维度做没做）。只从 not_started 往前推一格，
-    # 不覆盖人工已设成 executable/needs_fix 等更具体的状态。
+    # 不覆盖人工已设成 executable 等更具体的状态。
     if scid:
         case_obj = await session.get(Case, scid)
         if case_obj is not None and case_obj.api_status == "not_started":
@@ -1135,7 +1240,6 @@ async def sync_ui_script(
             for i, st in enumerate(manual)
         ] or [{"seq": 1, "phase": "action", "action": "见脚本", "expected": "", "uiTarget": ""}]
         case.ui_scenario = {"steps": steps, "variablesUsed": []}
-    case.ui_scenario_status = "debugging"
     await session.commit()
 
     return {

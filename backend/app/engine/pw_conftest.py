@@ -27,6 +27,15 @@ def write_playwright_conftest(
 from playwright.sync_api import Page
 from tea_step import tea_step
 
+# 自动埋点：普通 Playwright 脚本（没用 tea_step 的）也能出步骤和验证结果。
+# 不装的话执行历史里只有 pytest 那一行 "1 passed"，脚本里十几个 expect() 一个不落。
+# 包不上就静默退回原样 —— 埋点绝不能拖垮执行本身。
+try:
+    import tea_autolog
+    tea_autolog.install()
+except Exception:
+    pass
+
 ADMIN_USERNAME = "{admin_user}"
 ADMIN_PASSWORD = "{admin_pass}"
 TENANT_USERNAME = "{tenant_user}"

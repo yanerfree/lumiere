@@ -13,6 +13,27 @@ from app.schemas.case import CreateCaseRequest, UpdateCaseRequest
 from app.services.import_service import _get_or_create_folder, _next_case_code
 
 
+def sync_manual_status(case) -> None:
+    """手工步骤写了就把 manual_status 推到「待发布」—— **别靠显示层派生**。
+
+    原来没有任何代码推进它：写了 17 步，`manual_status` 永远停在 `not_started`，
+    于是徽标那边用 `hasContent` 派生出「已写」盖住，而下拉里高亮的还是原始值
+    「未开始」—— 同一个维度两个说法。实测被指出三次（pending_review 一次、
+    executable 一次、手动这次），根子都是同一个：**徽标显示派生值、下拉显示存储值**。
+
+    手工步骤**没有执行器**，写完就是做完，所以只有两种真实状态：
+        没写(draft) → 写了(completed)
+    写的时候直接落 completed，徽标和下拉就永远一致，也不用再派生。
+    """
+    has = bool(case.steps or [])
+    if has and case.manual_status in ("draft", "debugging"):
+        case.manual_status = "completed"
+    elif not has and case.manual_status == "completed":
+        case.manual_status = "draft"
+    from app.services.script_run_service import sync_review_status
+    sync_review_status(case)
+
+
 @audit_log(action="create", target_type="case")
 async def create_case(
     session: AsyncSession, branch_id: uuid.UUID, data: CreateCaseRequest, source: str = "manual"
@@ -50,8 +71,6 @@ async def _build_and_flush(session, branch_id, case_code, folder_id, data, sourc
         variables_used=data.variables_used,
         api_scenario=data.api_scenario,
         ui_scenario=data.ui_scenario,
-        api_scenario_status=data.api_scenario_status,
-        ui_scenario_status=data.ui_scenario_status,
         is_api_template=data.is_api_template,
         is_ui_template=data.is_ui_template,
         source=source,
@@ -61,6 +80,7 @@ async def _build_and_flush(session, branch_id, case_code, folder_id, data, sourc
         remark=data.remark,
         target_level=getattr(data, "target_level", None) or "spec",
     )
+    sync_manual_status(case)
     session.add(case)
     await session.flush()
     await session.refresh(case)
@@ -110,6 +130,7 @@ async def update_case(
         if data.steps != case.steps:
             _invalidate_confirmation()
         case.steps = data.steps
+        sync_manual_status(case)
     if data.expected_result is not None:
         if data.expected_result != case.expected_result:
             _invalidate_confirmation()
@@ -120,10 +141,6 @@ async def update_case(
         case.api_scenario = data.api_scenario
     if data.ui_scenario is not None:
         case.ui_scenario = data.ui_scenario
-    if data.api_scenario_status is not None:
-        case.api_scenario_status = data.api_scenario_status
-    if data.ui_scenario_status is not None:
-        case.ui_scenario_status = data.ui_scenario_status
     if data.is_api_template is not None:
         case.is_api_template = data.is_api_template
     if data.is_ui_template is not None:
@@ -403,23 +420,33 @@ async def batch_cases(
                 attr = f"{d}_status"
                 cur = getattr(case, attr, None)
                 if action == "publish":
-                    # 「无」的那一维不给发布 —— 那一维压根没东西，
-                    # 发布了它会进回归然后必挂，是一条假的绿。
-                    if cur in ("debugging", "pending_review", "needs_fix"):
-                        setattr(case, attr, "executable"); touched = True
-                    elif d == "manual" and (case.steps or []) and cur != "executable":
-                        setattr(case, attr, "executable"); touched = True
+                    # 现在没有 executable 了（放权 CC：跑绿自己置 completed），
+                    # 这个动作退化成"人手动把某一维标成完成" —— 少数场景还有用
+                    # （比如手工用例人自己核过了）。空的那一维不给标：
+                    # 标了它会进回归然后必挂，是一条假的绿。
+                    if cur == "debugging" or (d == "manual" and (case.steps or [])):
+                        setattr(case, attr, "completed"); touched = True
                 else:
-                    if cur == "executable":
+                    # 打回：把「完成」打回「调试中」。
+                    if cur == "completed":
                         setattr(case, attr, "debugging"); touched = True
             # **只数真改了的**。外面那句 succeeded += 1 数的是"处理了几条"，
             # 拿它当发布数，空维度也会报「已发布 1 条，能进回归了」——
             # 而那一维根本没东西，这是句假话。实测被自己的反向用例照出来。
             if not touched:
                 failed += 1
-                errors.append({"caseId": str(case.id),
-                               "error": "这一维还是「无」，没东西可发布"})
+                errors.append({
+                    "caseId": str(case.id),
+                    "error": ("这一维还是「无」，没东西可标完成" if action == "publish"
+                              else "三维都不在「完成」，没有可打回的"),
+                })
                 continue
+            # 打回意味着"这条又变成在做的东西了"，总状态跟着退回草稿 ——
+            # 否则列表里会出现「总状态：完成」而三维全是「调试中」，自相矛盾。
+            if action == "unpublish" and case.lifecycle_status == "done":
+                case.lifecycle_status = "draft"
+            from app.services.script_run_service import sync_review_status
+            sync_review_status(case)
 
         succeeded += 1
 

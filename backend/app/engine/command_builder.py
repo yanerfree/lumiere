@@ -20,7 +20,10 @@ def build_pytest_command(
     if script_ref_func:
         test_target += f"::{script_ref_func}"
 
-    cmd = [sys.executable, "-m", "pytest", test_target, "-v", "--tb=long"]
+    # `-s`（不捕获 stdout）是**步骤实时进度的前提**：埋点靠 print `##STEP_START##`
+    # 标记，SSE 那条路逐行读 stdout 转发出去。pytest 默认把 print 收进自己的缓冲区、
+    # 只在失败时才吐，于是标记永远流不出来 —— 跑的时候面板上一直是「0 步完成」。
+    cmd = [sys.executable, "-m", "pytest", test_target, "-v", "--tb=long", "-s"]
 
     if junit_xml_path:
         cmd.append(f"--junit-xml={junit_xml_path}")

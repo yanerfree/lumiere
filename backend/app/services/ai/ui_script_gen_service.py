@@ -115,7 +115,6 @@ async def generate_ui_script_stream(
             async with async_session_factory() as save_session:
                 case2 = await save_session.get(Case, case.id)
                 script = await _save_script(save_session, case2, script_content, all_passed)
-                case2.ui_scenario_status = "completed" if all_passed else "debugging"
                 # 状态体系 v2：生成自测通过→待审(需人工审核)，失败→调试中
                 case2.ui_status = "pending_review" if all_passed else "debugging"
                 if not case2.ui_scenario:

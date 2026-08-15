@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import re
@@ -51,6 +52,12 @@ class ScenarioResult:
 
     @property
     def passed(self) -> bool:
+        # **一步都没真跑过不算通过。** 原来只判 `all(pass or skip)`，于是"全是 skip"
+        # （步骤全禁用、或运行时一个都没勾）返回 True，页面报「全通过 0/0 步」，
+        # 再经 apply_case_status 把用例的接口维度推成"跑绿了" —— 一条彻底的假绿，
+        # 而且是最难发现的那种：没有任何红色，计数是 0 但结论是通过。
+        if not any(s.status in ("pass", "fail") for s in self.steps):
+            return False
         return all(s.status == "pass" or s.status == "skip" for s in self.steps)
 
     @property
@@ -798,7 +805,17 @@ async def run_batch(
     base_env: dict | None = None,
     branch_id: uuid.UUID | None = None,
     env_name: str | None = None,
+    step_ids: set[str] | None = None,
 ) -> AsyncIterator[RunEvent]:
+    """step_ids：**运行时**只跑这几步（页面上勾选的那些）。None = 全跑。
+
+    刻意不复用步骤上的 `enabled` 字段：那是持久禁用，改它会写库、会影响别人
+    和后续每一次回归；勾选是"这一次先只跑这几步"，跑完不留痕。
+
+    没被勾选的步骤**整个不进 steps 列表** —— 不是标成 skip。区别在于
+    skip 会把 `last_status` 覆盖成 'skip'，等于把上一次的真实结果擦掉；
+    而"这次没跑它"本来就不该动它上次的结论。
+    """
     all_results: list[ScenarioResult] = []
     # 批量执行共享 TokenCache：同一角色只登录一次（ADR-3）
     shared_env = dict(base_env or {})
@@ -815,6 +832,17 @@ async def run_batch(
             .order_by(ApiTestStep.sort_order)
         )
         steps = steps_result.scalars().all()
+
+        if step_ids is not None:
+            steps = [s for s in steps if str(s.id) in step_ids]
+            if not steps:
+                # 一个都没勾还点了运行 —— 必须当场说清楚。放它跑下去的话
+                # 场景里 0 步、passed 恒真，页面会显示「全通过 0/0 步」。
+                yield RunEvent(type="error", data={
+                    "scenarioId": str(scenario.id),
+                    "message": f"「{scenario.title}」没有勾选任何步骤，本次未执行。",
+                })
+                continue
 
         scenario_result = None
         async for event in run_scenario(scenario, steps, session, base_env=base_env, token_cache=token_cache, env_name=env_name):
@@ -903,6 +931,36 @@ def describe_assertion(a: dict) -> str:
     )
 
 
+_TYPE_CN = {bool: "布尔", int: "数字", float: "数字", str: "字符串",
+            list: "数组", dict: "对象", type(None): "null"}
+
+
+def _type_hint(a: dict) -> str:
+    """两边**看起来一样、类型不一样**时把类型点出来，并说清怎么改。
+
+    不点出来的话报错长这样：「期望 data.enabled == true，实际 True」——
+    `true` 和 `True` 差一个大小写，谁都以为平台在说胡话，然后去怀疑判定逻辑。
+    实测就是这么卡住的：AT-0011 断言里写的是字符串 "true"，响应里是布尔 true。
+
+    数字那一类已经由 `_scalar_eq` 兜住（变量插值出来必然是字符串，不兜必然假红）。
+    布尔**故意不兜** —— 放过去的话「期望 true、实际 1」也会算相等，那是假绿。
+    所以这里只负责把话说明白，判定不放松。
+    """
+    expected = a.get("value") if a.get("value") is not None else a.get("expected")
+    actual = a.get("actual")
+    if expected is None or actual is None:
+        return ""
+    if type(expected) is type(actual):
+        return ""
+    if str(expected).strip().lower() != str(actual).strip().lower():
+        return ""      # 值本身就不同，类型不是重点
+    et = _TYPE_CN.get(type(expected), type(expected).__name__)
+    at = _TYPE_CN.get(type(actual), type(actual).__name__)
+    fix = f"，断言里应写成 {json.dumps(actual, ensure_ascii=False)}（不加引号）" \
+        if isinstance(actual, bool) else ""
+    return f"（值一样但类型不同：期望是{et}、实际是{at}{fix}）"
+
+
 def failure_detail(assertions, error) -> dict:
     """把一步失败的原因整理成给调用方看的东西。
 
@@ -911,7 +969,9 @@ def failure_detail(assertions, error) -> dict:
     """
     bad = [a for a in (assertions or []) if isinstance(a, dict) and not a.get("passed")]
     why = "；".join(
-        describe_assertion(a) + (f"，实际 {a.get('actual')!r}" if a.get("actual") is not None else "")
+        describe_assertion(a)
+        + (f"，实际 {a.get('actual')!r}" if a.get("actual") is not None else "")
+        + _type_hint(a)
         for a in bad
     )
     if error:
@@ -968,9 +1028,24 @@ async def _create_report(
     report_name: str | None,
     folder_name: str | None = None,
     branch_id: uuid.UUID | None = None,
+    run_mode: str | None = None,
 ) -> uuid.UUID:
     from datetime import datetime, timezone
     from app.models.report import TestReport, TestReportScenario, TestReportStep
+
+    # `script_run_service` 在下面还有一处**函数内**导入，Python 因此把它当局部变量 ——
+    # 在那之前引用就是 UnboundLocalError。第一版把 `mode = ...` 放在函数顶部，
+    # 于是**整条页面「运行全部」路径直接抛异常**：报告没了、记账没了、状态也不推了，
+    # 而 SSE 只回一句 error。所以这里提前统一导入一次，下面那处也删掉。
+    from app.services import script_run_service
+
+    # **默认按调试记，不按回归。** 走到这里的只有"人在页面上点了运行"这一种情况
+    # （计划回归走 engine/tasks/adhoc_execution，那条不传 user_id、压根不进这里）。
+    # 原来写死 REGRESSION，代价有三：① 执行历史里 UI 跑标「调试」、接口跑标「回归」，
+    # 同一个详情页上的两个按钮说法不一致 ② 手动调试进回归通过率口径
+    # ③ 更糟的是 REGRESSION 失败会把 api_status 打回 debugging，而断点续跑正是靠
+    # 状态判待办 —— 人手动试一次没成功，CC 下一轮就把这条已完成的用例捡回来重做。
+    mode = run_mode or script_run_service.DEBUG
 
     total_pass = sum(r.pass_count for r in results)
     total_fail = sum(r.fail_count for r in results)
@@ -1030,7 +1105,6 @@ async def _create_report(
         # 同一次执行也落进 script_runs —— 用例的「执行历史」读的是这张表。
         # 不记的话，接口场景跑了多少次，用例页面上都是零。
         if case is not None:
-            from app.services import script_run_service
             await script_run_service.record_run(
                 session,
                 case_id=case.id,
@@ -1042,13 +1116,13 @@ async def _create_report(
                     "stdout": _readable_trace(result),
                 },
                 executed_by=user_id,
-                run_mode=script_run_service.REGRESSION,
+                run_mode=mode,
                 report_scenario_id=report_scenario.id,
             )
             script_run_service.apply_case_status(
                 case, "api",
                 "passed" if result.passed else "failed",
-                script_run_service.REGRESSION,
+                mode,
             )
 
         for j, step in enumerate(result.steps):

@@ -731,8 +731,10 @@ async def execute_adhoc(
     executable_count = 0
     skipped_count = 0
     for case in cases:
-        _dim = case.api_status if body.type == "api" else case.ui_status
-        has_script = (_dim == "executable") or (bool(case.script_ref_file) and case.automation_status == "automated")
+        # 有产物就算能跑 —— 不再要求维度 == executable（见 execution_service 那段说明）
+        from app.engine.tasks.adhoc_execution import _has_new_style_script
+        _has_artifact = await _has_new_style_script(session, case.id, body.type) is not None
+        has_script = _has_artifact or (bool(case.script_ref_file) and case.automation_status == "automated")
         if has_script:
             executable_count += 1
         else:
@@ -760,8 +762,10 @@ async def execute_adhoc(
     await session.flush()
 
     for i, case in enumerate(cases):
-        _dim = case.api_status if body.type == "api" else case.ui_status
-        has_script = (_dim == "executable") or (bool(case.script_ref_file) and case.automation_status == "automated")
+        # 有产物就算能跑 —— 不再要求维度 == executable（见 execution_service 那段说明）
+        from app.engine.tasks.adhoc_execution import _has_new_style_script
+        _has_artifact = await _has_new_style_script(session, case.id, body.type) is not None
+        has_script = _has_artifact or (bool(case.script_ref_file) and case.automation_status == "automated")
         scenario = TestReportScenario(
             report_id=report.id,
             case_id=case.id,

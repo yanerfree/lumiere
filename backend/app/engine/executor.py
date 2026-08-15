@@ -79,6 +79,7 @@ def execute_single_case(
     # 注入 HTTP 捕获插件 + 步骤标记器
     plugin_src = Path(__file__).parent / "plugins" / "tea_capture.py"
     step_src = Path(__file__).parent / "plugins" / "tea_step.py"
+    autolog_src = Path(__file__).parent / "plugins" / "tea_autolog.py"
     tea_plugins_dir = Path(sandbox_dir) / ".tea_plugins"
     tea_results_dir = Path(sandbox_dir) / ".tea_results"
     has_capture_plugin = plugin_src.exists()
@@ -88,6 +89,10 @@ def execute_single_case(
         shutil.copy2(str(plugin_src), str(tea_plugins_dir / "tea_capture.py"))
         if step_src.exists():
             shutil.copy2(str(step_src), str(tea_plugins_dir / "tea_step.py"))
+        # 自动埋点插件。两处沙箱（这里和 api/scripts.py 的 SSE 路径）都得复制 ——
+        # 漏一处那条路径就静默走 conftest 的 except 分支，执行历史又只剩 pytest 一行。
+        if autolog_src.exists():
+            shutil.copy2(str(autolog_src), str(tea_plugins_dir / "tea_autolog.py"))
 
     # 注入平台 conftest.py（始终覆盖，确保环境变量注入逻辑可用）
     conftest_src = Path(__file__).parent / "plugins" / "conftest_platform.py"

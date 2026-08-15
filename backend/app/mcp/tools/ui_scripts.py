@@ -126,14 +126,40 @@ async def run_ui_script(
 
     await session.commit()
 
-    return {
+    # **步骤必须回出来。** 此前只回 status + stdout_preview，而 stdout 前 1000 字
+    # 全是 pytest 的启动横幅（platform/rootdir/plugins…），真正有用的那行
+    # 「1 passed」和每一步验了什么都不在里面。于是跑挂之后只知道"挂了"，
+    # 看不出挂在哪一步 —— 而 steps 本来就在 result 里带着，是这几行给扔了。
+    steps = result.get("steps") or []
+    out = {
         "status": result.get("status", "error"),
         "duration_ms": result.get("duration_ms"),
         "error_summary": result.get("error_summary"),
-        "stdout_preview": (result.get("stdout") or "")[:1000],
+        "stepCount": len(steps),
+        # seq 用枚举补 —— parse_step_json 的输出里没有这个键，
+        # 取不到就全是 null，人没法说"第几步挂了"。
+        "steps": [{
+            "seq": i,
+            "phase": s.get("step_phase") or s.get("phase"),
+            "action": s.get("step_name") or s.get("action"),
+            "status": s.get("status"),
+            "durationMs": s.get("duration_ms"),
+            **({"error": str(s.get("error_summary") or s.get("error"))[:300]}
+               if s.get("error_summary") or s.get("error") else {}),
+        } for i, s in enumerate(steps, 1)],
         "screenshots_count": len(result.get("screenshots") or []),
-        "case_status": case.ui_scenario_status if case else None,
+        "case_status": case.ui_status if case else None,
     }
+    # 挂了就把失败那几步单独拎出来 —— 十几步里找那一行红的很费眼。
+    bad = [s for s in out["steps"] if s.get("status") == "failed"]
+    if bad:
+        out["failedSteps"] = bad[:5]
+    if not steps:
+        out["stdout_preview"] = (result.get("stdout") or "")[-1500:]
+        out["note"] = ("这次没解析到步骤。脚本用普通 Playwright 写法时平台会自动埋点"
+                       "（断言和 goto/click/fill 各算一步）；一步都没有说明埋点没装上，"
+                       "看 stdout_preview。")
+    return out
 
 
 async def run_ui_scripts_batch(

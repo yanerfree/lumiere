@@ -1,5 +1,6 @@
 import uuid
 import io
+import json
 import re
 import shutil
 import tempfile
@@ -26,6 +27,23 @@ router = APIRouter(
     prefix="/api/projects/{project_id}/branches/{branch_id}/cases/{case_id}/scripts",
     tags=["scripts"],
 )
+
+
+def _sse_done(payload: dict) -> str:
+    """SSE 的 `done` 事件 —— **必须自己驼峰化**。
+
+    驼峰中间件只改 `JSONResponse.render()`，管不到 `StreamingResponse` 的 chunk。
+    此前这里是手写 `json.dumps`，于是服务端发 `duration_ms` / `error_summary`，
+    前端读的是 `durationMs` / `errorSummary` —— 两个都拿不到。表现是 UI 跑完
+    面板上写「耗时未记录」（库里明明存着 13403ms），失败时更糟：**错误原文整段
+    不显示**，人只看到一个红点。
+
+    `to_camel_case` 现在会豁免装用户数据的字段（见 middleware._OPAQUE_KEYS），
+    所以 screenshots 路径、步骤里的响应原文不会被改。
+    """
+    from app.core.middleware import to_camel_case
+    body = json.dumps(to_camel_case(payload), ensure_ascii=False, default=str)
+    return f"event: done\ndata: {body}\n\n"
 
 
 async def _inject_test_token(session, env_id, case_id, env_vars: dict) -> None:
@@ -386,6 +404,8 @@ async def _run_typescript_stream(script, case_id, env_vars, user, session):
                 "stdout": (stdout_text + stderr_text)[-5000:],
                 "screenshots": screenshots,
                 "captured_requests": captured_requests,
+                # TS 流目前没有步骤解析，恒空；显式带上是为了以后加了别忘接线。
+                "steps": [],
             },
             executed_by=user.id,
             run_mode=script_run_service.DEBUG,
@@ -395,11 +415,14 @@ async def _run_typescript_stream(script, case_id, env_vars, user, session):
         script_run_service.apply_case_status(case, "ui", status, script_run_service.DEBUG)
         await session.commit()
 
-        final = json.dumps({
+        yield _sse_done({
             "status": status, "duration_ms": duration_ms,
             "error_summary": error_summary, "steps": [], "screenshots": screenshots,
-        }, ensure_ascii=False, default=str)
-        yield f"event: done\ndata: {final}\n\n"
+            # 带上本次抓到的流量。不带的话前端只能沿用上一次加载的那份，
+            # 而面板标题写的是「本次流量」—— 每次都恰好 150 条（截断上限），
+            # 数字对得上，所以这个谎一直没被发现。
+            "captured_requests": captured_requests,
+        })
 
     finally:
         shutil.rmtree(sandbox_dir, ignore_errors=True)
@@ -438,6 +461,9 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
 
     plugin_src = Path(__file__).resolve().parent.parent / "engine" / "plugins" / "tea_capture.py"
     step_src = Path(__file__).resolve().parent.parent / "engine" / "plugins" / "tea_step.py"
+    # 自动埋点插件。**必须跟着复制进沙箱** —— conftest 里 import 它，
+    # 漏了这一行就静默走 except 分支，执行历史又变回只有 pytest 那一行。
+    autolog_src = Path(__file__).resolve().parent.parent / "engine" / "plugins" / "tea_autolog.py"
     tea_plugins_dir = Path(sandbox_dir) / ".tea_plugins"
     tea_results_dir = Path(sandbox_dir) / ".tea_results"
     tea_plugins_dir.mkdir(parents=True, exist_ok=True)
@@ -446,6 +472,8 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
         shutil.copy2(str(plugin_src), str(tea_plugins_dir / "tea_capture.py"))
     if step_src.exists():
         shutil.copy2(str(step_src), str(tea_plugins_dir / "tea_step.py"))
+    if autolog_src.exists():
+        shutil.copy2(str(autolog_src), str(tea_plugins_dir / "tea_autolog.py"))
 
     import sys
     junit_path = tempfile.mktemp(suffix=".xml")
@@ -475,12 +503,21 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
         async for line in proc.stdout:
             text = line.decode("utf-8", errors="ignore").rstrip()
             stdout_chunks.append(text)
-            if text.startswith("##STEP_START##"):
-                data = text[len("##STEP_START##"):]
-                yield f"event: step_start\ndata: {data}\n\n"
-            elif text.startswith("##STEP_END##"):
-                data = text[len("##STEP_END##"):]
-                yield f"event: step_end\ndata: {data}\n\n"
+            # **按"行内查找"而不是"行首"。** 加了 `-s` 之后 pytest 打印用例名
+            # 不带换行（`test_ui.py::test_xxx[chromium] `），第一个标记被拼到那一行
+            # 末尾，用 startswith 就匹配不到 —— 于是 step_start 永远比 step_end 少一个，
+            # 面板上「N 步完成」永远差一步，最后一步看着像卡住了。实测就是这个现象。
+            for marker, ev in (("##STEP_START##", "step_start"), ("##STEP_END##", "step_end")):
+                idx = text.find(marker)
+                if idx >= 0:
+                    yield f"event: {ev}\ndata: {text[idx + len(marker):]}\n\n"
+                    break
+
+        # 最后一步跑完之后还有一段：pytest 收尾、关浏览器上下文、把 HAR 落盘
+        # （98 条请求带响应体，几秒）、解析 junit。这段期间一个事件都没有，
+        # 面板停在「N 步完成，等待中...」——**看着就是卡住了**，实测被当成 bug 报上来。
+        # 明说一句在干什么，代价是一行。
+        yield 'event: finishing\ndata: {"message": "步骤跑完，正在收尾（关闭浏览器、保存本次流量）"}\n\n'
 
         try:
             await asyncio.wait_for(proc.wait(), timeout=10)
@@ -529,6 +566,10 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
                 "stdout": ("\n".join(stdout_chunks) + ("\n--- STDERR ---\n" + stderr if stderr else ""))[-10000:],
                 "screenshots": screenshots,
                 "captured_requests": captured_requests,
+                # **必须存。** 这是页面「运行验证」走的路径；不存的话执行历史
+                # 展开又只剩 pytest 那坨 —— 而 steps 就在手边（下面 done 事件里用的
+                # 就是它），是这几行漏了。
+                "steps": steps,
             },
             executed_by=user.id,
             run_mode=script_run_service.DEBUG,
@@ -537,11 +578,11 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
         script_run_service.apply_case_status(case, "ui", status, script_run_service.DEBUG)
         await session.commit()
 
-        final = json.dumps({
+        yield _sse_done({
             "status": status, "duration_ms": duration_ms, "error_summary": error_summary,
             "steps": steps, "screenshots": screenshots,
-        }, ensure_ascii=False, default=str)
-        yield f"event: done\ndata: {final}\n\n"
+            "captured_requests": captured_requests,   # 见上面那条注释
+        })
 
     finally:
         try:
@@ -598,6 +639,9 @@ async def list_script_runs(
                 # 不用去读一坨 pytest stdout。
                 "captured_requests": r.captured_requests,
                 "failure_phenomenon": r.failure_phenomenon,
+                # 步骤级结果。不给的话执行历史展开只有 pytest 那坨横幅，
+                # 十几个 expect() 验了什么、挂在第几步全看不到 —— 实测被指出两轮。
+                "steps": r.steps,
                 "executed_by": str(r.executed_by),
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }

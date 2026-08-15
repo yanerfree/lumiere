@@ -70,12 +70,9 @@ class Case(Base):
     variables_used: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     api_scenario: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     ui_scenario: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    api_scenario_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="draft", server_default="draft"
-    )  # draft / debugging / completed
-    ui_scenario_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="draft", server_default="draft"
-    )
+    # api_scenario_status / ui_scenario_status 已删（2026-08）——
+    # 它们和 api_status / ui_status 说的是同一件事，`apply_case_status` 一直同时写两套，
+    # 实测 255 条里 0 处不一致。两个字段表达一件事，迟早有一处漏写就开始互相矛盾。
     is_api_template: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     is_ui_template: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     # 核心/标杆用例：供其他用例参考应用它来生成（用例级，区别于 per-scenario 的模板）
@@ -88,19 +85,33 @@ class Case(Base):
     lifecycle_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="draft", server_default="draft"
     )
-    # 三维执行就绪度统一枚举：not_started / draft / debugging / pending_review / executable / needs_fix
+    # 三维执行就绪度：**draft(草稿) / debugging(调试中) / completed(完成)**。
+    #
+    # 2026-08 从 5 态收到 3 态。去掉的两个和它们的理由：
+    #   · not_started —— 和 draft 区分不出来，起点就是草稿
+    #   · pending_review / executable —— 原来「跑绿了等人」和「人发布了」是两个态，
+    #     而 executable **只有人能给**（红线：CC 说能跑等于自证）。代价是回归池永远空
+    #     （实测 257 条只有 1 条 executable）。现在放权 CC：跑绿就置 completed，
+    #     「要不要人审」拆到 review_status 那个独立标签上，**且审核不挡回归**。
     manual_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="not_started", server_default="not_started"
+        String(20), nullable=False, default="draft", server_default="draft"
     )
     ui_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="not_started", server_default="not_started"
+        String(20), nullable=False, default="draft", server_default="draft"
     )
     api_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="not_started", server_default="not_started"
+        String(20), nullable=False, default="draft", server_default="draft"
     )
     # 这条用例**要**做到什么程度（C1）：spec 只要手工步骤 / spec_api 步骤+接口 / full 三件套。
     # 和上面三个"已经做到哪儿"的状态配合，就是 CC 断点续跑的判据：
     # target_level=full 但 ui_status != executable 的，就是还欠着的那些。
+    # **为什么定这个 level**（尤其"不要 UI/不要接口"的那些）。
+    #
+    # 只有 target_level 一个值时，人分不出「CC 判断这条纯接口验证不需要 UI」和
+    # 「CC 没想，用了默认值」—— 而这两件事的后果完全不同。实测被直接问过：
+    # 「他自己会规划吗，用户怎么知道呢，是他规划了没写还是没规划」。
+    # 照 expected_confirmed_note 的样子留一句话，回推时没带就提醒（不硬拦）。
+    target_level_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     target_level: Mapped[str] = mapped_column(
         String(16), nullable=False, default="spec", server_default="spec"
     )
@@ -124,7 +135,16 @@ class Case(Base):
     expected_confirmed_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     # —— AI 生成用例扩展（功能场景测试模块，仅 source=ai 使用；旧数据全部为 NULL）——
-    # pending_review / approved / rejected
+    # **审核标签（用例级，一个）**。库里只存 3 个值，第四态用 NULL：
+    #   NULL      待提审 —— 三维还没全完成。**用空而不是 'not_submitted'**：
+    #                      绝大多数用例都在这个态，存个值等于给每条都挂一个灰标签，
+    #                      列表上一片噪音；空就什么都不显示。
+    #   pending   待审   —— 三维全完成，**自动进**（谁都不用点「提交审核」）
+    #   approved  已审   \
+    #   rejected  不通过 /  人点，而且**可以不点** —— 审核不挡回归，建计划直接能跑
+    #
+    # 这个字段原来给平台侧那条已下线的 AI 流水线用（pending_review/approved/rejected），
+    # 47 条停在待审只有 1 条被点过。语义正好对得上，所以复用它，不新增列。
     review_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # {category, text, reviewer, at}
     review_reason: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

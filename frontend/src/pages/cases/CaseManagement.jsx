@@ -25,37 +25,26 @@ const statusBg = { automated: 'transparent', pending: 'transparent', script_remo
 
 // 六个存储态收敛成三档给人看。
 //
-// **存储保留六态是有理由的**：pending_review（跑绿了、等人确认）承载着
-// 「轮到人了」这个信号，`_owes` 的断点续跑靠它才收敛 —— 折成 debugging 的话，
-// CC 会把等人审的用例一遍遍捡回来重做，那个循环永远停不下来。
-// 但人不需要看六个词：他只关心「这一维有没有东西 / 能不能进回归」。
-//
-// 手动维度特殊：manual_status 没有任何代码会自动推进它（唯一写入点是人在编辑页
-// 手填），所以写了 9 步它照样显示「未开始」—— 实测被指出来的就是这个。
-// 手动步骤不是执行物、没有「跑通」这回事，所以按**有没有写**判，不看那个字段。
-const TIER = {
-  none:      { label: '无',     color: '#c9cdd4', bg: 'rgba(0,0,0,0.04)' },
-  debugging: { label: '调试中', color: '#faad14', bg: 'rgba(250,173,20,0.12)' },
-  published: { label: '已发布', color: '#0ea5a0', bg: 'rgba(14,165,160,0.12)' },
-}
-const tierOf = (status, hasContent) => {
-  if (status === 'executable') return 'published'
-  if (['debugging', 'pending_review', 'needs_fix'].includes(status)) return 'debugging'
-  return hasContent ? 'debugging' : 'none'
-}
-
 const lifecycleMap = {
   draft: { label: '草稿', color: '#86909c', bg: 'rgba(0,0,0,0.03)' },
   done: { label: '完成', color: '#0ea5a0', bg: '#e0f7f6' },
   deprecated: { label: '废弃', color: '#e8453c', bg: '#fff2f0' },
 }
+// 叫法必须和上面 TIER 的档位、和详情页的 dimStatusMap 三处一字不差。
+// 三维只有 3 态，直接显示存储值 —— 不再压成档位再显示（那是三次
+// 「徽标和下拉对不上」的根源）。详情页 CaseDetail 的 dimStatusMap 必须一字不差。
 const dimStatusMap = {
-  not_started: { label: '未开始', color: '#c9cdd4' },
-  draft: { label: '草稿', color: '#86909c' },
-  debugging: { label: '调试中', color: '#faad14' },
-  pending_review: { label: '待审', color: '#4e8af0' },
-  executable: { label: '可执行', color: '#0ea5a0' },
-  needs_fix: { label: '待修改', color: '#e8453c' },
+  draft: { label: '草稿', color: '#86909c', bg: 'rgba(0,0,0,0.04)' },
+  debugging: { label: '调试中', color: '#faad14', bg: 'rgba(250,173,20,0.12)' },
+  completed: { label: '完成', color: '#0ea5a0', bg: 'rgba(14,165,160,0.12)' },
+}
+const dimOf = (status) => dimStatusMap[status] || dimStatusMap.draft
+
+// 审核标签（用例级）。NULL=待提审，不显示 —— 见 CaseDetail 的 REVIEW 说明。
+const REVIEW = {
+  pending:  { label: '待审',   color: '#4e8af0', bg: 'rgba(78,138,240,0.12)' },
+  approved: { label: '已审',   color: '#0ea5a0', bg: 'rgba(14,165,160,0.12)' },
+  rejected: { label: '不通过', color: '#e8453c', bg: 'rgba(232,69,60,0.12)' },
 }
 
 // ---- 主页面 ----
@@ -155,14 +144,14 @@ export default function CaseManagement() {
       if (keyword) params.set('keyword', keyword)
       if (statusFilter === 'deleted') {
         params.set('includeDeleted', 'true')
-      } else if (statusFilter === 'pending_review') {
-        params.set('reviewStatus', 'pending_review')
+      } else if (statusFilter === 'review_pending') {
+        params.set('reviewStatus', 'pending')
       } else if (['draft', 'done', 'deprecated'].includes(statusFilter)) {
         params.set('lifecycleStatus', statusFilter)
       } else if (statusFilter) {
         params.set('automationStatus', statusFilter)
       }
-      // 维度就绪度筛选（如 ui:executable）——供批量执行前挑"该维度可跑"的用例
+      // 维度就绪度筛选（如 ui:completed）——供批量执行前挑"该维度做完了"的用例
       if (readyFilter) {
         const [dim, st] = readyFilter.split(':')
         params.set(`${dim}Status`, st)
@@ -207,12 +196,14 @@ export default function CaseManagement() {
   // 一条接口场景跑通过 69 次的用例，只因 apiStatus 还停在 debugging 就被算进"无脚本"。
   // 人看到"无脚本"会去写脚本，而实际该做的只是把状态推到「可执行」。
   const precheck = (selected, type) => {
+    // **判据是有没有产物，不是状态到没到。**
+    // 原来要求维度 == executable，而那个态只有人点「发布到回归」才给 ——
+    // 一条接口场景跑通 69 次的用例，只因状态没被推上去就被算进"不可执行"。
+    // 现在有脚本/有编排场景就算能跑（跟后端 execution_service 同一份判据）。
     let executable = 0, notReady = 0, missing = 0
     selected.forEach(c => {
-      const dim = type === 'api' ? c.apiStatus : c.uiStatus
       const has = type === 'api' ? c.hasApi : c.hasUi
-      if (dim === 'executable' || (c.scriptRefFile && c.automationStatus === 'automated')) executable++
-      else if (has) notReady++
+      if (has || (c.scriptRefFile && c.automationStatus === 'automated')) executable++
       else missing++
     })
     return { total: selected.length, executable, notReady, missing, skipped: notReady + missing }
@@ -479,7 +470,7 @@ export default function CaseManagement() {
       } else {
         if (keyword) params.set('keyword', keyword)
         if (selectedFolderId) params.set('folderId', selectedFolderId)
-        if (statusFilter === 'pending_review') params.set('reviewStatus', 'pending_review')
+        if (statusFilter === 'review_pending') params.set('reviewStatus', 'pending')
         else if (['draft', 'done', 'deprecated'].includes(statusFilter)) params.set('lifecycleStatus', statusFilter)
         else if (statusFilter && statusFilter !== 'deleted') params.set('automationStatus', statusFilter)
         if (readyFilter) {
@@ -577,7 +568,10 @@ export default function CaseManagement() {
     { key: 'caseCode', title: '用例ID', dataIndex: 'caseCode', width: 135, defaultVisible: true, render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c' }}>{v}</span> },
     { key: 'title', title: '标题', dataIndex: 'title', ellipsis: true, defaultVisible: true, fixed: true, render: (v, row) => (
       <span
-        onClick={() => navigate(`/projects/${projectId}/cases/${row.id}?branchId=${globalBranchId}`)}
+        // 必须 stopPropagation：行上 onRow 也挂了同一个 navigate，而它的放行判断只认
+        // .ant-btn/.ant-checkbox-wrapper/a —— 这里是裸 span，两个 handler 都会跑，
+        // 同一个 URL 被 push 两次。详情页的返回按钮 navigate(-1) 于是要点两下才退得出去。
+        onClick={e => { e.stopPropagation(); navigate(`/projects/${projectId}/cases/${row.id}?branchId=${globalBranchId}`) }}
         style={{ color: '#1d2129', cursor: 'pointer', fontWeight: 500 }}
         onMouseEnter={e => e.target.style.color = '#0ea5a0'}
         onMouseLeave={e => e.target.style.color = '#1d2129'}
@@ -596,27 +590,31 @@ export default function CaseManagement() {
     // 三个维度挤成 10px 的小圆点，得逐个 hover 才知道是什么 —— 字号提到 11、
     // 整组一个 tooltip 一次说清三维，不用挨个悬停
     { key: 'dimStatus', title: '三件套', dataIndex: 'manualStatus', width: 214, defaultVisible: true, render: (_, r) => {
-      const dims = [
-        ['手动', tierOf(r.manualStatus, r.hasManual)],
-        ['UI', tierOf(r.uiStatus, r.hasUi)],
-        ['接口', tierOf(r.apiStatus, r.hasApi)],
-      ]
+      const dims = [['手动', r.manualStatus], ['UI', r.uiStatus], ['接口', r.apiStatus]]
       return (
         <Tooltip title={<span style={{ fontSize: 12 }}>
-          {dims.map(([n, t]) => `${n}：${TIER[t].label}`).join('　')}
-          <br />只有「已发布」才进回归。跑绿之后勾选用例点「发布」，不用逐条开详情页。
+          {dims.map(([n, v]) => `${n}：${dimOf(v).label}`).join('　')}
+          <br />CC 跑绿自己置「完成」。<b>有产物就能进回归</b> —— 不用谁点发布，
+          审核也不挡（审没审看「审核」那一列）。
         </span>}>
           <span style={{ display: 'inline-flex', gap: 4 }}>
-            {dims.map(([n, t]) => (
+            {dims.map(([n, v]) => (
               <span key={n} style={{
                 fontSize: 11, padding: '0 6px', borderRadius: 6, lineHeight: '18px',
-                background: TIER[t].bg, color: TIER[t].color,
-              }}>{n}·{TIER[t].label}</span>
+                background: dimOf(v).bg, color: dimOf(v).color,
+              }}>{n}·{dimOf(v).label}</span>
             ))}
           </span>
         </Tooltip>
       )
     } },
+    // 审核列。NULL（待提审）不显示任何东西 —— 绝大多数用例都在那个态，
+    // 挂个灰标签只是噪音。三维全完成自动进「待审」，人可以不审。
+    { key: 'review', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center',
+      defaultVisible: true, render: v => v && REVIEW[v] ? (
+        <span style={{ fontSize: 11, padding: '0 6px', borderRadius: 6, lineHeight: '18px',
+          background: REVIEW[v].bg, color: REVIEW[v].color }}>{REVIEW[v].label}</span>
+      ) : <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span> },
     { key: 'source', title: '来源', dataIndex: 'source', width: 48, align: 'center', defaultVisible: true, render: v => <span style={{ fontSize: 11, color: v === 'ai' ? '#7cacf8' : '#c9cdd4' }}>{v === 'imported' ? '导入' : v === 'ai' ? 'AI' : '手动'}</span> },
     // 三种状态，别混成一个 F：
     //   人工标记 F   —— 人自己撤
@@ -869,7 +867,7 @@ export default function CaseManagement() {
                 <Radio.Button value="draft">草稿</Radio.Button>
                 <Radio.Button value="done">完成</Radio.Button>
                 <Radio.Button value="deprecated">废弃</Radio.Button>
-                <Radio.Button value="pending_review">待审核</Radio.Button>
+                <Radio.Button value="review_pending">待审</Radio.Button>
                 <Radio.Button value="deleted">已删除</Radio.Button>
               </Radio.Group>
               {/* 「刚回推的」= 看一眼这一轮 CC 干了什么。用的是成果切片而不是进度条：
@@ -886,11 +884,11 @@ export default function CaseManagement() {
                 style={{ width: 150 }} popupMatchSelectWidth={false}
                 options={[
                   { value: '', label: '就绪度：不限' },
-                  { value: 'ui:executable', label: 'UI 可执行' },
-                  { value: 'ui:pending_review', label: 'UI 待审' },
-                  { value: 'api:executable', label: '接口 可执行' },
-                  { value: 'api:pending_review', label: '接口 待审' },
-                  { value: 'manual:executable', label: '手动 可执行' },
+                  { value: 'manual:completed', label: '手动 完成' },
+                  { value: 'ui:completed', label: 'UI 完成' },
+                  { value: 'api:completed', label: '接口 完成' },
+                  { value: 'ui:debugging', label: 'UI 调试中' },
+                  { value: 'api:debugging', label: '接口 调试中' },
                 ]} />
               <span style={{ flex: 1 }} />
               <Space size={6} wrap>
@@ -1420,7 +1418,7 @@ export default function CaseManagement() {
           <div style={{ padding: '12px 16px', background: 'rgba(0,0,0,0.02)', borderRadius: 12, fontSize: 13 }}>
             <div style={{ marginBottom: 4 }}>共选中 <b>{batchPrecheck.total}</b> 个用例</div>
             <div style={{ color: '#0ea5a0' }}>
-              {batchPrecheck.executable} 个会执行<span style={{ color: '#c9cdd4' }}>（{batchExecType === 'api' ? '接口' : 'UI'}状态 = 可执行）</span>
+              {batchPrecheck.executable} 个会执行<span style={{ color: '#c9cdd4' }}>（有{batchExecType === 'api' ? '接口场景/脚本' : 'UI 脚本'}就能跑，不看状态）</span>
             </div>
             {batchPrecheck.notReady > 0 && (
               <div style={{ color: '#faad14', marginTop: 2 }}>

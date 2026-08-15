@@ -142,7 +142,7 @@ async def create_plan(
 
 _DIM_LABEL = {
     "not_started": "未开始", "draft": "草稿", "debugging": "调试中",
-    "pending_review": "待复核", "needs_fix": "待修改",
+    "pending_review": "待发布",
 }
 
 
@@ -157,16 +157,15 @@ async def _not_executable(session, cases, test_type: str) -> list[tuple[str, str
 
     out = []
     for c in cases:
-        dim = c.api_status if test_type == "api" else c.ui_status
         legacy = bool(c.script_ref_file) and c.automation_status == "automated"
         if legacy:
             continue
-        if dim != "executable":
-            out.append((c.case_code, _DIM_LABEL.get(dim, dim)))
-            continue
+        # **判据只剩「有没有产物」** —— 不再看维度状态。原来要求维度到某个
+        # 「已发布」态，而那个态只有人点「发布到回归」才给，跑通 69 次也进不了回归。
+        # 审核也不看：审没审在 review_status 那个独立标签上，不挡回归。
         if await _has_new_style_script(session, c.id, test_type) is None:
             kind = "接口场景或接口脚本" if test_type == "api" else "UI 脚本"
-            out.append((c.case_code, f"状态是可执行，但没有{kind}"))
+            out.append((c.case_code, f"没有{kind}"))
     return out
 
 

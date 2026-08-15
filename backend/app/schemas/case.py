@@ -20,8 +20,6 @@ class CreateCaseRequest(BaseSchema):
     variables_used: list[str] | None = None
     api_scenario: dict | None = None
     ui_scenario: dict | None = None
-    api_scenario_status: Literal["draft", "debugging", "completed"] = "draft"
-    ui_scenario_status: Literal["draft", "debugging", "completed"] = "draft"
     is_api_template: bool = False
     is_ui_template: bool = False
     script_ref_file: str | None = None
@@ -45,8 +43,6 @@ class UpdateCaseRequest(BaseSchema):
     variables_used: list[str] | None = None
     api_scenario: dict | None = None
     ui_scenario: dict | None = None
-    api_scenario_status: Literal["draft", "debugging", "completed"] | None = None
-    ui_scenario_status: Literal["draft", "debugging", "completed"] | None = None
     is_api_template: bool | None = None
     is_ui_template: bool | None = None
     is_core: bool | None = None
@@ -55,13 +51,14 @@ class UpdateCaseRequest(BaseSchema):
     is_flaky: bool | None = None
     remark: str | None = None
     # AI 审核扩展（FR21-FR28）
-    review_status: Literal["pending_review", "approved", "rejected"] | None = None
+    # 审核标签：NULL=待提审（不存值）/ pending=待审 / approved=已审 / rejected=不通过
+    review_status: Literal["pending", "approved", "rejected"] | None = None
     review_reason: dict | None = None
     # 状态体系 v2（可编辑）
     lifecycle_status: Literal["draft", "done", "deprecated"] | None = None
-    manual_status: Literal["not_started", "draft", "debugging", "pending_review", "executable", "needs_fix"] | None = None
-    ui_status: Literal["not_started", "draft", "debugging", "pending_review", "executable", "needs_fix"] | None = None
-    api_status: Literal["not_started", "draft", "debugging", "pending_review", "executable", "needs_fix"] | None = None
+    manual_status: Literal["draft", "debugging", "completed"] | None = None
+    ui_status: Literal["draft", "debugging", "completed"] | None = None
+    api_status: Literal["draft", "debugging", "completed"] | None = None
 
 
 class BatchCaseRequest(BaseSchema):
@@ -97,16 +94,14 @@ class CaseResponse(BaseSchema):
     variables_used: list[str] | None
     api_scenario: dict | None
     ui_scenario: dict | None
-    api_scenario_status: str
-    ui_scenario_status: str
     is_api_template: bool
     is_ui_template: bool
     is_core: bool = False
     automation_status: str
     lifecycle_status: str = "draft"
-    manual_status: str = "not_started"
-    ui_status: str = "not_started"
-    api_status: str = "not_started"
+    manual_status: str = "draft"
+    ui_status: str = "draft"
+    api_status: str = "draft"
     source: str
     script_ref_file: str | None
     script_ref_func: str | None

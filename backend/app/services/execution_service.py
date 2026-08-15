@@ -19,16 +19,19 @@ from app.services import flaky_service
 async def _will_run_automated(session: AsyncSession, plan, case) -> bool:
     """这条用例在这次计划里会不会被自动执行。
 
-    判据和执行器保持同一份：新式（scripts 表有该维度活跃脚本 + 该维度已 executable）
-    优先，兼容旧式（automation_status=automated + script_ref_file）。
+    **判据是「有没有产物」，不是「状态到没到」。**
+    原来要求该维度到某个「已发布」态，而那个态只有人在列表上勾选点「发布到回归」
+    才给 —— 于是回归池永远是空的（实测 257 条里只有 1 条）。而且审核也被夹在这条路上：
+    人不点，脚本就永远进不了回归，哪怕它已经跑绿几十次。
+    现在只看 scripts 表有没有该维度的活跃脚本（接口维度看有没有绑定的编排场景）——
+    **有产物就能跑，审核不挡回归**。审没审在 review_status 那个独立标签上，只做提示。
     Flaky 用例被执行器跳过，这里也不算自动。
     """
     if plan.plan_type != "automated" or flaky_service.should_skip(case):
         return False
     from app.engine.tasks.adhoc_execution import _has_new_style_script
 
-    dim = case.api_status if plan.test_type == "api" else case.ui_status
-    if dim == "executable" and await _has_new_style_script(session, case.id, plan.test_type):
+    if await _has_new_style_script(session, case.id, plan.test_type):
         return True
     return case.automation_status == "automated" and bool(case.script_ref_file)
 

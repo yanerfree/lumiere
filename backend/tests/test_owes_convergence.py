@@ -47,8 +47,14 @@ def test_debugging_still_owed():
     assert "ui" in _owes(case(ui_status="debugging", api_status="executable"))
 
 
-def test_needs_fix_still_owed():
-    assert "ui" in _owes(case(ui_status="needs_fix", api_status="executable"))
+def test_只有五个态_没有needs_fix():
+    """原来还有 needs_fix「待修改」。它和 debugging 表达的是同一件事
+    （这一维现在有问题、不能进回归），多一个态只是让人纠结该选哪个 ——
+    2026-08 去掉了，有问题直接改「调试中」或「草稿」。库里当时一条都没有。
+    """
+    from app.mcp.tools import test_cases
+    assert "needs_fix" not in test_cases._CC_TODO, "needs_fix 又回来了"
+    assert set(test_cases._CC_TODO) == {"not_started", "draft", "debugging"}
 
 
 def test_target_level_limits_scope():

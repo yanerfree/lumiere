@@ -219,8 +219,6 @@ async def import_cases(
         variables_used = item.get("variables_used")
         api_scenario = item.get("api_scenario")
         ui_scenario = item.get("ui_scenario")
-        api_scenario_status = item.get("api_scenario_status", "draft")
-        ui_scenario_status = item.get("ui_scenario_status", "draft")
 
         if existing is None:
             # 新增
@@ -239,8 +237,6 @@ async def import_cases(
                 variables_used=variables_used,
                 api_scenario=api_scenario,
                 ui_scenario=ui_scenario,
-                api_scenario_status=api_scenario_status if api_scenario else "draft",
-                ui_scenario_status=ui_scenario_status if ui_scenario else "draft",
                 source="imported",
                 automation_status="automated" if script_ref.get("file") else "pending",
                 script_ref_file=script_ref.get("file"),

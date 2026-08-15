@@ -44,9 +44,22 @@ _STATIC_MIME_RE = re.compile(
 )
 # 开发服务器自己的东西：没有扩展名，mimeType 也常常是 text/javascript 之外的花样。
 # 被测系统跑在 vite/webpack dev 上时，这些能占到抓包的一大半。
+#
+# ⚠ 第二次漏：`/src/i18n/locales/zh-CN/common.json?import` 这一类**一条没拦住**。
+# 实测一次 UI 执行抓到 150 条，其中 **102 条是它们**（全是 304）。两处都失效：
+#   · 扩展名名单里没有 `json`，而加进去会误伤真接口（/api/v1/config.json）
+#   · **304 响应没有 content.mimeType**，所以 MIME 那道防线在它们身上压根不触发
+# 代价不是"多几行噪声"：它们把 MAX_ENTRIES 的配额吃光，于是这次执行**最关键的
+# 那条 `POST /services/{id}/publish` 被截断丢掉了** —— 而面板的用途正是让人从
+# 这份流量里勾选接口编排成场景。流量只覆盖了前 7.3s，整轮跑了 13.4s。
+#
+# 所以改按「dev server 的取源路径 + 构建工具的查询串」拦，不碰扩展名：
+#   /src/... 是 vite 直接吐源码的路径；`?import` / `?t=` / `?v=` 是它的模块查询串。
 _DEV_TOOLING_RE = re.compile(
     r"/@(?:vite|react-refresh|id|fs|vite-plugin)|/node_modules/"
-    r"|/__vite|/sockjs-node|hot-update|/__webpack|/_next/static|/@hmr",
+    r"|/__vite|/sockjs-node|hot-update|/__webpack|/_next/static|/@hmr"
+    r"|/src/"                                   # vite dev 的源码目录
+    r"|[?&](?:import|t|v)=(?:&|$)|[?&]import(?:&|$)",   # 模块查询串
     re.I,
 )
 # HMR 的 websocket：`ws://host:5173/?token=xxx`，握手返回 101。
@@ -154,8 +167,29 @@ def parse_har(har_path: str | Path | None) -> list[dict]:
             "responseBody": _mask_body((resp.get("content", {}) or {}).get("text"), mime) if keep_body else None,
         })
         if len(out) >= MAX_ENTRIES:
+            # **截断必须留痕。** 此前是静默 break，于是面板上写「抓到 150 条请求」——
+            # 150 正好是上限，人读成"这次发了 150 条"，实际是"≥150，只留了前 150"，
+            # 而被丢掉的恰恰是时间上更靠后、业务上更关键的那些（实测丢了 publish）。
+            kept = len(out)
+            total = sum(1 for _ in (data.get("log", {}) or {}).get("entries", []))
+            out.append({
+                "startedAt": None, "elapsedMs": 0, "method": "", "url": "",
+                "status": None, "requestHeaders": None, "requestBody": None,
+                "responseBody": None,
+                "truncated": True, "kept": kept, "totalSeen": total,
+            })
+            logger.warning("HAR 超过 %s 条已截断（原始 %s 条），后面的请求丢失：%s",
+                           MAX_ENTRIES, total, p)
             break
     return out
+
+
+def truncation_marker(entries: list[dict] | None) -> dict | None:
+    """取出截断标记（没截断就返回 None）。调用方拿它给用户说清"这份流量不全"。"""
+    for e in reversed(entries or []):
+        if isinstance(e, dict) and e.get("truncated"):
+            return e
+    return None
 
 
 def har_path_for(output_dir: str | Path | None) -> str | None:

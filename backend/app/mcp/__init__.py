@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks, deliverable
 
 mcp = FastMCP(
     name="testBench",
@@ -294,7 +294,7 @@ _section("用例·手工步骤")
 _register(
     test_cases.list_cases,
     name="tb_list_cases",
-    description="列出分支下的用例（手工步骤那一层）。找已有用例、确认编号、看某模块测了哪些时用。**断点续跑靠它**：传 pending_only=true 只返回还欠着的那些 —— target_level 说这条要做到哪一步（spec 只要步骤 / spec_api 步骤+接口 / full 三件套），三个维度状态说已经做到哪一步，差集就是待办；返回里的 owes 直接列出还欠哪几维。中断之后重跑不用从头来，也不会把做完的又捡回来重做。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, module(按模块名，省得先查folder_id), priority(P0/P1/P2/P3), case_type(api/e2e), target_level(spec/spec_api/full), ui_status/api_status/manual_status(not_started/draft/debugging/pending_review/executable/needs_fix), pending_only(默认false)",
+    description="列出分支下的用例（手工步骤那一层）。找已有用例、确认编号、看某模块测了哪些时用。**断点续跑靠它**：传 pending_only=true 只返回还欠着的那些 —— target_level 说这条要做到哪一步（spec 只要步骤 / spec_api 步骤+接口 / full 三件套），三个维度状态说已经做到哪一步，差集就是待办；返回里的 owes 直接列出还欠哪几维。中断之后重跑不用从头来，也不会把做完的又捡回来重做。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, module(按模块名，省得先查folder_id), priority(P0/P1/P2/P3), case_type(api/e2e), target_level(spec/spec_api/full), ui_status/api_status/manual_status(not_started/draft/debugging/pending_review/executable), pending_only(默认false)",
 )
 
 _register(
@@ -304,9 +304,21 @@ _register(
 )
 
 _register(
+    deliverable.check_branch,
+    name="tb_check_branch",
+    description="【验收·一次看完整个分支】做完一批之后跑这个，别逐条查。回 summary（可交付/有阻塞/有脆弱点/待人审 各几条）+ 每条一行：卡在哪(firstBlocker)、有几处脆弱点(riskKinds)、审核标签。**阻塞和脆弱点是分开的**：「有一步真挂了」和「跑绿了但异步断言抢跑」在 owes 里长得一样，要做的事完全不同（一个改断言、一个加 retry_timeout_ms）。参数: branch_id(分支UUID), module(可选，按模块名筛)",
+)
+
+_register(
+    deliverable.check_deliverable,
+    name="tb_check_deliverable",
+    description="【交付门禁·做完自己先跑】这条用例现在**能不能交付**，只读不改任何状态。回三类结论：blockers=交不了（有一条就是不可交付：欠维度/一步没跑过/有步骤挂着/断言把布尔写成字符串这种必然假红）、risks=交得了但脆（典型是异步断言没开 retry_timeout_ms —— 跑绿了也是侥幸跑赢时间窗，换台机器就红；还有只跑了勾选的一部分、流量被截断）、notes=要你自己判断的（疑似越界的测试点、只用 body_contains 兑付「应产生/应记入」这类承诺、请求体里的驼峰键）。**别再自己宣布「这条可以交付了」** —— 跑这个，把它的结论贴出来。参数: case_id(用例UUID)",
+)
+
+_register(
     test_cases.create_case,
     name="tb_create_case",
-    description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。**入库要过门禁**：标题完全同名硬拒、标题含模糊词（操作成功/显示正常/无报错/符合预期）硬拒。标题相似只提醒不拦。**P0 三件套不拦你**：同源生成的三份产物容易互相一致而不正确（典型是把「创建成功」做成「返回 200」），所以建议先在对话里跟用户确认这个场景到底要验什么，再把确认内容用 expected_confirmed_by / expected_confirmed_note 带上来 —— 平台只记录、不拦截，没带只回一句提醒。参数: branch_id, title, module(中文如'服务管理'), case_type(e2e/api), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result, target_level(这条要做到什么程度: spec只要步骤/spec_api步骤+接口/full三件套，默认spec), expected_confirmed_by(跟谁确认的), expected_confirmed_note(确认了什么，把对话里那句原话带上来)",
+    description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。**入库要过门禁**：标题完全同名硬拒、标题含模糊词（操作成功/显示正常/无报错/符合预期）硬拒。标题相似只提醒不拦。**P0 三件套不拦你**：同源生成的三份产物容易互相一致而不正确（典型是把「创建成功」做成「返回 200」），所以建议先在对话里跟用户确认这个场景到底要验什么，再把确认内容用 expected_confirmed_by / expected_confirmed_note 带上来 —— 平台只记录、不拦截，没带只回一句提醒。参数: branch_id, title, module(中文如'服务管理'), case_type(e2e/api), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result, target_level(这条要做到什么程度: spec只要步骤/spec_api步骤+接口/full三件套，默认spec), **target_level_reason(不做某一维就说一句为什么——只有 target_level 一个值时，人分不出你是判断过不需要、还是没想就用了默认值；不写只提醒不拦)**, expected_confirmed_by(跟谁确认的), expected_confirmed_note(确认了什么，把对话里那句原话带上来)",
 )
 
 _section("Mock 与观测")
@@ -360,7 +372,7 @@ _register(
 _register(
     test_cases.update_case,
     name="tb_update_case",
-    description="改一条已有用例的内容（只传要改的字段，没传的原样不动）。**你写错了自己改，别喊人** —— 标题打错字、步骤和实测不符（比如写「跳转回列表」、实际跳的是详情页），都用这个修。过的是和建用例同一套门禁（模糊词硬拒、同模块同名硬拒、步骤粒度自动拆），同名检查会排除自己。**改不了状态**：ui_status/api_status/manual_status 一概不收 —— 状态由平台按执行事实推进或由人拍板；你要说「这条能跑了」，就去跑一遍让结果说话。改了步骤或预期结果会自动清掉「预期已确认」标记（返回里会提醒），要重新跟用户对一遍。参数: case_id(用例UUID), title, priority, preconditions, steps([{seq,action,expected}]), expected_result, target_level(spec/spec_api/full), expected_confirmed_by, expected_confirmed_note",
+    description="改一条已有用例的内容（只传要改的字段，没传的原样不动）。**你写错了自己改，别喊人** —— 标题打错字、步骤和实测不符（比如写「跳转回列表」、实际跳的是详情页），都用这个修。过的是和建用例同一套门禁（模糊词硬拒、同模块同名硬拒、步骤粒度自动拆），同名检查会排除自己。**改不了状态**：ui_status/api_status/manual_status 一概不收 —— 状态由平台按执行事实推进或由人拍板；你要说「这条能跑了」，就去跑一遍让结果说话。改了步骤或预期结果会自动清掉「预期已确认」标记（返回里会提醒），要重新跟用户对一遍。参数: case_id(用例UUID), title, priority, preconditions, steps([{seq,action,expected}]), expected_result, target_level(spec/spec_api/full), target_level_reason(不做某一维的理由), expected_confirmed_by, expected_confirmed_note",
 )
 
 _register(

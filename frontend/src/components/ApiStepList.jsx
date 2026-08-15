@@ -325,7 +325,7 @@ function KvEditor({ items = [], onChange, keyPh = 'Key', valPh = 'Value' }) {
 // 左侧面板：紧凑步骤列表（Apifox 风格）
 // ===========================================================================
 
-function CompactApiRow({ step, index, isSelected, onClick, onRemove, onCopy, onDragStart, onDragOver, onDrop }) {
+function CompactApiRow({ step, index, isSelected, onClick, onRemove, onCopy, onDragStart, onDragOver, onDrop, runChecked, onRunCheck }) {
   const method = step.method || 'GET'
   const mc = methodColors[method] || methodColors.GET
   const label = step.action || step.url || '未命名请求'
@@ -346,11 +346,18 @@ function CompactApiRow({ step, index, isSelected, onClick, onRemove, onCopy, onD
         background: isSelected ? mc.bg : hovered ? 'rgba(0,0,0,0.02)' : 'transparent',
         borderLeft: isSelected ? `3px solid ${mc.color}` : '3px solid transparent',
         transition: 'all 0.12s',
+        // 没勾选的整行压暗：光靠一个空复选框，扫一眼 19 步看不出哪些不跑。
+        opacity: onRunCheck && !runChecked ? 0.45 : 1,
       }}>
+      {onRunCheck && (
+        <Checkbox checked={runChecked} onClick={e => e.stopPropagation()}
+          onChange={e => onRunCheck(e.target.checked)} style={{ flexShrink: 0 }} />
+      )}
       <HolderOutlined style={{ color: 'rgba(0,0,0,0.25)', cursor: 'grab', fontSize: 9, flexShrink: 0, opacity: hovered ? 1 : 0, transition: 'opacity 0.1s' }} />
       <Tag style={{ margin: 0, fontWeight: 700, fontSize: 9, background: mc.bg, color: mc.color, border: 'none', padding: '0 5px', lineHeight: '16px', minWidth: 38, textAlign: 'center' }}>{method}</Tag>
       <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-        <div style={{ fontSize: 12, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</div>
+        <div style={{ fontSize: 12, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          textDecoration: onRunCheck && !runChecked ? 'line-through' : 'none' }}>{label}</div>
         {subLabel && <div style={{ fontSize: 10, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{subLabel}</div>}
       </div>
       <div style={{ display: 'flex', gap: 2, flexShrink: 0, alignItems: 'center' }}>
@@ -474,7 +481,7 @@ function CompactWaitRow({ node, onRemove }) {
   )
 }
 
-function CompactStepList({ steps, onChange, selectedId, onSelect }) {
+function CompactStepList({ steps, onChange, selectedId, onSelect, runSel }) {
   const [dragIdx, setDragIdx] = useState(null)
   const update = (i, ns) => onChange(steps.map((s, j) => j === i ? { ...ns, seq: j + 1 } : s))
   const remove = (i) => onChange(steps.filter((_, j) => j !== i).map((s, j) => ({ ...s, seq: j + 1 })))
@@ -498,30 +505,32 @@ function CompactStepList({ steps, onChange, selectedId, onSelect }) {
         const nt = s.nodeType || 'api'
         if (nt === 'group') return (
           <CompactGroupRow key={i} node={s} onRemove={() => remove(i)}>
-            <CompactStepList steps={s.children || []} onChange={ch => update(i, { ...s, children: ch })} selectedId={selectedId} onSelect={onSelect} />
+            <CompactStepList steps={s.children || []} onChange={ch => update(i, { ...s, children: ch })} selectedId={selectedId} onSelect={onSelect} runSel={runSel} />
           </CompactGroupRow>
         )
         if (nt === 'loop') return (
           <CompactLoopRow key={i} node={s} onChange={ns => update(i, ns)} onRemove={() => remove(i)}>
-            <CompactStepList steps={s.children || []} onChange={ch => update(i, { ...s, children: ch })} selectedId={selectedId} onSelect={onSelect} />
+            <CompactStepList steps={s.children || []} onChange={ch => update(i, { ...s, children: ch })} selectedId={selectedId} onSelect={onSelect} runSel={runSel} />
           </CompactLoopRow>
         )
         if (nt === 'forEach') return (
           <CompactForEachRow key={i} node={s} onRemove={() => remove(i)}>
-            <CompactStepList steps={s.children || []} onChange={ch => update(i, { ...s, children: ch })} selectedId={selectedId} onSelect={onSelect} />
+            <CompactStepList steps={s.children || []} onChange={ch => update(i, { ...s, children: ch })} selectedId={selectedId} onSelect={onSelect} runSel={runSel} />
           </CompactForEachRow>
         )
         if (nt === 'condition') return (
           <CompactConditionRow key={i} node={s} onRemove={() => remove(i)}
-            thenChildren={<CompactStepList steps={s.thenSteps || []} onChange={ch => update(i, { ...s, thenSteps: ch })} selectedId={selectedId} onSelect={onSelect} />}
-            elseChildren={<CompactStepList steps={s.elseSteps || []} onChange={ch => update(i, { ...s, elseSteps: ch })} selectedId={selectedId} onSelect={onSelect} />}
+            thenChildren={<CompactStepList steps={s.thenSteps || []} onChange={ch => update(i, { ...s, thenSteps: ch })} selectedId={selectedId} onSelect={onSelect} runSel={runSel} />}
+            elseChildren={<CompactStepList steps={s.elseSteps || []} onChange={ch => update(i, { ...s, elseSteps: ch })} selectedId={selectedId} onSelect={onSelect} runSel={runSel} />}
           />
         )
         if (nt === 'wait') return <CompactWaitRow key={i} node={s} onRemove={() => remove(i)} />
         return <CompactApiRow key={i} step={s} index={i} isSelected={selectedId === s}
           onClick={() => onSelect(s, ns => update(i, ns))}
           onRemove={() => remove(i)} onCopy={() => copy(i)}
-          onDragStart={setDragIdx} onDragOver={handleDragOver} onDrop={() => setDragIdx(null)} />
+          onDragStart={setDragIdx} onDragOver={handleDragOver} onDrop={() => setDragIdx(null)}
+          runChecked={runSel ? runSel.isChecked(s) : undefined}
+          onRunCheck={runSel ? (c => runSel.toggle(s, c)) : undefined} />
       })}
     </div>
   )
@@ -1502,7 +1511,22 @@ function makeNewStep(key, seq) {
 // nodeTypes：允许添加的节点类型。默认全开（用例内嵌场景存 JSONB，什么结构都放得下）；
 // 挂在 api_test_scenarios/api_test_steps 上时只能传 ['api'] —— 那张表没有
 // node_type/children/times 这些列，存控制流会静默退化成一个 URL 为空的 GET。
-export default function ApiStepList({ steps, onChange, environments, runEnv, nodeTypes }) {
+// 收集树里所有 API 步骤的 id（分组/循环/条件都会嵌套，勾选要能穿透）。
+function collectApiIds(nodes, out = []) {
+  for (const n of nodes || []) {
+    const nt = n.nodeType || 'api'
+    if (nt === 'api') { if (n.id) out.push(n.id) }
+    else {
+      collectApiIds(n.children, out)
+      collectApiIds(n.thenSteps, out)
+      collectApiIds(n.elseSteps, out)
+    }
+  }
+  return out
+}
+
+export default function ApiStepList({ steps, onChange, environments, runEnv, nodeTypes,
+                                      runSelection, onRunSelectionChange }) {
   const allowedAddItems = useMemo(() => {
     if (!nodeTypes) return addMenuItems
     const allow = new Set(nodeTypes)
@@ -1539,6 +1563,59 @@ export default function ApiStepList({ steps, onChange, environments, runEnv, nod
     }
   }, [steps.length])
 
+  // ── 运行勾选（Apifox 那种）：只决定「运行全部」跑哪几步，不写库 ──
+  // runSelection == null 表示"全选"。刻意不在挂载时展开成全量 id 集合：
+  // 那样新增的步骤会默认不跑，而人的预期是"新加的当然要跑"。
+  const allApiIds = useMemo(() => collectApiIds(steps), [steps])
+  const runSel = useMemo(() => {
+    if (!onRunSelectionChange) return null
+    const isChecked = (s) => !s.id || runSelection == null || runSelection.has(s.id)
+    return {
+      isChecked,
+      toggle: (s, checked) => {
+        if (!s.id) return
+        const next = new Set(runSelection == null ? allApiIds : runSelection)
+        if (checked) next.add(s.id); else next.delete(s.id)
+        // 又变回全选就还原成 null，避免"看着全勾着、其实是一份会过期的快照"
+        onRunSelectionChange(next.size === allApiIds.length ? null : next)
+      },
+    }
+  }, [runSelection, allApiIds, onRunSelectionChange])
+
+  const checkedCount = runSelection == null ? allApiIds.length
+    : allApiIds.filter(id => runSelection.has(id)).length
+
+  // 勾掉的步骤如果是别人的上游，后面那些会静默全挂 —— 实测第一次用就踩到：
+  // 勾掉「租户管理员登录」，剩下 17 步因为 ${token} 没解析全红，而页面只说
+  // 「17 步失败」，完全看不出是自己勾掉了前置。这里把断掉的变量名直接点出来。
+  const brokenVars = useMemo(() => {
+    if (!runSel || runSelection == null) return []
+    const flat = []
+    const walk = (ns) => (ns || []).forEach(n => {
+      const nt = n.nodeType || 'api'
+      if (nt === 'api') flat.push(n)
+      else { walk(n.children); walk(n.thenSteps); walk(n.elseSteps) }
+    })
+    walk(steps)
+    const dropped = new Set()
+    for (const s of flat) {
+      if (s.id && !runSelection.has(s.id)) {
+        for (const op of getOps(s, 'postOperations')) {
+          if (op.type === 'extractor' && op.variable) dropped.add(op.variable)
+        }
+      }
+    }
+    if (!dropped.size) return []
+    const used = new Set()
+    for (const s of flat) {
+      if (!s.id || !runSelection.has(s.id)) continue
+      const text = [s.url, JSON.stringify(s.headers || ''), JSON.stringify(s.body || ''),
+                    JSON.stringify(s.params || '')].join(' ')
+      for (const m of text.matchAll(/\$\{(\w+)\}/g)) if (dropped.has(m[1])) used.add(m[1])
+    }
+    return [...used]
+  }, [runSel, runSelection, steps])
+
   const handleAdd = ({ key }) => {
     const newSteps = [...steps, makeNewStep(key, steps.length + 1)]
     onChange(newSteps)
@@ -1556,13 +1633,38 @@ export default function ApiStepList({ steps, onChange, environments, runEnv, nod
       {/* 左侧：紧凑步骤列表 */}
       <div style={{ width: 300, borderRight: '1px solid rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
         <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fafbfc' }}>
-          <span style={{ fontSize: 12, color: '#1d2129', fontWeight: 600 }}>步骤 ({steps.length})</span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            {runSel && allApiIds.length > 0 && (
+              <Tooltip title="只决定「运行全部」跑哪几步，不改步骤本身，也不写库">
+                <Checkbox
+                  checked={checkedCount === allApiIds.length}
+                  indeterminate={checkedCount > 0 && checkedCount < allApiIds.length}
+                  onChange={e => onRunSelectionChange(e.target.checked ? null : new Set())} />
+              </Tooltip>
+            )}
+            <span style={{ fontSize: 12, color: '#1d2129', fontWeight: 600 }}>步骤 ({steps.length})</span>
+            {runSel && checkedCount < allApiIds.length && (
+              // 少跑了几步必须在列表头写死 —— 否则跑完看到「全通过 6/6 步」，
+              // 没人会想起来那是因为自己勾掉了 13 步。
+              <span style={{ fontSize: 11, color: '#fa8c16', fontWeight: 600 }}>
+                已选 {checkedCount}/{allApiIds.length}
+              </span>
+            )}
+          </span>
           <Dropdown menu={{ items: allowedAddItems, onClick: handleAdd }} trigger={['click']}>
             <Button type="primary" size="small" icon={<PlusOutlined />} ghost>添加</Button>
           </Dropdown>
         </div>
+        {brokenVars.length > 0 && (
+          <div style={{ padding: '6px 10px', background: '#fff7e6', borderBottom: '1px solid #ffe58f',
+            fontSize: 11, color: '#ad6800', lineHeight: 1.5 }}>
+            勾掉的步骤负责提取 <b style={{ fontFamily: 'var(--font-mono)' }}>
+              {brokenVars.map(v => '${' + v + '}').join('、')}</b>
+            ，后面用到它的步骤会因「变量未解析」全部失败。
+          </div>
+        )}
         <div style={{ flex: 1, overflow: 'auto' }}>
-          <CompactStepList steps={steps} onChange={onChange} selectedId={selected?.step} onSelect={handleSelect} />
+          <CompactStepList steps={steps} onChange={onChange} selectedId={selected?.step} onSelect={handleSelect} runSel={runSel} />
         </div>
       </div>
 

@@ -289,7 +289,8 @@ async def _execute_adhoc(
     for case in cases:
         dim = case.api_status if test_type == "api" else case.ui_status
         script = await _has_new_style_script(session, case.id, test_type)
-        if dim == "executable" and script:
+        # 有产物就跑 —— 不再要求维度 == executable（见 execution_service 那段说明）
+        if script:
             executable.append(case)
             new_scripts[case.id] = script
         elif bool(case.script_ref_file) and case.automation_status == "automated":
@@ -388,6 +389,16 @@ async def _execute_adhoc(
                 run_mode=script_run_service.REGRESSION,
                 report_scenario_id=scenario.id,
                 base_url=env_vars.get("BASE_URL"),
+            )
+            # **回归失败必须把状态打回来。** 这里原来只记账不推状态，于是
+            # `apply_case_status` 文档里写的「只有 regression 失败才是真信号，
+            # 才允许打回 debugging」在**唯一的真回归路径上从来没生效过** ——
+            # 一条用例被人发布进回归之后，哪怕每晚都挂，状态永远停在 executable，
+            # 没有任何人被通知，它就一直挂在回归池里刷红。
+            # 调试跑不打回（调试是"我正在试"），这条是回归，该打回。
+            script_run_service.apply_case_status(
+                case, "api" if test_type == "api" else "ui",
+                case_result.get("status"), script_run_service.REGRESSION,
             )
 
             for j, step in enumerate(case_result.get("steps", [])):

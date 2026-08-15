@@ -82,7 +82,7 @@ async def list_cases(
         # 用 `!= executable` 当判据，等人审的用例会被 CC 一遍遍捡回来重做，**这个循环
         # 永远不收敛**（dogfood 实测踩到：UI 都跑通了 owes 还挂着）。
         # pending_review / executable 都是"轮到人了"，CC 该放手。
-        todo = ("not_started", "draft", "debugging", "needs_fix")
+        todo = ("not_started", "draft", "debugging")
         stmt = stmt.where(or_(
             # 手工步骤按"有没有写"判 —— 步骤是内容不是执行物，没有"跑通"这回事，
             # manual_status 只有人工在页面上才会推进，拿它当判据同样不收敛。
@@ -110,7 +110,7 @@ async def list_cases(
     }
 
 
-_CC_TODO = ("not_started", "draft", "debugging", "needs_fix")
+_CC_TODO = ("not_started", "draft", "debugging")
 
 
 def _owes(c) -> list[str]:
@@ -149,6 +149,7 @@ async def create_case(
     steps: list | None = None,
     expected_result: str | None = None,
     target_level: str = "spec",
+    target_level_reason: str | None = None,
     expected_confirmed_by: str | None = None,
     expected_confirmed_note: str | None = None,
 ) -> dict:
@@ -211,6 +212,8 @@ async def create_case(
     )
     case = await case_service.create_case(session, uuid.UUID(branch_id), data, source="ai")
     case.target_level = target_level
+    if (target_level_reason or "").strip():
+        case.target_level_reason = target_level_reason.strip()[:1000]
     # CC 侧确认记录：平台只存不判。改了步骤/预期结果会被 update_case 自动清掉，
     # 所以它始终指向"确认的是哪一版"。
     if (expected_confirmed_note or "").strip():
@@ -227,8 +230,20 @@ async def create_case(
             "at": case.expected_confirmed_at.isoformat(),
         }
     warnings = list(warnings or []) + list(gate_warns or [])
+    # 「不要 UI / 不要接口」是个判断，必须留下理由 —— 只有一个 target_level 值时，
+    # 人分不出「你判断这条不需要」和「你没想、用了默认值」，而这两件事后果完全不同。
+    # 只提醒不硬拦：真有那种确实不需要的，写一句话的成本就够了。
+    if target_level != "full" and not (target_level_reason or "").strip():
+        missing = "UI" if target_level == "spec_api" else "UI 和接口"
+        warnings.append({
+            "field": "target_level_reason",
+            "value": f"这条 target_level={target_level}，也就是**不做 {missing} 维度**，"
+                     f"但没说为什么。人看不出你是判断过不需要、还是没想就用了默认值。"
+                     f"补一句话（比如「纯接口验证，页面没有对应落点」）。",
+        })
     if warnings:
         result["_qualityWarnings"] = warnings
+    result["targetLevelReason"] = case.target_level_reason
     return result
 
 
@@ -241,6 +256,7 @@ async def update_case(
     steps: list | None = None,
     expected_result: str | None = None,
     target_level: str | None = None,
+    target_level_reason: str | None = None,
     expected_confirmed_by: str | None = None,
     expected_confirmed_note: str | None = None,
 ) -> dict:
@@ -310,6 +326,8 @@ async def update_case(
         steps=steps, expected_result=expected_result,
     )
     case = await case_service.update_case(session, cid, data)
+    if target_level_reason is not None:
+        case.target_level_reason = (target_level_reason or "").strip()[:1000] or None
     if target_level is not None:
         case.target_level = target_level
     if (expected_confirmed_note or "").strip():
@@ -319,7 +337,8 @@ async def update_case(
         case.expected_confirmed_at = datetime.now(timezone.utc)
     await session.commit()
 
-    result = {**_case_to_dict(case), "targetLevel": case.target_level, "changed": changed}
+    result = {**_case_to_dict(case), "targetLevel": case.target_level,
+              "targetLevelReason": case.target_level_reason, "changed": changed}
     # 改了步骤或预期，平台会把"预期已确认"标记清掉 —— 说出来，否则 CC 以为还确认着
     if ("steps" in changed or "expectedResult" in changed) and not case.expected_confirmed_at:
         warnings = list(warnings) + [
