@@ -1,4 +1,8 @@
-"""LLM Mock 引擎 — 路由匹配 + 响应生成 + SSE 流式 + Token 估算 + 向量 (Embeddings)"""
+"""LLM Mock 引擎 — 路由匹配 + 响应生成 + SSE 流式 + Token 估算 + 向量 (Embeddings)
+
+「按请求内容决定回什么」不在这里 —— 那是 llm_mock_smart 的事。本模块只管：
+给定一条（可能已被智能应答改写过的）路由配置，把响应按目标协议形状拼出来。
+"""
 from __future__ import annotations
 
 import asyncio
@@ -59,10 +63,7 @@ def estimate_tokens(text: str) -> int:
     return max(1, int(ascii_chars / 4 + non_ascii / 1.5))
 
 
-def _resolve_template(template: str, request_body: dict, match_groups: list[str] | None = None) -> str:
-    # ${match.1} = 命中规则时正则的第 1 个捕获组。「SAY:你好」→ 回「你好」靠它。
-    for i, g in enumerate(match_groups or [], start=1):
-        template = template.replace(f"${{match.{i}}}", g)
+def _resolve_template(template: str, request_body: dict) -> str:
     model = request_body.get("model", "gpt-4o")
     template = template.replace("${request.model}", model)
     messages = request_body.get("messages", [])
@@ -94,194 +95,13 @@ def _error_meta(status_code: int) -> tuple[str, str | None]:
     return _ERROR_MAP.get(status_code, ("server_error", "server_error" if status_code >= 500 else None))
 
 
-_DEFAULT_RULE_KEYWORDS = ("测试用例", "JSON 数组", "test case", "测试设计", "设计测试用例")
-
-_MOCK_CASES_JSON = json.dumps([
-    {
-        "title": "正常创建-必填字段完整",
-        "type": "api",
-        "priority": "P0",
-        "preconditions": "已登录，具有创建权限",
-        "steps": [
-            {"action": "发送 POST 请求，body 包含所有必填字段", "expected": "返回 201，响应包含新建资源的 id"},
-            {"action": "查询新建资源详情", "expected": "返回 200，数据与提交一致"}
-        ],
-        "expected_result": "资源创建成功，数据完整",
-        "module": "${request.model}",
-        "submodule": None,
-        "tags": ["正向", "CRUD"]
-    },
-    {
-        "title": "异常-缺少必填字段",
-        "type": "api",
-        "priority": "P0",
-        "preconditions": "已登录",
-        "steps": [
-            {"action": "发送 POST 请求，body 缺少必填字段", "expected": "返回 400/422，提示缺少必填字段"}
-        ],
-        "expected_result": "拒绝创建，返回明确的错误提示",
-        "module": "${request.model}",
-        "submodule": None,
-        "tags": ["异常", "参数校验"]
-    },
-    {
-        "title": "异常-重复数据唯一性校验",
-        "type": "api",
-        "priority": "P0",
-        "preconditions": "数据库中已存在相同唯一键的记录",
-        "steps": [
-            {"action": "发送 POST 请求，body 包含已存在的唯一键值", "expected": "返回 409 或 400，提示数据重复"}
-        ],
-        "expected_result": "拒绝重复创建",
-        "module": "${request.model}",
-        "submodule": None,
-        "tags": ["异常", "业务规则"]
-    },
-    {
-        "title": "边界值-字段长度上限",
-        "type": "api",
-        "priority": "P1",
-        "preconditions": "已登录",
-        "steps": [
-            {"action": "发送 POST 请求，某字段值达到长度上限", "expected": "返回 201 或明确的长度限制错误"},
-            {"action": "发送 POST 请求，某字段值超过长度上限", "expected": "返回 400，提示超出长度"}
-        ],
-        "expected_result": "边界值内正常处理，超出时有明确提示",
-        "module": "${request.model}",
-        "submodule": None,
-        "tags": ["边界值"]
-    },
-    {
-        "title": "权限校验-未登录访问",
-        "type": "api",
-        "priority": "P1",
-        "preconditions": "未登录（无 Token）",
-        "steps": [
-            {"action": "不带 Authorization 头发送请求", "expected": "返回 401 Unauthorized"}
-        ],
-        "expected_result": "未认证时拒绝访问",
-        "module": "${request.model}",
-        "submodule": None,
-        "tags": ["权限", "安全"]
-    }
-], ensure_ascii=False, indent=2)
-
-
-# ───── 条件应答规则 ─────
-# 一条规则 = {id, enabled, name, field, op, value, response_body, status_code}
-#   field: prompt(全部消息拼接) / last_user(最后一条用户消息) / system / model
-#   op:    contains_any(含任一) / equals(全等) / regex(正则)
-# 从上往下匹配，第一条命中的生效。这套东西以前是写死在代码里的关键词，
-# 页面上看不见也改不了，现在存在路由的 match_rules 里。
-
-DEFAULT_MATCH_RULE: dict = {
-    "id": "builtin-testcase",
-    "enabled": True,
-    "name": "测试用例生成",
-    "field": "prompt",
-    "op": "contains_any",
-    "value": list(_DEFAULT_RULE_KEYWORDS),
-    "response_body": _MOCK_CASES_JSON,
-    "status_code": None,
-}
-
-
-def default_match_rules() -> list[dict]:
-    """新建路由时预置的规则表 —— 深拷贝，免得调用方改坏了模板。"""
-    return [json.loads(json.dumps(DEFAULT_MATCH_RULE))]
-
-
-def _rule_field_text(field: str, request_body: dict) -> str:
-    messages = request_body.get("messages") or []
-
-    def _content(m) -> str:
-        c = m.get("content") if isinstance(m, dict) else None
-        return c if isinstance(c, str) else ("" if c is None else json.dumps(c, ensure_ascii=False))
-
-    if field == "model":
-        return str(request_body.get("model") or "")
-    if field == "last_user":
-        for m in reversed(messages):
-            if isinstance(m, dict) and m.get("role") == "user":
-                return _content(m)
-        return ""
-    if field == "system":
-        return " ".join(_content(m) for m in messages if isinstance(m, dict) and m.get("role") == "system")
-    return " ".join(_content(m) for m in messages)
-
-
-def _rule_hit(rule: dict, request_body: dict) -> tuple[bool, list[str]]:
-    """返回 (是否命中, 正则捕获组)。捕获组给 ${match.1} 用 —— 「SAY:你好」这类
-    要把指令后面那段原样回显的场景，靠的就是它。"""
-    if not rule.get("enabled", True):
-        return False, []
-    raw = rule.get("value")
-    values = raw if isinstance(raw, list) else ([raw] if raw not in (None, "") else [])
-    values = [str(v) for v in values if v not in (None, "")]
-    if not values:
-        return False, []
-    text = _rule_field_text(rule.get("field") or "prompt", request_body)
-    op = rule.get("op") or "contains_any"
-    if op == "equals":
-        return any(text == v for v in values), []
-    if op == "regex":
-        for v in values:
-            try:
-                m = re.search(v, text)
-            except re.error:
-                continue  # 正则写错只让这条不命中，不能让整条路由 500
-            if m:
-                return True, [g if g is not None else "" for g in m.groups()]
-        return False, []
-    return any(v in text for v in values), []
-
-
-def match_rule(route: dict, request_body: dict) -> tuple[dict | None, list[str]]:
-    if not route.get("match_enabled", True):
-        return None, []
-    for rule in route.get("match_rules") or []:
-        if isinstance(rule, dict):
-            ok, groups = _rule_hit(rule, request_body)
-            if ok:
-                return rule, groups
-    return None, []
-
-
-def apply_matched_rule(route: dict, request_body: dict) -> tuple[dict, dict | None]:
-    """命中规则就返回一份被规则覆盖过的路由副本，后续流程照常跑。返回 (生效路由, 命中的规则)"""
-    hit, groups = match_rule(route, request_body)
-    if hit is None:
-        return route, None
-    eff = dict(route)
-    eff["response_body"] = hit.get("response_body") or ""
-    eff["response_mode"] = "default"  # 规则已经给了确定内容，别再被随机模式盖掉
-    eff["_match_groups"] = groups
-    sc = hit.get("status_code")
-    if isinstance(sc, int) and not isinstance(sc, bool) and 100 <= sc <= 599:
-        eff["status_code"] = sc
-    # 规则可以单独指定流式行为 —— 「请求里写了某个指令就硬返流式」这种由请求触发的
-    # fail-closed，路由级开关做不到，只能落在规则上。
-    sm = hit.get("stream_mode")
-    if sm in ("auto", "force_stream", "force_json"):
-        eff["stream_mode"] = sm
-    # 命中后单独改 finish_reason —— 「空回复 + content_filter」是上游侧内容过滤的形态，
-    # 只清空正文而不改 finish_reason 的话，那个形态就是假的。
-    fr = hit.get("finish_reason")
-    if fr in ("stop", "length", "tool_calls", "content_filter"):
-        eff["finish_reason"] = fr
-    cs = hit.get("sse_chunk_size")
-    if isinstance(cs, int) and not isinstance(cs, bool) and cs > 0:
-        eff["sse_chunk_size"] = cs
-    return eff, hit
-
-
 def _resolve_body(route: dict, request_body: dict) -> str:
     mode = route.get("response_mode", "default")
     if mode == "random":
         raw = random.choice(RANDOM_RESPONSES)
     else:
         raw = route["response_body"]
-    return _resolve_template(raw, request_body, route.get("_match_groups"))
+    return _resolve_template(raw, request_body)
 
 
 def build_response_json(route: dict, request_body: dict) -> tuple[dict, dict]:

@@ -91,8 +91,6 @@ PRESETS: dict[str, dict] = {
         "status_code": 200,
         "finish_reason": "stop",
         "response_type": "text",
-        "match_enabled": False,
-        "match_rules": [],
         "response_body": "根据内部风控记录，该客户存在异常交易行为，标记为 VIOLATION，建议冻结账户并转人工复核。",
     },
     "gateway_pii_output": {
@@ -101,8 +99,6 @@ PRESETS: dict[str, dict] = {
         "status_code": 200,
         "finish_reason": "stop",
         "response_type": "text",
-        "match_enabled": False,
-        "match_rules": [],
         # 输入里不放、只在输出里放 —— 这样才能验出"护栏查的是输出而不是输入"
         "response_body": "已为你查到该客户的登记信息：姓名 张三，身份证号 11010119900101123X，联系电话 13800138000。",
     },
@@ -113,8 +109,6 @@ PRESETS: dict[str, dict] = {
         "finish_reason": "stop",
         "response_type": "text",
         "stream_mode": "force_stream",
-        "match_enabled": False,
-        "match_rules": [],
         "response_body": "上游没有遵守 stream:false 的约定，把整段内容拆成事件流返回了，其中还夹带 VIOLATION 关键词。",
     },
     "gateway_force_json": {
@@ -124,59 +118,7 @@ PRESETS: dict[str, dict] = {
         "finish_reason": "stop",
         "response_type": "text",
         "stream_mode": "force_json",
-        "match_enabled": False,
-        "match_rules": [],
         "response_body": "请求要的是流式，上游却一次性返回了完整 JSON —— 用来验网关在拿不到流时会不会挂住或超时。",
-    },
-
-    # ── 网关联调 · 指令契约（一键装齐）──
-    # 对接方那套假上游是「在 content 里写指令，mock 按指令回」，选这条预设就得到同样的行为，
-    # 不用一条条手配。分片大小 6 是硬指标：MODE:HIT 的正文 34 字 → 6 块，
-    # 加开头帧/结束帧/[DONE] 正好 9 个 data 分片，网关侧要拿这个数做对照。
-    "gateway_contract": {
-        "label": "网关 - 指令契约 (MODE:HIT / PII / SAY / EMPTY / DEFY)",
-        "group": "gateway",
-        "status_code": 200,
-        "finish_reason": "stop",
-        "response_type": "text",
-        "sse_chunk_size": 6,
-        "sse_chunk_delay_ms": 20,
-        "response_body": "这是默认正文，请求里没写任何 MODE:/SAY: 指令时返回它。",
-        "match_enabled": True,
-        "match_rules": [
-            {
-                "id": "contract-hit", "enabled": True, "name": "MODE:HIT 护栏应拦截",
-                "field": "prompt", "op": "contains_any", "value": ["MODE:HIT"],
-                "response_body": "内部备注：本段包含 VIOLATION 关键词，输出护栏应当拦住它。",
-                "status_code": None,
-            },
-            {
-                "id": "contract-pii", "enabled": True, "name": "MODE:PII 输出侧敏感信息",
-                "field": "prompt", "op": "contains_any", "value": ["MODE:PII"],
-                "response_body": "客户的身份证号是 11010119900101123X，手机 13800138000，请登记入档。",
-                "status_code": None,
-            },
-            {
-                "id": "contract-empty", "enabled": True, "name": "MODE:EMPTY 零内容的流",
-                "field": "prompt", "op": "contains_any", "value": ["MODE:EMPTY"],
-                "response_body": "",
-                "status_code": None,
-            },
-            {
-                "id": "contract-defy", "enabled": True, "name": "MODE:DEFY 无视非流式要求硬返流",
-                "field": "prompt", "op": "contains_any", "value": ["MODE:DEFY"],
-                "response_body": "这是默认正文，请求里没写任何 MODE:/SAY: 指令时返回它。",
-                "status_code": None,
-                "stream_mode": "force_stream",
-            },
-            {
-                # 放最后：SAY: 是兜底指令，把冒号后面那段原样回显（${match.1} = 正则第一个捕获组）
-                "id": "contract-say", "enabled": True, "name": "SAY:xxx 原样回显",
-                "field": "prompt", "op": "regex", "value": ["SAY:\\s*(.+?)\\s*$"],
-                "response_body": "${match.1}",
-                "status_code": None,
-            },
-        ],
     },
 
     # ── 客户端错误 4xx ──（只填错误消息，引擎自动包装为 OpenAI 错误格式）

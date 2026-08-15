@@ -57,18 +57,11 @@ class MockRoute(Base):
     # （测网关 fail-closed：上游对 stream:false 耍赖返流）；force_json 反过来，请求要流也只给整包 JSON
     stream_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="auto")
 
-    # 条件应答 —— 按请求内容分流：命中规则就返回规则自己的响应，都不命中才用下面的 response_body。
-    # 总开关关掉则整张规则表不参与匹配（调试时想看默认响应，不必一条条禁用）。
-    match_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    # [{id, enabled, name, field, op, value, response_body, status_code}]
-    # 内置那条「测试用例关键词 → 用例 JSON」也躺在这里，跟自建规则完全平权，可改可删。
-    match_rules: Mapped[list | None] = mapped_column(JSONB, nullable=False, default=list, server_default="[]")
-
     # 智能应答 —— 行为由请求里的指令决定（SAY: / MODE:xxx），而不是这张表上的静态配置。
-    # 开着的时候接管整条链路：条件应答规则、响应内容、状态码、finish_reason、流式这些全部旁路。
-    # 为什么单独一个模式而不是再加几条规则：规则的响应体是静态串，而护栏回显（要报本次
-    # 待检正文的长度/开头）、MODE:LOOP（要跨轮判断）、MODE:SLOW（按分片计时）这三样
-    # 的响应内容依赖请求内容，规则表达不了。
+    # 开着的时候接管整条链路：响应内容、状态码、finish_reason、流式这些全部旁路。
+    # 关着就是一条老老实实的静态 mock：所有请求都回 response_body。
+    # （原来还有一套 match_enabled/match_rules 条件应答，跟这个重复 —— 一条路由上两套
+    #  「按请求内容决定回什么」，"这次到底是谁决定了响应"只能靠猜，已在 zz6dropmr 删除。）
     smart_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     # auto（按路径判）/ upstream（被测智能体的上游大模型）/ checker（网关护栏调用的检查模型）
     smart_role: Mapped[str] = mapped_column(String(20), nullable=False, default="auto", server_default="auto")

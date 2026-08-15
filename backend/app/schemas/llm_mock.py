@@ -8,29 +8,6 @@ from pydantic import Field
 from app.schemas.common import BaseSchema
 
 
-# ───── 条件应答规则 ─────
-
-class MatchRule(BaseSchema):
-    """一条「什么样的请求 → 回什么」的规则。从上往下匹配，第一条命中的生效。"""
-    id: str | None = None
-    enabled: bool = True
-    name: str = Field(default="", max_length=100)
-    # 拿请求的哪部分来比：全部消息拼接 / 最后一条用户消息 / system 消息 / 模型名
-    field: str = Field(default="prompt", pattern="^(prompt|last_user|system|model)$")
-    op: str = Field(default="contains_any", pattern="^(contains_any|equals|regex)$")
-    value: list[str] = Field(default_factory=list)
-    response_body: str = ""
-    # 命中后连状态码一起改（比如"prompt 里带 xxx 就返回 429"），不填则沿用路由的
-    status_code: int | None = Field(default=None, ge=100, le=599)
-    # 命中后单独指定流式行为 —— 「请求里写了某个指令就硬返流式」这种由请求触发的
-    # fail-closed，路由级开关做不到
-    stream_mode: str | None = Field(default=None, pattern="^(auto|force_stream|force_json)$")
-    sse_chunk_size: int | None = Field(default=None, ge=1, le=4096)
-    # 命中后连 finish_reason 一起改。「空回复 + content_filter」这个上游过滤形态，
-    # 只清空正文是做不出来的
-    finish_reason: str | None = Field(default=None, pattern="^(stop|length|tool_calls|content_filter)$")
-
-
 # ───── Mock Route Schemas ─────
 
 class MockRouteCreate(BaseSchema):
@@ -54,9 +31,6 @@ class MockRouteCreate(BaseSchema):
     sse_chunk_delay_ms: int = Field(default=50, ge=0)
     sse_chunk_size: int = Field(default=1, ge=1, le=4096)
     stream_mode: str = Field(default="auto", pattern="^(auto|force_stream|force_json)$")
-    match_enabled: bool = True
-    # 不传则由 service 预置内置规则；显式传 [] 就是明确要一条规则都不要
-    match_rules: list[MatchRule] | None = None
     response_type: str = Field(default="text")
     tool_calls: list | None = None
     # 智能应答：默认关，开了才由请求里的指令决定行为（见 llm_mock_smart.py）
@@ -86,8 +60,6 @@ class MockRouteUpdate(BaseSchema):
     sse_chunk_delay_ms: int | None = None
     sse_chunk_size: int | None = Field(default=None, ge=1, le=4096)
     stream_mode: str | None = Field(default=None, pattern="^(auto|force_stream|force_json)$")
-    match_enabled: bool | None = None
-    match_rules: list[MatchRule] | None = None
     response_type: str | None = None
     tool_calls: list | None = None
     smart_enabled: bool | None = None
@@ -119,8 +91,6 @@ class MockRouteResponse(BaseSchema):
     sse_chunk_delay_ms: int
     sse_chunk_size: int
     stream_mode: str
-    match_enabled: bool
-    match_rules: list[MatchRule]
     response_type: str
     tool_calls: list | None
     smart_enabled: bool

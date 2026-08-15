@@ -25,7 +25,7 @@ def _route(**over) -> dict:
         "token_mode": "auto", "custom_prompt_tokens": None, "custom_completion_tokens": None,
         "delay_ms": 0, "finish_reason": "stop", "response_headers": None,
         "stream_mode": "auto", "sse_chunk_size": 6, "sse_chunk_delay_ms": 0,
-        "match_enabled": True, "match_rules": [], "tool_calls": None,
+        "tool_calls": None,
         "smart_enabled": True, "smart_role": "auto", "smart_body_marker": None,
     }
     base.update(over)
@@ -277,14 +277,14 @@ def test_smart_meta记的是网关实际发出的stream():
     assert meta2["stream"] is True and meta2["includeUsage"] is True
 
 
-def test_智能应答一律旁路条件应答规则():
-    """两套都生效的话，「这次到底是谁决定了响应」就只能靠猜。"""
-    r = _route(match_enabled=True, match_rules=[{
-        "id": "x", "enabled": True, "field": "prompt", "op": "contains_any",
-        "value": ["你好"], "response_body": "规则的回复"}])
-    eff, _ = smart.apply_smart(r, _msg("你好"), "/v1/chat/completions")
-    assert eff["match_enabled"] is False
-    assert eff["response_body"] != "规则的回复"
+def test_智能应答只在开着时接管():
+    """关掉就是一条静态 mock：所有请求都回路由上配的那段，指令一概不认。"""
+    r = _route(response_body="我是路由上配死的正文")
+    # 开着：指令生效
+    eff, _ = smart.apply_smart(r, _msg("MODE:HIT"), "/v1/chat/completions")
+    assert "VIOLATION" in eff["response_body"]
+    # 关着：manager 压根不调 apply_smart，引擎直接拿路由的静态正文
+    assert engine._resolve_body({**r, "smart_enabled": False}, _msg("MODE:HIT")) == "我是路由上配死的正文"
 
 
 # ───── 三种协议形状的输出 ─────
@@ -329,25 +329,28 @@ def test_legacy流式用text字段():
 
 # ───── 回归守卫：没开智能应答时行为不能变 ─────
 
-def test_没开智能应答时条件应答照常工作():
-    r = _route(smart_enabled=False, match_rules=[{
-        "id": "x", "enabled": True, "field": "prompt", "op": "contains_any",
-        "value": ["退款"], "response_body": "您的退款已受理"}])
-    eff, hit = engine.apply_matched_rule(r, _msg("我要退款"))
-    assert hit is not None
-    assert eff["response_body"] == "您的退款已受理"
+def test_没开智能应答时就是老老实实的静态响应():
+    r = _route(smart_enabled=False, response_body="固定回这句")
+    body, _ = engine.build_response_json(r, _msg("随便问点什么"))
+    assert body["choices"][0]["message"]["content"] == "固定回这句"
 
 
-def test_规则可以单独改finish_reason且不影响没填的情况():
-    base = _route(finish_reason="stop")
-    rule = {"id": "x", "enabled": True, "field": "prompt", "op": "contains_any", "value": ["过滤"]}
+def test_模板变量还在_没被条件应答一起删掉():
+    """${match.N} 是规则专用的，跟着规则删了；这几个是路由自己的，不能误删。"""
+    r = _route(smart_enabled=False, response_body="模型是 ${request.model}，问的是 ${request.messages[-1].content}")
+    out = engine._resolve_body(r, {**_msg("今天天气"), "model": "gpt-4o"})
+    assert out == "模型是 gpt-4o，问的是 今天天气"
 
-    eff, _ = engine.apply_matched_rule({**base, "match_rules": [dict(rule, response_body="")]}, _msg("过滤"))
-    assert eff["finish_reason"] == "stop", "没填就得沿用路由的，不能被悄悄改掉"
 
-    eff2, _ = engine.apply_matched_rule(
-        {**base, "match_rules": [dict(rule, response_body="", finish_reason="content_filter")]}, _msg("过滤"))
-    assert eff2["finish_reason"] == "content_filter"
+def test_条件应答已彻底移除():
+    """删干净了没 —— 留着半截 API 比留着整个功能更糟。"""
+    for gone in ("match_rule", "apply_matched_rule", "default_match_rules", "DEFAULT_MATCH_RULE"):
+        assert not hasattr(engine, gone), f"engine 里还剩 {gone}"
+    assert not hasattr(smart, "expand_to_rules")
+    from app.schemas import llm_mock as sch
+    assert not hasattr(sch, "MatchRule")
+    assert "match_enabled" not in sch.MockRouteCreate.model_fields
+    assert "match_rules" not in sch.MockRouteCreate.model_fields
 
 
 def test_usage帧仍在流末尾且在DONE之前():
@@ -361,29 +364,32 @@ def test_usage帧仍在流末尾且在DONE之前():
     assert usage_frame["usage"]["total_tokens"] > 0
 
 
-def test_展开成规则只含规则表达得了的那几条():
-    rules = smart.expand_to_rules()
-    keys = " ".join(json.dumps(r, ensure_ascii=False) for r in rules)
-    for expandable in ("MODE:HIT", "MODE:PII", "MODE:EMPTY", "MODE:FILTER", "MODE:DEFY", "SAY:"):
-        assert expandable in keys
-    # 这两条响应内容依赖请求内容，规则表达不了 —— 混进去只会做出一条假的
-    assert "MODE:LOOP" not in keys and "MODE:SLOW" not in keys
+# ───── 智能应答「没接管」的那几样，必须仍然可配 ─────
+# 页面上一度把它们跟被接管的一起藏了 —— 那是反过来的坑：生效了，但你看不见也改不了。
 
-    declared = {d["key"]: d["expandable"] for d in smart.DIRECTIVE_CONTRACT}
-    assert declared["MODE:LOOP"] is False and declared["MODE:SLOW"] is False
+def test_分片与token不被智能应答接管():
+    """分片数和 token 用量本身就是拿来断言网关的（分片边界、计费统计），
+    指令管不着它们，所以必须仍按路由配置生效。"""
+    r = _route(sse_chunk_size=6, sse_chunk_delay_ms=20,
+               token_mode="custom", custom_prompt_tokens=999, custom_completion_tokens=888)
+    eff, _ = smart.apply_smart(r, _msg("你好"), "/v1/chat/completions")
+    for k in ("sse_chunk_size", "sse_chunk_delay_ms", "token_mode",
+              "custom_prompt_tokens", "custom_completion_tokens", "model_mode", "custom_model"):
+        assert eff[k] == r[k], f"{k} 不该被智能应答改掉"
 
 
-def test_展开出来的规则真的能被引擎命中():
-    """展开完是死的就等于没给逃生口。"""
-    r = _route(smart_enabled=False, match_enabled=True, match_rules=smart.expand_to_rules())
-    eff, hit = engine.apply_matched_rule(r, _msg("MODE:PII"))
-    assert hit is not None and "11010119900101123X" in eff["response_body"]
+def test_被接管的那几样确实被覆盖了():
+    """反过来也要守：说了接管就得真接管，不然页面藏了它们就是骗人。"""
+    r = _route(status_code=429, response_type="refusal", finish_reason="length",
+               stream_mode="force_json", delay_ms=500, response_mode="random")
+    eff, _ = smart.apply_smart(r, _msg("你好"), "/v1/chat/completions")
+    assert (eff["status_code"], eff["response_type"], eff["finish_reason"]) == (200, "text", "stop")
+    assert (eff["stream_mode"], eff["delay_ms"], eff["response_mode"]) == ("auto", 0, "default")
 
-    # SAY 的捕获组要能回填进 ${match.1}。回填发生在响应构建阶段（_resolve_body），
-    # 不是命中阶段 —— 只断言 apply_matched_rule 的话，看到的还是没展开的模板串
-    body = _msg("SAY:你好世界")
-    eff2, _ = engine.apply_matched_rule(r, body)
-    assert engine._resolve_body(eff2, body) == "你好世界"
 
-    eff3, _ = engine.apply_matched_rule(r, _msg("MODE:FILTER"))
-    assert eff3["response_body"] == "" and eff3["finish_reason"] == "content_filter"
+def test_MODE_SLOW是唯一会顶掉SSE间隔的指令():
+    r = _route(sse_chunk_delay_ms=20)
+    eff, _ = smart.apply_smart(r, {**_msg("MODE:SLOW"), "stream": True}, "/v1/chat/completions")
+    assert eff["sse_chunk_delay_ms"] == smart.SLOW_CHUNK_DELAY_MS
+    eff2, _ = smart.apply_smart(r, {**_msg("你好"), "stream": True}, "/v1/chat/completions")
+    assert eff2["sse_chunk_delay_ms"] == 20

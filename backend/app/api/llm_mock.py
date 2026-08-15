@@ -115,15 +115,13 @@ async def get_preset_detail(key: str):
 
 
 # ───── 智能应答契约 ─────
-# 前端的「指令契约面板」和「展开成规则」都从这里取，不在 JSX 里再抄一份 ——
+# 前端的「指令契约面板」从这里取，不在 JSX 里再抄一份 ——
 # 抄两份的话，改了一边忘了另一边，页面上写的和引擎实际干的就不是一回事了。
 
 @router.get("/smart-contract")
 async def get_smart_contract():
     return {
         "directives": smart.DIRECTIVE_CONTRACT,
-        # 「展开成规则」按钮拿它写进 match_rules
-        "expandableRules": smart.expand_to_rules(),
         "defaultBody": smart.SMART_DEFAULT_BODY,
         "checkerSample": smart.build_checker_verdict(
             {"messages": [{"role": "user", "content":

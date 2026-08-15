@@ -41,8 +41,6 @@ _FALLBACK_EMBEDDING_ROUTE: dict = {
     "response_headers": None,
     "stream_mode": "auto",
     "sse_chunk_size": 1,
-    "match_enabled": False,
-    "match_rules": [],
     "smart_enabled": False,
     "smart_role": "auto",
     "smart_body_marker": None,
@@ -59,6 +57,8 @@ class MockServerManager:
         self._app: FastAPI | None = None
         self._task: asyncio.Task | None = None
         self._ws_clients: list = []
+        # 断连场景下异步写日志的任务。必须持强引用，否则可能被 GC 掉、日志无声无息地丢
+        self._log_tasks: set[asyncio.Task] = set()
 
     def _save_state(self, running: bool):
         try:
@@ -142,6 +142,13 @@ class MockServerManager:
         @app.get("/{prefix:path}/v1/models")
         async def list_models(prefix: str = ""):
             return mgr._build_models_response()
+
+        # 探活。没有它的话，「上游到底活着没有」只能靠发一条业务请求去试，
+        # 而那条请求会进请求日志、把「上游收到几次」这类断言搞脏。
+        # 声明在 catch_all 之前，否则会被通配路由吃掉（路由都是 POST，GET /health 会 404）。
+        @app.get("/health")
+        async def health():
+            return {"status": "ok", "service": "llm-mock", "port": mgr.port}
 
         @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
         async def catch_all(request: Request, path: str):
@@ -236,8 +243,9 @@ class MockServerManager:
             )
 
         route_dict = self._route_to_dict(matched_route)
-        # 智能应答开着就由它接管：行为全部由请求里的指令决定，条件应答规则不参与。
-        # 二选一而不是叠加 —— 两套都在的话，「这次到底是谁决定了响应」会变成猜。
+        # 智能应答开着就由它接管：响应内容 / 状态码 / finish_reason / 流式全部由请求里的
+        # 指令决定。放在最前面是因为 status_code 会影响下面的流式判定和日志。
+        # 关着就是一条静态 mock，所有请求都回路由上配的那段 response_body。
         smart_meta: dict | None = None
         if route_dict.get("smart_enabled"):
             route_dict, smart_meta = smart.apply_smart(route_dict, request_body, path)
@@ -246,12 +254,6 @@ class MockServerManager:
                 smart_meta.get("role"), smart_meta.get("shape"),
                 smart_meta.get("directive") or "无", route_dict.get("name"),
             )
-        else:
-            # 条件应答：命中规则就把 response_body / status_code 换成规则自己的，
-            # 放在最前面是因为 status_code 会影响下面的流式判定和日志。
-            route_dict, hit_rule = engine.apply_matched_rule(route_dict, request_body)
-            if hit_rule is not None:
-                logger.info("命中条件应答规则: %s (路由 %s)", hit_rule.get("name") or hit_rule.get("id"), route_dict.get("name"))
         shape = route_dict.get("_smart_shape") or "chat"
         is_embeddings = engine.is_embeddings_route(route_dict, path)
         # embeddings 没有流式、错误响应也不走流式，这两条压过 stream_mode
@@ -286,17 +288,39 @@ class MockServerManager:
 
             async def stream_with_log():
                 body_parts = []
-                async for chunk in stream_builder(route_dict, request_body):
-                    body_parts.append(chunk)
-                    yield chunk
-                t_done = time.perf_counter()
-                if self.capture_enabled:
-                    await self._log_request(
-                        route_dict, request, request_body, method, path,
-                        route_dict["status_code"], "".join(body_parts), {},
-                        match_ms, first_byte_ms, (t_done - t_first_byte) * 1000, (t_done - t0) * 1000,
-                        smart_meta,
-                    )
+                finished = False
+                try:
+                    async for chunk in stream_builder(route_dict, request_body):
+                        body_parts.append(chunk)
+                        yield chunk
+                    finished = True
+                finally:
+                    # 走 finally 是因为**客户端中途断连也必须留下日志**。
+                    # 护栏拦截的形态就是断连：网关判定要拦，直接掐掉与上游的连接。
+                    # 只在正常读完时记的话，恰恰是最该查的那次请求在日志里完全不存在，
+                    # 「被拦下来时上游已经发出去多少」就永远查不到了。
+                    t_done = time.perf_counter()
+                    if self.capture_enabled:
+                        text = "".join(body_parts)
+                        meta = dict(smart_meta) if isinstance(smart_meta, dict) else None
+                        if not finished:
+                            text += "\n[流未发完：客户端中途断开连接（护栏拦截通常就是这个形态）]"
+                            if meta is not None:
+                                meta["aborted"] = True
+                        args = (
+                            route_dict, request, request_body, method, path,
+                            route_dict["status_code"], text, {},
+                            match_ms, first_byte_ms, (t_done - t_first_byte) * 1000, (t_done - t0) * 1000,
+                            meta,
+                        )
+                        if finished:
+                            await self._log_request(*args)
+                        else:
+                            # ⚠ 断连时当前任务正在被取消，**这里绝不能直接 await 数据库**：
+                            # 取消会把 asyncpg 连接掐在执行到一半的地方，坏连接回到池子里，
+                            # 之后别的请求全报 "connection is closed"（实测踩过，整个后端跟着挂）。
+                            # 甩给一个独立任务去写，它不受本次取消影响。
+                            self._spawn_log_task(*args)
 
             headers = engine._build_headers(route_dict, "")
             headers["content-type"] = "text/event-stream; charset=utf-8"
@@ -383,14 +407,21 @@ class MockServerManager:
             "sse_chunk_delay_ms": route.sse_chunk_delay_ms,
             "sse_chunk_size": route.sse_chunk_size,
             "stream_mode": route.stream_mode,
-            "match_enabled": route.match_enabled,
-            "match_rules": route.match_rules,
             "response_type": route.response_type,
             "tool_calls": route.tool_calls,
             "smart_enabled": route.smart_enabled,
             "smart_role": route.smart_role,
             "smart_body_marker": route.smart_body_marker,
         }
+
+    def _spawn_log_task(self, *args) -> None:
+        """把写日志甩给独立任务 —— 只在「本次请求正在被取消」时用（见调用处注释）。"""
+        try:
+            task = asyncio.create_task(self._log_request(*args))
+        except RuntimeError:
+            return  # 事件循环已经在关了，日志写不成也别炸
+        self._log_tasks.add(task)
+        task.add_done_callback(self._log_tasks.discard)
 
     async def _log_request(
         self, route_dict, request, request_body, method, path,

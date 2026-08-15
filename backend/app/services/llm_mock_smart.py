@@ -5,16 +5,14 @@
 服务端配置里。差别不是风格问题 —— 配置在服务端的话，每换一个场景都要改配置、等下发、
 重来一遍，**对照实验根本做不起来**。
 
-## 与「条件应答规则表」的分工
+## 开 / 关
 
-规则表（`llm_mock_engine.match_rule`）能覆盖大部分「问什么答什么」，而且可见可编辑，
-所以它是默认路径。但它的响应体是**静态串**，下面这几样它表达不了，才归本模块：
+关着：路由是一条老老实实的静态 mock，所有请求都回它配的 response_body。
+开着：本模块接管，响应内容 / 状态码 / finish_reason / 流式全部由请求里的指令决定，
+页面上那些配置也就跟着隐藏了 —— 显示一堆改了不生效的框只会误导人。
 
-  · 护栏回显 —— 响应里要带「本次待检正文有多长、开头是什么」，必须现算
-  · MODE:LOOP —— 要跨轮判断（消息里有没有 role=tool），第一轮回 tool_calls、第二轮回终局
-  · MODE:SLOW —— 非流式也要按分片数累计延迟
-  · MODE:FILTER —— 要改 finish_reason
-  · 三种协议形状 / 三种入参形状
+（曾经还有一套 match_rules 条件应答干类似的事，跟这个重复：一条路由上两套
+「按请求内容决定回什么」，"这次到底是谁决定了响应"只能靠猜，已在 zz6dropmr 删掉。）
 
 ## 实现取向
 
@@ -364,8 +362,7 @@ def apply_smart(route: dict, request_body: dict, path: str) -> tuple[dict, dict]
         "userTextHead": (user_text or "")[:BODY_HEAD_LEN],
     }
 
-    # 智能应答接管：条件应答规则一律不参与，静态响应配置也不生效
-    eff["match_enabled"] = False
+    # 智能应答接管：路由上的静态响应配置一概不生效
     eff["response_mode"] = "default"
     eff["response_type"] = "text"
     eff["finish_reason"] = "stop"
@@ -425,53 +422,27 @@ def apply_smart(route: dict, request_body: dict, path: str) -> tuple[dict, dict]
     return eff, meta
 
 
-# ───── 页面用：指令契约表 + 能否展开成规则 ─────
-# 前端拿这张表渲染「指令契约面板」，以及「展开成规则」按钮生成 match_rules。
-# expandable=False 的那几条**规则表达不了**，这就是智能应答存在的全部理由。
+# ───── 页面用：指令契约表 ─────
+# 前端的「指令契约面板」从这里取，不在 JSX 里再抄一份 ——
+# 抄两份的话，改了一边忘了另一边，页面上写的和引擎实际干的就不是一回事了。
 
 DIRECTIVE_CONTRACT: list[dict] = [
-    {"key": "", "label": "不带指令", "expandable": False,
+    {"key": "", "label": "不带指令",
      "effect": "返回内置的干净长正文，作为对照实验的基线"},
-    {"key": "SAY:<文本>", "label": "SAY", "expandable": True,
+    {"key": "SAY:<文本>", "label": "SAY",
      "effect": "原样回显冒号后面那段（取到行尾），用来只改一个变量做对照"},
-    {"key": "MODE:HIT", "label": "HIT", "expandable": True,
+    {"key": "MODE:HIT", "label": "HIT",
      "effect": "输出含 VIOLATION 关键词，不依赖大模型的确定性对照"},
-    {"key": "MODE:PII", "label": "PII", "expandable": True,
+    {"key": "MODE:PII", "label": "PII",
      "effect": "输出含身份证号+手机号（请求里没有），验护栏查的是输出而不是输入"},
-    {"key": "MODE:EMPTY", "label": "EMPTY", "expandable": True,
+    {"key": "MODE:EMPTY", "label": "EMPTY",
      "effect": "零内容事件流（只有角色帧+结束帧）—— 合法形态，网关不该当错误"},
-    {"key": "MODE:FILTER", "label": "FILTER", "expandable": True,
+    {"key": "MODE:FILTER", "label": "FILTER",
      "effect": "空回复 + finish_reason=content_filter，上游侧内容过滤的形态"},
-    {"key": "MODE:DEFY", "label": "DEFY", "expandable": True,
+    {"key": "MODE:DEFY", "label": "DEFY",
      "effect": "无视 stream=false 照样回事件流，验网关 fail-closed"},
-    {"key": "MODE:SLOW", "label": "SLOW", "expandable": False,
-     "effect": f"每片 sleep {SLOW_CHUNK_DELAY_MS}ms，非流式也按分片数累计 —— 规则改不了延迟"},
-    {"key": "MODE:LOOP", "label": "LOOP", "expandable": False,
-     "effect": "第一轮回 tool_calls，收到 role=tool 后回终局 —— 规则做不到跨轮判断"},
+    {"key": "MODE:SLOW", "label": "SLOW",
+     "effect": f"每片 sleep {SLOW_CHUNK_DELAY_MS}ms，非流式也按分片数累计 —— 量「全量缓冲把首字延迟推成完整生成耗时」这个降级代价"},
+    {"key": "MODE:LOOP", "label": "LOOP",
+     "effect": "第一轮回 tool_calls，收到 role=tool 后回终局（终局含 VIOLATION，好验护栏有没有介入终局）"},
 ]
-
-
-def expand_to_rules() -> list[dict]:
-    """把能用条件应答规则表达的那几条展开成 match_rules。
-
-    逃生口：不想被契约绑着就点「展开成规则」，从此可看可改可删。
-    LOOP / SLOW / 护栏回显展开不了（响应内容依赖请求内容），不在这里面。
-    """
-    def rule(rid, name, values, resp, **extra):
-        r = {"id": rid, "enabled": True, "name": name, "field": "prompt",
-             "op": "contains_any", "value": values, "response_body": resp, "status_code": None}
-        r.update(extra)
-        return r
-
-    return [
-        rule("smart-hit", "MODE:HIT 护栏应拦截", ["MODE:HIT"], SMART_HIT_BODY),
-        rule("smart-pii", "MODE:PII 输出侧敏感信息", ["MODE:PII"], SMART_PII_BODY),
-        rule("smart-empty", "MODE:EMPTY 零内容的流", ["MODE:EMPTY"], ""),
-        rule("smart-filter", "MODE:FILTER 内容过滤形态", ["MODE:FILTER"], "",
-             finish_reason="content_filter"),
-        rule("smart-defy", "MODE:DEFY 无视非流式要求硬返流", ["MODE:DEFY"],
-             SMART_DEFAULT_BODY, stream_mode="force_stream"),
-        # 放最后：SAY: 是兜底指令，把冒号后面那段原样回显（${match.1} = 正则第一个捕获组）
-        {"id": "smart-say", "enabled": True, "name": "SAY:xxx 原样回显", "field": "prompt",
-         "op": "regex", "value": ["SAY:[ \\t]*(.*)"], "response_body": "${match.1}", "status_code": None},
-    ]
