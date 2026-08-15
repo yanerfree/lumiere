@@ -184,6 +184,27 @@ def test_接口把回收条数送出去():
     assert '"captured_pruned_count"' in api, "执行历史接口没送回收条数，界面说不出「已回收」"
 
 
+def test_执行历史展开是页签不是一路摊开():
+    """一条记录 37 步 + 98 条流量，上下摞着同时展开要占三四屏，往下翻第二条得滚很久。
+    而且每条历史都长一样，摊开不会让人"一眼看全"，只会让人"怎么翻都翻不完"。
+
+    失败归因不进页签 —— 那是失败时唯一要人动手的东西，藏进页签等于藏起来。
+    """
+    from pathlib import Path
+    jsx = (Path(__file__).resolve().parents[2]
+           / "frontend/src/pages/cases/CaseDetail.jsx").read_text(encoding="utf-8")
+    assert "function RunDetail" in jsx
+    i = jsx.index("function RunDetail")
+    seg = jsx[i:i + 4200]
+    assert "<Tabs" in seg, "执行历史展开没用页签，又摊开了"
+    for k in ("'steps'", "'traffic'", "'raw'"):
+        assert k in seg, f"页签缺了 {k}"
+    tabs_at = seg.index("<Tabs")
+    assert seg.index("FailureTriagePanel") < tabs_at, "失败归因被塞进页签了 —— 那是唯一要人动手的东西"
+    assert "expandedRowRender: r => (\n                      <RunDetail" in jsx, \
+        "执行历史没用 RunDetail —— 组件写了但没接上"
+
+
 def test_前端三种情况分得开():
     """有流量 / 已回收 / 没抓到 —— 后两种都渲染成空白的话，回收会被当成 bug 报。"""
     from pathlib import Path

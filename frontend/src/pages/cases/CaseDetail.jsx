@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table, Alert, Collapse } from 'antd'
+import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table, Alert } from 'antd'
 import {
   ArrowLeftOutlined, PlayCircleOutlined, SaveOutlined,
   PlusOutlined, DeleteOutlined, HolderOutlined,
@@ -177,6 +177,109 @@ const PHENOMENON_LABELS = {
   script_error: '脚本自身报错',
   dependency_unresolved: '依赖没解析出来',
   unknown: '看不出来',
+}
+
+/** 执行历史里那一次的步骤清单。 */
+function RunSteps({ steps }) {
+  if (!steps?.length) return <div style={{ fontSize: 12, color: '#86909c' }}>本次没有步骤记录</div>
+  return (
+    <div style={{ maxHeight: 340, overflow: 'auto', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 10 }}>
+      {steps.map((s, i) => {
+        const bad = s.status && s.status !== 'passed'
+        const { name: sName, phase: ph, ms: sMs, error: sErr } = stepInfo(s, i)
+        return (
+          <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '4px 10px', fontSize: 12,
+            borderTop: i ? '1px solid rgba(0,0,0,0.03)' : 'none', background: bad ? '#fff5f5' : 'transparent' }}>
+            <span style={{ color: '#c9cdd4', minWidth: 20, textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{i + 1}</span>
+            <span style={{ fontSize: 10, padding: '0 5px', borderRadius: 6, lineHeight: '17px', flexShrink: 0,
+              background: ph === 'verify' ? 'rgba(78,138,240,0.1)' : 'rgba(0,0,0,0.04)',
+              color: ph === 'verify' ? '#4e8af0' : '#86909c' }}>
+              {ph === 'verify' ? '验证' : ph === 'setup' ? '前置' : '操作'}
+            </span>
+            <span style={{ flex: 1, color: bad ? '#e8453c' : '#1d2129', wordBreak: 'break-all' }}>
+              {sName}
+              {sErr && <div style={{ color: '#e8453c', fontFamily: 'var(--font-mono)', fontSize: 11, marginTop: 2 }}>{sErr}</div>}
+            </span>
+            <span style={{ color: '#c9cdd4', flexShrink: 0, fontFamily: 'var(--font-mono)' }}>{sMs != null ? `${sMs}ms` : ''}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/** 执行历史展开后的内容 —— 页签，不是一路摊开。
+ *
+ * 原来步骤清单和流量清单是**上下摞着同时展开**的：一条记录 37 步 + 98 条流量，
+ * 展开一行就占掉三四屏，往下翻第二条记录得滚很久。而且每条历史都长一样，
+ * 摊开并不会让人「一眼看全」，只会让人「怎么翻都翻不完」。
+ * 跟「UI 测试」页签里的 脚本 / 执行轨迹 / 本次流量 保持同一种形态。
+ *
+ * 失败归因**不进页签**，留在最上面：那是失败时唯一要人动手的东西，
+ * 藏进页签就等于藏起来了。
+ */
+function RunDetail({ run, projectId, branchId, caseId, onConfirmed }) {
+  const r = run
+  const traffic = r.capturedRequests || r.captured_requests
+  const pruned = r.capturedPrunedCount ?? r.captured_pruned_count
+  const passedSteps = (r.steps || []).filter(s => s.status === 'passed').length
+  const label = (t, n) => <span style={{ fontSize: 12.5 }}>{t}{n != null && <span style={{ color: '#86909c' }}>（{n}）</span>}</span>
+
+  const items = []
+  if (r.steps?.length) {
+    items.push({ key: 'steps', label: label('执行步骤', `${passedSteps}/${r.steps.length} 通过`),
+      children: <RunSteps steps={r.steps} /> })
+  }
+  items.push({
+    key: 'traffic',
+    label: label('本次流量', traffic?.length ?? (pruned != null ? '已回收' : '无')),
+    children: <RunTraffic run={r} />,
+  })
+  if (r.screenshots?.length) {
+    items.push({ key: 'shots', label: label('截图', r.screenshots.length), children: (
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {r.screenshots.map((s, i) => (
+          <div key={i} style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.06)', cursor: 'pointer' }}
+            onClick={() => window.open(`data:image/png;base64,${s.base64}`, '_blank')}>
+            <img src={`data:image/png;base64,${s.base64}`} alt={s.name}
+              style={{ width: 160, height: 100, objectFit: 'cover', display: 'block' }} />
+            <div style={{ fontSize: 10, color: '#86909c', padding: '1px 4px', background: 'rgba(0,0,0,0.02)' }}>{s.name}</div>
+          </div>
+        ))}
+      </div>
+    ) })
+  }
+  if (r.stdout) {
+    // 接口执行落的是给人看的中文轨迹，UI 执行落的是 pytest 原文 —— 标签得说清是哪个，
+    // 不然人点进去看到一屏 pytest 横幅，不知道自己点错了还是本来就这样。
+    const isApi = r.scriptType === 'api'
+    items.push({ key: 'raw', label: label(isApi ? '执行轨迹' : '原始日志'), children: (
+      <pre style={{ margin: 0, padding: 12, borderRadius: 12, fontSize: 12, fontFamily: 'var(--font-mono)',
+        maxHeight: 340, overflow: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.7,
+        background: isApi ? 'rgba(0,0,0,0.02)' : '#1e1e1e', color: isApi ? '#1d2129' : '#d4d4d4' }}>{r.stdout}</pre>
+    ) })
+  }
+
+  return (
+    <div>
+      {r.status !== 'passed' && (
+        <FailureTriagePanel projectId={projectId} branchId={branchId} caseId={caseId} run={r} onConfirmed={onConfirmed} />
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
+        {r.failurePhenomenon && (
+          <Tag color={r.status === 'passed' ? undefined : 'error'} style={{ margin: 0 }}>
+            {phenomenonLabel(r.failurePhenomenon)}
+          </Tag>
+        )}
+        {r.errorSummary
+          ? <span style={{ fontSize: 12.5, color: '#e8453c', fontFamily: 'var(--font-mono)' }}>{r.errorSummary}</span>
+          : <span style={{ fontSize: 12.5, color: '#86909c' }}>脚本跑完没有报错</span>}
+      </div>
+      {items.length
+        ? <Tabs size="small" items={items} destroyOnHidden />
+        : <span style={{ color: '#c9cdd4' }}>本次没有留下任何记录</span>}
+    </div>
+  )
 }
 
 /** 执行历史里那一次的网络流量。
@@ -2502,104 +2605,8 @@ export default function CaseDetail() {
                   locale={{ emptyText: '暂无执行记录' }}
                   expandable={{
                     expandedRowRender: r => (
-                      <div>
-                        {r.status !== 'passed' && (
-                          <FailureTriagePanel
-                            projectId={projectId} branchId={branchId} caseId={caseId} run={r}
-                            onConfirmed={loadScriptRuns}
-                          />
-                        )}
-                        {/* 接口执行落的是给人看的中文轨迹，直接展开；
-                            UI 执行落的是 pytest 原文（执行器只有这个），
-                            先把人能用的信息摆出来，原文收进折叠里给排查用。
-                            此前不分类型一律甩一屏 pytest stdout —— 「给用户看的还是给 CC 看的」。 */}
-                        {r.scriptType === 'api' && r.stdout ? (
-                          <pre style={{ margin: 0, padding: 12, background: 'rgba(0,0,0,0.02)', color: '#1d2129', borderRadius: 12, fontSize: 12.5, fontFamily: 'var(--font-mono)', maxHeight: 340, overflow: 'auto', whiteSpace: 'pre-wrap', lineHeight: 1.7 }}>{r.stdout}</pre>
-                        ) : r.stdout ? (
-                          <>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-                              {r.failurePhenomenon && (
-                                <Tag color={r.status === 'passed' ? undefined : 'error'} style={{ margin: 0 }}>
-                                  {phenomenonLabel(r.failurePhenomenon)}
-                                </Tag>
-                              )}
-                              {r.errorSummary
-                                ? <span style={{ fontSize: 12.5, color: '#e8453c', fontFamily: 'var(--font-mono)' }}>{r.errorSummary}</span>
-                                : <span style={{ fontSize: 12.5, color: '#86909c' }}>
-                                    脚本跑完没有报错{r.screenshots?.length ? `，留下 ${r.screenshots.length} 张截图` : ''}
-                                  </span>}
-                            </div>
-                            {/* 步骤级结果。这才是人展开执行历史想看的东西 ——
-                                原来这儿只有「脚本跑完没有报错」加一坨 pytest 横幅，
-                                脚本里十几个 expect() 验了什么、挂在第几步全看不到。
-                                平台会给普通 Playwright 脚本自动埋点（见 tea_autolog）。 */}
-                            {r.steps?.length > 0 && (
-                              <div style={{ marginBottom: 10, border: '1px solid rgba(0,0,0,0.06)',
-                                borderRadius: 10, overflow: 'hidden' }}>
-                                <div style={{ padding: '6px 10px', background: '#fafbfc', fontSize: 12,
-                                  color: '#4e5969', fontWeight: 600 }}>
-                                  执行步骤（{r.steps.filter(s => s.status === 'passed').length}/{r.steps.length} 通过）
-                                </div>
-                                <div style={{ maxHeight: 320, overflow: 'auto' }}>
-                                  {r.steps.map((s, i) => {
-                                    const bad = s.status && s.status !== 'passed'
-                                    const { name: sName, phase: ph, ms: sMs, error: sErr } = stepInfo(s, i)
-                                    return (
-                                      <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline',
-                                        padding: '4px 10px', fontSize: 12,
-                                        borderTop: i ? '1px solid rgba(0,0,0,0.03)' : 'none',
-                                        background: bad ? '#fff5f5' : 'transparent' }}>
-                                        <span style={{ color: '#c9cdd4', minWidth: 20, textAlign: 'right',
-                                          fontFamily: 'var(--font-mono)' }}>{i + 1}</span>
-                                        <span style={{ fontSize: 10, padding: '0 5px', borderRadius: 6,
-                                          lineHeight: '17px', flexShrink: 0,
-                                          background: ph === 'verify' ? 'rgba(78,138,240,0.1)' : 'rgba(0,0,0,0.04)',
-                                          color: ph === 'verify' ? '#4e8af0' : '#86909c' }}>
-                                          {ph === 'verify' ? '验证' : ph === 'setup' ? '前置' : '操作'}
-                                        </span>
-                                        <span style={{ flex: 1, color: bad ? '#e8453c' : '#1d2129',
-                                          wordBreak: 'break-all' }}>
-                                          {sName}
-                                          {sErr && (
-                                            <div style={{ color: '#e8453c', fontFamily: 'var(--font-mono)',
-                                              fontSize: 11, marginTop: 2 }}>
-                                              {sErr}
-                                            </div>
-                                          )}
-                                        </span>
-                                        <span style={{ color: '#c9cdd4', flexShrink: 0,
-                                          fontFamily: 'var(--font-mono)' }}>
-                                          {sMs != null ? `${sMs}ms` : ''}
-                                        </span>
-                                      </div>
-                                    )
-                                  })}
-                                </div>
-                              </div>
-                            )}
-                            <Collapse ghost size="small" items={[{
-                              key: 'raw',
-                              label: <span style={{ fontSize: 12, color: '#86909c' }}>原始日志（pytest 输出，排查用）</span>,
-                              children: (
-                                <pre style={{ margin: 0, padding: 12, background: '#1e1e1e', color: '#d4d4d4', borderRadius: 12, fontSize: 12, fontFamily: 'var(--font-mono)', maxHeight: 300, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{r.stdout}</pre>
-                              ),
-                            }]} />
-                          </>
-                        ) : <span style={{ color: '#c9cdd4' }}>无输出日志</span>}
-                        {r.screenshots?.length > 0 && (
-                          <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                            {r.screenshots.map((s, i) => (
-                              <div key={i} style={{ borderRadius: 8, overflow: 'hidden', border: '1px solid rgba(0,0,0,0.06)', cursor: 'pointer' }}
-                                onClick={() => window.open(`data:image/png;base64,${s.base64}`, '_blank')}>
-                                <img src={`data:image/png;base64,${s.base64}`} alt={s.name}
-                                  style={{ width: 120, height: 75, objectFit: 'cover', display: 'block' }} />
-                                <div style={{ fontSize: 10, color: '#86909c', padding: '1px 4px', background: 'rgba(0,0,0,0.02)' }}>{s.name}</div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        <RunTraffic run={r} />
-                      </div>
+                      <RunDetail run={r} projectId={projectId} branchId={branchId}
+                        caseId={caseId} onConfirmed={loadScriptRuns} />
                     ),
                     rowExpandable: () => true,
                   }}
