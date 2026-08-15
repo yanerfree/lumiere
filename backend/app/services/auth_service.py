@@ -68,14 +68,36 @@ async def rotate_refresh_token(session: AsyncSession, raw: str) -> tuple[str, st
     if record is None:
         raise UnauthorizedError(code="INVALID_REFRESH_TOKEN", message="登录已过期，请重新登录")
 
-    # 重放检测：收到已吊销的 refresh token，吊销该用户全部活跃 token
-    if record.revoked_at is not None:
-        await revoke_all_user_tokens(session, record.user_id)
-        # 必须显式提交：get_db 在异常时会 rollback，否则连坐吊销会被回滚
-        await session.commit()
-        raise UnauthorizedError(code="REFRESH_TOKEN_REUSED", message="登录状态异常，请重新登录")
+    now = datetime.now(timezone.utc)
+    in_grace = False
 
-    if record.expires_at <= datetime.now(timezone.utc):
+    if record.revoked_at is not None:
+        # 轮换重叠窗口（Okta 的 grace period 模型，默认 30s / 上限 60s）：
+        # 弱网、多标签页并发刷新、服务重启都会让新 token 送不到客户端，客户端于是拿旧的重试。
+        # 这种重试不是攻击，窗口内照常签发。只有窗口外的重放才按 OAuth 2.0 Security BCP
+        # 判定为盗用，吊销整个 token family。
+        # 没有这个窗口时的实际后果：正常开两个标签页就会把该账号全端踢下线。
+        grace = max(0, min(settings.refresh_token_grace_seconds, 60))
+        age = (now - record.revoked_at).total_seconds()
+        if grace and record.replaced_by_id is not None and 0 <= age <= grace:
+            in_grace = True
+        else:
+            await revoke_all_user_tokens(session, record.user_id)
+            # 标准要求重放是可观测的安全事件，不能静默吊销
+            from app.core.audit import write_audit_log
+            await write_audit_log(
+                session,
+                action="refresh_token_reuse_detected",
+                target_type="user",
+                target_id=record.user_id,
+                user_id=record.user_id,
+                changes={"revoked_at": record.revoked_at.isoformat(), "age_seconds": round(age, 3)},
+            )
+            # 必须显式提交：get_db 在异常时会 rollback，否则连坐吊销会被回滚
+            await session.commit()
+            raise UnauthorizedError(code="REFRESH_TOKEN_REUSED", message="登录状态异常，请重新登录")
+
+    if record.expires_at <= now:
         raise UnauthorizedError(code="REFRESH_TOKEN_EXPIRED", message="登录已过期，请重新登录")
 
     user = await session.get(User, record.user_id)
@@ -92,9 +114,12 @@ async def rotate_refresh_token(session: AsyncSession, raw: str) -> tuple[str, st
     session.add(new_record)
     await session.flush()
 
-    record.revoked_at = datetime.now(timezone.utc)
-    record.replaced_by_id = new_record.id
-    await session.flush()
+    # 只有正常轮换才动旧记录。走宽容窗口时必须保持 revoked_at 不变 ——
+    # 一旦刷新它，同一个旧 token 每 29 秒来一次就能把窗口无限往后推，等于永不失效。
+    if not in_grace:
+        record.revoked_at = now
+        record.replaced_by_id = new_record.id
+        await session.flush()
 
     return access, raw_refresh, user
 

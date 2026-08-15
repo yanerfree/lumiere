@@ -47,12 +47,18 @@ async def get_user(session: AsyncSession, user_id: uuid.UUID) -> User:
 
 @audit_log(action="update", target_type="user")
 async def update_user(session: AsyncSession, user_id: uuid.UUID, data: UpdateUserRequest) -> User:
-    """更新用户的角色或激活状态。"""
+    """更新用户的角色、激活状态，或由管理员重置密码。"""
     user = await get_user(session, user_id)
     if data.role is not None:
         user.role = data.role
     if data.is_active is not None:
         user.is_active = data.is_active
+    if data.password:
+        from app.core.security import hash_password
+        from app.services import auth_service
+        user.password = hash_password(data.password)
+        # 密码换了就得把旧登录全清掉，否则拿着旧 token 的人照样进得来
+        await auth_service.revoke_all_user_tokens(session, user.id)
     await session.flush()
     await session.refresh(user)  # 重新加载 DB 侧更新的字段（如 updated_at）
     return user

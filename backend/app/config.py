@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     # 长期 refresh token（天），默认 7。
     refresh_token_expire_days: int = 7
+    # 轮换重叠窗口（秒）：refresh token 被轮换后，旧的在这段时间内再次使用不判定重放，
+    # 而是正常签发。对齐 Okta 的 grace period —— 默认 30、可配 0~60。
+    # 为什么需要它：弱网/并发刷新/服务重启时，新 token 可能没送达客户端，客户端会拿旧的重试；
+    # 没有这个窗口，正常重试会被当成盗用，进而吊销该用户全部令牌（全端被踢）。
+    # 窗口外仍按 OAuth 2.0 Security BCP 处理：判定重放 → 吊销整个 token family。
+    refresh_token_grace_seconds: int = 30
     bcrypt_cost: int = 12  # >= 10
 
     # Redis

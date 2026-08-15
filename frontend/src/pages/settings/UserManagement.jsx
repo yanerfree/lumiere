@@ -47,11 +47,11 @@ export default function UserManagement() {
     setSaving(true)
     try {
       if (editingUser) {
-        await api.put(`/users/${editingUser.id}`, {
-          role: values.role,
-          isActive: values.isActive,
-        })
-        message.success('用户已更新')
+        const payload = { role: values.role, isActive: values.isActive }
+        // 留空表示不改密码，别把空串发上去
+        if (values.password) payload.password = values.password
+        await api.put(`/users/${editingUser.id}`, payload)
+        message.success(values.password ? '用户已更新，密码已重置' : '用户已更新')
       } else {
         await api.post('/users', {
           username: values.username,
@@ -156,7 +156,17 @@ export default function UserManagement() {
           rowKey="id"
           size="small"
           loading={loading}
-          pagination={{ pageSize: 10, size: 'small', showTotal: t => `共 ${t} 位用户` }}
+          pagination={{
+            defaultPageSize: 20,
+            size: 'small',
+            showTotal: t => `共 ${t} 位用户`,
+            // showSizeChanger 不显式开的话，antd 只在总数 > 50 时才给「每页几条」，
+            // 十几个用户时永远看不到 —— 而恰恰是这种时候 admin/liyan 被挤到第 2 页找不着人。
+            showSizeChanger: true,
+            // 20 得留在选项里，否则从别的档位切回默认值就没路可走了
+            pageSizeOptions: [10, 20, 50, 100, 500],
+            showQuickJumper: true,
+          }}
         />
       </div>
 
@@ -195,6 +205,18 @@ export default function UserManagement() {
               ]}
             >
               <Input.Password placeholder="至少 6 位" />
+            </Form.Item>
+          )}
+          {editingUser && (
+            <Form.Item
+              name="password" label="重置密码"
+              extra="留空则不改动。重置后该用户所有已登录的地方都会被强制重新登录。"
+              rules={[
+                { min: 6, message: '密码至少 6 个字符' },
+                { max: 128, message: '密码最多 128 个字符' },
+              ]}
+            >
+              <Input.Password placeholder="不填就不改" autoComplete="new-password" />
             </Form.Item>
           )}
           <Form.Item

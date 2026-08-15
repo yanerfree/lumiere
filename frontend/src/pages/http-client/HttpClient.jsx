@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Button, Input, Select, Tag, Space, message, Popconfirm, Tooltip, Modal, Dropdown, Radio, Switch, InputNumber
 } from 'antd'
@@ -11,6 +11,7 @@ import {
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
+import { useTextSearch, TextSearchBar, highlightText, scrollMatchIntoView } from '../../components/TextSearch'
 
 const { TextArea } = Input
 const MONO = 'var(--font-mono)'
@@ -274,13 +275,72 @@ export default function HttpClient() {
   const isSending = activeItem ? sending[activeItem.id] : false
   const rootRequests = requests.filter(r => !r.parentId)
 
+  // ── 文本域搜索：请求 Body + 响应 Body，忽略大小写的包含匹配 ──
+  const respBodyText = useMemo(() => {
+    if (!resp || resp.error || resp.body == null) return ''
+    try { return JSON.stringify(JSON.parse(resp.body), null, 2) } catch { return resp.body }
+  }, [resp])
+  const bodySearch = useTextSearch(activeItem?.body || '')
+  const respSearch = useTextSearch(respBodyText)
+  const bodyHasSearch = !!bodySearch.keyword && bodySearch.total > 0
+  const bodyRef = useRef(null)
+  const bodyBackdropRef = useRef(null)
+  const bodyInnerRef = useRef(null)
+  const bodyBgRef = useRef(null)
+  const bodyMarkRef = useRef(null)
+  const respScrollRef = useRef(null)
+  const respMarkRef = useRef(null)
+  const getBodyEl = () => bodyRef.current?.resizableTextArea?.textArea || null
+
+  // 高亮层要和 textarea 逐像素对齐，度量直接从真实元素上抄，别猜 antd 的 token
+  useEffect(() => {
+    const el = getBodyEl()
+    if (!el) return
+    const cs = getComputedStyle(el)
+    // 搜索期间 textarea 自身要透明（不然会挡住底下的高亮），先把原背景记下来照搬给高亮层
+    if (!bodyHasSearch) { bodyBgRef.current = cs.backgroundColor; return }
+    const bd = bodyBackdropRef.current, inner = bodyInnerRef.current
+    if (!bd || !inner) return
+    Object.assign(bd.style, {
+      borderTopWidth: cs.borderTopWidth, borderRightWidth: cs.borderRightWidth,
+      borderBottomWidth: cs.borderBottomWidth, borderLeftWidth: cs.borderLeftWidth,
+      borderRadius: cs.borderRadius, background: bodyBgRef.current || '#fff',
+    })
+    Object.assign(inner.style, {
+      paddingTop: cs.paddingTop, paddingRight: cs.paddingRight, paddingBottom: cs.paddingBottom, paddingLeft: cs.paddingLeft,
+      fontFamily: cs.fontFamily, fontSize: cs.fontSize, fontWeight: cs.fontWeight, fontStyle: cs.fontStyle,
+      lineHeight: cs.lineHeight, letterSpacing: cs.letterSpacing, tabSize: cs.tabSize,
+      whiteSpace: cs.whiteSpace, overflowWrap: cs.overflowWrap, wordBreak: cs.wordBreak,
+      transform: `translate(${-el.scrollLeft}px, ${-el.scrollTop}px)`,  // 开搜时可能已经是滚着的
+    })
+  }, [bodyHasSearch, activeTabId, reqTab])
+
+  // 用 transform 平移内容层跟随滚动：高亮层自己的 scrollTop 会被它的内容高度夹住，对不齐
+  const syncBodyBackdrop = () => {
+    const el = getBodyEl(), inner = bodyInnerRef.current
+    if (el && inner) inner.style.transform = `translate(${-el.scrollLeft}px, ${-el.scrollTop}px)`
+  }
+
+  // 跳转到当前命中：滚 textarea，高亮层跟着滚，顺手把光标放过去（不抢焦点，搜索框还能继续打字）
+  useEffect(() => {
+    const el = getBodyEl()
+    if (!el || !bodySearch.active) return
+    scrollMatchIntoView(el, bodyMarkRef.current)
+    syncBodyBackdrop()
+    try { el.setSelectionRange(bodySearch.active[0], bodySearch.active[1]) } catch {}
+  }, [bodySearch.active])
+
+  useEffect(() => {
+    if (respSearch.active) scrollMatchIntoView(respScrollRef.current, respMarkRef.current)
+  }, [respSearch.active])
+
   const renderTreeItem = (item, depth = 0) => {
     const isFolder = item.type === 'folder'
     const children = isFolder ? requests.filter(r => r.parentId === item.id) : []
     const isEditing = editingNameId === item.id
     const isActive = !isFolder && activeTabId === item.id
     const isHover = hoverItemId === item.id || popupItemId === item.id
-    const isExpanded = expandedFolders[item.id] !== false
+    const isExpanded = expandedFolders[item.id] === true  // 默认收起，点开才展开
     const isDragOver = dragOverId === item.id
     const showAbove = isDragOver && dragPos === 'above'
     const showBelow = isDragOver && dragPos === 'below'
@@ -477,7 +537,7 @@ export default function HttpClient() {
 
               {/* 请求参数区 — Params / Headers / Body */}
               <div style={{ flexShrink: 0, maxHeight: '40%', overflow: 'auto', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-                <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid rgba(0,0,0,0.03)', paddingLeft: 16 }}>
+                <div style={{ display: 'flex', gap: 0, borderBottom: '1px solid rgba(0,0,0,0.03)', paddingLeft: 16, alignItems: 'center' }}>
                   {[
                     { key: 'params', label: `Params${urlParams.length ? ` ${urlParams.length}` : ''}` },
                     { key: 'headers', label: `Headers${(activeItem.headers || []).filter(h => h.key).length ? ` ${(activeItem.headers || []).filter(h => h.key).length}` : ''}` },
@@ -489,6 +549,10 @@ export default function HttpClient() {
                       borderBottom: reqTab === t.key ? '2px solid #0ea5a0' : '2px solid transparent',
                     }}>{t.label}</div>
                   ))}
+                  <span style={{ flex: 1 }} />
+                  {reqTab === 'body' && (
+                    <span style={{ paddingRight: 16 }}><TextSearchBar search={bodySearch} placeholder="搜索请求体" /></span>
+                  )}
                 </div>
                 <div style={{ padding: '8px 16px' }}>
                   {reqTab === 'params' && (
@@ -528,7 +592,23 @@ export default function HttpClient() {
                       ))}</tbody>
                     </table>
                   </>)}
-                  {reqTab === 'body' && <TextArea spellCheck={false} value={activeItem.body} onChange={e => updateTabField(activeItem.id, 'body', e.target.value)} rows={6} style={{ fontFamily: MONO, fontSize: 12 }} placeholder='{"key": "value"}' />}
+                  {reqTab === 'body' && (
+                    <div style={{ position: 'relative', display: 'flex' }}>
+                      {bodyHasSearch && (
+                        <div ref={bodyBackdropRef} aria-hidden data-testid="req-body-highlight" style={{
+                          position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none',
+                          borderStyle: 'solid', borderColor: 'transparent', boxSizing: 'border-box',
+                        }}>
+                          <div ref={bodyInnerRef} style={{ color: 'transparent' }}>
+                            {highlightText(activeItem.body || '', bodySearch.matches, bodySearch.index, bodyMarkRef)}
+                          </div>
+                        </div>
+                      )}
+                      <TextArea ref={bodyRef} spellCheck={false} value={activeItem.body} onChange={e => updateTabField(activeItem.id, 'body', e.target.value)}
+                        onScroll={syncBodyBackdrop} rows={6} placeholder='{"key": "value"}'
+                        style={{ fontFamily: MONO, fontSize: 12, ...(bodyHasSearch ? { background: 'transparent', position: 'relative' } : null) }} />
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -547,6 +627,9 @@ export default function HttpClient() {
                     }}>{t.label}</div>
                   ))}
                   <span style={{ flex: 1 }} />
+                  {respTab === 'body' && !!respBodyText && (
+                    <span style={{ marginRight: 10 }}><TextSearchBar search={respSearch} placeholder="搜索响应体" /></span>
+                  )}
                   {resp && !resp.error && (<>
                     <Tag color={resp.statusCode < 300 ? 'cyan' : resp.statusCode < 400 ? 'blue' : 'red'} style={{ margin: 0, borderRadius: 8, fontFamily: MONO }}>{resp.statusCode}</Tag>
                     <span style={{ fontSize: 11, color: '#8c8c8c', marginLeft: 6 }}>{resp.elapsed}ms</span>
@@ -555,11 +638,11 @@ export default function HttpClient() {
                       onClick={() => copyToClipboard(resp.body).then(() => message.success('已复制'))}>复制</Button>
                   </>)}
                 </div>
-                <div style={{ flex: 1, overflow: 'auto', padding: '8px 16px' }}>
+                <div ref={respScrollRef} style={{ flex: 1, overflow: 'auto', padding: '8px 16px' }}>
                   {resp ? (resp.error ? (
                     <div style={{ color: '#e8453c', padding: 12, background: 'rgba(232,69,60,0.06)', borderRadius: 8, fontSize: 12 }}>{resp.error}</div>
                   ) : (<>
-                    {respTab === 'body' && <pre style={{ margin: 0, fontFamily: MONO, fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{(() => { try { return JSON.stringify(JSON.parse(resp.body), null, 2) } catch { return resp.body } })()}</pre>}
+                    {respTab === 'body' && <pre style={{ margin: 0, fontFamily: MONO, fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{highlightText(respBodyText, respSearch.matches, respSearch.index, respMarkRef)}</pre>}
                     {respTab === 'respHeaders' && (
                       <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                         <thead><tr style={{ background: 'rgba(0,0,0,0.02)' }}><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#8c8c8c' }}>名称</th><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#8c8c8c' }}>值</th></tr></thead>
