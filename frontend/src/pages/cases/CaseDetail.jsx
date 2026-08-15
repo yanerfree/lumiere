@@ -18,6 +18,7 @@ import ApiStepList, { generateApiCodeFromSteps } from '../../components/ApiStepL
 import { scenarioToNodes, nodeToStepPatch } from './apiStepAdapter'
 import RunResultPanel from '../api-test/components/RunResultPanel'
 import FailureTriagePanel from '../../components/FailureTriagePanel'
+import { createSseParser } from '../../utils/sseParser'
 
 const priorityColors = { P0: '#fff', P1: '#fff', P2: '#fff', P3: '#fff' }
 const priorityBg = { P0: '#e8453c', P1: '#ff7d00', P2: '#4e8af0', P3: 'rgba(0,0,0,0.08)' }
@@ -803,50 +804,57 @@ function ScenarioEditor({
     })).then(response => {
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
-      let buffer = ''
+      let sawDone = false
+
+      // 解析器建在循环外 —— 事件名要活过网络分片。done 那一帧 47KB，装不进一个
+      // 分片，事件名放在读循环里会被清掉，整帧静默丢弃。见 sseParser.js。
+      const parser = createSseParser((ev, data) => {
+        if (ev === 'step_start') {
+          // 又有步骤了 → 刚才那次沉默不是收尾，把提示撤掉。
+          setFinishingMsg(null)
+          setLiveSteps(prev => { const n = [...prev, { ...data, status: 'running' }]; liveStepsRef.current = n; return n })
+        } else if (ev === 'step_end') {
+          setLiveSteps(prev => { const n = prev.map(s => s.seq === data.seq ? { ...s, ...data } : s); liveStepsRef.current = n; return n })
+        } else if (ev === 'finishing') {
+          setFinishingMsg(data.message || '正在收尾…')
+        } else if (ev === 'done') {
+          sawDone = true
+          setFinishingMsg(null)
+          // 优先用 liveSteps（有完整步骤名），fallback 到 data.steps
+          const live = liveStepsRef.current
+          const steps = live.length > 0 ? live : (data.steps || [])
+          // 运行结果不含接口流量 → 保留生成时抓到的接口，别把「接口视图」清空
+          // 后端现在统一驼峰（SSE 也过 to_camel_case 了），两种都认 ——
+          // 内部沿用 snake 那套键，跟 918 行的归一化保持一致。
+          const cap = data.capturedRequests || data.captured_requests
+          setDebugResult(prev => ({ ...data, steps, captured_requests: (cap?.length ? cap : prev?.captured_requests) || [], _drawerOpen: true }))
+          setDebugRunning(false)
+          setLiveSteps([]); liveStepsRef.current = []
+          scriptEditorRef.current?.refresh()
+          onDone?.(data)
+        }
+      })
 
       function processChunk() {
         reader.read().then(({ done, value }) => {
-          if (done) return
-          buffer += decoder.decode(value, { stream: true })
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || ''
-
-          let currentEvent = null
-          for (const line of lines) {
-            if (line.startsWith('event: ')) currentEvent = line.slice(7).trim()
-            else if (line.startsWith('data: ') && currentEvent) {
-              try {
-                const data = JSON.parse(line.slice(6))
-                if (currentEvent === 'step_start') {
-                  // 又有步骤了 → 刚才那次沉默不是收尾，把提示撤掉。
-                  setFinishingMsg(null)
-                  setLiveSteps(prev => { const n = [...prev, { ...data, status: 'running' }]; liveStepsRef.current = n; return n })
-                } else if (currentEvent === 'step_end') {
-                  setLiveSteps(prev => { const n = prev.map(s => s.seq === data.seq ? { ...s, ...data } : s); liveStepsRef.current = n; return n })
-                } else if (currentEvent === 'finishing') {
-                  setFinishingMsg(data.message || '正在收尾…')
-                } else if (currentEvent === 'done') {
-                  setFinishingMsg(null)
-                  // 优先用 liveSteps（有完整步骤名），fallback 到 data.steps
-                  const live = liveStepsRef.current
-                  const steps = live.length > 0 ? live : (data.steps || [])
-                  // 运行结果不含接口流量 → 保留生成时抓到的接口，别把「接口视图」清空
-                  // 后端现在统一驼峰（SSE 也过 to_camel_case 了），两种都认 ——
-                  // 内部沿用 snake 那套键，跟 918 行的归一化保持一致。
-                  const cap = data.capturedRequests || data.captured_requests
-                  setDebugResult(prev => ({ ...data, steps, captured_requests: (cap?.length ? cap : prev?.captured_requests) || [], _drawerOpen: true }))
-                  setDebugRunning(false)
-                  setLiveSteps([]); liveStepsRef.current = []
-                  scriptEditorRef.current?.refresh()
-                  onDone?.(data)
-                }
-              } catch {}
-              currentEvent = null
+          if (done) {
+            // 流断了却没收到 done —— 转圈状态必须自己收掉，否则又是「一直这样」。
+            // 宁可显示一句「连接中断」让人重跑，也不能永远转圈假装还在跑。
+            if (!sawDone) {
+              setFinishingMsg(null)
+              setDebugRunning(false)
+              setDebugResult(prev => ({
+                ...(prev || {}), status: 'error',
+                errorSummary: '连接在拿到结果前断开了；执行本身可能已完成，去「执行历史」看这一次的记录。',
+                steps: liveStepsRef.current.length ? liveStepsRef.current : (prev?.steps || []),
+                _drawerOpen: true,
+              }))
             }
+            return
           }
+          parser.push(decoder.decode(value, { stream: true }))
           processChunk()
-        }).catch(() => { setDebugRunning(false) })
+        }).catch(() => { setFinishingMsg(null); setDebugRunning(false) })
       }
       processChunk()
     }).catch(e => {

@@ -15,6 +15,7 @@ goto/click/fill 包一层。中间踩了三个坑，都在下面各有一条测�
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -248,11 +249,17 @@ def test_收尾提示走确定的teardown标记():
 
 
 def test_前端认收尾事件且新步骤会撤掉它():
-    """后端发了前端不认，等于没发（第一版就是这样：事件发出去，面板照旧「等待中」）。"""
+    """后端发了前端不认，等于没发（第一版就是这样：事件发出去，面板照旧「等待中」）。
+
+    钉的是**分支存在**，不是变量叫什么名字。上一版写死了 `currentEvent === 'finishing'`，
+    解析器重构成 `ev === 'finishing'` 之后这条就红了 —— 行为一点没变，红的是命名。
+    那种守卫只会在重构时挡路，挡不住真正的回归。
+    """
     jsx = (Path(__file__).resolve().parents[2]
            / "frontend/src/pages/cases/CaseDetail.jsx").read_text(encoding="utf-8")
-    assert "currentEvent === 'finishing'" in jsx, "前端不认 finishing 事件"
+    assert re.search(r"===\s*'finishing'", jsx), "前端不认 finishing 事件"
     assert "setFinishingMsg" in jsx
     # 新步骤到来要撤掉提示 —— 否则一旦误报就永远挂着
-    i = jsx.index("currentEvent === 'step_start'")
-    assert "setFinishingMsg(null)" in jsx[i:i + 400], "来了新步骤没撤掉收尾提示"
+    m = re.search(r"===\s*'step_start'", jsx)
+    assert m, "前端不认 step_start 事件"
+    assert "setFinishingMsg(null)" in jsx[m.start():m.start() + 400], "来了新步骤没撤掉收尾提示"
