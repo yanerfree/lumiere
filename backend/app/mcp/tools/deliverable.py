@@ -110,14 +110,23 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
     if not_ready and not blockers:
         # 没有硬阻塞却维度没到「完成」：多半是跑过但没经平台记账，或者压根没在
         # 平台上跑过。说清楚，别让人以为是内容问题。
-        # **manual 不能排除掉。** 它只会由人在页面上推进，所以确实推不动 ——
-        # 但「推不动」不等于「可以不说」：手动维度停在调试中，这条就进不了「待审」，
-        # 不报出来的话人只会看到它一直不冒头，不知道卡在哪。
-        risks.append({"kind": "status_behind",
-                      "detail": f"{'、'.join(not_ready)} 维度还在 "
-                                f"{'、'.join(dim_status[d] or '空' for d in not_ready)}。"
-                                f"接口/UI 在平台上跑一遍会自己往前走；"
-                                f"manual 只能人在页面上改。"})
+        # **manual 不能排除掉** —— 停在调试中这条就进不了「待审」，不报出来
+        # 人只会看到它一直不冒头，不知道卡在哪。
+        #
+        # 但也别说成「只能人在页面上改」（我上一版就是这么写的，错了）：
+        # sync_manual_status 的规矩是**手工步骤写了就是 completed**（手工步骤没有
+        # 执行器，写完就是做完）。所以改一下步骤重存就会自己回到完成。
+        # 实测 TC-FWGL-00002 有 13 步却停在 debugging，是一次「整条用例保存」把
+        # manual 和 api 一起写成 debugging 的连带产物，步骤本身自始至终没动过 ——
+        # 不是谁判断了「步骤没写完」。说成"只能人改"会让人以为要去做一次真的判断。
+        detail = (f"{'、'.join(not_ready)} 维度还在 "
+                  f"{'、'.join(dim_status[d] or '空' for d in not_ready)}。"
+                  f"接口/UI 在平台上跑一遍会自己往前走。")
+        if "manual" in not_ready:
+            detail += ("manual 的规矩是「手工步骤写了就算完成」——"
+                       "有步骤却停在草稿/调试中，多半是被某次整条保存带偏了，"
+                       "改一下步骤重存或在下拉里直接选「完成」即可。")
+        risks.append({"kind": "status_behind", "detail": detail})
 
     # 预期结果里写了 UI 落点，但这条不做 UI 维度 → 那句话没人验
     if target == "spec_api" and re.search(r"详情页|列表页|页面|回显|界面", case.expected_result or ""):
