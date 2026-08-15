@@ -150,6 +150,21 @@ class MockServerManager:
         async def health():
             return {"status": "ok", "service": "llm-mock", "port": mgr.port}
 
+        # ── 排障端点 ──
+        # 给「在平台外面用 curl 跑对照实验」的人自助查：不用登录页面、不用 MCP。
+        #
+        # ⚠ 只回**解析后的摘要，不回请求头、不回完整报文**。这个端口是不鉴权的，
+        #   而请求头里恰恰是最敏感的东西 —— 网关注入的上游 API Key 就在 Authorization 里，
+        #   把它摊在一个开放端口上等于把凭据发出去。要看完整报文走平台页面或 MCP
+        #   （tb_llm_mock_requests），那两条路都是要登录/授权的。
+        @app.get("/__log")
+        async def debug_log(limit: int = 50, path: str | None = None):
+            return await mgr._debug_log(limit, path)
+
+        @app.post("/__reset")
+        async def debug_reset(path: str | None = None):
+            return await mgr._debug_reset(path)
+
         @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
         async def catch_all(request: Request, path: str):
             return await mgr._handle_request(request, f"/{path}")
@@ -413,6 +428,55 @@ class MockServerManager:
             "smart_role": route.smart_role,
             "smart_body_marker": route.smart_body_marker,
         }
+
+    async def _debug_log(self, limit: int, path: str | None) -> dict:
+        """最近若干条请求的摘要。见路由声明处的安全说明：不含请求头 / 完整报文。"""
+        n = min(max(int(limit or 50), 1), 200)
+        async with async_session_factory() as session:
+            rows, total = await svc.list_logs(session, search=path, limit=n)
+
+        out = []
+        for r in rows:
+            rb = r.request_body if isinstance(r.request_body, dict) else {}
+            so = rb.get("stream_options")
+            out.append({
+                "at": r.timestamp.isoformat() if r.timestamp else None,
+                "method": r.method,
+                "path": r.path,
+                "status": r.status_code,
+                "model": r.request_model,
+                # ★ 记的是**网关实际发出的值**（请求体里的 stream），不是 mock 最终回的形态。
+                #   验流式降级只能看这一格：客户端传 true、上游收到 false 才叫降级生效。
+                "stream": bool(rb.get("stream")),
+                "hasStreamOptions": isinstance(so, dict),
+                "includeUsage": bool(isinstance(so, dict) and so.get("include_usage")),
+                "totalMs": round(r.total_ms or 0, 1),
+                # 智能应答路由才有：mode / role / shape / loopStage / loopTool /
+                # checkedLen / envelopeLen / bodyFrom / redactMode / verdict / aborted
+                "smart": r.smart_meta,
+            })
+        return {
+            "total": total,
+            "count": len(out),
+            "requests": out,
+            "note": "stream 是网关实际发出的值，不是 mock 回的形态 —— 验流式降级看这一格。"
+                    "本端点不返回请求头和完整报文（端口不鉴权，鉴权头里有上游 API Key）；"
+                    "要看完整报文走平台「请求日志」页或 MCP tb_llm_mock_requests。",
+        }
+
+    async def _debug_reset(self, path: str | None) -> dict:
+        """清请求记录。断言「上游只收到 N 次」之前先清，否则上一轮的记录会让断言假过。"""
+        from sqlalchemy import delete as sa_delete
+
+        from app.models.llm_mock import MockRequestLog
+
+        async with async_session_factory() as session:
+            stmt = sa_delete(MockRequestLog)
+            if path:
+                stmt = stmt.where(MockRequestLog.path == path)
+            res = await session.execute(stmt)
+            await session.commit()
+        return {"deleted": res.rowcount or 0, "path": path or "(全部)"}
 
     def _spawn_log_task(self, *args) -> None:
         """把写日志甩给独立任务 —— 只在「本次请求正在被取消」时用（见调用处注释）。"""

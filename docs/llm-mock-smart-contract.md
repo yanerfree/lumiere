@@ -106,6 +106,24 @@
 > 取消会把 asyncpg 连接掐在半路，坏连接回到池子里，之后别的请求全报 `connection is closed`
 > （实测踩过，整个后端跟着挂）。所以那条日志是甩给独立任务写的，见 `_spawn_log_task`。
 
+## 排障端点（mock 端口上，不鉴权）
+
+给「在平台外面用 curl 跑对照实验」的人自助查，不用登录页面、也不用 MCP：
+
+| 端点 | 用途 |
+|---|---|
+| `GET /__log?limit=50&path=…` | 最近若干条请求的**摘要**：`stream` / `hasStreamOptions` / `includeUsage` + 整个 `smart` 判定块 |
+| `POST /__reset?path=…` | 清请求记录。断言「上游只收到 N 次」之前先清，否则上一轮的记录会让断言**假过** |
+| `GET /health` | 探活 |
+
+> ⚠ `__log` **只回解析后的摘要，不回请求头和完整报文**。这个端口不鉴权，而请求头里恰恰是
+> 最敏感的东西 —— 网关注入的上游 API Key 就在 `Authorization` 里，摊在开放端口上等于把凭据发出去。
+> 要看完整报文走平台「请求日志」页或 MCP `tb_llm_mock_requests`，那两条路都要登录/授权。
+
+`__log` 里的 `stream` 记的是**网关实际发出的值**（请求体里的 `stream`），不是 mock 最终回的形态 ——
+**验流式降级只能看这一格**：客户端传 `true`、上游收到 `false` 才叫降级生效。
+拿 `MODE:DEFY` 就能自证：发 `stream:false`，mock 故意返事件流，日志里仍是 `stream=false`。
+
 ## 探活
 
 `GET /health` → `{"status":"ok","service":"llm-mock","port":28100}`。
