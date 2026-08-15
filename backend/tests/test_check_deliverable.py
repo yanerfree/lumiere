@@ -334,3 +334,43 @@ def test_MCP协议信封不报驼峰():
         "params": {"clientInfo": {"name": "t"}, "protocolVersion": "2024-11-05"}})]
     r = _run(FakeSession(case=_case(), scenario=_scenario(), steps=steps))
     assert not [n for n in r["notes"] if n["kind"] == "body_camel_keys"], r["notes"]
+
+
+# ── 否定/稳态断言不该被催重试 ──────────────────────────────────────
+
+def test_断应404的步骤不催重试():
+    """重试的语义是「等它变成期望值」。对「应 404」恰恰是反的 ——
+    路由本该立刻且一直不存在，开 10 秒重试等于把「路由没被清掉」这种真 bug
+    等到收敛之后判绿。**照建议改比不改更糟。**
+
+    实测这条误报占了 4 报 3，CC 甚至在步骤名里写了「否定断言故不加重试」，
+    门禁还在催。"""
+    steps = [_step(0, "草稿阶段打网关（不下发，应 404）", retry=0,
+                   url="${gatewayBase}/v1/x/echo",
+                   assertions=[{"type": "status", "value": 404}])]
+    r = _run(FakeSession(case=_case(manual_status="completed", api_status="completed"),
+                         scenario=_scenario(), steps=steps))
+    assert not [x for x in r["risks"] if x["kind"] == "async_assertion_no_retry"], r["risks"]
+
+
+def test_断保持200的稳态步骤也不催重试():
+    """「弃用后存量调用不中断（应保持 200）」期望的是 200，同样不能重试 ——
+    重试意味着允许它先断一下再恢复，而这条测的正是"不能断"。
+    只按状态码判会漏掉它。"""
+    steps = [_step(0, "弃用后存量调用不中断（应保持 200）", retry=0,
+                   url="${gatewayBase}/v1/x/echo",
+                   assertions=[{"type": "status", "value": 200}])]
+    r = _run(FakeSession(case=_case(manual_status="completed", api_status="completed"),
+                         scenario=_scenario(), steps=steps))
+    assert not [x for x in r["risks"] if x["kind"] == "async_assertion_no_retry"], r["risks"]
+
+
+def test_正向异步断言照旧要催():
+    """别把豁免开太大 —— 真正等收敛的那种必须还报。"""
+    steps = [_step(0, "逐节点同步状态应可查", retry=0,
+                   url="${BASE_URL}/api/v1/services/${sid}/push-status",
+                   assertions=[{"type": "body_field", "field": "data.synced_count",
+                                "expected": 1, "operator": "=="}])]
+    r = _run(FakeSession(case=_case(manual_status="completed", api_status="completed"),
+                         scenario=_scenario(), steps=steps))
+    assert [x for x in r["risks"] if x["kind"] == "async_assertion_no_retry"], r["risks"]

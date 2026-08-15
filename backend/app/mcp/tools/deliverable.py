@@ -34,6 +34,31 @@ _DATA_PLANE_RE = re.compile(r"\$\{(gatewayBase|gateway_base|dataPlane|GATEWAY_UR
 _CAMEL_KEY_RE = re.compile(r"^[a-z]+[a-z0-9]*[A-Z]")
 # 「应产生/应新增/应记入」这类承诺，只用 body_contains 兑付就是弱断言
 _PROMISE_RE = re.compile(r"应(产生|新增|记入|生成|保留|接管)|版本历史|操作日志")
+# 稳态语义：断的是「一直是这样」，不是「等它变成这样」
+_STEADY_RE = re.compile(r"不中断|保持|不变|不应|别变|仍(应|然)|依旧|不下发|不新旧并存")
+
+
+def _is_negative_assertion(step) -> bool:
+    """这一步断的是「不存在 / 不变」吗？是的话不该催重试。
+
+    两种判据，任一成立即可：
+      · 断言里期望一个非 2xx 状态码 —— 那是在断「这个东西不存在」。
+        重试会一直等到它变成 404，把「路由该清没清掉」等成绿。
+      · 步骤名带稳态词（保持/不中断/不变/不应…）—— 断的是「一直是这样」，
+        重试同样是反的。
+
+    **只看状态码不够**：「弃用后存量调用不中断（应保持 200）」期望的是 200，
+    却同样不能重试 —— 重试意味着允许它先断一下再恢复，而这条测的正是"不能断"。
+    """
+    for a in (step.assertions or []):
+        if (a.get("type") or "") == "status":
+            v = a.get("value", a.get("expected"))
+            try:
+                if int(v) >= 400:
+                    return True
+            except (TypeError, ValueError):
+                pass
+    return bool(_STEADY_RE.search(step.name or ""))
 # 越界判定的阈值：步骤名有多少比例的二元组能在用例范围里找到，低于这个才报。
 # 在真实那批 6 条上标定过：真阳性（用例压根没提「版本记录」「操作日志」）落在 12%，
 # 边界误报（「推送应已收敛」「确认服务已转 active」，用例其实提过）落在 17~20%。
@@ -185,8 +210,13 @@ def _audit_api_steps(scenario, steps, case, blockers, risks, notes) -> None:
                                  "detail": f"第 {s.sort_order + 1} 步「{s.name}」断言 "
                                            f"{a.get('field')} 期望写成了字符串 \"{exp}\"，"
                                            f"应为 {exp.lower()}（不加引号）"})
-        # 异步断言裸奔 —— 跑绿了也是侥幸
-        if int(s.retry_timeout_ms or 0) == 0:
+        # 异步断言裸奔 —— 跑绿了也是侥幸。
+        # **但否定/稳态断言要放过**：重试的语义是「等它变成期望值」，对
+        # 「应 404」「应保持 200」恰恰是反的 —— 路由本该立刻且一直不存在，
+        # 给它开 10 秒重试，等于把「路由没被清掉」这种真 bug 等到收敛后判绿。
+        # 实测这条误报占了 4 报 3（CC 甚至在步骤名里写了「否定断言故不加重试」，
+        # 而门禁还在催），照建议改反而有害。
+        if int(s.retry_timeout_ms or 0) == 0 and not _is_negative_assertion(s):
             atext = json.dumps(s.assertions or [], ensure_ascii=False)
             if _DATA_PLANE_RE.search(s.url or "") or _ASYNC_FIELD_RE.search(s.url or "") \
                     or _ASYNC_FIELD_RE.search(atext):
