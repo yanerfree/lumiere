@@ -12,6 +12,7 @@ from sqlalchemy import delete as sa_delete, func as sa_func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_test import ApiTestScenario, ApiTestStep
+from app.models.case import Case
 from app.models.api_test_folder import ApiTestFolder
 from app.services.ai import llm_client
 from app.services.ai_config_resolver import ResolvedAIConfig
@@ -46,16 +47,22 @@ async def generate_api_test(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     api_info: str,
-    api_ids: list[str] | None,
     env_variables: dict | None,
+    case_id: uuid.UUID,
     folder_id: uuid.UUID | None = None,
-    case_id: uuid.UUID | None = None,
     on_existing: str | None = None,
     ai_config: ResolvedAIConfig,
     session: AsyncSession,
     user_id: uuid.UUID,
 ) -> AsyncIterator[GenEvent]:
-    """生成接口测试场景。
+    """把一段接口流量编排成**某条用例的**接口场景。
+
+    `case_id` 必填（2026-08-15）。此前可空，是为了服务「接口测试」模块那条
+    「凭文档造单接口场景」的入口；那个模块下线后唯一的调用方是用例详情的
+    「编排为接口测试」，而库里 source_case_id 已是 NOT NULL —— 不传只会撞约束。
+
+    连带删掉的 `api_ids` 参数：它用来把接口库节点的定义拼进 prompt，
+    只有那个模块的生成弹窗会传，前端从来没传过，落库的 source_api_ids 恒为 None。
 
     `on_existing` —— 该用例**已经有**接口场景时怎么办。前端的约定是
     「一个用例 = 一个接口场景」（LinkedApiScenarios 只显示步骤最多的那一条），
@@ -115,26 +122,7 @@ async def generate_api_test(
         except Exception as e:
             logger.warning("Auto-load env vars failed: %s", e)
 
-    # 从 API 节点读取详情（如果有 api_ids）
     full_api_info = api_info or ""
-    if api_ids:
-        from app.mcp.tools import api_endpoints
-        for aid in api_ids:
-            try:
-                node = await api_endpoints.get_api_node(session, aid)
-                if node:
-                    parts = [f"### {node.get('method', 'GET')} {node.get('url', '')} — {node.get('name', '')}"]
-                    if node.get("description"):
-                        parts.append(f"描述: {node['description']}")
-                    if node.get("params"):
-                        parts.append(f"参数 Schema: {json.dumps(node['params'], ensure_ascii=False)}")
-                    if node.get("headers"):
-                        parts.append(f"Headers: {json.dumps(node['headers'], ensure_ascii=False)}")
-                    if node.get("body"):
-                        parts.append(f"Body: {node['body'][:500]}")
-                    full_api_info += "\n\n" + "\n".join(parts)
-            except Exception as e:
-                logger.warning("Failed to load api node %s: %s", aid, e)
 
     if not full_api_info.strip():
         yield GenEvent(type="error", data={"message": "没有接口信息，请选择接口或手动输入"})
@@ -239,24 +227,18 @@ async def generate_api_test(
         yield GenEvent(type="error", data={"message": "无法解析 AI 返回的 JSON（已重试多次仍失败，请重试或减少所选接口数量）"})
         return
 
-    # 下一个编号 = 分支内 **max(code) + 1**，不是 count()+1。
+    # 编号 = **用例编号**，和 CC 回推那条路（sync.py）完全一致。
     #
-    # 原来用 count()：删掉任何一条，下一次生成就会撞上已存在的号 —— 而 `code`
-    # 上没有唯一约束，撞了也不报错，两条场景顶着同一个 AT-####，从此按编号定位
-    # 全是错的。实测已经撞出来了：某分支的 AT-0024 / AT-0027 各有两条。
-    # 编号空间和「用例编排」那边共用（sync.py 也是 max+1），所以两边判据必须一致。
-    max_code_result = await session.execute(
-        select(sa_func.max(ApiTestScenario.code)).where(
-            ApiTestScenario.branch_id == branch_id,
-        )
-    )
-    code_seq = 1
-    _max = max_code_result.scalar()
-    if _max:
-        try:
-            code_seq = int(str(_max).split("-")[1]) + 1
-        except (IndexError, ValueError):
-            pass
+    # 原来这里发的是 AT-#### max+1 —— 那是「接口测试」模块的号段，它已经下线了。
+    # 更糟的是用例详情看到 `AT-` 开头会打上「未绑定用例」的橙色提示，
+    # 于是从这个按钮编排出来的场景，明明绑着用例却被标成孤儿。
+    #
+    # 一个用例 = 一条接口场景，它没有独立身份，不需要第二个名字。
+    src_case = await session.get(Case, case_id)
+    if src_case is None:
+        yield GenEvent(type="error", data={"message": f"用例不存在：{case_id}"})
+        return
+    scenario_code = src_case.case_code
 
     created_ids = []
     auto_folders: dict[str, uuid.UUID] = {}
@@ -323,12 +305,11 @@ async def generate_api_test(
             scenario = ApiTestScenario(
                 project_id=project_id,
                 branch_id=branch_id,
-                code=f"AT-{code_seq:04d}",
+                code=scenario_code,
                 title=sc.get("title", "未命名场景"),
                 priority=sc.get("priority", "P1"),
                 description=sc.get("description", ""),
                 status="draft",
-                source_api_ids=api_ids,
                 source_case_id=case_id,
                 env_variables=env_variables,
                 folder_id=sc_folder_id,
@@ -358,7 +339,6 @@ async def generate_api_test(
         next_sort += len(sc.get("steps", []))
         if str(scenario.id) not in created_ids:
             created_ids.append(str(scenario.id))
-        code_seq += 1
 
         await session.commit()
 

@@ -23,12 +23,13 @@ class ApiTestScenario(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="draft")  # draft | published | deprecated
     source: Mapped[str] = mapped_column(String(10), default="ai")  # ai | manual
-    # 源用例：从功能用例「编排为接口测试」而来时回填，运行时据此解析该用例的场景变量(SV_*)，实现 UI/接口共用一份场景变量
-    source_case_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="SET NULL"), nullable=True)
-    pre_steps: Mapped[dict | None] = mapped_column(JSONB, nullable=True)  # 场景级前置操作(如auth)
-    source_api_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 源用例：运行时据此解析该用例的场景变量(SV_*)，实现 UI/接口共用一份场景变量。
+    # **必填**（2026-08-15 迁移 zz9orph1 收敛）：不绑用例的场景拿不到场景变量
+    # （scenario_variables.case_id 同样 NOT NULL），跑起来必挂在「变量未解析」。
+    # 外键是 CASCADE 而不是 SET NULL —— SET NULL 会把删用例变成"生产孤儿"，
+    # 实测这么攒出过 7 条无主场景。
+    source_case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("cases.id", ondelete="CASCADE"), nullable=False)
     env_variables: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    edited_after_generate: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

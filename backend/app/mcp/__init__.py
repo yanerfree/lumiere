@@ -27,9 +27,10 @@ mcp = FastMCP(
    真正防重复的是你动手之前那一眼。
 
    ⚠ **判重只看 tb_list_cases，别拿接口场景当依据**。tb_list_api_tests 返回里
-   分了两组：`boundToCases`（用例编排的，一个用例一条）和 `standalone`
-   （接口测试模块的独立场景，或者用例已被删的孤儿）。看到 standalone 里有一条
-   全绿的场景就判「这个用例已经有了」是错的 —— 它无主，不属于任何用例。
+   分了两组：`boundToCases`（一个用例一条）和 `standalone`（**无主场景**）。
+   `standalone` 现在**恒为空** —— 2026-08-15 清了存量 47 条并把
+   source_case_id 收成 NOT NULL + 外键 CASCADE，写不出无主场景了。
+   它还留着是当哨兵：**里面一旦有东西，说明有人绕过了约束，那不是谁的产物，别算进判重**。
    实测跑偏过一次：CC 看到孤儿场景 AT-0009 全绿，就不写新用例、改去"补用例重绑"。
 
 ①-1 【怎么挑场景】这是**功能验证**，不是接口参数遍历。
@@ -53,16 +54,14 @@ mcp = FastMCP(
    —— 标题是列表页唯一露出来的东西。写得笼统，以后所有人都得点进详情才知道
    你在测什么，几百条之后没人受得了。
 
-② 「接口测试」有两种，不是一回事，别混：
-   （**这两个是不同的功能，各自有独立的页面和列表**。「接口测试」页面里的东西
-     不代表任何用例的产物，梳理场景、判重复时不要把它算进来。）
+② 接口场景**只有一种**：你亲手活体验证过、绑在某条用例上的多步 E2E 链。
+   回推走 tb_sync_orchestrated_scenario（登录→造→断言→清理），
+   用 source_case_id 绑定某功能用例、**共享该用例的场景变量**。
 
-   · 【接口测试模块·单接口】tb_generate_api_test
-       —— 只有接口文档、无法活体验证时，给一个/少数接口，AI 造一组正向/参数/边界/安全场景。
-          写入 api_test_scenarios，用 source_api_ids 关联接口，**没有 source_case_id**。
-   · 【用例·编排的接口场景】tb_sync_orchestrated_scenario
-       —— 你**亲手活体验证过**的多步 E2E 接口链（登录→造→断言→清理），显式写回，
-          用 source_case_id 绑定某功能用例、**共享该用例的场景变量**。
+   （2026-08-15 之前还有第二种「单接口·凭文档 AI 造」，连同「接口测试」页面
+     一起下线了 —— 那种不绑用例，而场景变量只能挂在用例上，所以它结构上就跑不了。
+     生成归你，平台只做呈现和回推通道。库里可能还留着几条那个年代的无主场景，
+     **梳理场景、判重复时不要把它们算进来**，见下面 tb_list_api_tests 的 standalone 组。）
 
 ③ 活体验证后「回推同步」= 步骤用例 + 编排接口场景 + 场景变量。通道：
    tb_get_sync_spec（先对齐口径）→ tb_list_global_data（看可引用项）→
@@ -130,8 +129,9 @@ mcp = FastMCP(
 ⑤ 【默认先活体验证，别凭文档编】只要能连上被测系统（有可访问的环境地址和账号），
    就**必须真的把接口调一遍**把流程跑通——拿到真实响应结构、真实字段名、真实状态码，
    再据此回推。不要读完接口文档就直接生成。
-   · tb_generate_api_test 仅限**确实拿不到可访问环境**时使用，它是让平台 AI 凭文档造，
-     质量明显更差。不能因为省事就走它。
+   · 平台**不再提供**"凭文档造"那条路（原 tb_generate_api_test 已下线）。连不上环境就
+     先把环境弄通，或者只回推步骤用例（target_level=spec）把接口那一维明明白白欠着 ——
+     欠着是事实，编一条跑不了的场景是假象。
    · 判断依据是"能不能连上"，不是"手上有没有文档"。有文档但环境也能连 → 仍然要活体验证。
 
 ⑥ 【一个用例 = 一条接口场景】tb_sync_orchestrated_scenario 按 source_case_id 幂等：
@@ -497,11 +497,10 @@ _register(
 
 _section("接口场景·可执行")
 
-_register(
-    api_tests.generate_api_test,
-    name="tb_generate_api_test",
-    description="【接口测试模块·单接口】给一个/少数接口定义，AI 生成一组测试场景（正向/参数校验/边界/安全），写入 api_test_scenarios（source_api_ids 关联接口，无 source_case_id）。用于只有接口文档、无法活体验证时。⚠ 与『用例·编排的接口场景』(tb_sync_orchestrated_scenario) 不是一回事。参数: branch_id(分支UUID), api_info(接口定义文本，含method/url/参数/响应), folder_name(可选，目标文件夹名)",
-)
+# tb_generate_api_test（凭接口文档让平台 AI 造单接口场景）2026-08-15 随
+# 「接口测试」模块一起摘掉。它跟平台的定位反着来 —— 生成归外部 Claude Code，
+# 平台只做呈现和回推通道。而且它的产物结构上就跑不了：场景变量只能挂在用例上
+# （scenario_variables.case_id NOT NULL），不绑用例就拿不到凭据。
 
 _register(
     api_tests.list_api_test_scenarios,
@@ -604,7 +603,7 @@ _register(
 _register(
     sync.sync_orchestrated_scenario,
     name="tb_sync_orchestrated_scenario",
-    description="【用例·编排的接口场景】把你**活体验证过**的多步接口链显式写回，绑定 source_case_id 并共享该用例场景变量。入库前硬拦截悬空 ${x}、软警告疑似写死。⚠ 与 tb_generate_api_test（单接口AI造）不是一回事。参数: project_id, branch_id, title, steps([{name,method,url,headers,body,assertions:[{type,operator,expected/value,field}],variables_extract:{name:jsonpath},group_name,enabled,**retry_timeout_ms**,retry_interval_ms,wait_ms}])——异步下发导致的抢跑用 retry_timeout_ms（断言没过就整步重发直到过或超时），别再插假步骤占时间窗；详见 tb_get_sync_spec(kind='timing'), source_case_id(强烈建议), folder_name(可选), priority(默认P1), description(可选)",
+    description="【用例·编排的接口场景】把你**活体验证过**的多步接口链显式写回，绑定 source_case_id 并共享该用例场景变量。入库前硬拦截悬空 ${x}、软警告疑似写死。参数: project_id, branch_id, title, steps([{name,method,url,headers,body,assertions:[{type,operator,expected/value,field}],variables_extract:{name:jsonpath},group_name,enabled,**retry_timeout_ms**,retry_interval_ms,wait_ms}])——异步下发导致的抢跑用 retry_timeout_ms（断言没过就整步重发直到过或超时），别再插假步骤占时间窗；详见 tb_get_sync_spec(kind='timing'), source_case_id(强烈建议), folder_name(可选), priority(默认P1), description(可选)",
 )
 
 _register(

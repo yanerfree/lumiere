@@ -160,8 +160,10 @@ def test_调试跑挂不把已完成的用例打回():
 
 # ── 二、边界：接口测试模块永远碰不到用例 ──────────────────────────
 
-def test_单接口场景跑通不碰任何用例():
-    """接口测试模块的本职产物，不属于任何用例 —— 连查都不该去查用例表。
+def test_无主场景跑通不碰任何用例():
+    """防御分支，不是可达状态 —— 2026-08-15 起库里 source_case_id 是 NOT NULL
+    （迁移 zz9orph1），这种场景插不进去了。留着是因为**执行器里那个 if 还在**：
+    哪天有人把模型改回可空，或者构造出一个内存态的无主场景，边界得还在。
 
     只断言 `applied == []` 是假过的：没有 source_case_id 时用例本来就查不到，
     守卫拆了结果也一样。真正要钉住的是它**在边界上就停下了**。
@@ -176,8 +178,9 @@ def test_单接口场景跑通不碰任何用例():
     assert session.looked_up_cases() == [], session.looked_up_cases()
 
 
-def test_孤儿场景跑通不碰任何用例():
-    """曾经绑过、用例已删 —— source_case_id 还在但取不到用例，必须跳过而不是炸。"""
+def test_取不到源用例时跳过而不是炸():
+    """source_case_id 还在但用例取不到。外键改成 CASCADE 之后正常不会发生
+    （删用例会带走场景），但跨分支复制、并发删除这类缝隙还在 —— 要跳过，不要炸。"""
     dead_case_id = uuid.uuid4()
     sc = _scenario(dead_case_id)
     session = FakeSession({(ApiTestScenario, sc.id): sc})   # 故意不放 Case
@@ -188,8 +191,8 @@ def test_孤儿场景跑通不碰任何用例():
     assert calls == []
 
 
-def test_混跑时只有编排那条落到用例():
-    """一次跑多条、单接口和编排混在一起，边界不能漏。"""
+def test_混跑时只有绑了用例那条落到用例():
+    """一次跑多条、绑用例的和无主的混在一起，边界不能漏。"""
     case = _case()
     bound = _scenario(case.id)
     standalone = _scenario(None)

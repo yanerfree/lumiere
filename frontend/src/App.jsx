@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Routes, Route, useNavigate, useLocation, Navigate } from 'react-router-dom'
+import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom'
 import { Layout, Menu, Avatar, Dropdown, Button, Tooltip, message, Modal, Form, Input } from 'antd'
 import {
   FolderOutlined, FileTextOutlined, UnorderedListOutlined, BarChartOutlined,
@@ -45,10 +45,17 @@ import SkillManage from './pages/settings/SkillManage'
 import MCPTools from './pages/settings/MCPTools'
 import Exploratory from './pages/exploratory/Exploratory'
 import Documents from './pages/documents/Documents'
-import ApiTest from './pages/api-test/ApiTest'
 import SystemServices from './pages/settings/SystemServices'
 
 const { Header, Sider, Content } = Layout
+
+// 「接口测试」模块 2026-08-15 下线后，老书签的落点。
+// 不能写成 <Navigate to="../cases">：这些路由挂在 AppLayout 内层的第二个 <Routes> 里，
+// 相对路径的基准不是 /projects/:projectId，实测会跳到 /cases（丢掉项目前缀）—— 照样白屏。
+function RedirectToCases() {
+  const { projectId } = useParams()
+  return <Navigate to={`/projects/${projectId}/cases`} replace />
+}
 
 function RequireAuth({ children }) {
   const token = localStorage.getItem('token')
@@ -91,7 +98,6 @@ function AppLayout() {
     { key: `/projects/${projectId}/reports`, icon: <BarChartOutlined />, label: t('menu.reports') },
     { key: `/projects/${projectId}/exploratory`, icon: <BugOutlined />, label: t('menu.exploratory') },
     { key: `/projects/${projectId}/documents`, icon: <FileTextOutlined />, label: t('menu.documents') },
-    { key: `/projects/${projectId}/api-test`, icon: <ThunderboltOutlined />, label: t('menu.apiTest') },
     { key: `/projects/${projectId}/settings/automation-data`, icon: <DatabaseOutlined />, label: '自动化数据' },
     { key: `/projects/${projectId}/settings/i18n`, icon: <TranslationOutlined />, label: '国际化词典' },
     { type: 'divider' },
@@ -278,7 +284,11 @@ function AppLayout() {
             <Route path="/projects/:projectId/settings/mcp-tools" element={<MCPTools />} />
             <Route path="/projects/:projectId/exploratory" element={<Exploratory />} />
             <Route path="/projects/:projectId/documents" element={<Documents />} />
-            <Route path="/projects/:projectId/api-test" element={<ApiTest />} />
+            {/* 「接口测试」模块 2026-08-15 下线（见 docs/cc-platform-loop-spec.md §11）。
+                留一条重定向而不是直接删路由：全站没有兜底 404，存了书签的人点进来
+                会看到一片空白内容区 —— 不报错也不说话，比 404 还难判断发生了什么。
+                接口场景现在只在「用例详情 → 接口测试」页签里维护。 */}
+            <Route path="/projects/:projectId/api-test" element={<RedirectToCases />} />
             <Route path="/settings/services" element={<SystemServices />} />
             <Route path="/settings/env" element={<EnvConfig />} />
             <Route path="/settings/channels" element={<ChannelConfig />} />

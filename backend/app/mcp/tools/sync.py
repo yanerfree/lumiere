@@ -11,11 +11,14 @@
   ③ 步骤间提取物（上一步 variables_extract 出来的名字）
 本模块在入库前做「悬空引用硬拦截 + 疑似写死软警告」把这条纪律落地。
 
-术语澄清（很多人会混淆，这里写死口径）：
-  · 「接口测试模块·单接口」= tb_generate_api_test：给接口文档、AI 造一组正/边界/安全场景，
-     source_api_ids 关联接口、无 source_case_id。用于**无法活体验证**时。
-  · 「用例·编排的接口场景」= 本模块 tb_sync_orchestrated_scenario：与某功能用例绑定
-     （source_case_id）、你亲手验证过的多步 E2E 链、共享该用例的场景变量。二者不是一回事。
+口径（2026-08-15 起只剩一种，历史包袱写在这里免得再有人翻出来）：
+  接口场景 = 本模块 tb_sync_orchestrated_scenario 回推的那种：与某功能用例绑定
+  （source_case_id）、你亲手验证过的多步 E2E 链、共享该用例的场景变量。
+
+  此前还有「单接口·凭文档 AI 造」（tb_generate_api_test，无 source_case_id），
+  连同「接口测试」页面一起下线了 —— 不绑用例就拿不到场景变量，结构上跑不了。
+  存量 47 条已清，source_case_id 收成 NOT NULL + 外键 CASCADE（迁移 zz9orph1），
+  所以 source_case_id **必填**，不传直接被这里挡回去。
 """
 from __future__ import annotations
 
@@ -509,13 +512,23 @@ async def sync_orchestrated_scenario(
 ) -> dict:
     """把活体验证过的接口链显式写入「用例·编排的接口场景」。
 
-    与 tb_generate_api_test（单接口 AI 造场景）不是一回事：本工具是你亲手验证过的多步 E2E，
-    绑定 source_case_id、共享该用例场景变量。入库前会做悬空引用硬拦截 + 疑似写死软警告。"""
+    这是接口场景**唯一**的入库路径：你亲手验证过的多步 E2E，绑定 source_case_id、
+    共享该用例场景变量。入库前会做悬空引用硬拦截 + 疑似写死软警告。"""
     pid = uuid.UUID(project_id)
     bid = uuid.UUID(branch_id)
     steps = _loads(steps)
     if not isinstance(steps, list) or not steps:
         return {"error": "steps 必须是非空数组"}
+    # source_case_id 从"强烈建议"变成**必填**（2026-08-15，迁移 zz9orph1）：
+    # 库里 source_case_id 已是 NOT NULL，不传的话下面会撞非空约束、抛出一个
+    # 看不懂的 IntegrityError。在这里挡住，顺便把"为什么"说清楚 ——
+    # 不绑用例的场景拿不到场景变量（scenario_variables.case_id 也是 NOT NULL），
+    # 跑起来必挂在「变量未解析」，建出来也是个死物。
+    if not source_case_id:
+        return {"error": "source_case_id 必填：接口场景必须绑定某条用例。"
+                         "没有对应用例就先 tb_create_case 建一条 —— 不绑用例的场景"
+                         "拿不到场景变量（凭据、随机数据都在用例上），跑起来必然"
+                         "「变量未解析」。"}
 
     # 归一化每个 step 的 JSON 字段（防止客户端把对象序列化成字符串）
     norm: list[dict] = []
@@ -671,27 +684,17 @@ async def sync_orchestrated_scenario(
         # 「为什么要单独一个 ID，不是和用例同一个 id 吗」。
         #
         # 现在 code = 用例编号（TC-XXXX-00001）。AT-#### 序列从此只归单接口场景，
-        # 两个模块的编号空间彻底分开 —— 这也是「两块要分开」那条要求的根上。
-        # 没绑用例的（理论上不该走到这个工具）才回退到 AT-#### max+1。
-        code = None
-        if scid:
-            src_case = await session.get(Case, scid)
-            if src_case:
-                code = src_case.case_code
-        if not code:
-            max_code = (await session.execute(
-                select(sa_func.max(ApiTestScenario.code)).where(
-                    ApiTestScenario.branch_id == bid,
-                    ApiTestScenario.code.like("AT-%"),
-                )
-            )).scalar()
-            next_num = 1
-            if max_code:
-                try:
-                    next_num = int(max_code.split("-")[1]) + 1
-                except (IndexError, ValueError):
-                    pass
-            code = f"AT-{next_num:04d}"
+        # 原来这里还有一条「取不到用例就回退 AT-#### max+1」的兜底。**已删**：
+        # 那条兜底会在用例 id 不存在时照样建，然后撞 source_case_id 的外键 ——
+        # 报出来的是 IntegrityError，人得自己猜是用例没了。而且 AT-#### 序列
+        # 本来就是「接口测试」模块的号，那个模块 2026-08-15 已经下线。
+        # 现在编号只有一种：用例编号。取不到用例就直说。
+        src_case = await session.get(Case, scid)
+        if src_case is None:
+            return {"error": f"用例不存在：{source_case_id}。"
+                             "接口场景的编号就是用例编号，用例找不到就无从落库。"
+                             "先用 tb_list_cases 确认 case_id，或 tb_create_case 建一条。"}
+        code = src_case.case_code
         scenario = ApiTestScenario(
             project_id=pid,
             branch_id=bid,

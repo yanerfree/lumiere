@@ -874,9 +874,10 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           } />
       )}
 
-      {/* 右侧抽屉。跟「接口测试」模块页保持同一种呈现，那边一直就是右侧 Drawer。
-          曾经试过排在文档流里（步骤编辑区很高，结果落到屏幕外，像没反应）和吸底
-          （能看见但形态跟另一个页面不一致），都不对，回到 Drawer。 */}
+      {/* 右侧抽屉。曾经试过排在文档流里（步骤编辑区很高，结果落到屏幕外，像没反应）
+          和吸底（能看见但形态怪），都不对，回到 Drawer。
+          （原注释说"跟「接口测试」模块页保持一致"—— 那个模块 2026-08-15 下线了，
+            这里现在是接口场景运行结果**唯一**的呈现方式。） */}
       <Drawer
         open={showPanel && (stepResults.length > 0 || running)}
         onClose={() => setShowPanel(false)}

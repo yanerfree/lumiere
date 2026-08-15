@@ -26,15 +26,22 @@ async def copy_branch_data(
     """
     stats = {}
     api_node_map: dict[uuid.UUID, uuid.UUID] = {}
+    case_map: dict[uuid.UUID, uuid.UUID] = {}
 
     if "cases" in modules:
-        stats["cases"] = await _copy_cases(session, source_branch_id, target_branch_id, user_id)
+        stats["cases"], case_map = await _copy_cases(session, source_branch_id, target_branch_id, user_id)
 
     if "apis" in modules:
         stats["apis"], api_node_map = await _copy_api_nodes(session, source_branch_id, target_branch_id, project_id, user_id)
 
     if "api_test" in modules:
-        stats["apiTest"] = await _copy_api_tests(session, source_branch_id, target_branch_id, project_id, user_id, api_node_map)
+        # 接口场景必须绑用例（source_case_id NOT NULL），所以它只能跟着用例走：
+        # 没勾「用例」就没有 case_map，场景在目标分支找不到宿主，只能整体跳过。
+        # 这不是缺陷是定义 —— 一条不属于任何用例的接口场景，本来就不该存在。
+        stats["apiTest"] = await _copy_api_tests(
+            session, source_branch_id, target_branch_id, project_id, user_id,
+            api_node_map, case_map,
+        )
 
     await session.commit()
     logger.info("Branch copy done: %s -> %s, stats=%s", source_branch_id, target_branch_id, stats)
@@ -131,6 +138,7 @@ async def _copy_cases(
     cases = cases_result.scalars().all()
 
     count = 0
+    case_map: dict[uuid.UUID, uuid.UUID] = {}
     for c in cases:
         if c.deleted_at:
             continue
@@ -155,10 +163,14 @@ async def _copy_cases(
             remark=c.remark,
         )
         session.add(new_case)
+        await session.flush()          # 要立刻拿到新 id 去建映射
+        case_map[c.id] = new_case.id
         count += 1
 
     await session.flush()
-    return {"folders": len(folders), "cases": count}
+    # 顺带回一份 旧用例id → 新用例id。接口场景靠它改绑到目标分支的用例上
+    # （source_case_id 是 NOT NULL，不改绑就只能整体跳过）。
+    return {"folders": len(folders), "cases": count}, case_map
 
 
 async def _copy_api_tests(
@@ -168,10 +180,17 @@ async def _copy_api_tests(
     project_id: uuid.UUID,
     user_id: uuid.UUID,
     api_node_map: dict[uuid.UUID, uuid.UUID] | None = None,
+    case_map: dict[uuid.UUID, uuid.UUID] | None = None,
 ) -> dict:
-    """复制接口测试文件夹 + 场景 + 步骤。状态重置为 draft，执行历史清空。
+    """复制接口场景的文件夹 + 场景 + 步骤。状态重置为 draft，执行历史清空。
 
-    api_node_map: 同时复制了 API 接口时，source_api_ids 重映射到新接口 ID（FR40）。
+    `case_map`（旧用例id → 新用例id）：场景必须绑用例（source_case_id NOT NULL），
+    所以每条场景都要改绑到目标分支的那条用例上。映射里找不到宿主的**跳过**，
+    数量记在 `skippedNoCase` 里 —— 静默少复制几条比报错更难查。
+
+    `api_node_map` 参数已废弃：它是给 source_api_ids 重映射用的，
+    而那一列 2026-08-15 随「接口测试」模块一起删了（迁移 zza0dead1）。
+    形参先留着不动调用方，下次清理时一并摘。
     """
     from app.models.api_test import ApiTestScenario, ApiTestStep
     from app.models.api_test_folder import ApiTestFolder
@@ -213,13 +232,14 @@ async def _copy_api_tests(
 
     scenario_count = 0
     step_count = 0
+    skipped_no_case = 0
     for sc in scenarios:
-        # source_api_ids 重映射：接口也被复制时指向新 ID，否则保留原值
-        new_api_ids = sc.source_api_ids
-        if api_node_map and sc.source_api_ids:
-            new_api_ids = [
-                str(api_node_map.get(uuid.UUID(aid), aid)) for aid in sc.source_api_ids
-            ]
+        # 场景跟着用例走。目标分支里没有对应用例就跳过 —— 硬建的话会撞
+        # source_case_id 的非空约束，把整次分支复制打死。
+        new_case_id = (case_map or {}).get(sc.source_case_id)
+        if new_case_id is None:
+            skipped_no_case += 1
+            continue
         new_scenario = ApiTestScenario(
             project_id=project_id,
             branch_id=target_branch_id,
@@ -230,8 +250,7 @@ async def _copy_api_tests(
             description=sc.description,
             status="draft",
             source=sc.source,
-            pre_steps=sc.pre_steps,
-            source_api_ids=new_api_ids,
+            source_case_id=new_case_id,
             env_variables=sc.env_variables,
             created_by=user_id,
         )
@@ -261,4 +280,11 @@ async def _copy_api_tests(
             step_count += 1
 
     await session.flush()
-    return {"folders": len(folder_map), "scenarios": scenario_count, "steps": step_count}
+    if skipped_no_case:
+        # 别静默 —— 少复制了几条，人得知道为什么（多半是没勾「用例」那个模块）
+        logger.warning(
+            "分支复制跳过 %d 条接口场景：目标分支里没有对应用例（复制时要一起勾选「用例」）",
+            skipped_no_case,
+        )
+    return {"folders": len(folder_map), "scenarios": scenario_count,
+            "steps": step_count, "skippedNoCase": skipped_no_case}

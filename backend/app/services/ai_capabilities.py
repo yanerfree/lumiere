@@ -48,8 +48,9 @@ CAPABILITY_REGISTRY = [
     {"key": "tb-quality-review",       "label": "用例质量评审",         "category": "text",      "where": "用例管理"},
     {"key": "tb-diagnose",             "label": "失败诊断",             "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "归因归外部 Claude Code（tb_submit_analysis），平台只按规则出现象、由人确认结论。前端从来没有调用入口"},
     {"key": "scenario-gen",            "label": "功能场景测试生成",     "category": "text",      "where": "场景生成 Stage1-4"},
-    {"key": "api-test-generate",       "label": "接口测试场景生成",     "category": "text",      "where": "接口测试"},
-    {"key": "api-test-optimize",       "label": "接口场景 AI 优化",     "category": "text",      "where": "接口测试 → 选中场景 → AI 优化"},
+    # 「接口测试」模块 2026-08-15 下线，但这条 key 还活着 —— 用例详情里
+    # 「探索测试流量 → 编排为接口测试」走的是同一个 /generate 端点。
+    {"key": "api-test-generate",       "label": "接口场景编排生成",     "category": "text",      "where": "用例详情 → 编排为接口测试"},
     {"key": "pytest-script",           "label": "pytest 脚本生成",      "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "入口是已删除的 AIScriptModal"},
     {"key": "doc-generate",            "label": "文档生成",             "category": "text",      "where": "文档管理"},
     {"key": "doc-generate-screenshots","label": "文档带截图生成",       "category": "text",      "where": "文档管理"},

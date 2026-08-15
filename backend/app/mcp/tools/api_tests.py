@@ -1,4 +1,9 @@
-"""MCP 工具 — 接口测试场景的生成、查询、执行"""
+"""MCP 工具 — 接口场景的查询与执行。
+
+生成不在这里：2026-08-15 下线「接口测试」模块时一并摘掉了 tb_generate_api_test
+（凭接口文档 AI 造场景）。生成归外部 Claude Code，平台只做呈现和回推通道。
+回推走 tb_sync_orchestrated_scenario。
+"""
 from __future__ import annotations
 
 import json
@@ -9,59 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_test import ApiTestScenario, ApiTestStep
-from app.models.api_test_folder import ApiTestFolder
-
-
-async def generate_api_test(
-    session: AsyncSession,
-    branch_id: str,
-    api_info: str,
-    folder_name: str | None = None,
-) -> dict:
-    """根据接口定义 AI 生成测试场景。Claude Code 通过此工具提交接口信息，平台 AI 生成测试用例。
-    api_info 应包含完整的接口定义（method, url, 参数约束, 响应格式等）。
-    folder_name 可选，指定生成到哪个文件夹（不存在则自动创建）。"""
-    from app.services.ai_config_resolver import resolve_ai_config
-    from app.services.ai.api_scenario_gen_service import generate_api_test as _generate
-
-    bid = uuid.UUID(branch_id)
-    scenario = await session.execute(select(ApiTestScenario).where(ApiTestScenario.branch_id == bid).limit(1))
-    sc = scenario.scalars().first()
-    if not sc:
-        return {"error": "分支下没有任何场景，无法确定 project_id。请先在平台创建一个场景。"}
-
-    project_id = sc.project_id
-    user_id = sc.created_by
-
-    folder_id = None
-    if folder_name:
-        fr = await session.execute(
-            select(ApiTestFolder).where(ApiTestFolder.branch_id == bid, ApiTestFolder.name == folder_name)
-        )
-        folder = fr.scalars().first()
-        if not folder:
-            folder = ApiTestFolder(branch_id=bid, name=folder_name)
-            session.add(folder)
-            await session.flush()
-        folder_id = folder.id
-
-    ai_config = await resolve_ai_config(project_id, session, capability="api-test-generate")
-    if not ai_config:
-        return {"error": "AI 服务未配置"}
-
-    created = []
-    async for event in _generate(
-        project_id=project_id, branch_id=bid,
-        api_info=api_info, api_ids=None,
-        env_variables=None, folder_id=folder_id,
-        ai_config=ai_config, session=session, user_id=user_id,
-    ):
-        if event.type == "scenario_created":
-            created.append({"code": event.data["code"], "title": event.data["title"], "stepCount": event.data["stepCount"]})
-        elif event.type == "error":
-            return {"error": event.data["message"], "partialResults": created}
-
-    return {"scenarios": created, "total": len(created)}
 
 
 async def list_api_test_scenarios(
@@ -81,33 +33,28 @@ async def list_api_test_scenarios(
     result = await session.execute(q)
     scenarios = result.scalars().all()
 
-    # **分成两组返回，因为它们是两个功能**：
-    #   boundToCases —— 用例编排的接口场景（有 source_case_id），一个用例一条，
-    #                    这才是"这个用例的接口维度"
-    #   standalone   —— 接口测试模块里的独立场景（凭接口文档 AI 造的那种），
-    #                    和用例没有关系
+    # 原来这里分 boundToCases / standalone 两组返回，因为库里混着两个功能的产物。
+    # 2026-08-15 之后只剩一种：接口场景必属于某条用例（source_case_id NOT NULL +
+    # 外键 CASCADE，迁移 zz9orph1），standalone 那组恒为空 —— 保留一个永远空的
+    # 分组只会让人以为"另一类还在"。平列表返回。
     #
-    # 混在一个平列表里回过一次，后果是 CC 判重时把 standalone 里的一条
-    # 当成"这个用例已经有了"，于是不写新的、改去"补用例重绑" —— 实测跑偏过。
-    # 孤儿（曾经绑过、用例被删了）也归进 standalone 并单独标出来：它无主，
-    # 不该被当作任何用例的既有产物。
+    # 但**判重仍然不能看这里**：一个用例一条场景，这个列表只说明"接口维度做没做"，
+    # 说明不了"这个测试点写没写过"。那条实测跑偏过（CC 看到一条全绿就不写新用例了），
+    # 所以 usage 那句话留着。
     rows = []
     for sc in scenarios:
         rows.append({
             "id": str(sc.id), "code": sc.code, "title": sc.title,
             "status": sc.status, "source": sc.source, "priority": sc.priority,
             "stepCount": await _count_steps(session, sc.id),
-            "sourceCaseId": str(sc.source_case_id) if sc.source_case_id else None,
+            "sourceCaseId": str(sc.source_case_id),
         })
-    bound = [r for r in rows if r["sourceCaseId"]]
-    alone = [r for r in rows if not r["sourceCaseId"]]
     return {
-        "boundToCases": bound,
-        "standalone": alone,
+        "scenarios": rows,
         "total": len(rows),
-        "usage": "判「这个场景库里有没有」**只看 boundToCases** —— standalone 是"
-                 "接口测试模块的独立场景（另一个功能），或者用例已被删的孤儿，"
-                 "拿它判重会误判成「已经有了」。要判用例层有没有，用 tb_list_cases。",
+        "usage": "这里列的是**各用例的接口维度产物**，一个用例最多一条。"
+                 "判「这个测试点写没写过」用 tb_list_cases，别拿这个列表判 —— "
+                 "看到一条全绿就以为「已经有了」，实测跑偏过。",
     }
 
 

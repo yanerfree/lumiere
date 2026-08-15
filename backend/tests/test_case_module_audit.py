@@ -381,11 +381,25 @@ def test_接口层只认append和replace():
     """乱传一个字符串不能被当成"表态"放行。"""
     from app.api.api_test import GenerateRequest
 
-    assert GenerateRequest(on_existing="append").on_existing == "append"
-    assert GenerateRequest(on_existing="replace").on_existing == "replace"
-    assert GenerateRequest().on_existing is None
+    cid = "11111111-1111-1111-1111-111111111111"   # caseId 现在必填，见下一条
+    assert GenerateRequest(case_id=cid, on_existing="append").on_existing == "append"
+    assert GenerateRequest(case_id=cid, on_existing="replace").on_existing == "replace"
+    assert GenerateRequest(case_id=cid).on_existing is None
     with pytest.raises(Exception):
-        GenerateRequest(on_existing="drop")
+        GenerateRequest(case_id=cid, on_existing="drop")
+
+
+def test_编排生成必须指定用例():
+    """`/generate` 的 caseId 从可选变必填（2026-08-15）。
+
+    可选是为了服务已下线的「接口测试」模块那个生成弹窗。留着的话，不传 caseId
+    会一路走到插库才撞 source_case_id 的非空约束 —— 报出来是 500 和一句
+    IntegrityError，调用方看不出自己少传了什么。声明成必填 = 一条带字段名的 422。
+    """
+    from app.api.api_test import GenerateRequest
+
+    with pytest.raises(Exception):
+        GenerateRequest(api_info="POST /x")
 
 
 # ── 空目录 ──────────────────────────────────────────────────────────
@@ -1831,27 +1845,82 @@ def test_彻底删用例要带走绑定的接口场景():
         "彻底删用例没带走绑定场景，它会变成孤儿混进接口测试模块")
 
 
-def test_接口场景列表要把两个功能分开():
-    """混在一个平列表里回给 CC，它就会拿另一个功能的东西判重。"""
+def test_接口场景必须属于某条用例():
+    """无主场景这件事，2026-08-15 从"约定"升成"不变量"（迁移 zz9orph1）。
+
+    在这之前它只是纪律：外键是 SET NULL，删一条用例就把它的场景变成孤儿，
+    `case_service` 里补的那句 sa_delete 只堵住了一条删除路径。实测攒出 7 条无主
+    场景，跑起来必挂在「变量未解析」（场景变量只能挂在用例上），还在稀释通过率。
+
+    现在库里是 NOT NULL + ON DELETE CASCADE。这条钉住模型别被改回去 ——
+    模型和库不一致的后果是安静的：SQLAlchemy 以为可空，插进去才炸。
+    """
+    from app.models.api_test import ApiTestScenario
+
+    col = ApiTestScenario.__table__.c.source_case_id
+    assert not col.nullable, "source_case_id 又变回可空了 —— 孤儿会重新长出来"
+    fk = next(iter(col.foreign_keys))
+    assert fk.ondelete == "CASCADE", (
+        f"外键删除规则是 {fk.ondelete}，不是 CASCADE —— "
+        "SET NULL 会把「删用例」变成「生产孤儿」")
+
+
+def test_回推不绑用例要说人话而不是撞约束():
+    """必填是库层挡的，但库层挡出来的是 IntegrityError，CC 看不懂。
+
+    工具入口要先挡一道，并且**把为什么说清楚**（不绑用例 = 拿不到场景变量）。
+    只 assert 返回 error 是不够的：随便报个错也能过。
+    """
+    import inspect
+
+    from app.mcp.tools.sync import sync_orchestrated_scenario
+
+    body = inspect.getsource(sync_orchestrated_scenario)
+    assert "if not source_case_id:" in body, "回推入口没挡「不传用例」"
+    assert "场景变量" in body, "挡住了但没说为什么，CC 只会换个参数重试"
+    # AT-#### 那条兜底必须已经拆掉：它会在用例不存在时照建，然后撞外键
+    assert "AT-{" not in body and 'f"AT-' not in body, (
+        "AT-#### 编号兜底还在 —— 用例不存在时它会建出一条撞外键的场景")
+
+
+def test_接口场景列表不许被当成判重依据():
+    """原来这条测的是"分成 boundToCases / standalone 两组" —— 那是库里混着
+    两个功能产物的年代。现在只剩一种（source_case_id NOT NULL），
+    standalone 恒为空，保留一个永远空的分组只会让人以为另一类还在。
+
+    但**要守的那件事没变**：这个列表说明的是"各用例的接口维度做没做"，
+    说明不了"这个测试点写没写过"。实测跑偏过 —— CC 看到一条全绿就不写新用例了。
+    所以 usage 里必须把人指回 tb_list_cases。
+    """
     from app.mcp.tools import api_tests
 
     body = _code_of(api_tests, "list_api_test_scenarios")
-    # 钉分组那两行本身 —— "boundToCases"/"standalone" 只是返回字典的键，
-    # 把分组逻辑改成 `bound = []` 它们照样在。
-    assert "[r for r in rows if r['sourceCaseId']]" in body, "没有按绑定与否分组"
-    assert "[r for r in rows if not r['sourceCaseId']]" in body
-    assert "只看 boundToCases" in body, "分了组却不说该看哪组，等于没分"
+    assert "standalone" not in body, (
+        "standalone 分组还在 —— 它现在恒为空（NOT NULL 约束），留着是误导")
+    assert "tb_list_cases" in body, "没把判重指回 tb_list_cases，这个列表就会被拿去判重"
 
 
-def test_instructions说清这是两个功能():
-    """接入指令和 instructions 都要写死这条 —— 光在返回值里分组，
-    模型未必意识到那是"另一个功能"。
+def test_instructions说清无主场景不算数():
+    """光在返回值里分组，模型未必意识到 standalone 那组"不属于任何人"。
+
+    原来这条测的是"说清这是两个功能"——因为当时确实有两个（「接口测试」模块的
+    单接口场景 vs 用例编排链）。2026-08-15 那个模块下线了，功能只剩一个，
+    但**它的存量数据还在库里**，判重踩坑的风险一点没少（实测跑偏过：CC 看到
+    孤儿 AT-0009 全绿就不写新用例了）。所以要守的东西从"说清是两个功能"
+    变成"说清 standalone 那组无主、不算数"。
     """
     from app.mcp import mcp
 
     ins = mcp.instructions
     assert "判重只看 tb_list_cases" in ins
-    assert "不同的功能" in ins and "不要把它算进来" in ins
+    assert "无主场景" in ins
+    # 只认一句原话太脆 —— 这条已经因为改文案红过一次（把"不要把它算进来"改成
+    # "别算进判重"）。认意思：两种说法哪种都行，但**必须说了别拿它判重**。
+    assert any(k in ins for k in ("不要把它算进来", "别算进判重", "不要把它们算进来")), (
+        "instructions 没说清无主场景不参与判重")
+    # 顺带钉住新事实：约束收敛之后 standalone 恒为空，它现在的角色是哨兵。
+    # 不说这一句的话，CC 会以为那组里"本来就有些历史数据"，看到东西也不当回事。
+    assert "恒为空" in ins, "没说清 standalone 现在应该是空的（有东西=有人绕过了约束）"
 
 
 def test_等待重试这个能力要送达CC():

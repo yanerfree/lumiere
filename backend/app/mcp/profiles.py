@@ -7,6 +7,9 @@
 正好是要避开的那条路。instructions 里写了"默认先活体验证"也拦不住，
 **软约束对模型是建议，工具范围才是墙**。
 
+（那个工具后来直接下线了 —— 拦不如没有。但这条教训对别的岔路照样成立，
+分档因此保留。）
+
 所以档位不是 UI 便利，是拿 Key 上的 `allowed_tools` 兜底：范围外的工具
 在 `tools/list` 里看不到，直接 `tools/call` 也会被 `on_call_tool` 拒掉。
 
@@ -99,8 +102,8 @@ _REGRESSION = _LOCATE + [
 # 工具不属于任何档位是同一个毛病）。
 #
 # 它比别的档大得多（三十多个），这是有意的：这一档挡的不是"工具多"，而是那几条
-# **会把人带偏的岔路** —— tb_generate_api_test（凭文档造，绕开亲手验证）、
-# Skill 存取、文档规范。（需求文档流水线那条岔路已整体下线，不用再挡了）
+# **会把人带偏的岔路** —— Skill 存取、文档规范、接口库维护。
+# （需求文档流水线和 tb_generate_api_test 那两条岔路已整体下线，不用再挡了）
 _FULLLOOP = sorted(set(_LIVE + _UISCRIPT + _REGRESSION + _TRIAGE + _MOCKS))
 _FULLLOOP_TASK = "下面这四件活连起来干完：" + " → ".join(
     f"{n}{_LABELS[k]}" for n, k in zip("①②③④", _CHAIN)
@@ -111,14 +114,14 @@ PROFILES: list[dict] = [
         "key": "fullloop",
         "label": "全链路：从写用例到读报告",
         "task": _FULLLOOP_TASK,
-        "hint": "最常见的用法就是这一条。不含 tb_generate_api_test —— 那个凭接口文档造，和你亲手跑过不是一回事",
+        "hint": "最常见的用法就是这一条。不含接口库维护和 Skill 存取 —— 那些是另一件活",
         "tools": _FULLLOOP,
     },
     {
         "key": "live",
         "label": _LABELS["live"],
         "task": "在被测系统里真跑一遍，把测试步骤和接口链回写成用例",
-        "hint": "刻意排除 tb_generate_api_test —— 那个凭文档造，和「亲手验证过」是两回事",
+        "hint": "接口场景一律亲手跑通再回推 —— 平台不提供「凭文档造」那条路",
         "tools": _LIVE,
     },
     {
@@ -153,14 +156,19 @@ PROFILES: list[dict] = [
     },
     # 「需求文档批量生成用例」档已删 —— 那条流水线的入口整体下线了，
     # 原因见 app/mcp/__init__.py 里「需求→用例流水线：已下线」那段注释。
+    # 原来这一档叫「只有接口文档，连不上系统」，配的是 tb_generate_api_test（凭文档造场景）。
+    # 那个工具 2026-08-15 随「接口测试」模块一起下线 —— 它造出来的场景不绑用例，
+    # 而场景变量只能挂在用例上，所以结构上就跑不了。这一档因此收敛回它真正干的事：
+    # **维护接口库**（记系统有哪些接口、怎么调），供后面编排场景时查阅引用。
+    # 连不上环境时的正解不是凭文档编场景，是只回推 spec 用例、把接口那一维明明白白欠着。
     {
         "key": "apidoc",
-        "label": "只有接口文档，连不上系统",
-        "task": "拿不到可访问环境时，按接口定义造一组正向/参数/边界/安全场景",
-        "hint": "退而求其次的路。能连上被测系统就该选「用例：步骤 + 接口场景」，亲手跑通比凭文档猜靠谱",
+        "label": "维护接口库",
+        "task": "把系统有哪些接口、怎么调记进接口库，供后续写用例和编排场景时查阅",
+        "hint": "接口库只是文档，没有断言、不能执行。要可执行的接口场景，选「用例：步骤 + 接口场景」亲手跑通再回推",
         "tools": _LOCATE + [
             "tb_list_api_tree", "tb_get_api_node", "tb_create_api_node",
-            "tb_generate_api_test", "tb_list_api_tests", "tb_get_api_test",
+            "tb_list_api_tests", "tb_get_api_test",
         ],
     },
     {

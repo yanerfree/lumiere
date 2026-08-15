@@ -83,11 +83,18 @@ def test_全链路档覆盖整条链的每一步():
         assert tool in fl, f"全链路缺了「{step}」这一步（{tool}）"
 
 
-def test_活体验证档位不含凭文档造场景的工具():
-    """实测踩过：CC 看到 tb_generate_api_test 觉得省事就走了它，
-    正好绕开了"亲手跑一遍"。instructions 是软约束，这里才是墙。"""
-    live = next(p for p in PROFILES if p["key"] == "live")
-    assert "tb_generate_api_test" not in live["tools"]
+def test_平台不再提供凭文档造场景的工具():
+    """原来这条测的是"live 档不含 tb_generate_api_test" —— 靠档位把它挡在外面。
+
+    2026-08-15 那个工具连同「接口测试」模块整个下线了，于是这条要测的东西变了：
+    不是"某一档挡住它"，而是**它根本不该再被注册回来**。
+    档位断言在工具不存在时是恒真的，留着等于没测（假通过）。
+
+    下线的理由不是没人用，是它的产物结构上跑不了：场景变量只能挂在用例上
+    （scenario_variables.case_id NOT NULL），不绑用例就拿不到凭据，实跑必挂在
+    「变量未解析」。生成归外部 Claude Code，平台只做呈现和回推通道。
+    """
+    assert "tb_generate_api_test" not in NAMES
 
 
 def test_归因档位不含任何写用例或脚本的工具():
