@@ -16,7 +16,7 @@ import ScriptEditor from '../../components/ScriptEditor'
 import ScenarioVariables from '../../components/ScenarioVariables'
 import ApiStepList, { generateApiCodeFromSteps } from '../../components/ApiStepList'
 import { scenarioToNodes, nodeToStepPatch } from './apiStepAdapter'
-import RunResultPanel from '../api-test/components/RunResultPanel'
+import RunResultPanel from '../../components/RunResultPanel'
 import FailureTriagePanel from '../../components/FailureTriagePanel'
 import { createSseParser } from '../../utils/sseParser'
 
