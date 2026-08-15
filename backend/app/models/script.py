@@ -71,7 +71,9 @@ class ScriptRun(Base):
     duration_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     error_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     stdout: Mapped[str | None] = mapped_column(Text, nullable=True)
-    screenshots: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # none_as_null 见下面 captured_requests 那条注释 —— 这几列都是用
+    # `result.get(...) or None` 写进来的，不开就会存成 JSON 的 null。
+    screenshots: Mapped[list | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     executed_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
@@ -96,7 +98,7 @@ class ScriptRun(Base):
     captured_pruned_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # UI 脚本的步骤级结果（平台自动埋点产出）。接口场景不用这个 ——
     # 它的每一步存在 api_test_steps.last_status/last_response 上。
-    steps: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    steps: Mapped[list | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     # ── 失败判断的三层，谁也不覆盖谁（见 o9c0d1e2f3a4 迁移的说明）──
     # 平台判的「现象」：确定性规则，每次执行自动算
     failure_phenomenon: Mapped[str | None] = mapped_column(String(32), nullable=True)

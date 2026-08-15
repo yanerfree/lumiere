@@ -139,9 +139,13 @@ def test_置空必须落成SQL_NULL不是JSON_null():
     数字对不上。单元测试用的是假 session，永远碰不到这个。
     """
     from app.models.script import ScriptRun
-    col = ScriptRun.__table__.c.captured_requests
-    assert col.type.none_as_null is True, \
-        "captured_requests 没开 none_as_null —— 置空会存成 JSON null，被反复回收"
+    # 三列都是 `result.get(...) or None` 写进来的，都会踩同一个坑。
+    # 只修 captured_requests 的时候，steps 存量 25 行、screenshots 112 行都还是坏的 ——
+    # 表现是任何 jsonb_array_length 查询直接报「cannot get array length of a scalar」。
+    for name in ("captured_requests", "steps", "screenshots"):
+        col = ScriptRun.__table__.c[name]
+        assert getattr(col.type, "none_as_null", False) is True, \
+            f"{name} 没开 none_as_null —— 置空会存成 JSON null，IS NOT NULL 照样为真"
 
 
 @pytest.mark.asyncio
