@@ -28,6 +28,59 @@ logger = logging.getLogger(__name__)
 DEBUG = "debug"
 REGRESSION = "regression"
 
+# ── 流量回收 ────────────────────────────────────────────────────────
+# 一次 UI 执行会录下浏览器发的全部请求（含响应体），实测 96~98 条、约 34KB。
+# 它是**失败时唯一的网络证据**——平台的请求拦截器拦的是 httpx，浏览器发的请求
+# 根本不经过它；不录 HAR，UI 脚本挂了就只剩一句「元素找不到」，看不到那一刻
+# 后端返了什么。
+#
+# 但通过那次的流量几乎没人回头看，而这张表只涨不落。所以按结果分开留：
+KEEP_PASSED = 1   # 通过的只留最新一次
+KEEP_FAILED = 5   # 失败的留最近 5 次
+#
+# 为什么失败的要留好几次而不是也只留一次：挂了之后重跑一次想复现，没复现出来
+# （flaky）——这一重跑就会把挂掉那次的流量冲掉，而 flaky 恰恰是最需要拿两次
+# 流量对比的场景。项目里 flaky 是正式的归因类别、还有 flakyEvidence 字段。
+
+
+async def prune_captured_requests(session: AsyncSession, case_id, script_type: str) -> int:
+    """回收同一条用例（同一脚本类型）下的老流量，返回回收了几行。
+
+    规则：通过的只留最新 KEEP_PASSED 次，失败的留最近 KEEP_FAILED 次。
+    只清 `captured_requests` 这一个字段 —— 步骤、错误、截图、stdout、失败现象
+    全部原样保留，历史行数不变。**回收不是删记录，是丢掉那一坨流量。**
+
+    按结果分两档，不是一刀切"留最近 N 次"：一条用例挂了之后往往连着重跑好几遍，
+    一刀切的话那几次重跑会把挂掉那次挤出窗口 —— 而那次才是要看的。
+    """
+    cid = case_id if isinstance(case_id, uuid.UUID) else uuid.UUID(str(case_id))
+    pruned = 0
+    for statuses, keep in (({"passed"}, KEEP_PASSED), (None, KEEP_FAILED)):
+        stmt = select(ScriptRun).where(
+            ScriptRun.case_id == cid,
+            ScriptRun.script_type == script_type,
+            ScriptRun.captured_requests.isnot(None),
+            # 已经回收过的绝不再碰。**双保险**：真正的根因是 JSONB 把 None 存成
+            # JSON null（见模型里那条注释），已经在列上修了；但万一哪天又有别的
+            # 写法让空值漏进上面那个 isnot(None)，重复回收会把原条数抹成 0 ——
+            # 那是不可逆的信息丢失，值得多加这一条。
+            ScriptRun.captured_pruned_count.is_(None),
+        )
+        stmt = (stmt.where(ScriptRun.status == "passed") if statuses
+                else stmt.where(ScriptRun.status != "passed"))
+        rows = (await session.execute(
+            stmt.order_by(ScriptRun.created_at.desc())
+        )).scalars().all()
+        for r in rows[keep:]:
+            # 先记条数再置空 —— 反过来就永远是 0，界面上「没抓到」和「已回收」
+            # 又分不出来了。
+            r.captured_pruned_count = len(r.captured_requests or [])
+            r.captured_requests = None
+            pruned += 1
+    if pruned:
+        await session.flush()
+    return pruned
+
 
 async def fallback_user_id(session: AsyncSession) -> uuid.UUID | None:
     """executed_by 是 NOT NULL FK，拿不到真实执行人时的兜底。
@@ -122,6 +175,13 @@ async def record_run(
         )
         session.add(run)
         await session.flush()
+
+        # 回收老流量。挂在这个唯一写入点上 —— 不需要定时任务，也就不会有
+        # 「清理任务挂了没人发现」这种二次故障。
+        try:
+            await prune_captured_requests(session, case_id, script_type)
+        except Exception:  # noqa: BLE001
+            logger.exception("流量回收失败（不影响这次执行记账）")
 
         # 记完账立刻判一次 flaky —— 挂在这个唯一写入点上，任何执行路径
         # （单条调试 / 计划回归 / 批量）都自动过一遍，不用各自记得去调。

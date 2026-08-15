@@ -85,7 +85,15 @@ class ScriptRun(Base):
     # 计划执行会重试 N 次，每次单独一行。只记最后一次的话，flaky 判定要的
     # "同一版本多次结果翻转"就永远攒不到。
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
-    captured_requests: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # none_as_null 必须开。JSONB 列默认把 Python None 存成 **JSON 的 null**
+    # （字面量 'null'），不是 SQL NULL —— `IS NOT NULL` 照样为真。
+    # 实测后果：回收把这一列置空之后，下一次执行的回收又把它选出来重清一遍，
+    # `len(None or [])` = 0，**原来记的「97 条」被抹成 0**，说不出回收了多少。
+    captured_requests: Mapped[list | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
+    # 流量被回收时，把原来有多少条记下来。**不能只把 captured_requests 置空** ——
+    # 那样界面上「没抓到流量」和「抓了但回收了」长得一模一样，人会当成 bug 报。
+    # 这个项目已经栽在「静默」上三次了。
+    captured_pruned_count: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # UI 脚本的步骤级结果（平台自动埋点产出）。接口场景不用这个 ——
     # 它的每一步存在 api_test_steps.last_status/last_response 上。
     steps: Mapped[list | None] = mapped_column(JSONB, nullable=True)

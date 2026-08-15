@@ -179,6 +179,60 @@ const PHENOMENON_LABELS = {
   unknown: '看不出来',
 }
 
+/** 执行历史里那一次的网络流量。
+ *
+ * 此前这里什么都不渲染 —— 库里每次执行都单独存了一份 96~98 条的流量、接口也一直
+ * 在返回，界面上却只有「UI 测试」页签里最新那一次看得到，跑下一次就被顶掉。
+ * 存了没人能读，等于白存。
+ *
+ * 三种情况要分得开，**尤其是后两种不能都渲染成空白**：
+ *   有流量   → 列出来
+ *   已回收   → 说清楚是回收了、原来有多少条、为什么
+ *   没抓到   → 说没抓到
+ * 「已回收」显示成空白的话，人会当成 bug 报 —— 这个项目已经栽在「静默」上三次。
+ */
+function RunTraffic({ run }) {
+  const list = run.capturedRequests || run.captured_requests
+  const pruned = run.capturedPrunedCount ?? run.captured_pruned_count
+  const box = { marginTop: 10, fontSize: 12, color: '#86909c' }
+  if (!list?.length) {
+    // 条数可能是 null（老数据修不回来了），那就只说回收了、不报数 ——
+    // 「0 条流量已回收」比不报数更让人摸不着头脑。
+    if (pruned != null) {
+      return (
+        <div style={box}>
+          {pruned > 0 ? `本次 ${pruned} 条流量已回收` : '本次流量已回收'}
+          （通过的只留最新一次，失败的留最近 5 次）—— 步骤、错误和截图都还在。
+        </div>
+      )
+    }
+    return <div style={box}>本次没有抓到流量</div>
+  }
+  return (
+    <div style={{ marginTop: 10, border: '1px solid rgba(0,0,0,0.06)', borderRadius: 10, overflow: 'hidden' }}>
+      <div style={{ padding: '6px 10px', background: '#fafbfc', fontSize: 12, color: '#4e5969', fontWeight: 600 }}>
+        本次流量（{list.length} 条）
+      </div>
+      <div style={{ maxHeight: 260, overflow: 'auto' }}>
+        {list.map((q, i) => {
+          const code = q.status ?? q.statusCode
+          const bad = code && code >= 400
+          return (
+            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '3px 10px',
+              fontSize: 11.5, fontFamily: 'var(--font-mono)',
+              borderTop: i ? '1px solid rgba(0,0,0,0.03)' : 'none',
+              background: bad ? '#fff5f5' : 'transparent' }}>
+              <span style={{ minWidth: 46, color: '#4e5969' }}>{q.method}</span>
+              <span style={{ flex: 1, wordBreak: 'break-all', color: '#1d2129' }}>{q.url}</span>
+              <span style={{ color: bad ? '#e8453c' : '#86909c' }}>{code ?? '-'}</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function phenomenonLabel(k) {
   // 驼峰化把 http_5xx 变成 http5xx（下划线后是数字，没有大写可转），
   // 所以字母边界和数字边界都要还原，否则这一条永远落回英文。
@@ -2544,6 +2598,7 @@ export default function CaseDetail() {
                             ))}
                           </div>
                         )}
+                        <RunTraffic run={r} />
                       </div>
                     ),
                     rowExpandable: () => true,

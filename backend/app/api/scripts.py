@@ -649,6 +649,9 @@ async def list_script_runs(
                 # （超时/元素找不到/断言不符…），人扫一眼就知道往哪看，
                 # 不用去读一坨 pytest stdout。
                 "captured_requests": r.captured_requests,
+                # 流量被回收过就把原条数送出去 —— 界面要能说出「该次 97 条已回收」，
+                # 不能跟「本来就没抓到」一样是一片空白。
+                "captured_pruned_count": r.captured_pruned_count,
                 "failure_phenomenon": r.failure_phenomenon,
                 # 步骤级结果。不给的话执行历史展开只有 pytest 那坨横幅，
                 # 十几个 expect() 验了什么、挂在第几步全看不到 —— 实测被指出两轮。
