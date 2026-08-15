@@ -714,19 +714,37 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
   useEffect(() => { if (active) load() }, [active, load])
 
   // 编辑器整体回调：节点数组落回 api_test_steps
+  //
+  // **顺序要单独发一次**。逐个 PUT 只带内容，`sort_order` 不在 patch 里
+  // （后端 UpdateStepRequest 也不收），而新建步骤一律 max+1 落到末尾 ——
+  // 所以拖完保存、刷新回来顺序纹丝不动。而顺序不是显示问题：执行器按
+  // sort_order 跑，第 1 步登录取的 token 后面才有得用、清理步骤得在最后。
+  // 顺序错了的表现是后面一片「变量未解析」，人还会以为是变量没定义。
   const saveNodes = async (nodes) => {
     if (!scenario) return
     const sid = scenario.id
     const prev = scenario.steps || []
     try {
+      // 边写边记最终顺序。新建的 id 要从 POST 响应里接住，否则它不在排序名单里，
+      // 只能留在末尾 —— 那正是「复制出来的副本跑到最后」的老毛病。
+      const orderedIds = []
       for (const n of nodes) {
         const patch = nodeToStepPatch(n)
-        if (n.id) await api.put(`${base}/${sid}/steps/${n.id}`, patch)
-        else await api.post(`${base}/${sid}/steps`, patch)
+        if (n.id) {
+          await api.put(`${base}/${sid}/steps/${n.id}`, patch)
+          orderedIds.push(n.id)
+        } else {
+          const res = await api.post(`${base}/${sid}/steps`, patch)
+          const newId = res?.data?.id
+          if (newId) orderedIds.push(newId)
+        }
       }
       const keep = new Set(nodes.filter(n => n.id).map(n => n.id))
       for (const st of prev) {
         if (!keep.has(st.id)) await api.delete(`${base}/${sid}/steps/${st.id}`)
+      }
+      if (orderedIds.length) {
+        await api.put(`${base}/${sid}/steps/reorder`, { stepIds: orderedIds })
       }
       await load()
     } catch (e) { message.error(e?.message || '保存失败') }

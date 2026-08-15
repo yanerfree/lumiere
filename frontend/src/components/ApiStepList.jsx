@@ -487,6 +487,12 @@ function CompactStepList({ steps, onChange, selectedId, onSelect, runSel }) {
   const remove = (i) => onChange(steps.filter((_, j) => j !== i).map((s, j) => ({ ...s, seq: j + 1 })))
   const copy = (i) => {
     const clone = JSON.parse(JSON.stringify(steps[i]))
+    // **必须去掉 id**。深拷贝会把 id 一起复制走，而保存时是靠 `n.id 有没有值`
+    // 判断新建还是更新的 —— 带着原 id 的副本会走 PUT，把原件覆盖掉：
+    // 你点了复制，结果不是多一条，是原来那条被改名成「xxx (副本)」，还没有任何提示。
+    delete clone.id
+    // 执行痕迹也不能带过来：副本一次都没跑过，挂着原件的绿勾是假的
+    delete clone.lastStatus
     clone.action = (clone.action || '') + ' (副本)'
     onChange([...steps.slice(0, i + 1), { ...clone, seq: i + 2 }, ...steps.slice(i + 1).map((s, j) => ({ ...s, seq: i + j + 3 }))])
   }
