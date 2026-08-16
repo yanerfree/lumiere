@@ -1540,6 +1540,57 @@ export default function ApiStepList({ steps, onChange, environments, runEnv, nod
   }, [nodeTypes])
   const [selected, setSelected] = useState(null)
 
+  // ── 步骤列表宽度：默认宽一点 + 可拖拽，带上下限 ──
+  //
+  // 原来写死 300px。实际步骤名是「制备: 发布上线」「回滚前基准: 新路径通」这种
+  // 带前缀的长句，300px 下大半被截成「记下「改路由之前」的...」，配上下面那行
+  // 同样被截断的 URL，列表等于只能看出"这是第几步"。
+  //
+  // 上下限不是防御性代码，是这个布局的硬约束：
+  //   下限 260 —— 再窄就装不下「方法标签 + 名字 + 断言/取值角标」，拖到那儿等于把功能拖没
+  //   上限 720，且**不能吃掉右侧编辑器** —— 详情面板里 URL 行、Params/Headers 表格
+  //             挤到 420 以下就开始换行错位，所以真正的上限取 min(720, 容器宽 - 420)
+  const LIST_MIN = 260
+  const LIST_MAX = 720
+  const EDITOR_MIN = 420
+  const wrapRef = useRef(null)
+  const clampW = useCallback((w) => {
+    const avail = wrapRef.current?.offsetWidth || 0
+    // 容器还没量到（首帧）就先只用固定上限，量到之后再让编辑器的下限说话
+    const max = avail ? Math.max(LIST_MIN, Math.min(LIST_MAX, avail - EDITOR_MIN)) : LIST_MAX
+    return Math.round(Math.min(max, Math.max(LIST_MIN, w)))
+  }, [])
+  const [listW, setListW] = useState(() => {
+    const saved = Number(localStorage.getItem('apiStepListWidth'))
+    return saved >= LIST_MIN && saved <= LIST_MAX ? saved : 380
+  })
+  const [dragging, setDragging] = useState(false)
+
+  const startResize = useCallback((e) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = listW
+    setDragging(true)
+    const onMove = (ev) => setListW(clampW(startW + ev.clientX - startX))
+    const onUp = () => {
+      setDragging(false)
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      // 存的是钳过的值，别把越界值写进去 —— 下次读出来又要再钳一遍
+      setListW(w => { localStorage.setItem('apiStepListWidth', String(w)); return w })
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [listW, clampW])
+
+  // 窗口变窄时（或侧边栏收起）重新钳一次，否则列表会把编辑器挤没
+  useEffect(() => {
+    const onResize = () => setListW(w => clampW(w))
+    window.addEventListener('resize', onResize)
+    onResize()
+    return () => window.removeEventListener('resize', onResize)
+  }, [clampW])
+
   const baseUrl = useMemo(() => {
     if (!runEnv || !environments?.length) return ''
     const env = environments.find(e => e.id === runEnv)
@@ -1635,9 +1686,11 @@ export default function ApiStepList({ steps, onChange, environments, runEnv, nod
   }
 
   return (
-    <div style={{ display: 'flex', border: '1px solid rgba(0,0,0,0.05)', borderRadius: 8, overflow: 'hidden', minHeight: 480, height: 'calc(100vh - 340px)', maxHeight: 800, background: 'transparent' }}>
-      {/* 左侧：紧凑步骤列表 */}
-      <div style={{ width: 300, borderRight: '1px solid rgba(0,0,0,0.06)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+    <div ref={wrapRef} style={{ display: 'flex', border: '1px solid rgba(0,0,0,0.05)', borderRadius: 8, overflow: 'hidden', minHeight: 480, height: 'calc(100vh - 340px)', maxHeight: 800, background: 'transparent',
+      // 拖动时禁掉选中，否则一拖就把整页文字刷蓝
+      userSelect: dragging ? 'none' : undefined }}>
+      {/* 左侧：紧凑步骤列表（宽度可拖，见上面 LIST_MIN/LIST_MAX） */}
+      <div style={{ width: listW, display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
         <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(0,0,0,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', background: '#fafbfc' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
             {runSel && allApiIds.length > 0 && (
@@ -1673,6 +1726,22 @@ export default function ApiStepList({ steps, onChange, environments, runEnv, nod
           <CompactStepList steps={steps} onChange={onChange} selectedId={selected?.step} onSelect={handleSelect} runSel={runSel} />
         </div>
       </div>
+
+      {/* 拖拽分隔条。它同时承担原来左栏的右边框 —— 否则拖动时会看到两条线。
+          命中区做到 5px（1px 的边框鼠标够不着），hover/拖动时才染色，
+          平时看起来就是一条普通分隔线。 */}
+      <div
+        onMouseDown={startResize}
+        onDoubleClick={() => { const w = clampW(380); setListW(w); localStorage.setItem('apiStepListWidth', String(w)) }}
+        title="拖动调整宽度，双击恢复默认"
+        style={{
+          width: 5, flexShrink: 0, cursor: 'col-resize',
+          background: dragging ? 'rgba(14,165,160,0.45)' : 'rgba(0,0,0,0.06)',
+          transition: dragging ? 'none' : 'background 0.15s',
+        }}
+        onMouseEnter={e => { if (!dragging) e.currentTarget.style.background = 'rgba(14,165,160,0.25)' }}
+        onMouseLeave={e => { if (!dragging) e.currentTarget.style.background = 'rgba(0,0,0,0.06)' }}
+      />
 
       {/* 右侧：步骤详情 */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
