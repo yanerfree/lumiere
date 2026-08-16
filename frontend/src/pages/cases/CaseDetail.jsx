@@ -2224,7 +2224,13 @@ export default function CaseDetail() {
 
       // Check if there's an active script in the scripts table
       try {
-        const scriptRes = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/active?type=${vals.type === 'e2e' ? 'ui' : 'api'}`)
+        // 用 target_level 判，不用 type。
+        // type（api/e2e）的初衷是分「单接口测试」和「场景」，而接口测试模块已下线，
+        // 单接口那一类没有实例了；CC 现在拿它当「做不做 UI」用，跟 target_level 重复。
+        // 凭 type 判的后果：一条 type=api 的用例补了 UI 脚本，这里仍去取 api 脚本，
+        // UI 页签就永远是空的 —— 而 target_level=full 才是"这条要做 UI"的正解。
+        const wantsUi = (vals.targetLevel || 'spec') === 'full' || vals.type === 'e2e'
+        const scriptRes = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/active?type=${wantsUi ? 'ui' : 'api'}`)
         setHasActiveScript(!!scriptRes.data)
       } catch { setHasActiveScript(false) }
 

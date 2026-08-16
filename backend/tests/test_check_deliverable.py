@@ -68,10 +68,13 @@ def _scenario():
 
 
 def _step(order, name, status="pass", assertions=None, retry=0, url="${BASE_URL}/api/v1/x",
-          body=None, group=None):
+          body=None, group=None, method="GET"):
+    # method 是真模型上就有的字段。假 step 少一个，写操作那类判据就整个跑不起来 ——
+    # 上一次假 Case 少了 review_status 也是同样的问题。
     return SimpleNamespace(sort_order=order, name=name, last_status=status,
                            assertions=assertions or [{"type": "status", "value": 200}],
-                           retry_timeout_ms=retry, url=url, body=body, group_name=group)
+                           retry_timeout_ms=retry, url=url, body=body, group_name=group,
+                           method=method)
 
 
 def _run(session):

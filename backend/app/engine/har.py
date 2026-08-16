@@ -166,22 +166,48 @@ def parse_har(har_path: str | Path | None) -> list[dict]:
             "requestBody": _mask_body(post.get("text"), post.get("mimeType", "")) if keep_body else None,
             "responseBody": _mask_body((resp.get("content", {}) or {}).get("text"), mime) if keep_body else None,
         })
-        if len(out) >= MAX_ENTRIES:
-            # **截断必须留痕。** 此前是静默 break，于是面板上写「抓到 150 条请求」——
-            # 150 正好是上限，人读成"这次发了 150 条"，实际是"≥150，只留了前 150"，
-            # 而被丢掉的恰恰是时间上更靠后、业务上更关键的那些（实测丢了 publish）。
-            kept = len(out)
-            total = sum(1 for _ in (data.get("log", {}) or {}).get("entries", []))
-            out.append({
-                "startedAt": None, "elapsedMs": 0, "method": "", "url": "",
-                "status": None, "requestHeaders": None, "requestBody": None,
-                "responseBody": None,
-                "truncated": True, "kept": kept, "totalSeen": total,
-            })
-            logger.warning("HAR 超过 %s 条已截断（原始 %s 条），后面的请求丢失：%s",
-                           MAX_ENTRIES, total, p)
-            break
-    return out
+    total_seen = len(out)
+    if total_seen <= MAX_ENTRIES:
+        return out
+
+    # ── 超额了：按重要性留，不是按先来后到留 ──
+    #
+    # 原来是「取前 150 条然后 break」。后果实测过：TC-FWGL-00004 一次执行 2960 条，
+    # 配额全被页面自身的轮询 GET 吃光，**真正的写操作一条都没进来**，
+    # 而拿这份流量去编排接口场景恰恰只需要那些写操作。丢掉的还都是时间上更靠后的
+    # （publish 就这么丢过一次）。
+    #
+    # 优先级：写操作和非 2xx 全留（它们是编排的素材和排错的证据），
+    # 剩下的配额给页面自身的 GET，**留最靠后的那些** —— 出问题时人要看的是
+    # 失败前后那一段，不是刚进页面时的一串加载请求。
+    def _important(e: dict) -> bool:
+        st = e.get("status")
+        return (e.get("method", "").upper() != "GET") or st is None or st >= 300
+
+    important = [e for e in out if _important(e)]
+    ordinary = [e for e in out if not _important(e)]
+    quota = max(0, MAX_ENTRIES - len(important))
+    kept_rows = important + (ordinary[-quota:] if quota else [])
+    # 重新按时间排回去 —— 上面按重要性分了组，直接输出会让时间乱跳。
+    kept_rows.sort(key=lambda e: e.get("startedAt") or "")
+    dropped_ordinary = len(ordinary) - (quota if quota < len(ordinary) else len(ordinary))
+    dropped_important = max(0, len(important) - MAX_ENTRIES)
+    kept_rows = kept_rows[:MAX_ENTRIES]
+
+    # **截断必须留痕。** 此前是静默 break，于是面板上写「抓到 150 条请求」——
+    # 150 正好是上限，人读成"这次发了 150 条"，实际是"≥150，只留了前 150"。
+    kept_rows.append({
+        "startedAt": None, "elapsedMs": 0, "method": "", "url": "",
+        "status": None, "requestHeaders": None, "requestBody": None,
+        "responseBody": None,
+        "truncated": True, "kept": len(kept_rows), "totalSeen": total_seen,
+        "droppedOrdinary": dropped_ordinary, "droppedImportant": dropped_important,
+    })
+    logger.warning("HAR %s 条超过上限 %s：写操作/非 2xx 全留 %s 条，"
+                   "丢弃页面自身的 GET %s 条（重要请求丢弃 %s 条）：%s",
+                   total_seen, MAX_ENTRIES, len(important), dropped_ordinary,
+                   dropped_important, p)
+    return kept_rows
 
 
 def truncation_marker(entries: list[dict] | None) -> dict | None:

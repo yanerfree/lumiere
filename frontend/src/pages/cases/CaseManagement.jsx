@@ -597,7 +597,21 @@ export default function CaseManagement() {
         onMouseLeave={e => e.target.style.color = '#1d2129'}
       >{row.isCore && <Tooltip title="核心/标杆用例（供其他用例参考生成）"><StarFilled style={{ color: '#fa8c16', marginRight: 4, fontSize: 12 }} /></Tooltip>}{v}</span>
     )},
-    { key: 'type', title: '类型', dataIndex: 'type', width: 50, defaultVisible: true, render: v => <span style={{ fontSize: 11, color: '#86909c' }}>{v?.toUpperCase()}</span> },
+    // 原来这列是 type（API / E2E）。它的初衷是分「单接口测试」和「场景」两类 ——
+    // 而「接口测试」模块 2026-08-15 已下线，库里无主场景归零，**单接口那一类
+    // 不再有任何实例**，于是这一列永远只能表示一件事，等于不表示。
+    // 实测它还被当成「做不做 UI」在用（e2e↔full、api↔spec_api 一一对应），
+    // 那正是 target_level 该说的话。
+    // 换成覆盖层级：它和右边「三件套」互相印证 —— 计划做几维 / 做到哪一步。
+    { key: 'targetLevel', title: '覆盖', dataIndex: 'targetLevel', width: 78, defaultVisible: true,
+      render: v => (
+        <Tooltip title={<span style={{ fontSize: 12 }}>
+          这条用例计划做到哪一步：只做步骤 / 步骤+接口 / 三件套。<br />
+          右边「三件套」是实际做到哪一步，两者对照看。
+        </span>}>
+          <span style={{ fontSize: 11, color: '#86909c' }}>{TARGET_LEVEL[v || 'spec']}</span>
+        </Tooltip>
+      ) },
     // 三个标签各有各的真实来源，后端 list_case_assets 已经把两个存储取过并集了。
     // 别再回头读 row.apiScenario —— 那只是其中一个存储，MCP 回推的场景不在里面。
     // 「场景」列已并入下面的「三件套」列 —— 「有没有」是「什么状态」的子集：

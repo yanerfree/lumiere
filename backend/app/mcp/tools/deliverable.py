@@ -34,6 +34,10 @@ _DATA_PLANE_RE = re.compile(r"\$\{(gatewayBase|gateway_base|dataPlane|GATEWAY_UR
 _CAMEL_KEY_RE = re.compile(r"^[a-z]+[a-z0-9]*[A-Z]")
 # 「应产生/应新增/应记入」这类承诺，只用 body_contains 兑付就是弱断言
 _PROMISE_RE = re.compile(r"应(产生|新增|记入|生成|保留|接管)|版本历史|操作日志")
+# 改状态的动作词。这类写操作只断 200 = 没验它真的改成功了。
+_STATE_CHANGE_RE = re.compile(
+    r"禁用|启用|停用|发布|上线|下线|弃用|废弃|回滚|恢复|撤销|审批|授权|"
+    r"修改|更新|保存|编辑|切换|变更|调整")
 # 稳态语义：断的是「一直是这样」，不是「等它变成这样」
 _STEADY_RE = re.compile(r"不中断|保持|不变|不应|别变|仍(应|然)|依旧|不下发|不新旧并存")
 
@@ -160,6 +164,18 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
                                 "接口层若已断言对应字段就算覆盖了数据层，页面渲染那一层没人验 —— "
                                 "确认这是有意的，或者把那句话改成接口口径。"})
 
+    # 少做了一维却没说为什么。
+    # **建用例时只提醒不拦，实测 6 条全空** —— 提醒发生在写入那一刻，CC 当时
+    # 正忙着别的，过了就没人再提。挪到这里：CC 每次自证交付都要看这份结论，
+    # 缺了会一直挂着。仍然不拦（不是缺陷，是信息缺失）。
+    if target != "full" and not (getattr(case, "target_level_reason", None) or "").strip():
+        skipped = "UI" if target == "spec_api" else "接口和 UI"
+        notes.append({"kind": "target_level_reason_missing",
+                      "detail": f"target_level={target}，{skipped} 维度不做，但没写为什么。"
+                                f"只有一个 target_level 值时，人分不出你是**判断过不需要**"
+                                f"还是**没想就用了默认值** —— 后者半年后没人敢动它。"
+                                f"用 tb_update_case 的 target_level_reason 补一句。"})
+
     deliverable = not blockers
     return {
         "caseCode": case.case_code,
@@ -245,6 +261,23 @@ def _audit_api_steps(scenario, steps, case, blockers, risks, notes) -> None:
                                         f"字符串出现在响应里不等于那件事真发生了。"
                                         f"补一条 body_field 断到具体字段上。"})
 
+        # 写操作只断状态码 —— 「请求被接受」不等于「状态真的变了」。
+        # 实测 105 步里有 20 步只断 status，其中「禁用服务」「重新启用服务」
+        # 「回滚到上一版本」这类**改状态的写操作**只断了 200：接口哪怕什么都没做、
+        # 只要返回 200 就判绿。这类步骤恰恰是用例的核心动作。
+        # 登录/制备/清理不算 —— 它们的目的就是"别报错"，断状态码是对的。
+        if (s.method or "").upper() in ("POST", "PUT", "PATCH", "DELETE") \
+                and (s.group_name or "") not in ("前置", "制备", "清理") \
+                and _STATE_CHANGE_RE.search(s.name or ""):
+            kinds = {a.get("type") for a in (s.assertions or []) if isinstance(a, dict)}
+            if kinds and kinds <= {"status"}:
+                notes.append({"kind": "write_only_status_assert",
+                              "detail": f"第 {s.sort_order + 1} 步「{s.name}」是改状态的写操作，"
+                                        f"却只断了状态码 —— 接口什么都没做、只要回 200 也判绿。"
+                                        f"补一条 body_field 断到变更后的字段上"
+                                        f"（如 data.status / data.enabled），"
+                                        f"或者在下一步查一次确认它真的变了。"})
+
     # 疑似越界测试点：这一步在讲一件用例本身**从没提过**的事。
     #
     # 两个坑我都踩过，写在这儿免得下次再来：
@@ -266,7 +299,11 @@ def _audit_api_steps(scenario, steps, case, blockers, risks, notes) -> None:
                           "detail": f"第 {s.sort_order + 1} 步「{s.name}」讲的事情在用例标题、"
                                     f"预期结果和手工步骤里都没出现过（词重叠 {ratio:.0%}）—— "
                                     f"确认它属于这条用例，还是该拆出去"
-                                    f"（合并的唯一代价是一挂全挂）。"})
+                                    f"（合并的唯一代价是一挂全挂）。"
+                                    f"**消除方式是拆出去或把标题/预期写全，不是删掉这一步** —— "
+                                    f"删掉等于丢覆盖。实测 CC 打算删掉两条『应记入操作日志』，"
+                                    f"理由是『别的用例已经覆盖』，而那两条断的 action "
+                                    f"（改路由 / 回滚）没有任何其它用例验过。"})
 
 
 def _audit_ui_traffic(last_run, risks) -> None:
