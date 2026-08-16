@@ -279,3 +279,68 @@ def test_刚起步的小模块不报():
             return SimpleNamespace(name="刚开工")
 
     assert _a.run(_module_ui_gaps(S(), cases)) == []
+
+
+# ── ⑧ 跑红不一定是问题，也可能正是它在干活 ──────────────────────
+
+def _fs(case, scenario, steps, runs):
+    """带 script_runs 的 FakeSession（_defect_verdict 要读最近一次执行）。"""
+    return FakeSession(case=case, scenario=scenario, steps=steps, runs=runs)
+
+
+def test_人已确认是产品缺陷时跑红不算阻塞():
+    """**这条决定了「按需求写预期」到底可不可行。**
+
+    门禁原来一律阻塞：按需求写预期而实现不符时用例就红，于是这条永远不可交付 ——
+    唯一能交付的路是把预期改成实测值，也就是把被测系统的 bug 洗成「预期」。
+    门禁只认绿，就是在奖励这件事。实测那 12 条预期全是实测倒推的，这是原因之一。
+    """
+    run = SimpleNamespace(status="failed", captured_requests=[],
+                          confirmed_cause="product_defect",
+                          confirmed_note="确认：禁用期应 403，实现返回 401",
+                          cc_analysis=None)
+    steps = [_step(0, "禁用后网关应返回 403", status="fail", method="GET")]
+    r = _run(_fs(_case(manual_status="completed", api_status="completed"),
+                 _scenario(), steps, [run]))
+    assert r["deliverable"] is True, r["blockers"]
+    assert "failing_on_known_defect" in _kinds(r), r.get("notes")
+
+
+def test_只有CC自己提的归因不解锁交付():
+    """自证不能解锁 —— 否则等于给了一条「跑不过就说是产品的锅」的后门。"""
+    run = SimpleNamespace(status="failed", captured_requests=[], confirmed_cause=None,
+                          cc_analysis={"cause": "product_defect", "confidence": "high"})
+    steps = [_step(0, "禁用后网关应返回 403", status="fail", method="GET")]
+    r = _run(_fs(_case(), _scenario(), steps, [run]))
+    assert r["deliverable"] is False
+    assert "api_steps_failed_pending_triage" in [b["kind"] for b in r["blockers"]], r["blockers"]
+
+
+def test_没归因的失败照旧是硬阻塞():
+    run = SimpleNamespace(status="failed", captured_requests=[],
+                          confirmed_cause=None, cc_analysis=None)
+    steps = [_step(0, "发布服务", status="fail", method="POST")]
+    r = _run(_fs(_case(), _scenario(), steps, [run]))
+    assert r["deliverable"] is False
+    assert "api_steps_failed" in [b["kind"] for b in r["blockers"]], r["blockers"]
+
+
+def test_人确认是脚本自己错的不解锁():
+    """只有 product_defect 才解锁。test_defect 是脚本写错了，那就是该修。"""
+    run = SimpleNamespace(status="failed", captured_requests=[],
+                          confirmed_cause="test_defect", confirmed_note="断言字段名写错",
+                          cc_analysis=None)
+    steps = [_step(0, "发布服务", status="fail", method="POST")]
+    r = _run(_fs(_case(), _scenario(), steps, [run]))
+    assert r["deliverable"] is False
+
+
+def test_方法论要求读需求加读实现再判断():
+    """措辞是这套机制唯一的入口 —— CC 只会照它写的做。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "app/mcp/__init__.py").read_text(encoding="utf-8")
+    seg = src[src.index("①-A"):src.index("①-0")]
+    for k in ("读需求", "读实现", "自己比对", "按需求写", "product_defect"):
+        assert k in seg, f"方法论里缺「{k}」"
+    assert "人只在两个点上花时间：定需求、确认 bug" in seg, \
+        "没说清人只管两件事 —— 不然又变成事事找用户确认"

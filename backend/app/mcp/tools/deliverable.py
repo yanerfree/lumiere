@@ -104,7 +104,8 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
                 select(ApiTestStep).where(ApiTestStep.scenario_id == scenario.id)
                 .order_by(ApiTestStep.sort_order)
             )).scalars().all()
-            _audit_api_steps(scenario, steps, case, blockers, risks, notes)
+            cd, pd = await _defect_verdict(session, cid, "api")
+            _audit_api_steps(scenario, steps, case, blockers, risks, notes, cd, pd)
 
     # ── UI 维度 ──
     if "ui" in owed_dims:
@@ -178,8 +179,9 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
     if not getattr(case, "expected_confirmed_at", None):
         notes.append({"kind": "expected_not_confirmed",
                       "detail": "「预期已确认」是空的 —— 这条的预期没有外部依据。"
-                                "**先去仓库里读需求/设计文档**（PRD、README、docs/、接口契约、代码里的业务规则注释），"
-                                "那是最该用也最容易被跳过的一步；文档说不清再问用户。"
+                                "**读需求 + 读实现，然后自己判断**：一致就按它写、不用问人；"
+                                "不一致就按需求写预期、让它红，再提 product_defect 归因交人确认；"
+                                "需求没覆盖就按同类功能/行业惯例判，判不出来才带着判断去问用户。"
                                 "改过步骤或预期会自动清掉这个标记，那种情况把依据重新带上来（tb_update_case 的 expected_confirmed_by / expected_confirmed_note）。"})
     elif not re.search(r"用户|产品|需求|评审|业务|客户|PM", _actor):
         notes.append({"kind": "expected_confirmed_by_self",
@@ -187,8 +189,9 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
                                 f"这个标记要记的是**预期有外部依据** —— 自己实测一遍不算：\n"
                                 f"实测告诉你「它现在怎么做」，不是「它应该怎么做」；系统有 bug 时，"
                                 f"照实测写就是把 bug 固化成了预期，而三份产物同源会一起错还全绿。\n"
-                                f"依据按这个顺序找：需求/设计文档（仓库里就有，直接读）→ 问用户 → "
-                                f"都没有才退回实测，并在 note 里写明「无文档依据，按实测行为记录」。"})
+                                f"依据是**需求 + 实现的比对结果**，不是某一方的抄写：\n"
+                                f"一致→按它写；不一致→按需求写、让它红、提 product_defect 交人确认；\n"
+                                f"需求没覆盖→自己按同类功能判，判不出来才问人。人只管定需求和确认 bug。"})
 
     # 少做了一维却没说为什么。
     # **建用例时只提醒不拦，实测 6 条全空** —— 提醒发生在写入那一刻，CC 当时
@@ -218,7 +221,9 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
     }
 
 
-def _audit_api_steps(scenario, steps, case, blockers, risks, notes) -> None:
+def _audit_api_steps(scenario, steps, case, blockers, risks, notes,
+                     confirmed_defect: str | None = None,
+                     pending_defect: bool = False) -> None:
     if not steps:
         blockers.append({"kind": "api_no_steps", "detail": f"{scenario.code} 一步都没有"})
         return
@@ -232,9 +237,33 @@ def _audit_api_steps(scenario, steps, case, blockers, risks, notes) -> None:
                          "detail": f"{scenario.code} 的 {len(steps)} 步全都没有执行记录 —— "
                                    f"「写完了」和「跑通了」是两件事"})
     if failed:
-        blockers.append({"kind": "api_steps_failed",
-                         "detail": f"{scenario.code} 最近一次有 {len(failed)} 步失败",
-                         "steps": [{"sortOrder": s.sort_order, "name": s.name} for s in failed[:5]]})
+        # **跑红不一定是问题，也可能正是它在干活。**
+        #
+        # 这条判据原来一律阻塞。后果比看上去严重：按需求写预期、而实现不符时，
+        # 用例就会红，于是这条用例**永远不可交付** —— 唯一能交付的路就是
+        # 把预期改成实测值，也就是把被测系统的 bug 洗成「预期」。
+        # 门禁只认绿，就是在奖励这件事。实测这批 12 条的预期全是实测倒推出来的，
+        # 这个激励是原因之一。
+        #
+        # 所以：**人已经确认是被测系统缺陷的，不算阻塞**。一条盯着已知缺陷持续
+        # 报红的用例，是测试在正常工作，不是交付物有问题。
+        # 只认「人确认过的」—— CC 自己的归因是建议值，自证不能解锁交付。
+        detail = f"{scenario.code} 最近一次有 {len(failed)} 步失败"
+        stepinfo = [{"sortOrder": s.sort_order, "name": s.name} for s in failed[:5]]
+        if confirmed_defect:
+            notes.append({"kind": "failing_on_known_defect",
+                          "detail": f"{detail} —— 但人已确认是**被测系统缺陷**"
+                                    f"（{confirmed_defect}）。用例本身是对的，"
+                                    f"红是它在盯着那个缺陷。不算阻塞。"
+                                    f"缺陷修好之后这条会自己转绿。",
+                          "steps": stepinfo})
+        elif pending_defect:
+            blockers.append({"kind": "api_steps_failed_pending_triage",
+                             "detail": f"{detail}；已提「被测系统缺陷」归因但**还没人确认**。"
+                                       f"确认之后就不算阻塞了 —— 自证不能解锁交付。",
+                             "steps": stepinfo})
+        else:
+            blockers.append({"kind": "api_steps_failed", "detail": detail, "steps": stepinfo})
     if never and ran:
         risks.append({"kind": "api_partial_run",
                       "detail": f"{len(never)} 步没有执行记录（可能上次只跑了勾选的一部分），"
@@ -476,6 +505,27 @@ async def check_branch(session: AsyncSession, branch_id: str,
         "usage": "blockers=交不了，必须先修；riskKinds=交得了但会偶发红；"
                  "review=pending 表示三维都完成了、等你审（不审也能建计划跑）。",
     }
+
+
+async def _defect_verdict(session: AsyncSession, case_id, script_type: str):
+    """这条用例最近一次失败，被判定成「被测系统缺陷」了吗？
+
+    返回 (人已确认的缺陷说明 | None, 是否有待确认的缺陷归因)。
+
+    **只认人确认过的。** CC 自己提的归因是建议值 —— 让自证能解锁交付，
+    等于给了一条"跑不过就说是产品的锅"的后门。人拍板那一下是唯一的闸。
+    """
+    run = (await session.execute(
+        select(ScriptRun).where(ScriptRun.case_id == case_id,
+                                ScriptRun.script_type == script_type)
+        .order_by(ScriptRun.created_at.desc())
+    )).scalars().first()
+    if run is None:
+        return None, False
+    if getattr(run, "confirmed_cause", None) == "product_defect":
+        return (getattr(run, "confirmed_note", None) or "人已确认"), False
+    cc = getattr(run, "cc_analysis", None) or {}
+    return None, (cc.get("cause") == "product_defect")
 
 
 async def _module_ui_gaps(session: AsyncSession, cases) -> list[dict]:
