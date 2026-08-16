@@ -58,7 +58,10 @@ def _case(**kw):
                 # 就删了，假 Case 却一直照旧，于是门禁读旧态名的 bug 被测试掩护着，
                 # 直到对着真数据看才发现（TC-FWGL-00002 manual 停在调试中却判可交付）。
                 manual_status="draft", ui_status="draft",
-                api_status="debugging", review_status=None)
+                api_status="debugging", review_status=None,
+                # 预期确认：真模型上的两个字段，假 Case 缺了整条判据跑不起来
+                expected_confirmed_at=None, expected_confirmed_actor=None,
+                target_level_reason=None)
     base.update(kw)
     return SimpleNamespace(**base)
 

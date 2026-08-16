@@ -179,6 +179,15 @@ def _needs_retry(seq: int, st: dict) -> dict | None:
     """
     if int(st.get("retry_timeout_ms") or 0) > 0:
         return None
+    # **写操作一律不建议加重试。** 重试的语义是整步重发，POST 重发就是多造一份数据 ——
+    # 而本文件下面那条门禁正在为这件事发警告。同一个步骤同时收到「快加重试」和
+    # 「加了会造脏数据」两条相反建议，是平台自己在打架，实测被 CC 指出来：
+    # 6 条场景报了 19 处，全是 申请/驳回/审批/撤销 这类 POST —— 它们的 data.status
+    # 是**同步响应直接回传的**，压根没有异步可等。真异步的是数据面下发，
+    # 那些步骤本来就开着重试。
+    # 平台文档里早就写着「只该用在『读回来确认』那种步骤上」，判据补上就是了。
+    if (st.get("method") or "GET").upper() not in ("GET", "HEAD", "OPTIONS"):
+        return None
     url = str(st.get("url") or "")
     assertions = json.dumps(st.get("assertions") or [], ensure_ascii=False)
     hits = []

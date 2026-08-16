@@ -157,3 +157,75 @@ def test_截断后仍按时间排序():
     out = [e for e in parse_har(_har(entries)) if not e.get("truncated")]
     stamps = [e["startedAt"] for e in out]
     assert stamps == sorted(stamps), "截断后时间乱序了"
+
+
+# ── ⑤ 写操作不许被催重试（两个门禁必须同一口径） ──────────────────
+
+def test_写操作不催加重试():
+    """**平台自己在打架。** 一边催「加 retry_timeout_ms」，另一边警告
+    「写操作上开重试会造出多份数据」—— 同一个 POST 步骤同时收到两条相反建议。
+
+    实测 CC 指出来：6 条场景报了 19 处，全是 申请/驳回/审批/撤销 这类 POST，
+    它们的 data.status 是**同步响应直接回传的**，没有异步可等；
+    真异步的是数据面下发，那些步骤本来就开着重试。
+    照建议加 = 重发写请求造出多条数据，比不加更糟。
+    """
+    steps = [_step(0, "消费方发起订阅申请", method="POST", retry=0,
+                   url="${BASE_URL}/api/v1/subscriptions",
+                   assertions=[{"type": "body_field", "field": "data.status",
+                                "expected": "pending"}])]
+    r = _run(FakeSession(case=_case(), scenario=_scenario(), steps=steps))
+    assert "async_assertion_no_retry" not in [x["kind"] for x in r["risks"]], r["risks"]
+
+
+def test_读回来确认那种步骤照旧要催():
+    """豁免只给写操作。真正等收敛的 GET 必须还报，否则等于把这条判据废了。"""
+    steps = [_step(0, "确认推送已收敛", method="GET", retry=0,
+                   url="${BASE_URL}/api/v1/services/${sid}/push-status",
+                   assertions=[{"type": "body_field", "field": "data.status",
+                                "expected": "success"}])]
+    r = _run(FakeSession(case=_case(), scenario=_scenario(), steps=steps))
+    assert "async_assertion_no_retry" in [x["kind"] for x in r["risks"]], r["risks"]
+
+
+def test_回推门禁和交付门禁口径一致():
+    """两处判据分头写，很容易只改一处 —— 那就又变成"两个地方说法不同"。"""
+    from app.mcp.tools.sync import _needs_retry
+    post = {"method": "POST", "url": "${BASE_URL}/api/v1/subscriptions",
+            "retry_timeout_ms": 0,
+            "assertions": [{"type": "body_field", "field": "data.status", "expected": "pending"}]}
+    assert _needs_retry(1, post) is None, "回推门禁还在催写操作加重试"
+    get = dict(post, method="GET", url="${BASE_URL}/api/v1/services/x/push-status")
+    assert _needs_retry(1, get) is not None, "读回来确认那种不催了 —— 判据被改废了"
+
+
+# ── ⑥ 预期到底跟谁确认的 ────────────────────────────────────────
+
+def test_没确认过要提示():
+    r = _run(FakeSession(case=_case(expected_confirmed_at=None, expected_confirmed_actor=None),
+                         scenario=_scenario(), steps=[_step(0, "x")]))
+    assert "expected_not_confirmed" in _kinds(r), r.get("notes")
+
+
+def test_落款看不出是人时要摆出来():
+    """实测有一条落款写的是「实测（本轮探索）」—— 那是 CC 自己跑了一遍，
+    不是任何人确认过。三份产物同源，互相一致但一起错的时候，只有外部确认能挡住。
+    **装作有确认，比没有确认更危险。**"""
+    import datetime
+    r = _run(FakeSession(
+        case=_case(expected_confirmed_at=datetime.datetime(2026, 8, 16),
+                   expected_confirmed_actor="实测（本轮探索）"),
+        scenario=_scenario(), steps=[_step(0, "x")]))
+    n = [x for x in r.get("notes", []) if x["kind"] == "expected_confirmed_by_self"]
+    assert n, r.get("notes")
+    assert "实测（本轮探索）" in n[0]["detail"], "没把落款原样摆出来，人看不出问题在哪"
+
+
+def test_跟人确认过的不提示():
+    import datetime
+    r = _run(FakeSession(
+        case=_case(expected_confirmed_at=datetime.datetime(2026, 8, 16),
+                   expected_confirmed_actor="用户（候选清单评审）"),
+        scenario=_scenario(), steps=[_step(0, "x")]))
+    ks = _kinds(r)
+    assert "expected_confirmed_by_self" not in ks and "expected_not_confirmed" not in ks, ks

@@ -164,6 +164,30 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
                                 "接口层若已断言对应字段就算覆盖了数据层，页面渲染那一层没人验 —— "
                                 "确认这是有意的，或者把那句话改成接口口径。"})
 
+    # 预期到底跟谁确认的。
+    #
+    # 这个标记的用途是**记录人确认过「这个场景要验什么」** —— 同源生成的三份产物
+    # 容易互相一致而不正确（典型是把「创建成功」做成「返回 200」），所以要有个
+    # 外部锚点。落款是 CC 自由填的（它转述对话里那句话，这是设计如此），
+    # 但因此也可能填成自证：实测有一条落款写的是「实测（本轮探索）」——
+    # 那是 CC 自己跑了一遍，不是任何人确认过。
+    #
+    # 平台判不出真假，也不该判。**把落款原样摆出来让人一眼看见**就够了：
+    # 装作有确认，比没有确认更危险。
+    _actor = (getattr(case, "expected_confirmed_actor", None) or "").strip()
+    if not getattr(case, "expected_confirmed_at", None):
+        notes.append({"kind": "expected_not_confirmed",
+                      "detail": "「预期已确认」是空的 —— 没跟人对过这条要验什么。"
+                                "改过步骤或预期会自动清掉这个标记，如果是那种情况，"
+                                "把确认内容重新带上来（tb_update_case 的 "
+                                "expected_confirmed_by / expected_confirmed_note）。"})
+    elif not re.search(r"用户|产品|需求|评审|业务|客户|PM", _actor):
+        notes.append({"kind": "expected_confirmed_by_self",
+                      "detail": f"「预期已确认」的落款是「{_actor}」，看不出是跟人确认的。"
+                                f"这个标记要记的是**人确认过这条要验什么** —— "
+                                f"自己实测一遍不算：三份产物同源，互相一致但一起错的时候，"
+                                f"只有外部确认能挡住。确认过就把对话里那句原话写进落款。"})
+
     # 少做了一维却没说为什么。
     # **建用例时只提醒不拦，实测 6 条全空** —— 提醒发生在写入那一刻，CC 当时
     # 正忙着别的，过了就没人再提。挪到这里：CC 每次自证交付都要看这份结论，
@@ -232,7 +256,13 @@ def _audit_api_steps(scenario, steps, case, blockers, risks, notes) -> None:
         # 给它开 10 秒重试，等于把「路由没被清掉」这种真 bug 等到收敛后判绿。
         # 实测这条误报占了 4 报 3（CC 甚至在步骤名里写了「否定断言故不加重试」，
         # 而门禁还在催），照建议改反而有害。
-        if int(s.retry_timeout_ms or 0) == 0 and not _is_negative_assertion(s):
+        # 写操作一律不催重试 —— 重试是整步重发，POST 重发就多造一份数据。
+        # 回推门禁（sync._needs_retry）和这里必须同一个口径，否则 CC 在两个地方
+        # 收到相反的建议。实测这条误报占了 19/19：全是 申请/驳回/审批/撤销 这类
+        # POST，data.status 是同步响应直接回传的，没有异步可等。
+        _idempotent = (s.method or "GET").upper() in ("GET", "HEAD", "OPTIONS")
+        if int(s.retry_timeout_ms or 0) == 0 and _idempotent \
+                and not _is_negative_assertion(s):
             atext = json.dumps(s.assertions or [], ensure_ascii=False)
             if _DATA_PLANE_RE.search(s.url or "") or _ASYNC_FIELD_RE.search(s.url or "") \
                     or _ASYNC_FIELD_RE.search(atext):
