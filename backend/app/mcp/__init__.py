@@ -294,7 +294,7 @@ _section("用例·手工步骤")
 _register(
     test_cases.list_cases,
     name="tb_list_cases",
-    description="列出分支下的用例（手工步骤那一层）。找已有用例、确认编号、看某模块测了哪些时用。**断点续跑靠它**：传 pending_only=true 只返回还欠着的那些 —— target_level 说这条要做到哪一步（spec 只要步骤 / spec_api 步骤+接口 / full 三件套），三个维度状态说已经做到哪一步，差集就是待办；返回里的 owes 直接列出还欠哪几维。中断之后重跑不用从头来，也不会把做完的又捡回来重做。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, module(按模块名，省得先查folder_id), priority(P0/P1/P2/P3), case_type(api/e2e), target_level(spec/spec_api/full), ui_status/api_status/manual_status(draft草稿/debugging调试中/completed完成), pending_only(默认false)",
+    description="列出分支下的用例（手工步骤那一层）。找已有用例、确认编号、看某模块测了哪些时用。**断点续跑靠它**：传 pending_only=true 只返回还欠着的那些 —— target_level 说这条要做到哪一步（spec 只要步骤 / spec_api 步骤+接口 / full 三件套），三个维度状态说已经做到哪一步，差集就是待办；返回里的 owes 直接列出还欠哪几维。中断之后重跑不用从头来，也不会把做完的又捡回来重做。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, module(按模块名，省得先查folder_id), priority(P0/P1/P2/P3), case_type(e2e=场景 / api=单接口), target_level(spec/spec_api/full), ui_status/api_status/manual_status(draft草稿/debugging调试中/completed完成), pending_only(默认false)",
 )
 
 _register(
@@ -318,7 +318,7 @@ _register(
 _register(
     test_cases.create_case,
     name="tb_create_case",
-    description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。**入库要过门禁**：标题完全同名硬拒、标题含模糊词（操作成功/显示正常/无报错/符合预期）硬拒。标题相似只提醒不拦。**P0 三件套不拦你**：同源生成的三份产物容易互相一致而不正确（典型是把「创建成功」做成「返回 200」），所以建议先在对话里跟用户确认这个场景到底要验什么，再把确认内容用 expected_confirmed_by / expected_confirmed_note 带上来 —— 平台只记录、不拦截，没带只回一句提醒。参数: branch_id, title, module(中文如'服务管理'), case_type(e2e/api), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result, target_level(这条要做到什么程度: spec只要步骤/spec_api步骤+接口/full三件套，默认spec), **target_level_reason(不做某一维就说一句为什么——只有 target_level 一个值时，人分不出你是判断过不需要、还是没想就用了默认值；不写只提醒不拦)**, expected_confirmed_by(跟谁确认的), expected_confirmed_note(确认了什么，把对话里那句原话带上来)",
+    description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。**入库要过门禁**：标题完全同名硬拒、标题含模糊词（操作成功/显示正常/无报错/符合预期）硬拒。标题相似只提醒不拦。**P0 三件套不拦你**：同源生成的三份产物容易互相一致而不正确（典型是把「创建成功」做成「返回 200」），所以建议先在对话里跟用户确认这个场景到底要验什么，再把确认内容用 expected_confirmed_by / expected_confirmed_note 带上来 —— 平台只记录、不拦截，没带只回一句提醒。参数: branch_id, title, module(中文如'服务管理'), case_type(**这条在测什么形态的东西，跟做不做 UI 无关**：e2e=场景（验证一个完整功能，多步编排）/ api=单接口（针对单个接口的参数、边界、越权）；做几维看 target_level), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result, target_level(这条要做到什么程度: spec只要步骤/spec_api步骤+接口/full三件套，默认spec), **target_level_reason(不做某一维就说一句为什么——只有 target_level 一个值时，人分不出你是判断过不需要、还是没想就用了默认值；不写只提醒不拦)**, expected_confirmed_by(跟谁确认的), expected_confirmed_note(确认了什么，把对话里那句原话带上来)",
 )
 
 _section("Mock 与观测")

@@ -55,7 +55,7 @@ const dimPlanned = (targetLevel, dim) => {
 // 它永远不会变成「完成」，人却会一直等它变。
 // 不新增状态值（库里仍是 draft）：「做不做」是规划意图，target_level 已经
 // 表达了，显示层读它翻译即可。多加一个第四态只会污染数据模型。
-const NOT_PLANNED = { label: '不适用', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' }
+const NOT_PLANNED = { label: '无', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' }
 const TARGET_LEVEL = { spec: '只做步骤', spec_api: '步骤+接口', full: '三件套' }
 const dimBadge = (targetLevel, dim, status) =>
   dimPlanned(targetLevel, dim) ? dimOf(status) : NOT_PLANNED
@@ -597,19 +597,23 @@ export default function CaseManagement() {
         onMouseLeave={e => e.target.style.color = '#1d2129'}
       >{row.isCore && <Tooltip title="核心/标杆用例（供其他用例参考生成）"><StarFilled style={{ color: '#fa8c16', marginRight: 4, fontSize: 12 }} /></Tooltip>}{v}</span>
     )},
-    // 原来这列是 type（API / E2E）。它的初衷是分「单接口测试」和「场景」两类 ——
-    // 而「接口测试」模块 2026-08-15 已下线，库里无主场景归零，**单接口那一类
-    // 不再有任何实例**，于是这一列永远只能表示一件事，等于不表示。
-    // 实测它还被当成「做不做 UI」在用（e2e↔full、api↔spec_api 一一对应），
-    // 那正是 target_level 该说的话。
-    // 换成覆盖层级：它和右边「三件套」互相印证 —— 计划做几维 / 做到哪一步。
-    { key: 'targetLevel', title: '覆盖', dataIndex: 'targetLevel', width: 78, defaultVisible: true,
+    // 类型 = **这条用例在测什么形态的东西**，只有两类：
+    //   场景   —— 验证一个完整功能，多步编排（配下去 → 真生效 → 看得见的地方验出来）
+    //   单接口 —— 针对单个接口的参数、边界、越权
+    // 不用「API」当类型名：这里所有东西都走 API，那个词区分不出任何东西。
+    // 「单接口」正面说出了差别 —— 多步业务编排 vs 盯着一个接口打。
+    //
+    // 存储值 e2e/api 一直是这个意思，只是从没写清楚过，于是被当成
+    // 「做不做 UI」在用（实测 6 条全是场景，3 条被标成了 api）。
+    // 做不做 UI 是 target_level 的事，跟类型无关 —— 一条单接口用例也可能要验页面报错提示。
+    { key: 'type', title: '类型', dataIndex: 'type', width: 62, defaultVisible: true,
       render: v => (
         <Tooltip title={<span style={{ fontSize: 12 }}>
-          这条用例计划做到哪一步：只做步骤 / 步骤+接口 / 三件套。<br />
-          右边「三件套」是实际做到哪一步，两者对照看。
+          场景：验证一个完整功能，多步编排。<br />
+          单接口：针对单个接口的参数、边界、越权。<br />
+          做几维（步骤/接口/UI）看右边「覆盖」那一列，跟类型无关。
         </span>}>
-          <span style={{ fontSize: 11, color: '#86909c' }}>{TARGET_LEVEL[v || 'spec']}</span>
+          <span style={{ fontSize: 11, color: '#86909c' }}>{v === 'api' ? '单接口' : '场景'}</span>
         </Tooltip>
       ) },
     // 三个标签各有各的真实来源，后端 list_case_assets 已经把两个存储取过并集了。
@@ -623,7 +627,7 @@ export default function CaseManagement() {
     { key: 'lifecycleStatus', title: '状态', dataIndex: 'lifecycleStatus', width: 68, defaultVisible: true, render: v => { const m = lifecycleMap[v] || lifecycleMap.draft; return <Tag style={{ background: m.bg, color: m.color, border: 'none', margin: 0, fontSize: 11 }}>{m.label}</Tag> } },
     // 三个维度挤成 10px 的小圆点，得逐个 hover 才知道是什么 —— 字号提到 11、
     // 整组一个 tooltip 一次说清三维，不用挨个悬停
-    { key: 'dimStatus', title: '三件套', dataIndex: 'manualStatus', width: 214, defaultVisible: true, render: (_, r) => {
+    { key: 'dimStatus', title: '覆盖', dataIndex: 'manualStatus', width: 214, defaultVisible: true, render: (_, r) => {
       const dims = [['手动', 'manual', r.manualStatus], ['UI', 'ui', r.uiStatus],
                     ['接口', 'api', r.apiStatus]]
       const badge = (d, v) => dimBadge(r.targetLevel, d, v)
@@ -632,7 +636,7 @@ export default function CaseManagement() {
           {dims.map(([n, d, v]) => `${n}：${badge(d, v).label}`).join('　')}
           <br />CC 跑绿自己置「完成」。<b>有产物就能进回归</b> —— 不用谁点发布，
           审核也不挡（审没审看「审核」那一列）。
-          <br />「不适用」= 这条的覆盖层级里没规划这一维（{TARGET_LEVEL[r.targetLevel || 'spec']}），
+          <br />「无」= 这条的覆盖计划里没有这一维（{TARGET_LEVEL[r.targetLevel || 'spec']}），
           不是没做完。
         </span>}>
           <span style={{ display: 'inline-flex', gap: 4 }}>

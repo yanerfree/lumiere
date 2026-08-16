@@ -150,7 +150,7 @@ const dimPlanned = (targetLevel, dim) => {
 // 「UI·草稿」，看着就是没做完 —— 而那一维不在计划里，永远不会变成「完成」，
 // 人却会一直等它变。不新增状态值（库里仍是 draft）：「做不做」是规划意图，
 // target_level 已经表达了，显示层读它翻译即可。
-const NOT_PLANNED = { label: '不适用', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' }
+const NOT_PLANNED = { label: '无', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' }
 const dimBadge = (targetLevel, dim, status) =>
   dimPlanned(targetLevel, dim) ? dimLabel(status) : NOT_PLANNED
 
@@ -2390,7 +2390,7 @@ export default function CaseDetail() {
               合成这一组：状态词用和列表页一样的三档，括号里带内容量。 */}
           {/* 覆盖层级 —— 决定下面三维里哪几维算数。原来页面上完全不显示它，
               于是「UI·草稿」是没做还是不做，只能靠猜。 */}
-          <InlineProp value={`覆盖·${TARGET_LEVEL[targetLevel]?.label || targetLevel}`}
+          <InlineProp value={`计划·${TARGET_LEVEL[targetLevel]?.label || targetLevel}`}
             color="#7c5cff" bg="rgba(124,92,255,0.10)">
             <DropdownList activeKey={targetLevel} onSelect={setTargetLevel}
               items={Object.entries(TARGET_LEVEL).map(([k, v]) => ({
