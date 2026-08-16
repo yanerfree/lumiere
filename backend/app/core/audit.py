@@ -87,6 +87,28 @@ async def write_audit_log(
 # @audit_log 装饰器
 # ---------------------------------------------------------------------------
 
+async def _resolve_project_id(session: AsyncSession, result: Any) -> uuid.UUID | None:
+    """从被操作的对象推出它属于哪个项目。推不出就返回 None（不猜）。
+
+    顺序：对象自己有 project_id → 直接用；有 branch_id → 查 branch。
+    只多一次主键查询，而且只在上下文没给项目时才走。
+    """
+    if result is None:
+        return None
+    pid = getattr(result, "project_id", None)
+    if pid:
+        return pid
+    bid = getattr(result, "branch_id", None)
+    if not bid:
+        return None
+    try:
+        from app.models.project import Branch   # Branch 定义在 project.py 里，不是 branch.py
+        branch = await session.get(Branch, bid)
+        return getattr(branch, "project_id", None)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _extract_target_info(result: Any) -> tuple[uuid.UUID | None, str | None]:
     """从 service 函数返回值中提取 target_id 和 target_name。"""
     if result is None:
@@ -165,6 +187,15 @@ def audit_log(
             # 提取目标信息
             target_id, target_name = _extract_target_info(result)
 
+            # 所属项目：上下文里没有就从对象自己推。
+            # HTTP 那边只有**项目级路由**才会设 project_id（deps/auth.py:72），
+            # 用例的增删改走的不是那种路由，MCP 更是整条没设 —— 于是「操作日志」
+            # 的「所属项目」列一片「-」，几百条日志没法按项目筛。
+            # 用例身上有 branch_id，branch 身上有 project_id，推一次就有了。
+            project_id = get_audit_context().get("project_id")
+            if project_id is None:
+                project_id = await _resolve_project_id(session, result)
+
             # 提取变更摘要
             changes = None
             if changes_extractor is not None:
@@ -186,6 +217,7 @@ def audit_log(
                 target_id=target_id,
                 target_name=target_name,
                 changes=changes,
+                project_id=project_id,
             )
 
             return result

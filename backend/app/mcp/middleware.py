@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import time
+import uuid
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
@@ -141,6 +142,21 @@ class ToolScopeMiddleware(Middleware):
         return [t for t in tools if t.name in allowed_set]
 
     async def on_call_tool(self, context, call_next):
+        # 审计上下文只在 HTTP 认证依赖（deps/auth.py）里设过，**MCP 这条路整条漏了** ——
+        # 于是 CC 改的每一条用例在「操作日志」里操作人和所属项目都是「-」。
+        # 一份说不出是谁干的日志不叫审计日志：现在写库的主力是 CC，
+        # 分不出哪些是它改的、哪些是人改的，出问题就只能靠猜。
+        #
+        # 身份本来就有（Key 决定，script_runs 的 executed_by 一直在用它），
+        # 只是审计那条路从没问过它。挂在 on_call_tool 上 = 所有 tb_* 工具一次性覆盖。
+        try:
+            from app.core.audit import set_audit_context
+            uid = await current_caller_user_id()
+            set_audit_context(user_id=uuid.UUID(uid) if uid else None,
+                              trace_id=f"mcp:{context.message.name}")
+        except Exception:  # noqa: BLE001
+            pass  # 记账绝不能把 MCP 调用打死
+
         # 必须单独拦一道：从 tools/list 里藏起来 ≠ 不能直接调
         allowed = await _lookup_allowed_tools()
         if allowed is not None and context.message.name not in set(allowed):
