@@ -177,16 +177,18 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
     _actor = (getattr(case, "expected_confirmed_actor", None) or "").strip()
     if not getattr(case, "expected_confirmed_at", None):
         notes.append({"kind": "expected_not_confirmed",
-                      "detail": "「预期已确认」是空的 —— 没跟人对过这条要验什么。"
-                                "改过步骤或预期会自动清掉这个标记，如果是那种情况，"
-                                "把确认内容重新带上来（tb_update_case 的 "
-                                "expected_confirmed_by / expected_confirmed_note）。"})
+                      "detail": "「预期已确认」是空的 —— 这条的预期没有外部依据。"
+                                "**先去仓库里读需求/设计文档**（PRD、README、docs/、接口契约、代码里的业务规则注释），"
+                                "那是最该用也最容易被跳过的一步；文档说不清再问用户。"
+                                "改过步骤或预期会自动清掉这个标记，那种情况把依据重新带上来（tb_update_case 的 expected_confirmed_by / expected_confirmed_note）。"})
     elif not re.search(r"用户|产品|需求|评审|业务|客户|PM", _actor):
         notes.append({"kind": "expected_confirmed_by_self",
                       "detail": f"「预期已确认」的落款是「{_actor}」，看不出是跟人确认的。"
-                                f"这个标记要记的是**人确认过这条要验什么** —— "
-                                f"自己实测一遍不算：三份产物同源，互相一致但一起错的时候，"
-                                f"只有外部确认能挡住。确认过就把对话里那句原话写进落款。"})
+                                f"这个标记要记的是**预期有外部依据** —— 自己实测一遍不算：\n"
+                                f"实测告诉你「它现在怎么做」，不是「它应该怎么做」；系统有 bug 时，"
+                                f"照实测写就是把 bug 固化成了预期，而三份产物同源会一起错还全绿。\n"
+                                f"依据按这个顺序找：需求/设计文档（仓库里就有，直接读）→ 问用户 → "
+                                f"都没有才退回实测，并在 note 里写明「无文档依据，按实测行为记录」。"})
 
     # 少做了一维却没说为什么。
     # **建用例时只提醒不拦，实测 6 条全空** —— 提醒发生在写入那一刻，CC 当时
