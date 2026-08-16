@@ -349,3 +349,28 @@ def test_方法论要求读需求加读实现再判断():
     for k in ("卡住了", "这条用例之外", "影响别人"):
         assert k in seg, f"兜底缺「{k}」—— 遇到这类情况它会闷头硬试"
     assert "带着你的判断和依据去问" in seg, "没说清怎么问 —— 甩清单那道确认会废掉"
+
+
+def test_场景清单也来自需求加实现():
+    """**源头**：场景来源原来只写「从页面盘」= 纯实现视角。
+    需求里写了、实现漏做的功能，页面上没有入口，永远盘不到 —— 漏测的恰恰是这一类。
+    预期那一环上一轮修了，场景这一环才是更早的源头。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "app/mcp/__init__.py").read_text(encoding="utf-8")
+    seg = src[src.index("①-1 【怎么挑场景】"):src.index("①-2")]
+    assert "先读需求" in seg, "场景来源没写需求 —— 又变成从实现倒推"
+    assert "需求有、实现没有" in seg, "没说清功能缺失该怎么处理"
+    assert "product_defect" in seg, "功能缺失没导向缺陷归因，会被当成跳过"
+    assert "实现有、需求没有" in seg, "多出来的行为没人看"
+
+
+def test_探索中发现场景不对要当场改():
+    """场景清单是动手前拍的，动手时一定会发现它不准。
+    没有这条，CC 会为了"跟一开始报的一致"硬把发现塞回原框，或者攒到下一轮。"""
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] / "app/mcp/__init__.py").read_text(encoding="utf-8")
+    seg = src[src.index("①-1-B"):src.index("①-2")]
+    for k in ("拆成两条", "补一条", "tb_update_case", "重写它"):
+        assert k in seg, f"缺「{k}」—— 发现了也不知道该怎么办"
+    assert "不用等谁批准" in seg, "没授权就会攒着等确认"
+    assert "删掉已有用例" in seg, "没划出真正需要先说的那条边界"
