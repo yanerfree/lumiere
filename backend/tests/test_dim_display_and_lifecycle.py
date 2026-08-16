@@ -72,7 +72,7 @@ def test_两个页面都按计划翻译不做():
                 "frontend/src/pages/cases/CaseDetail.jsx"):
         src = (ROOT / rel).read_text(encoding="utf-8")
         assert "dimPlanned" in src and "NOT_PLANNED" in src, f"{rel} 没区分「不做」"
-        assert re.search(r"label:\s*'不做'", src), f"{rel} 没有「不做」这个显示词"
+        assert re.search(r"label:\s*'不适用'", src), f"{rel} 没有「不适用」这个显示词"
         assert "dimBadge" in src, f"{rel} 定义了却没用上"
 
 

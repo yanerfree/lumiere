@@ -55,7 +55,7 @@ const dimPlanned = (targetLevel, dim) => {
 // 它永远不会变成「完成」，人却会一直等它变。
 // 不新增状态值（库里仍是 draft）：「做不做」是规划意图，target_level 已经
 // 表达了，显示层读它翻译即可。多加一个第四态只会污染数据模型。
-const NOT_PLANNED = { label: '不做', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' }
+const NOT_PLANNED = { label: '不适用', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' }
 const TARGET_LEVEL = { spec: '只做步骤', spec_api: '步骤+接口', full: '三件套' }
 const dimBadge = (targetLevel, dim, status) =>
   dimPlanned(targetLevel, dim) ? dimOf(status) : NOT_PLANNED
@@ -618,7 +618,7 @@ export default function CaseManagement() {
           {dims.map(([n, d, v]) => `${n}：${badge(d, v).label}`).join('　')}
           <br />CC 跑绿自己置「完成」。<b>有产物就能进回归</b> —— 不用谁点发布，
           审核也不挡（审没审看「审核」那一列）。
-          <br />「不做」= 这条的覆盖层级里没规划这一维（{TARGET_LEVEL[r.targetLevel || 'spec']}），
+          <br />「不适用」= 这条的覆盖层级里没规划这一维（{TARGET_LEVEL[r.targetLevel || 'spec']}），
           不是没做完。
         </span>}>
           <span style={{ display: 'inline-flex', gap: 4 }}>

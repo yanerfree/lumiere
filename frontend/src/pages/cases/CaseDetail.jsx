@@ -150,7 +150,7 @@ const dimPlanned = (targetLevel, dim) => {
 // 「UI·草稿」，看着就是没做完 —— 而那一维不在计划里，永远不会变成「完成」，
 // 人却会一直等它变。不新增状态值（库里仍是 draft）：「做不做」是规划意图，
 // target_level 已经表达了，显示层读它翻译即可。
-const NOT_PLANNED = { label: '不做', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' }
+const NOT_PLANNED = { label: '不适用', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' }
 const dimBadge = (targetLevel, dim, status) =>
   dimPlanned(targetLevel, dim) ? dimLabel(status) : NOT_PLANNED
 
