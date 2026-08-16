@@ -99,6 +99,9 @@ class CaseResponse(BaseSchema):
     is_core: bool = False
     automation_status: str
     lifecycle_status: str = "draft"
+    # target_level 必须给前端 —— 没有它，列表页分不出「UI 草稿」是**还没做**
+    # 还是**本来就不做**，两种情况长得一模一样。实测被当成"没做完"问过。
+    target_level: str = "spec"
     manual_status: str = "draft"
     ui_status: str = "draft"
     api_status: str = "draft"

@@ -246,3 +246,11 @@ def sync_review_status(case) -> None:
         + (["ui"] if target == "full" else [])
     all_done = all(getattr(case, f"{d}_status", None) == "completed" for d in dims)
     case.review_status = "pending" if all_done else None
+
+    # 整体状态跟着一起走。**否则同一行三个信号自相矛盾**：列表页「状态」列写着
+    # 「草稿」，右边三件套全绿、审核写着「待审」—— 实测被问「为什么状态没全部
+    # 转成完成」。人看列表第一眼看的就是状态列，它说草稿就等于说这条没做完。
+    #
+    # 「废弃」是人的决定，任何自动推进都不许碰它。
+    if getattr(case, "lifecycle_status", None) != "deprecated":
+        case.lifecycle_status = "done" if all_done else "draft"

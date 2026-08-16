@@ -40,6 +40,26 @@ const dimStatusMap = {
 }
 const dimOf = (status) => dimStatusMap[status] || dimStatusMap.draft
 
+// 这条用例按 target_level 要不要做这一维。
+// spec = 只要手工步骤 / spec_api = 步骤+接口 / full = 三件套
+const dimPlanned = (targetLevel, dim) => {
+  const t = targetLevel || 'spec'
+  if (dim === 'manual') return true
+  if (dim === 'api') return t === 'spec_api' || t === 'full'
+  return t === 'full'
+}
+
+// **「本来就不做」和「还没做」不能长得一样。**
+// 原来 target_level=spec_api 的用例显示「UI·草稿」，看着就是没做完 ——
+// 实测被问「为什么 UI 是草稿状态，是不是还没做」。而那一维压根不在计划里，
+// 它永远不会变成「完成」，人却会一直等它变。
+// 不新增状态值（库里仍是 draft）：「做不做」是规划意图，target_level 已经
+// 表达了，显示层读它翻译即可。多加一个第四态只会污染数据模型。
+const NOT_PLANNED = { label: '不做', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' }
+const TARGET_LEVEL = { spec: '只做步骤', spec_api: '步骤+接口', full: '三件套' }
+const dimBadge = (targetLevel, dim, status) =>
+  dimPlanned(targetLevel, dim) ? dimOf(status) : NOT_PLANNED
+
 // 审核标签（用例级）。NULL=待提审，不显示 —— 见 CaseDetail 的 REVIEW 说明。
 const REVIEW = {
   pending:  { label: '待审',   color: '#4e8af0', bg: 'rgba(78,138,240,0.12)' },
@@ -590,19 +610,23 @@ export default function CaseManagement() {
     // 三个维度挤成 10px 的小圆点，得逐个 hover 才知道是什么 —— 字号提到 11、
     // 整组一个 tooltip 一次说清三维，不用挨个悬停
     { key: 'dimStatus', title: '三件套', dataIndex: 'manualStatus', width: 214, defaultVisible: true, render: (_, r) => {
-      const dims = [['手动', r.manualStatus], ['UI', r.uiStatus], ['接口', r.apiStatus]]
+      const dims = [['手动', 'manual', r.manualStatus], ['UI', 'ui', r.uiStatus],
+                    ['接口', 'api', r.apiStatus]]
+      const badge = (d, v) => dimBadge(r.targetLevel, d, v)
       return (
         <Tooltip title={<span style={{ fontSize: 12 }}>
-          {dims.map(([n, v]) => `${n}：${dimOf(v).label}`).join('　')}
+          {dims.map(([n, d, v]) => `${n}：${badge(d, v).label}`).join('　')}
           <br />CC 跑绿自己置「完成」。<b>有产物就能进回归</b> —— 不用谁点发布，
           审核也不挡（审没审看「审核」那一列）。
+          <br />「不做」= 这条的覆盖层级里没规划这一维（{TARGET_LEVEL[r.targetLevel || 'spec']}），
+          不是没做完。
         </span>}>
           <span style={{ display: 'inline-flex', gap: 4 }}>
-            {dims.map(([n, v]) => (
+            {dims.map(([n, d, v]) => (
               <span key={n} style={{
                 fontSize: 11, padding: '0 6px', borderRadius: 6, lineHeight: '18px',
-                background: dimOf(v).bg, color: dimOf(v).color,
-              }}>{n}·{dimOf(v).label}</span>
+                background: badge(d, v).bg, color: badge(d, v).color,
+              }}>{n}·{badge(d, v).label}</span>
             ))}
           </span>
         </Tooltip>

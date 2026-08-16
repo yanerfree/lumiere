@@ -134,6 +134,26 @@ const dimStatusMap = {
 // 现在 dimStatusMap 既是下拉的选项、也是徽标的文字和颜色，只有一份。
 const dimLabel = (status) => dimStatusMap[status] || dimStatusMap.draft
 
+// 覆盖层级：这条用例打算做到哪一步。
+const TARGET_LEVEL = {
+  spec:     { label: '只做步骤',   hint: '只要手工步骤' },
+  spec_api: { label: '步骤+接口', hint: '手工步骤 + 接口场景，不做 UI' },
+  full:     { label: '三件套',     hint: '手工步骤 + 接口场景 + UI 脚本' },
+}
+const dimPlanned = (targetLevel, dim) => {
+  const t = targetLevel || 'spec'
+  if (dim === 'manual') return true
+  if (dim === 'api') return t === 'spec_api' || t === 'full'
+  return t === 'full'
+}
+// **「本来就不做」和「还没做」不能长得一样。** 原来 spec_api 的用例显示
+// 「UI·草稿」，看着就是没做完 —— 而那一维不在计划里，永远不会变成「完成」，
+// 人却会一直等它变。不新增状态值（库里仍是 draft）：「做不做」是规划意图，
+// target_level 已经表达了，显示层读它翻译即可。
+const NOT_PLANNED = { label: '不做', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' }
+const dimBadge = (targetLevel, dim, status) =>
+  dimPlanned(targetLevel, dim) ? dimLabel(status) : NOT_PLANNED
+
 // 审核标签（用例级，一个）。**NULL 就是「待提审」** —— 不存值，因为绝大多数用例
 // 都在这个态，存了等于给每条都挂个灰标签，列表上一片噪音。
 // 「待审」是三维全完成后**自动进**的，没有「提交审核」那一下。
@@ -2054,6 +2074,9 @@ export default function CaseDetail() {
   // 审核标签（NULL = 待提审，不显示）
   const [reviewStatus, setReviewStatus] = useState(null)
   const [manualStatus, setManualStatus] = useState('draft')
+  // 这条要做到哪一步（spec/spec_api/full）。CC 靠它决定做几维，
+  // 页面上原来根本不显示 —— 于是「UI·草稿」到底是没做还是不做，人分不出来。
+  const [targetLevel, setTargetLevel] = useState('spec')
   const [uiStatus, setUiStatus] = useState('draft')
   const [apiStatus, setApiStatus] = useState('draft')
   const [isCore, setIsCore] = useState(false)
@@ -2171,6 +2194,7 @@ export default function CaseDetail() {
         isApiTemplate: c.isApiTemplate || false,
         isUiTemplate: c.isUiTemplate || false,
         lifecycleStatus: c.lifecycleStatus || 'draft',
+        targetLevel: c.targetLevel || 'spec',
         manualStatus: c.manualStatus || 'draft',
         uiStatus: c.uiStatus || 'draft',
         apiStatus: c.apiStatus || 'draft',
@@ -2182,6 +2206,7 @@ export default function CaseDetail() {
       setModule(vals.module); setSubModule(vals.subModule)
       setAutomationStatus(vals.automationStatus); setFlaky(vals.flaky)
       setLifecycleStatus(vals.lifecycleStatus); setManualStatus(vals.manualStatus)
+    setTargetLevel(vals.targetLevel)
       setUiStatus(vals.uiStatus); setApiStatus(vals.apiStatus)
       // 这一行漏掉过：reviewStatus 进了 vals（也就进了 savedRef）和保存体，却没回填 state。
       // 后果不只是审核徽标不显示 —— state 恒为 null 跟 savedRef 里的 'pending' 对不上，
@@ -2230,7 +2255,7 @@ export default function CaseDetail() {
     preconditions, expectedResult, scriptRefFile, scriptRefFunc, remark,
     steps, variablesUsed, apiScenario, uiScenario,
     isApiTemplate, isUiTemplate,
-    lifecycleStatus, manualStatus, uiStatus, apiStatus, reviewStatus, isCore,
+    lifecycleStatus, manualStatus, uiStatus, apiStatus, reviewStatus, isCore, targetLevel,
   })
   const isDirty = caseData && currentSnap !== savedRef.current
 
@@ -2291,7 +2316,7 @@ export default function CaseDetail() {
         isFlaky: flaky, preconditions, expectedResult, scriptRefFile, scriptRefFunc,
         remark, steps, variablesUsed, apiScenario, uiScenario,
         isApiTemplate, isUiTemplate,
-        lifecycleStatus, manualStatus, uiStatus, apiStatus, reviewStatus, isCore,
+        lifecycleStatus, manualStatus, uiStatus, apiStatus, reviewStatus, isCore, targetLevel,
       })
       savedRef.current = currentSnap
       setCaseData(prev => ({ ...prev }))
@@ -2357,17 +2382,27 @@ export default function CaseDetail() {
               一个说"什么状态"、一个说"有没有内容"，而"有没有"是"什么状态"的子集。
               两组并排 = 同一件事说两遍，实测出现过一组说有、另一组说未开始。
               合成这一组：状态词用和列表页一样的三档，括号里带内容量。 */}
-          {[['手动', manualStatus, setManualStatus, steps.length],
-            ['UI', uiStatus, setUiStatus, (uiScenario?.steps?.length || uiScenario?.lastResults?.length || 0)],
-            ['接口', apiStatus, setApiStatus, (apiScenario?.steps?.length || 0)]].map(([lbl, val, setter, n]) => (
+          {/* 覆盖层级 —— 决定下面三维里哪几维算数。原来页面上完全不显示它，
+              于是「UI·草稿」是没做还是不做，只能靠猜。 */}
+          <InlineProp value={`覆盖·${TARGET_LEVEL[targetLevel]?.label || targetLevel}`}
+            color="#7c5cff" bg="rgba(124,92,255,0.10)">
+            <DropdownList activeKey={targetLevel} onSelect={setTargetLevel}
+              items={Object.entries(TARGET_LEVEL).map(([k, v]) => ({
+                key: k, label: `${v.label} —— ${v.hint}`, dot: 'circle', color: '#7c5cff' }))} />
+          </InlineProp>
+          {[['手动', 'manual', manualStatus, setManualStatus, steps.length],
+            ['UI', 'ui', uiStatus, setUiStatus, (uiScenario?.steps?.length || uiScenario?.lastResults?.length || 0)],
+            ['接口', 'api', apiStatus, setApiStatus, (apiScenario?.steps?.length || 0)]].map(([lbl, dim, val, setter, n]) => {
             // 文字和颜色都取自同一个档位对象 —— 原来文字来自三档、颜色来自六态，
             // 于是「调试中」会出现两种颜色，同一屏自相矛盾。
-            <InlineProp key={lbl} value={`${lbl}·${dimLabel(val).label}${n ? ` (${n})` : ''}`}
-              color={dimLabel(val).color} bg={dimLabel(val).bg}>
+            const b = dimBadge(targetLevel, dim, val)
+            return (
+            <InlineProp key={lbl} value={`${lbl}·${b.label}${n ? ` (${n})` : ''}`}
+              color={b.color} bg={b.bg}>
               <DropdownList activeKey={val} onSelect={setter}
                 items={DIM_STATUS_KEYS.map(s => ({ key: s, label: dimStatusMap[s].label, dot: 'circle', color: dimStatusMap[s].color }))} />
             </InlineProp>
-          ))}
+          )})}
           <InlineProp icon={<WarningOutlined />}
             value={quarantined ? '已隔离' : unstable ? '不稳定' : flaky ? 'Flaky' : '正常'}
             color={quarantined ? '#e8453c' : unstable ? '#fa8c16' : flaky ? '#faad14' : '#86909c'}
