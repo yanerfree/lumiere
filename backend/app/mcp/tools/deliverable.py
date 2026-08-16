@@ -461,20 +461,62 @@ async def check_branch(session: AsyncSession, branch_id: str,
             "review": c.review_status or "待提审",
         })
 
+    gaps = await _module_ui_gaps(session, cases)
     return {
         "total": len(rows),
         "summary": {
             "可交付": deliverable, "有阻塞": blocked,
             "有脆弱点": risky, "待你审": waiting_review,
         },
+        "moduleGaps": gaps,
         "cases": rows,
-        "verdict": _branch_verdict(len(rows), deliverable, blocked, risky, waiting_review),
+        "verdict": _branch_verdict(len(rows), deliverable, blocked, risky, waiting_review, gaps),
         "usage": "blockers=交不了，必须先修；riskKinds=交得了但会偶发红；"
                  "review=pending 表示三维都完成了、等你审（不审也能建计划跑）。",
     }
 
 
-def _branch_verdict(total, ok, blocked, risky, waiting) -> str:
+async def _module_ui_gaps(session: AsyncSession, cases) -> list[dict]:
+    """整个模块一条 UI 维度都没有 → 那个模块的页面裸奔。
+
+    **这个空洞单条看不出来。** 逐条问「这条要不要做 UI」，每次的回答都合理：
+    「判定点在数据面，页面上看不到」「UI 只能验按钮不存在」…… 六条各有各的道理，
+    合起来就是整块界面没有任何自动化盯着 —— 审批页签没了、驳回按钮失效、
+    状态标签不刷新，全都发现不了。实测订阅管理 6 条全是 spec_api，0 条做 UI。
+
+    所以判据放在模块级：不看单条该不该做，只看**这个模块有没有人做**。
+    报出来不拦 —— 有的模块（纯后台任务、纯数据处理）确实没有页面。
+    """
+    from app.models.case import CaseFolder
+
+    by_folder: dict = {}
+    for c in cases:
+        by_folder.setdefault(c.folder_id, []).append(c)
+
+    gaps = []
+    for fid, group in by_folder.items():
+        if fid is None or len(group) < _MODULE_MIN_CASES:
+            continue
+        if any((c.target_level or "spec") == "full" for c in group):
+            continue
+        folder = await session.get(CaseFolder, fid)
+        gaps.append({
+            "module": getattr(folder, "name", None) or "（未归类）",
+            "caseCount": len(group),
+            "detail": f"「{getattr(folder, 'name', '?')}」{len(group)} 条用例**没有一条做 UI 维度** —— "
+                      f"这个模块的页面没有任何自动化盯着：审批入口消失、按钮失效、"
+                      f"状态标签不刷新，都发现不了。单条看每次都有道理"
+                      f"（「判定点在数据面」「UI 只能验按钮不存在」），合起来就是整块界面裸奔。"
+                      f"挑一条页面路径最长的升成 target_level=full。",
+        })
+    return gaps
+
+
+# 模块里少于这个数不报 —— 才两三条的模块可能只是刚开始写
+_MODULE_MIN_CASES = 4
+
+
+def _branch_verdict(total, ok, blocked, risky, waiting, gaps=None) -> str:
     parts = [f"{total} 条里 {ok} 条可交付"]
     if blocked:
         parts.append(f"{blocked} 条有硬阻塞（看 firstBlocker）")
@@ -482,4 +524,6 @@ def _branch_verdict(total, ok, blocked, risky, waiting) -> str:
         parts.append(f"{risky} 条有脆弱点 —— 不修的话回归里会偶发红")
     if waiting:
         parts.append(f"{waiting} 条等你审（**审核不挡回归**，不审也能建计划跑）")
+    for g in (gaps or []):
+        parts.append(f"⚠「{g['module']}」{g['caseCount']} 条没有一条做 UI 维度，整块界面没人盯")
     return "；".join(parts) + "。"

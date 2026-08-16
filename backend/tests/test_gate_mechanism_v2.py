@@ -229,3 +229,53 @@ def test_跟人确认过的不提示():
         scenario=_scenario(), steps=[_step(0, "x")]))
     ks = _kinds(r)
     assert "expected_confirmed_by_self" not in ks and "expected_not_confirmed" not in ks, ks
+
+
+# ── ⑦ 模块级 UI 覆盖空洞 ────────────────────────────────────────
+
+def test_整个模块没有UI维度要报出来():
+    """**这个空洞单条看不出来。** 逐条问「这条要不要做 UI」，每次回答都合理：
+    「判定点在数据面」「UI 只能验按钮不存在」…… 六条各有各的道理，合起来
+    就是整块界面没有任何自动化盯着。实测订阅管理 6 条全 spec_api、0 条做 UI。
+    """
+    import asyncio as _a
+    from app.mcp.tools.deliverable import _module_ui_gaps
+    fid = uuid.uuid4()
+    cases = [SimpleNamespace(folder_id=fid, target_level="spec_api") for _ in range(6)]
+
+    class S:
+        async def get(self, model, oid):
+            return SimpleNamespace(name="订阅管理")
+
+    gaps = _a.run(_module_ui_gaps(S(), cases))
+    assert gaps and gaps[0]["module"] == "订阅管理" and gaps[0]["caseCount"] == 6, gaps
+    assert "整块界面裸奔" in gaps[0]["detail"]
+
+
+def test_模块里有一条做UI就不报():
+    """判据是「这个模块有没有人做」，不是「每条都要做」。"""
+    import asyncio as _a
+    from app.mcp.tools.deliverable import _module_ui_gaps
+    fid = uuid.uuid4()
+    cases = [SimpleNamespace(folder_id=fid, target_level="spec_api") for _ in range(5)]
+    cases.append(SimpleNamespace(folder_id=fid, target_level="full"))
+
+    class S:
+        async def get(self, model, oid):
+            return SimpleNamespace(name="订阅管理")
+
+    assert _a.run(_module_ui_gaps(S(), cases)) == []
+
+
+def test_刚起步的小模块不报():
+    """才两三条可能只是刚开始写，这时候催 UI 是噪音。"""
+    import asyncio as _a
+    from app.mcp.tools.deliverable import _module_ui_gaps
+    fid = uuid.uuid4()
+    cases = [SimpleNamespace(folder_id=fid, target_level="spec") for _ in range(3)]
+
+    class S:
+        async def get(self, model, oid):
+            return SimpleNamespace(name="刚开工")
+
+    assert _a.run(_module_ui_gaps(S(), cases)) == []
