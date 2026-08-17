@@ -120,8 +120,10 @@ async def run(project_id: str, base: str, namespaces: list[str], dry: bool) -> N
                 if not dry:
                     s.add(ProjectI18nMessage(
                         project_id=pid, key_text=key, translations=langs,
-                        category="text", source="sut_locale",
-                        description=f"从被测系统 locale 导入：{langs['zh-CN'][:40]}"))
+                        category="text", source="sut_locale"))
+                        # description 不写。上一版写的是「从被测系统 locale 导入：<中文>」——
+                        # 前缀是废话，中文已经单独一列了，等于纯噪音，2416 条全长一样。
+                        # 「说明」留给人手填键看不出来的信息（这句话在什么条件下出现）。
                 continue
             cur = row.translations or {}
             if (cur.get("en-US") or "").strip() and (cur.get("zh-CN") or "").strip():

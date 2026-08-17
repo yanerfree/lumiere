@@ -42,47 +42,23 @@ const enOf = (r) => pick(r, 'en')
 // 中文：key 制的行译文里有 zh-CN；采集器那批是拿中文当 key，中文就在 key 上。
 const zhOf = (r) => pick(r, 'zh') || r.keyText || r.key_text || ''
 
-// 键本身就编码了位置：`services.detail.btn.enable` = 服务管理 › 详情页 › 按钮 › enable。
-// **在页面上直接把它翻出来，不要指望「说明」那一栏**——说明是导入时写死的一句话
-// （「从被测系统 locale 导入：操作」），既看不出位置、又会随文案改动过期。
-// 从键推导则永远和键一致。
+// 键的第一段是命名空间，对应被测系统的一级模块 —— **唯一能准确翻译**的一段。
+//
+// 上一版试图把整条键翻成中文路径
+// （`subscription.providerDetail.tenantCard.crossTenantSubscriber`
+//   → 「订阅管理 › provider detail › tenant card › cross tenant subscriber」）。
+// 那是错的：中间的业务词没有翻译表，只能露出英文，结果半中半洋比纯英文更难读，
+// 还占两行、把键列挤成三行。**做一件缺翻译表的翻译，半成品比不做更糟。**
+// 键剩下的部分本来就可读（tenantCard 一眼就是卡片），不需要我再翻一遍。
 const NS_LABEL = {
   common: '通用', services: '服务管理', subscription: '订阅管理', apps: '应用管理',
   auth: '登录认证', dashboard: '概览', gateway: '网关', upstream: '负载', menu: '菜单',
   tenant: '租户', application: '应用',
 }
-const SEG_LABEL = {
-  btn: '按钮', button: '按钮', form: '表单', modal: '弹窗', dialog: '弹窗', drawer: '抽屉',
-  list: '列表', table: '表格', detail: '详情页', create: '创建页', edit: '编辑页',
-  tab: '页签', tabs: '页签', msg: '提示', message: '提示', toast: '提示',
-  placeholder: '占位符', title: '标题', label: '标签', validation: '校验',
-  filter: '筛选', status: '状态', empty: '空态', confirm: '确认', error: '错误',
-  success: '成功', tip: '说明', column: '列', field: '字段', action: '操作',
-  lifecycle: '生命周期', version: '版本', manage: '管理', overview: '概览',
-}
-// 驼峰拆开，并把**结尾那个控件类型**翻出来：bindModal → bind 弹窗、configTitle → config 标题。
-// 只翻结尾那一个词 —— 键的命名习惯是「做什么 + 是什么控件」，控件类型在最后。
-// 中间的业务词不翻：那是被测系统自己的叫法，硬翻会翻错。
-const TYPE_TAIL = {
-  modal: '弹窗', dialog: '弹窗', drawer: '抽屉', btn: '按钮', button: '按钮',
-  title: '标题', label: '标签', msg: '提示', tip: '说明', tab: '页签',
-  form: '表单', list: '列表', table: '表格', column: '列', field: '字段',
-  placeholder: '占位符', error: '错误', success: '成功', empty: '空态',
-}
-const humanize = (seg) => {
-  const words = seg.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')
-  const tail = TYPE_TAIL[words[words.length - 1]]
-  if (tail && words.length > 1) return words.slice(0, -1).join(' ') + ' ' + tail
-  return tail || words.join(' ')
-}
-const keyPath = (key) => {
-  if (!key || /[\u4e00-\u9fff]/.test(key)) return null   // 中文当键的没有路径可推
-  const segs = key.split('.')
-  const out = segs.map((seg, i) => {
-    if (i === 0) return NS_LABEL[seg] || seg
-    return SEG_LABEL[seg] || humanize(seg)
-  })
-  return out.join(' › ')
+const moduleOf = (key) => {
+  if (!key || /[\u4e00-\u9fff]/.test(key)) return null
+  const ns = key.split('.')[0]
+  return NS_LABEL[ns] || ns
 }
 
 export default function I18nMessages() {
@@ -249,18 +225,25 @@ export default function I18nMessages() {
       // 键是给人复制到脚本里的，等宽字体够了，不要加粗也不要边框。
       title: '键',
       dataIndex: 'keyText',
-      width: 300,
+      width: 330,
       render: (v) => (
-        <div>
+        <>
           <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, wordBreak: 'break-all' }}>{v}</Text>
           {/[\u4e00-\u9fff]/.test(v) && (
             <Tag color="orange" style={{ marginLeft: 6, fontSize: 11 }}>键不该用中文</Tag>
           )}
-          {keyPath(v) && (
-            <div style={{ fontSize: 11.5, color: '#86909c', marginTop: 2 }}>{keyPath(v)}</div>
-          )}
-        </div>
+        </>
       ),
+    },
+    {
+      title: '模块',
+      key: 'module',
+      width: 100,
+      render: (_, r) => {
+        const m = moduleOf(r.keyText)
+        return m ? <Text type="secondary" style={{ fontSize: 12.5 }}>{m}</Text>
+                 : <Text type="secondary">—</Text>
+      },
     },
     {
       // 中文和英文必须挨着 —— 原来中间夹了「分类」列，同一条文案的两种语言
@@ -395,7 +378,7 @@ export default function I18nMessages() {
             <Input placeholder="如 Confirm Binding（留空=待补）" />
           </Form.Item>
           <Form.Item name="description" label="说明"
-            tooltip="补充键推不出来的信息（比如这句话在什么条件下才出现）。位置不用写在这里 —— 键本身已经表达了，列表上会自动翻成「服务管理 › 详情页 › 按钮」。">
+            tooltip="留给键看不出来的信息：这句话在什么条件下才出现、和哪条用例相关。别重复中文值 —— 它已经有单独一列了。">
             <Input placeholder="这条文案出现在哪、上下文（可选）" />
           </Form.Item>
         </Form>
