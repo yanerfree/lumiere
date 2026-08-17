@@ -56,7 +56,9 @@ class TestImportCases:
         data = response.json()["data"]
         assert data["new"] == 2
         assert data["updated"] == 0
-        assert data["removed"] == 0
+        # 原来断言的是 removed == 0。导入改成「只增不删」之后摘要不再有 removed，
+        # 换成如实上报「文件里没有的那几条」的 notInFile（见 845f203）
+        assert data["notInFile"] == 0
         assert data["newModules"] >= 1  # AUTH 模块
 
         # Then: 数据库中有 2 条用例
@@ -97,7 +99,14 @@ class TestImportCases:
         assert data["updated"] == 1
 
     @pytest.mark.asyncio
-    async def test_missing_tea_id_marks_removed(self, client, db_session):
+    async def test_missing_tea_id_is_reported_but_not_removed(self, client, db_session):
+        """文件里少了的那条要如实上报，但绝不能动它。
+
+        这条测试原来叫 test_missing_tea_id_marks_removed，断言 removed == 1 ——
+        那是旧行为，已经在 845f203「点一次导入删掉 3 条无关用例」里作为数据丢失
+        bug 修掉了。导入现在只增不删，改成上报 notInFile。
+        断言 B 仍在且字段没变，是为了把那个修复钉住，不是顺手多写一句。
+        """
         # Given: 已导入 2 条用例
         headers, pid, bid = await self._setup(client, db_session)
         first = _make_tea_json([
@@ -120,9 +129,17 @@ class TestImportCases:
             files={"file": ("tea-cases.json", io.BytesIO(second), "application/json")},
         )
 
-        # Then: B 被标记为 script_removed
+        # Then: B 被如实上报为「不在这个文件里」，并给出样例供人核对
         data = response.json()["data"]
-        assert data["removed"] == 1
+        assert data["notInFile"] == 1
+        assert "B" in data["notInFileSample"]
+
+        # Then: B 还在，而且没被改动 —— 导入不负责删，也不负责改状态
+        result = await db_session.execute(
+            select(Case).where(Case.branch_id == bid, Case.tea_id == "rm_case_b")
+        )
+        case_b = result.scalar_one()
+        assert case_b.title == "B"
 
     @pytest.mark.asyncio
     async def test_skip_cases_missing_fields(self, client, db_session):
