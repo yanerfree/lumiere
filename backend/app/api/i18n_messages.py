@@ -58,8 +58,12 @@ async def list_messages(
     if category:
         stmt = stmt.where(ProjectI18nMessage.category == category)
     if untranslated:
+        # 语种键是 BCP-47（en-US）。只认裸 "en" 的话，从被测系统 locale 导进来的
+        # 2400+ 条译文全被当成"待补"，页面上「已翻译」恒为 0。
         en = ProjectI18nMessage.translations["en"].astext
-        stmt = stmt.where(or_(en.is_(None), en == ""))
+        en_us = ProjectI18nMessage.translations["en-US"].astext
+        stmt = stmt.where(or_(en.is_(None), en == "").self_group())
+        stmt = stmt.where(or_(en_us.is_(None), en_us == "").self_group())
     stmt = stmt.order_by(ProjectI18nMessage.category, ProjectI18nMessage.key_text)
     rows = await session.execute(stmt)
     return {"data": [_dump(r) for r in rows.scalars().all()]}

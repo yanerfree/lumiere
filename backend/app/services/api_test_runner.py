@@ -224,20 +224,26 @@ def _resolve_variables(text, env: dict) -> str:
     return re.sub(r'\$\{(\w+)\}', lambda m: str(env.get(m.group(1), m.group(0))), text)
 
 
-def _t(zh_text: str, env: dict) -> str:
-    """中文文案 → 当前语种。查不到就原样返回中文，绝不抛 —— 词典一定是不全的。"""
+def _t(ref: str, env: dict) -> str:
+    """`${T:ref}` → 当前语种的那句话。
+
+    ref 是**语言中立的 key**（`services.form.nameRequired`）—— 中文和英文都是它的值。
+    也认中文原文（采集器从脚本里抽的那批就是拿中文当 key 的），是为了兼容。
+
+    查不到就原样返回，绝不抛 —— 词典一定是不全的。中文原文当 key 时，
+    原样返回正好就是中文的正确答案。
+    """
     lang = (env.get("TEST_LANGUAGE") or "").strip().lower()
-    locale = env.get("PLAYWRIGHT_LOCALE") or {"en": "en-US", "zh": "zh-CN"}.get(lang, "zh-CN")
-    if str(locale).startswith("zh"):
-        return zh_text
-    row = (env.get("__I18N__") or {}).get(zh_text) or {}
-    if locale in row:
+    locale = str(env.get("PLAYWRIGHT_LOCALE")
+                 or {"en": "en-US", "zh": "zh-CN"}.get(lang, "zh-CN"))
+    row = (env.get("__I18N__") or {}).get(ref) or {}
+    if row.get(locale):
         return row[locale]
-    pre = str(locale).split("-")[0]
+    pre = locale.split("-")[0]
     for k, v in row.items():
         if k.split("-")[0] == pre and v:
             return v
-    return zh_text
+    return ref
 
 
 def _resolve_obj(obj, env: dict):

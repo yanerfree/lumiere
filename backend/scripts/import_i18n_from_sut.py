@@ -60,13 +60,18 @@ def _flatten(d, prefix="") -> dict[str, str]:
     return out
 
 
-def build_pairs(base: str, namespaces: list[str]) -> dict[str, str]:
-    """返回 {中文文案: 英文文案}。
+def build_pairs(base: str, namespaces: list[str]) -> dict[str, dict]:
+    """返回 {key 路径: {"zh-CN": 中文, "en-US": 英文}}。
+
+    **key 是语言中立的路径**（`services.form.nameExists`），中文和英文都是它的值。
+    第一版拿中文当 key（`${T:服务名已存在}`）是错的：中文既是 key 又是值，
+    不对称 —— 而且中文文案一改（「服务名已存在」→「服务名称已存在」），
+    断言里的 key 就失效，静默退回原文，红都不红。
 
     **按 key 路径配对，不按顺序配对** —— 两个文件的键序不保证一致，
     按顺序配会把「保存」映射成「Cancel」，而且错得悄无声息。
     """
-    pairs: dict[str, str] = {}
+    pairs: dict[str, dict] = {}
     for ns in namespaces:
         zh = _fetch(f"{base}/src/i18n/locales/zh-CN/{ns}.json")
         en = _fetch(f"{base}/src/i18n/locales/en-US/{ns}.json")
@@ -76,6 +81,7 @@ def build_pairs(base: str, namespaces: list[str]) -> dict[str, str]:
         fz, fe = _flatten(zh), _flatten(en)
         hit = 0
         for key, zh_text in fz.items():
+            full_key = f"{ns}.{key}"      # 带上命名空间，跨文件不会撞
             en_text = fe.get(key)
             # 没有对应英文、或两边一样（多半是没翻译的占位）→ 不收
             #
@@ -85,7 +91,7 @@ def build_pairs(base: str, namespaces: list[str]) -> dict[str, str]:
             if len(zh_text) > 200 or "\n" in zh_text:
                 continue
             if en_text and en_text != zh_text:
-                pairs.setdefault(zh_text, en_text)
+                pairs.setdefault(full_key, {"zh-CN": zh_text, "en-US": en_text})
                 hit += 1
         print(f"  {ns}: {hit}/{len(fz)} 条可配对")
     return pairs
@@ -107,24 +113,23 @@ async def run(project_id: str, base: str, namespaces: list[str], dry: bool) -> N
         existing = {r.key_text: r for r in rows}
 
         filled = kept = added = 0
-        for zh_text, en_text in pairs.items():
-            row = existing.get(zh_text)
+        for key, langs in pairs.items():
+            row = existing.get(key)
             if row is None:
                 added += 1
                 if not dry:
                     s.add(ProjectI18nMessage(
-                        project_id=pid, key_text=zh_text,
-                        translations={"en-US": en_text},
+                        project_id=pid, key_text=key, translations=langs,
                         category="text", source="sut_locale",
-                        description="从被测系统 locale 文件导入"))
+                        description=f"从被测系统 locale 导入：{langs['zh-CN'][:40]}"))
                 continue
             cur = row.translations or {}
-            if (cur.get("en-US") or "").strip():
+            if (cur.get("en-US") or "").strip() and (cur.get("zh-CN") or "").strip():
                 kept += 1          # 人工改过的优先，不覆盖
                 continue
             filled += 1
             if not dry:
-                row.translations = {**cur, "en-US": en_text}
+                row.translations = {**langs, **{k: v for k, v in cur.items() if (v or "").strip()}}
         if not dry:
             await s.commit()
 
@@ -136,7 +141,8 @@ async def run(project_id: str, base: str, namespaces: list[str], dry: bool) -> N
                     if not ((r.translations or {}).get("en-US") or "").strip()
                     and r.key_text not in pairs]
             if left:
-                print(f"\n⚠ 还有 {len(left)} 条查不到译文，要人工填（被测系统 locale 里没有）：")
+                print(f"\n⚠ 还有 {len(left)} 条没有英文（采集器抽的中文文案，"
+                      f"被测系统 locale 里配不上）—— 要么人工填，要么改脚本用 key 引用：")
                 for t in left[:10]:
                     print(f"    {t}")
 

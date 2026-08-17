@@ -118,31 +118,70 @@ async def _upsert_literals(
 
 
 async def harvest_from_script(session: AsyncSession, project_id, script_content: str) -> int:
-    """采集单个脚本的文案（生成钩子用）。不 commit，交调用方。返回新增条数。"""
-    return await _upsert_literals(session, project_id, extract_copy_literals(script_content))
+    """**已弃用**：以前用它把中文原文当键插词典，见 harvest_project 的说明。
+    保留是因为平台侧生成钩子还在调它 —— 现在什么都不做，返回 0。
+    """
+    return 0
 
 
 async def harvest_project(session: AsyncSession, project_id) -> dict:
-    """扫该项目所有 UI 脚本，批量采集文案入词典（前端「扫描脚本采集」用）。
+    """扫该项目所有 UI 脚本，**报告哪些硬编码文案该换成哪个键** —— 不再造词条。
+
+    **原来它拿中文原文当键往词典里插。那是错的**：中文既是键又是值，不对称；
+    中文文案一改（「服务名已存在」→「服务名称已存在」），键就失效、静默退回原文，
+    红都不红。而且插进去的 `translations` 是空的 —— t() 查不到译文就返回键，
+    返回的正好是中文，**和没这条一模一样**，凭空多了一套不一致的键约定。
+
+    现在它做一件真有用的事：把脚本里的中文反查成语言中立的键。
+      · 对上了 → 这处该改成 t("<key>")，照着改就换语种无痛
+      · 对不上 → **那正是脚本在英文环境会挂的地方**：要么被测系统自己硬编码了中文
+        没走 i18n，要么脚本里的文案过期/是拼接出来的
+    实测 33 条里 26 条能对上、7 条对不上。
 
     脚本归属链：Script.case_id → Case.branch_id → Branch.project_id。
-    返回 {"added": 新增条数, "scanned": 扫描脚本数}。调用方负责 commit。
+    只读，不写库。
     """
     rows = await session.execute(
-        select(Script.content)
+        select(Case.case_code, Script.content)
         .join(Case, Script.case_id == Case.id)
         .join(Branch, Case.branch_id == Branch.id)
         .where(Branch.project_id == project_id, Script.script_type == "ui")
     )
-    contents = [c for (c,) in rows.all() if c]
-    # 汇总所有脚本的文案后一次性 upsert，避免逐脚本重复查库
-    merged: dict[str, str] = {}
-    for content in contents:
+    per_script = [(code, c) for code, c in rows.all() if c]
+
+    # 中文译文 → 键。同一句中文可能挂在多个键上，取第一个（字典序稳定）。
+    zh2key: dict[str, str] = {}
+    for row in (await session.execute(
+        select(ProjectI18nMessage.key_text, ProjectI18nMessage.translations)
+        .where(ProjectI18nMessage.project_id == project_id)
+        .order_by(ProjectI18nMessage.key_text)
+    )).all():
+        zh = (row[1] or {}).get("zh-CN")
+        if zh:
+            zh2key.setdefault(zh, row[0])
+
+    mapped: dict[str, dict] = {}
+    unmapped: dict[str, dict] = {}
+    for code, content in per_script:
         for item in extract_copy_literals(content):
-            merged.setdefault(item["text"], item["category"])
-    literals = [{"text": t, "category": c} for t, c in merged.items()]
-    added = await _upsert_literals(session, project_id, literals)
-    return {"added": added, "scanned": len(contents)}
+            txt = item["text"]
+            bucket = mapped if txt in zh2key else unmapped
+            hit = bucket.setdefault(txt, {"text": txt, "category": item.get("category"),
+                                          "cases": []})
+            if txt in zh2key:
+                hit["key"] = zh2key[txt]
+            if code not in hit["cases"]:
+                hit["cases"].append(code)
+
+    return {
+        "scanned": len(per_script),
+        "mapped": sorted(mapped.values(), key=lambda x: x["text"]),
+        "unmapped": sorted(unmapped.values(), key=lambda x: x["text"]),
+        "hint": (f"{len(mapped)} 处能换成语言中立的键（照 key 改成 t(\"…\") 即可）；"
+                 f"{len(unmapped)} 处在被测系统 locale 里找不到 —— "
+                 f"那是英文环境下会挂的地方：要么被测系统硬编码了中文，"
+                 f"要么脚本里的文案过期了。"),
+    }
 
 
 async def load_locale_table(session, project_id) -> dict[str, dict]:

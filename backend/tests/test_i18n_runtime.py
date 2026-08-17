@@ -156,3 +156,52 @@ def test_接口规范里写了文案占位():
     from app.mcp.tools.sync import _SPEC_API_SCENARIO
     for k in ("${T:", "TEST_LANGUAGE", "原样返回中文"):
         assert k in _SPEC_API_SCENARIO, f"接口规范缺「{k}」—— CC 只照规范写"
+
+
+# ── 键必须是语言中立的 ──────────────────────────────────────────
+
+def test_同一个键切语种取不同值():
+    """**这是这套设计的核心。** 第一版拿中文当键（`${T:服务名已存在}`）是错的：
+    中文既是键又是值，不对称 —— 而且中文文案一改（「服务名已存在」→「服务名称已存在」），
+    键就失效、静默退回原文，红都不红。
+    """
+    from app.services.api_test_runner import _resolve_variables as r
+    D = {"services.form.nameRequired": {"zh-CN": "服务名称(name)必填",
+                                        "en-US": "Service name (name) is required"}}
+    ref = "${T:services.form.nameRequired}"
+    assert r(ref, {"TEST_LANGUAGE": "zh", "__I18N__": D}) == "服务名称(name)必填"
+    assert r(ref, {"TEST_LANGUAGE": "en", "__I18N__": D}) == "Service name (name) is required"
+
+
+def test_UI侧同一个键也切两种():
+    mod_zh = _sandbox({"TEST_LANGUAGE": "zh"},
+                      {"common.create": {"zh-CN": "创建", "en-US": "Create"}})
+    mod_en = _sandbox({"TEST_LANGUAGE": "en"},
+                      {"common.create": {"zh-CN": "创建", "en-US": "Create"}})
+    assert mod_zh.t("common.create") == "创建"
+    assert mod_en.t("common.create") == "Create"
+
+
+def test_采集器不再往词典里插中文当键():
+    """它以前拿中文原文当键插进来，而 translations 是空的 —— t() 查不到译文就返回键
+    （正好是中文），**和没这条一模一样**，凭空多了一套不一致的键约定。
+    现在它只报告：脚本里的硬编码中文该换成哪个键、哪些在词典里找不到。"""
+    import inspect
+
+    from app.services import i18n_harvest_service as h
+    src = inspect.getsource(h.harvest_project)
+    assert "session.add" not in src, "又开始往词典里写了"
+    for k in ("mapped", "unmapped"):
+        assert f'"{k}"' in src, f"报告里缺 {k}"
+
+
+def test_导入脚本用key路径当键():
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import importlib
+
+    import import_i18n_from_sut as imp
+    importlib.reload(imp)
+    src = Path(imp.__file__).read_text(encoding="utf-8")
+    assert 'key_text=key' in src, "又拿中文当键了"
+    assert '"zh-CN": zh_text' in src, "没把中文也存成值 —— 那样切回中文就取不到"

@@ -30,7 +30,17 @@ const CATEGORY_COLOR = {
   title: 'purple', tab: 'gold', link: 'magenta', menu: 'green', option: 'lime',
 }
 
-const enOf = (r) => (r.translations && r.translations.en) || ''
+// 词典里的语种键是 BCP-47（en-US / zh-CN）—— 只认裸 'en' 的话，
+// 从被测系统 locale 导进来的 2400+ 条译文一条都读不到，页面上「已翻译」恒为 0。
+const pick = (r, lang) => {
+  const t = r?.translations || {}
+  if (t[lang]) return t[lang]
+  const hit = Object.keys(t).find(k => k.split('-')[0] === lang && t[k])
+  return hit ? t[hit] : ''
+}
+const enOf = (r) => pick(r, 'en')
+// 中文：key 制的行译文里有 zh-CN；采集器那批是拿中文当 key，中文就在 key 上。
+const zhOf = (r) => pick(r, 'zh') || r.keyText || r.key_text || ''
 
 export default function I18nMessages() {
   const { projectId } = useParams()
@@ -41,6 +51,7 @@ export default function I18nMessages() {
   const [scanning, setScanning] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
+  const [scanResult, setScanResult] = useState(null)
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
 
@@ -69,13 +80,16 @@ export default function I18nMessages() {
     setScanning(true)
     try {
       const res = await api.post(`${base}/harvest`)
-      const { added = 0, scanned = 0 } = res.data || {}
-      // 一个脚本都没扫到时别报"采集完成"——那是个空转，绿色 toast 会让人以为
-      // 采集器坏了。直接说清楚下一步该干什么。
+      const d = res.data || {}
+      const { scanned = 0, mapped = [], unmapped = [] } = d
+      // **它不再往词典里插词条了。** 以前是拿脚本里的中文原文当键插进来 ——
+      // 中文既是键又是值，中文一改键就失效；而且 translations 是空的，
+      // t() 查不到译文就返回键（正好是中文），和没这条一模一样。
+      // 现在它做的是反查：脚本里的硬编码中文该换成哪个语言中立的键。
       if (scanned === 0) {
-        message.warning('这个项目还没有 UI 脚本，没什么可采集的。先把脚本回推上来再来扫。')
+        message.warning('这个项目还没有 UI 脚本，没什么可查的。先把脚本回推上来再来扫。')
       } else {
-        message.success(`采集完成：新增 ${added} 条文案（扫描 ${scanned} 个脚本）`)
+        setScanResult({ scanned, mapped, unmapped })
       }
       load()
     } catch {
@@ -109,8 +123,8 @@ export default function I18nMessages() {
     } catch { return }
     // en 归并进 translations，保留其它语种
     const translations = { ...(editing?.translations || {}) }
-    if (values.en && values.en.trim()) translations.en = values.en.trim()
-    else delete translations.en
+    if (values.en && values.en.trim()) translations['en-US'] = values.en.trim()
+    else delete translations['en-US']
     const payload = {
       keyText: values.keyText,
       category: values.category || null,
@@ -145,11 +159,62 @@ export default function I18nMessages() {
     }
   }
 
+  // 扫描结果（不写库，只报告）
+  const scanPanel = scanResult && (
+    <Alert type={scanResult.unmapped.length ? 'warning' : 'info'} showIcon
+      style={{ marginBottom: 16 }} closable onClose={() => setScanResult(null)}
+      message={`扫了 ${scanResult.scanned} 个 UI 脚本：${scanResult.mapped.length} 处硬编码中文可以换成键，${scanResult.unmapped.length} 处在词典里找不到`}
+      description={
+        <div style={{ fontSize: 12 }}>
+          {scanResult.unmapped.length > 0 && (
+            <div style={{ marginBottom: 8 }}>
+              <Text strong type="danger">找不到键（英文环境会挂）：</Text>
+              {scanResult.unmapped.map(x => (
+                <div key={x.text}>
+                  「{x.text}」 <Text type="secondary">用在 {x.cases.join('、')}</Text>
+                </div>
+              ))}
+              <Text type="secondary">
+                要么被测系统自己硬编码了中文没走 i18n，要么脚本里的文案过期了。
+              </Text>
+            </div>
+          )}
+          {scanResult.mapped.length > 0 && (
+            <div>
+              <Text strong>照这个改成 t("…")：</Text>
+              {scanResult.mapped.map(x => (
+                <div key={x.text}>
+                  「{x.text}」 → <Text code>t("{x.key}")</Text>{' '}
+                  <Text type="secondary">用在 {x.cases.join('、')}</Text>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      } />
+  )
+
   const columns = [
     {
-      title: '中文原文（键）',
+      // 键分两种来源：从被测系统 locale 导入的是**语言中立的 key**
+      // （services.form.nameRequired，中英文都是它的值）；
+      // 采集器从脚本里抽的那批是拿中文原文当键 —— 那种不对称，
+      // 中文文案一改键就失效，所以列头不能再统一叫「中文原文（键）」。
+      title: '键',
       dataIndex: 'keyText',
-      render: (v) => <Text strong>{v}</Text>,
+      render: (v, r) => (
+        <div>
+          <Text strong code={!/[\u4e00-\u9fff]/.test(v)}>{v}</Text>
+          {/[\u4e00-\u9fff]/.test(v) && (
+            <Tag color="orange" style={{ marginLeft: 6, fontSize: 11 }}>键不该用中文</Tag>
+          )}
+        </div>
+      ),
+    },
+    {
+      title: '中文 (zh)',
+      width: 240,
+      render: (_, r) => zhOf(r) || <Text type="secondary">—</Text>,
     },
     {
       title: '分类',
@@ -194,11 +259,19 @@ export default function I18nMessages() {
         <TranslationOutlined /> 国际化词典
       </Typography.Title>
       <Paragraph type="secondary" style={{ marginBottom: 20 }}>
-        项目级 UI 文案词典。以<Text strong>中文原文</Text>为键，沉淀被测系统的按钮/占位符/标签/Toast 等文案，
-        为脚本国际化打底座。点<Text strong>「扫描脚本采集」</Text>从已生成的 UI 脚本自动抽取中文文案；
-        英文列（en）现留空，待英文环境跑测时再补。
+        项目级文案词典。<Text strong>键是语言中立的</Text>（如 <Text code>services.form.nameRequired</Text>），
+        中文和英文都是它的值 —— 测试里引用键，切语种时取对应译文。
+        UI 脚本写 <Text code>t("services.form.nameRequired")</Text>，接口断言写
+        <Text code>{'${T:services.form.nameRequired}'}</Text>，
+        跑哪种语言由全局变量 <Text code>TEST_LANGUAGE=zh|en</Text> 决定（不填就是中文）。
+        <br />词典里查不到就原样返回，不会因为缺一条词让脚本挂掉。
+        主要来源是从被测系统的 locale 文件导入（键和译文一并带进来）；
+        点<Text strong>「扫描脚本检查」</Text>会扫所有 UI 脚本，
+        把里面硬编码的中文反查成键、并列出词典里找不到的那些
+        （<Text strong>那正是英文环境下会挂的地方</Text>）—— 只报告，不写词典。
       </Paragraph>
 
+      {scanPanel}
       <Card style={{ marginBottom: 16 }}>
         <Row gutter={16}>
           <Col span={8}><Statistic title="总词条" value={stats.total} /></Col>
@@ -212,7 +285,7 @@ export default function I18nMessages() {
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} size="small" onClick={load}>刷新</Button>
-            <Button icon={<ScanOutlined />} size="small" loading={scanning} onClick={handleScan}>扫描脚本采集</Button>
+            <Button icon={<ScanOutlined />} size="small" loading={scanning} onClick={handleScan}>扫描脚本检查</Button>
             <Button type="primary" icon={<PlusOutlined />} size="small" onClick={openCreate}>新增词条</Button>
           </Space>
         }
@@ -221,7 +294,7 @@ export default function I18nMessages() {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="「采集」来源的词条键为脚本里抓到的中文原文，不建议改键；如需修正翻译，编辑 en 列即可。"
+          message="键必须是语言中立的（services.form.nameRequired）—— 中文和英文都是它的值。别拿中文原文当键：中文既是键又是值，中文文案一改键就失效，而且是静默失效（t() 查不到就原样返回，红都不红）。"
         />
         <Table
           rowKey="id"
@@ -230,7 +303,7 @@ export default function I18nMessages() {
           columns={columns}
           dataSource={rows}
           pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
-          locale={{ emptyText: <Empty description="暂无词条，点击「扫描脚本采集」从已生成脚本抽取，或「新增词条」手工录入" /> }}
+          locale={{ emptyText: <Empty description="暂无词条，点击「扫描脚本检查」从已生成脚本抽取，或「新增词条」手工录入" /> }}
         />
       </Card>
 
@@ -248,8 +321,9 @@ export default function I18nMessages() {
         <Form form={form} layout="vertical">
           <Form.Item
             name="keyText"
-            label="中文原文（键）"
-            rules={[{ required: true, message: '请输入中文原文' }]}
+            label="键"
+            tooltip="语言中立的键，如 services.form.nameRequired。测试里引用它，切语种时取对应译文。"
+            rules={[{ required: true, message: '请输入键' }]}
             tooltip="被测系统里真实的中文文案，如「确认绑定」。这是词典的键，二期脚本用它做匹配。"
           >
             <Input placeholder="如 确认绑定 / 请输入 用户名 / 导入成功" disabled={!!(editing && editing.source === 'harvested')} />
