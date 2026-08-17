@@ -42,6 +42,49 @@ const enOf = (r) => pick(r, 'en')
 // 中文：key 制的行译文里有 zh-CN；采集器那批是拿中文当 key，中文就在 key 上。
 const zhOf = (r) => pick(r, 'zh') || r.keyText || r.key_text || ''
 
+// 键本身就编码了位置：`services.detail.btn.enable` = 服务管理 › 详情页 › 按钮 › enable。
+// **在页面上直接把它翻出来，不要指望「说明」那一栏**——说明是导入时写死的一句话
+// （「从被测系统 locale 导入：操作」），既看不出位置、又会随文案改动过期。
+// 从键推导则永远和键一致。
+const NS_LABEL = {
+  common: '通用', services: '服务管理', subscription: '订阅管理', apps: '应用管理',
+  auth: '登录认证', dashboard: '概览', gateway: '网关', upstream: '负载', menu: '菜单',
+  tenant: '租户', application: '应用',
+}
+const SEG_LABEL = {
+  btn: '按钮', button: '按钮', form: '表单', modal: '弹窗', dialog: '弹窗', drawer: '抽屉',
+  list: '列表', table: '表格', detail: '详情页', create: '创建页', edit: '编辑页',
+  tab: '页签', tabs: '页签', msg: '提示', message: '提示', toast: '提示',
+  placeholder: '占位符', title: '标题', label: '标签', validation: '校验',
+  filter: '筛选', status: '状态', empty: '空态', confirm: '确认', error: '错误',
+  success: '成功', tip: '说明', column: '列', field: '字段', action: '操作',
+  lifecycle: '生命周期', version: '版本', manage: '管理', overview: '概览',
+}
+// 驼峰拆开，并把**结尾那个控件类型**翻出来：bindModal → bind 弹窗、configTitle → config 标题。
+// 只翻结尾那一个词 —— 键的命名习惯是「做什么 + 是什么控件」，控件类型在最后。
+// 中间的业务词不翻：那是被测系统自己的叫法，硬翻会翻错。
+const TYPE_TAIL = {
+  modal: '弹窗', dialog: '弹窗', drawer: '抽屉', btn: '按钮', button: '按钮',
+  title: '标题', label: '标签', msg: '提示', tip: '说明', tab: '页签',
+  form: '表单', list: '列表', table: '表格', column: '列', field: '字段',
+  placeholder: '占位符', error: '错误', success: '成功', empty: '空态',
+}
+const humanize = (seg) => {
+  const words = seg.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase().split(' ')
+  const tail = TYPE_TAIL[words[words.length - 1]]
+  if (tail && words.length > 1) return words.slice(0, -1).join(' ') + ' ' + tail
+  return tail || words.join(' ')
+}
+const keyPath = (key) => {
+  if (!key || /[\u4e00-\u9fff]/.test(key)) return null   // 中文当键的没有路径可推
+  const segs = key.split('.')
+  const out = segs.map((seg, i) => {
+    if (i === 0) return NS_LABEL[seg] || seg
+    return SEG_LABEL[seg] || humanize(seg)
+  })
+  return out.join(' › ')
+}
+
 export default function I18nMessages() {
   const { projectId } = useParams()
   const base = `/projects/${projectId}/i18n-messages`
@@ -110,6 +153,9 @@ export default function I18nMessages() {
     form.setFieldsValue({
       keyText: r.keyText,
       category: r.category || undefined,
+      // 中文也要能改 —— 原来弹窗里只有英文一栏，键制之后中文是**值**，
+      // 改不了等于这条词只能改一半。
+      zh: pick(r, 'zh'),
       en: enOf(r),
       description: r.description || '',
     })
@@ -121,10 +167,12 @@ export default function I18nMessages() {
     try {
       values = await form.validateFields()
     } catch { return }
-    // en 归并进 translations，保留其它语种
+    // 中英文都归并进 translations，保留其它语种
     const translations = { ...(editing?.translations || {}) }
-    if (values.en && values.en.trim()) translations['en-US'] = values.en.trim()
-    else delete translations['en-US']
+    for (const [lang, val] of [['zh-CN', values.zh], ['en-US', values.en]]) {
+      if (val && val.trim()) translations[lang] = val.trim()
+      else delete translations[lang]
+    }
     const payload = {
       keyText: values.keyText,
       category: values.category || null,
@@ -196,52 +244,59 @@ export default function I18nMessages() {
 
   const columns = [
     {
-      // 键分两种来源：从被测系统 locale 导入的是**语言中立的 key**
-      // （services.form.nameRequired，中英文都是它的值）；
-      // 采集器从脚本里抽的那批是拿中文原文当键 —— 那种不对称，
-      // 中文文案一改键就失效，所以列头不能再统一叫「中文原文（键）」。
+      // 原来这列没给宽度、又套了 <Text strong code>：键被挤成两三行、
+      // 每行还带一圈灰底描边，一屏十几条叠起来全是框，什么都读不进去。
+      // 键是给人复制到脚本里的，等宽字体够了，不要加粗也不要边框。
       title: '键',
       dataIndex: 'keyText',
-      render: (v, r) => (
+      width: 300,
+      render: (v) => (
         <div>
-          <Text strong code={!/[\u4e00-\u9fff]/.test(v)}>{v}</Text>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, wordBreak: 'break-all' }}>{v}</Text>
           {/[\u4e00-\u9fff]/.test(v) && (
             <Tag color="orange" style={{ marginLeft: 6, fontSize: 11 }}>键不该用中文</Tag>
+          )}
+          {keyPath(v) && (
+            <div style={{ fontSize: 11.5, color: '#86909c', marginTop: 2 }}>{keyPath(v)}</div>
           )}
         </div>
       ),
     },
     {
+      // 中文和英文必须挨着 —— 原来中间夹了「分类」列，同一条文案的两种语言
+      // 隔着一列比对，眼睛要来回跳。
       title: '中文 (zh)',
+      key: 'zh',
       width: 240,
       render: (_, r) => zhOf(r) || <Text type="secondary">—</Text>,
     },
     {
-      title: '分类',
-      dataIndex: 'category',
-      width: 130,
-      render: (v) => v ? <Tag color={CATEGORY_COLOR[v] || 'default'}>{v}</Tag> : <Text type="secondary">—</Text>,
-    },
-    {
       title: '英文 (en)',
       key: 'en',
+      width: 260,
       render: (_, r) => {
         const en = enOf(r)
         return en ? <Text>{en}</Text> : <Text type="secondary" italic>待补</Text>
       },
     },
     {
+      title: '分类',
+      dataIndex: 'category',
+      width: 120,
+      render: (v) => v ? <Tag color={CATEGORY_COLOR[v] || 'default'}>{v}</Tag> : <Text type="secondary">—</Text>,
+    },
+    {
       title: '来源',
       dataIndex: 'source',
-      width: 100,
+      width: 90,
       align: 'center',
       render: (v) => v === 'manual'
         ? <Tag color="orange">手工</Tag>
-        : <Tag color="green">采集</Tag>,
+        : <Tag color="green">导入</Tag>,
     },
     {
       title: '操作',
-      width: 110,
+      width: 100,
       render: (_, r) => (
         <Space>
           <Tooltip title="编辑"><Button size="small" icon={<EditOutlined />} onClick={() => openEdit(r)} /></Tooltip>
@@ -254,7 +309,7 @@ export default function I18nMessages() {
   ]
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
+    <div style={{ padding: 24, maxWidth: 1400, margin: '0 auto' }}>
       <Typography.Title level={4} style={{ marginBottom: 4 }}>
         <TranslationOutlined /> 国际化词典
       </Typography.Title>
@@ -322,19 +377,25 @@ export default function I18nMessages() {
           <Form.Item
             name="keyText"
             label="键"
-            tooltip="语言中立的键，如 services.form.nameRequired。测试里引用它，切语种时取对应译文。"
+            tooltip="语言中立的键，如 services.form.nameRequired。段落本身就是位置：命名空间.区域.控件类型.具体项。测试里引用它，切语种时取对应译文。"
             rules={[{ required: true, message: '请输入键' }]}
             tooltip="被测系统里真实的中文文案，如「确认绑定」。这是词典的键，二期脚本用它做匹配。"
           >
-            <Input placeholder="如 确认绑定 / 请输入 用户名 / 导入成功" disabled={!!(editing && editing.source === 'harvested')} />
+            <Input placeholder="如 services.detail.btn.enable"
+              style={{ fontFamily: 'var(--font-mono)' }} />
           </Form.Item>
           <Form.Item name="category" label="分类">
             <Select allowClear placeholder="按定位方式分类（可选）" options={CATEGORY_OPTIONS} />
           </Form.Item>
-          <Form.Item name="en" label="英文 (en)" tooltip="留空表示待补；英文环境跑测时可回填。">
+          <Form.Item name="zh" label="中文 (zh)"
+            tooltip="键制下中文是这个键的值之一，不是键本身。TEST_LANGUAGE=zh 时取它。">
+            <Input placeholder="如 创建服务" />
+          </Form.Item>
+          <Form.Item name="en" label="英文 (en)" tooltip="留空表示待补；TEST_LANGUAGE=en 时取它。">
             <Input placeholder="如 Confirm Binding（留空=待补）" />
           </Form.Item>
-          <Form.Item name="description" label="说明">
+          <Form.Item name="description" label="说明"
+            tooltip="补充键推不出来的信息（比如这句话在什么条件下才出现）。位置不用写在这里 —— 键本身已经表达了，列表上会自动翻成「服务管理 › 详情页 › 按钮」。">
             <Input placeholder="这条文案出现在哪、上下文（可选）" />
           </Form.Item>
         </Form>
