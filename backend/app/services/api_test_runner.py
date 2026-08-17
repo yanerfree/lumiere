@@ -206,10 +206,38 @@ def _collect_ref_names(*objs) -> list[str]:
     return names
 
 
+# 文案占位：`${T:服务名已存在}` —— 按 TEST_LANGUAGE 换成当前语种的那句话。
+#
+# **文案不是 UI 专属的。** 接口的错误提示语同样会跟着语种变（Accept-Language 一改，
+# message 字段就从中文变英文），断言里写死中文，跑英文环境照样全红。
+# UI 脚本那边是 `t("更多")`（沙箱里的 tea_i18n），接口场景是平台执行的 JSON 步骤、
+# 没有脚本可以 import，所以给一个占位语法走 ${} 这条既有的解析路。
+_TEXT_REF_RE = re.compile(r"\$\{T:([^}]+)\}")
+
+
 def _resolve_variables(text, env: dict) -> str:
     if not isinstance(text, str):
         return text
+    # 先解文案占位。放在前面：译文里可能带 ${var}（如「服务 ${name} 已存在」），
+    # 换完之后还要再过一轮普通变量解析。
+    text = _TEXT_REF_RE.sub(lambda m: _t(m.group(1), env), text)
     return re.sub(r'\$\{(\w+)\}', lambda m: str(env.get(m.group(1), m.group(0))), text)
+
+
+def _t(zh_text: str, env: dict) -> str:
+    """中文文案 → 当前语种。查不到就原样返回中文，绝不抛 —— 词典一定是不全的。"""
+    lang = (env.get("TEST_LANGUAGE") or "").strip().lower()
+    locale = env.get("PLAYWRIGHT_LOCALE") or {"en": "en-US", "zh": "zh-CN"}.get(lang, "zh-CN")
+    if str(locale).startswith("zh"):
+        return zh_text
+    row = (env.get("__I18N__") or {}).get(zh_text) or {}
+    if locale in row:
+        return row[locale]
+    pre = str(locale).split("-")[0]
+    for k, v in row.items():
+        if k.split("-")[0] == pre and v:
+            return v
+    return zh_text
 
 
 def _resolve_obj(obj, env: dict):
@@ -819,6 +847,15 @@ async def run_batch(
     all_results: list[ScenarioResult] = []
     # 批量执行共享 TokenCache：同一角色只登录一次（ADR-3）
     shared_env = dict(base_env or {})
+    # 文案词典：断言里的 ${T:中文} 靠它换语种。挂在这里 = 一次批量只查一次库。
+    # 取不到就留空 —— _t() 查不到会原样返回中文，不会因此挂掉。
+    if "__I18N__" not in shared_env:
+        try:
+            from app.services.i18n_harvest_service import load_locale_table
+            pid = project_id or await _project_of_scenarios(session, scenario_ids)
+            shared_env["__I18N__"] = await load_locale_table(session, pid) if pid else {}
+        except Exception:  # noqa: BLE001
+            shared_env["__I18N__"] = {}
     token_cache = TokenCache(shared_env)
 
     for sid in scenario_ids:
@@ -1144,3 +1181,26 @@ async def _create_report(
     await session.commit()
     logger.info("Created API test report %s: %s", report.id, report_name)
     return report.id
+
+
+async def _project_of_scenarios(session, scenario_ids) -> object | None:
+    """这批场景属于哪个项目 —— 取第一条的 branch → project。
+
+    批量只会在同一个分支里跑（页面和 MCP 都是按分支选的），所以取第一条就够。
+    """
+    from sqlalchemy import select as _select
+
+    from app.models.api_test import ApiTestScenario
+    from app.models.project import Branch
+
+    ids = list(scenario_ids or [])
+    if not ids:
+        return None
+    bid = (await session.execute(
+        _select(ApiTestScenario.branch_id).where(ApiTestScenario.id == ids[0])
+    )).scalar_one_or_none()
+    if not bid:
+        return None
+    return (await session.execute(
+        _select(Branch.project_id).where(Branch.id == bid)
+    )).scalar_one_or_none()

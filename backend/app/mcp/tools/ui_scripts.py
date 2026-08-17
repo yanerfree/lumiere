@@ -51,14 +51,10 @@ async def run_ui_script(
     if not script:
         return {"status": "error", "message": "没有可执行的 UI 脚本，请先调用 tb_generate_ui_script 生成"}
 
-    env_vars: dict[str, str] = {}
-    if env_id:
-        rows = await session.execute(
-            select(EnvironmentVariable)
-            .where(EnvironmentVariable.environment_id == uuid.UUID(env_id))
-        )
-        for v in rows.scalars().all():
-            env_vars[v.key] = v.value
+    # 全局变量 + 环境变量（同名以环境为准）。见 variable_service.build_run_env ——
+    # 四条执行路径原来各写一份 select，全局变量一条都没被注入过。
+    from app.services.variable_service import build_run_env
+    env_vars = await build_run_env(session, uuid.UUID(env_id) if env_id else None)
 
     # 注入场景变量：`SV_名字` 和裸名 `名字` 都注册 —— 和接口场景那边同一套规则。
     # 只注 SV_ 前缀的话，CC 照着「UI/接口共用同一份」写 os.getenv("PROJ_NAME")

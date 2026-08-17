@@ -92,3 +92,30 @@ async def put_variables(session: AsyncSession, variables: list[dict]) -> list[Gl
     for v in new_vars:
         await session.refresh(v)
     return new_vars
+
+
+async def build_run_env(session: AsyncSession, env_id) -> dict[str, str]:
+    """执行时注入脚本的环境变量：**全局变量 + 环境变量，同名以环境为准**。
+
+    这一层原来不存在。四条执行路径各自 `select(EnvironmentVariable)` 组一份，
+    **全局变量一条都没被注入过** —— `GlobalVariable` 全库只有 CRUD 和
+    `tb_get_merged_variables` 的展示在用，而那个工具的说明写着
+    「看某个环境执行时实际会注入哪些变量（全局变量 + 该环境变量）」。
+    页面上摆着 5 个全局变量、工具说明也承诺了，实际一个都不注入。
+
+    adhoc_execution.py 甚至 import 了 GlobalVariable 却从没用 —— 一个没写完的坑。
+
+    同名以环境为准：全局是兜底默认值，环境是这台机器的实情。
+    """
+    out: dict[str, str] = {}
+    for v in (await session.execute(
+        select(GlobalVariable).order_by(GlobalVariable.sort_order, GlobalVariable.key)
+    )).scalars().all():
+        out[v.key] = v.value
+    if env_id:
+        from app.models.environment import EnvironmentVariable
+        for v in (await session.execute(
+            select(EnvironmentVariable).where(EnvironmentVariable.environment_id == env_id)
+        )).scalars().all():
+            out[v.key] = v.value
+    return out

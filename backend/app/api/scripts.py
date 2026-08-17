@@ -174,14 +174,10 @@ async def run_script(
     if not script:
         raise NotFoundError(code="SCRIPT_NOT_FOUND", message="没有可执行的脚本")
 
-    env_vars: dict[str, str] = {}
-    if env_id:
-        rows = await session.execute(
-            select(EnvironmentVariable)
-            .where(EnvironmentVariable.environment_id == env_id)
-        )
-        for v in rows.scalars().all():
-            env_vars[v.key] = v.value
+    # 全局变量 + 环境变量（同名以环境为准）。别再在这里手写 select ——
+    # 四条执行路径各写一份的结果是全局变量一条都没被注入过。
+    from app.services.variable_service import build_run_env
+    env_vars = await build_run_env(session, env_id)
 
     from app.services.scenario_variable_service import (
         add_bare_names, resolve_scenario_variables,
@@ -266,11 +262,8 @@ async def run_script_stream(
 
     env_vars: dict[str, str] = {}
     if env_id:
-        rows = await session.execute(
-            select(EnvironmentVariable).where(EnvironmentVariable.environment_id == env_id)
-        )
-        for v in rows.scalars().all():
-            env_vars[v.key] = v.value
+        from app.services.variable_service import build_run_env
+        env_vars = await build_run_env(session, env_id)
 
     from app.services.scenario_variable_service import (
         add_bare_names, resolve_scenario_variables,

@@ -119,3 +119,40 @@ def test_导入脚本按key路径配对():
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
     from import_i18n_from_sut import _flatten
     assert _flatten({"a": {"b": "保存"}, "c": "取消"}) == {"a.b": "保存", "c": "取消"}
+
+
+# ── 接口断言的文案占位 ──────────────────────────────────────────
+
+def test_接口断言按语种换文案():
+    """**文案不是 UI 专属的。** 接口错误提示语跟着 Accept-Language 变，
+    断言里写死中文，跑英文环境照样全红。
+    UI 那边是脚本里 import t()，接口场景是平台执行的 JSON、没有脚本可以 import，
+    所以给一个 ${T:} 占位走 ${} 这条既有的解析路。"""
+    from app.services.api_test_runner import _resolve_variables as r
+    env = {"TEST_LANGUAGE": "en",
+           "__I18N__": {"服务名已存在": {"en-US": "Service name already exists"}}}
+    assert r("${T:服务名已存在}", env) == "Service name already exists"
+
+
+def test_接口断言中文环境原样():
+    from app.services.api_test_runner import _resolve_variables as r
+    assert r("${T:服务名已存在}", {"TEST_LANGUAGE": "zh", "__I18N__": {}}) == "服务名已存在"
+
+
+def test_接口断言查不到原样返回():
+    from app.services.api_test_runner import _resolve_variables as r
+    assert r("${T:没收录这句}", {"TEST_LANGUAGE": "en", "__I18N__": {}}) == "没收录这句"
+
+
+def test_文案占位和普通变量能混用():
+    """译文里也可能带 ${var}（「服务 ${name} 已存在」），所以文案要先解、再过变量。"""
+    from app.services.api_test_runner import _resolve_variables as r
+    env = {"TEST_LANGUAGE": "en", "svc": "payment",
+           "__I18N__": {"服务已存在": {"en-US": "service ${svc} exists"}}}
+    assert r("${T:服务已存在}", env) == "service payment exists"
+
+
+def test_接口规范里写了文案占位():
+    from app.mcp.tools.sync import _SPEC_API_SCENARIO
+    for k in ("${T:", "TEST_LANGUAGE", "原样返回中文"):
+        assert k in _SPEC_API_SCENARIO, f"接口规范缺「{k}」—— CC 只照规范写"
