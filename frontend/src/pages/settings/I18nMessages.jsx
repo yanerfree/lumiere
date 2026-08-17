@@ -367,6 +367,19 @@ export default function I18nMessages() {
             <Input placeholder="如 services.detail.btn.enable"
               style={{ fontFamily: 'var(--font-mono)' }} />
           </Form.Item>
+          {/* **列表上有的字段，弹窗里必须都能看到。** 缺了就是「列表看到一个值、
+              进去找不着」—— 这条被指出过三次。不可编辑的也要摆出来并说明为什么，
+              不能干脆不显示。 */}
+          {editing && (
+            <Form.Item label="模块" tooltip="由键的第一段推导（apps → 应用管理），不单独存、不用改；改键就跟着变。">
+              <Input value={moduleOf(editing.keyText) || '—'} disabled />
+            </Form.Item>
+          )}
+          {editing && (
+            <Form.Item label="来源" tooltip="记录这条词从哪来：导入=从被测系统 locale 文件带进来的，手工=人在这里录的。它是履历，不该改。">
+              <Input value={editing.source === 'manual' ? '手工录入' : '从被测系统 locale 导入'} disabled />
+            </Form.Item>
+          )}
           <Form.Item name="category" label="分类">
             <Select allowClear placeholder="按定位方式分类（可选）" options={CATEGORY_OPTIONS} />
           </Form.Item>
