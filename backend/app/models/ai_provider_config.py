@@ -100,7 +100,7 @@ class ProjectAIConfig(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4,
         server_default=func.gen_random_uuid(),
     )
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
 
     provider_config_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ai_provider_configs.id"), nullable=True,

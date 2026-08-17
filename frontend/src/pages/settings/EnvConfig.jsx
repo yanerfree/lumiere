@@ -163,7 +163,11 @@ function EnvironmentPanel() {
   return (
     <div style={{ display: 'flex', gap: 16, minHeight: 500 }}>
       {/* 左侧环境列表 */}
-      <div style={{ width: 200, background: 'rgba(255,255,255,0.5)', borderRadius: 14, border: 'none', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column', flexShrink: 0 }}>
+      {/* alignSelf 必须是 flex-start：父级是 flex 行，默认 align-items:stretch 会把
+          左栏拉到和右侧详情一样高，多出来的高度全落在列表和「新增环境」之间，
+          变成一块空白 —— 而且右侧变量越多空白越大（实测 4 个变量时 15px，
+          16 个变量时 325px），看着像切换环境就多出个空条目 */}
+      <div style={{ width: 200, background: 'rgba(255,255,255,0.5)', borderRadius: 14, border: 'none', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column', flexShrink: 0, alignSelf: 'flex-start' }}>
         <div style={{ flex: 1, overflow: 'auto' }}>
           {loading ? <div style={{ textAlign: 'center', padding: 20 }}><Spin size="small" /></div> :
             envs.map((env, i) => (
@@ -180,8 +184,8 @@ function EnvironmentPanel() {
                   display: 'flex', alignItems: 'center', gap: 8,
                   background: selectedId === env.id ? '#e0f7f6' : 'transparent',
                   borderLeft: selectedId === env.id ? '3px solid #0ea5a0' : '3px solid transparent',
-                  // 最后一项的下边框留透明：下面是 flex 剩余空间 + 按钮区的上边框，
-                  // 画实线会夹出一个"空条目"的错觉；用 none 则少 1px 盒高，
+                  // 最后一项的下边框留透明：紧接着就是按钮区的上边框，
+                  // 画实线会变成挨着的两条线；用 none 则少 1px 盒高，
                   // 最后一项会比其它项矮一点点
                   borderBottom: `1px solid ${i < envs.length - 1 ? 'rgba(0,0,0,0.04)' : 'transparent'}`,
                   borderTop: '2px solid transparent',

@@ -13,7 +13,7 @@ class KnowledgeEntry(Base):
     __tablename__ = "knowledge_entries"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     category: Mapped[str] = mapped_column(String(30), nullable=False)
     # category: review_feedback | bug_pattern | api_note | custom
     title: Mapped[str] = mapped_column(String(200), nullable=False)

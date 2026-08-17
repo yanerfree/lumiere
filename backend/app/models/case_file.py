@@ -27,7 +27,7 @@ class AIUsageLog(Base):
     __tablename__ = "ai_usage_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id"), nullable=False)
+    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
     skill_name: Mapped[str] = mapped_column(String(50), nullable=False)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)

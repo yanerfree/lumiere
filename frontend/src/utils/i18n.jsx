@@ -35,16 +35,16 @@ const MESSAGES = {
     'menu.proxyProbe': '代理观测',
     'menu.automationData': '自动化数据',
     'menu.i18nDict': '国际化词典',
-    // 分组标题。用 antd 的 group 而不是可折叠子菜单：这些分组本来就默认全展开，
-    // 子菜单那层壳只多一次点击、还让「只有一个子项」的分组看起来像分了级。
+    // 一级菜单标题。按功能实际作用在什么上分，不按名字听起来像什么 —— 理由写在 App.jsx
     'menu.group.design': '测试设计',
     'menu.group.exec': '执行与产出',
     'menu.group.ai': 'AI 能力',
     'menu.group.projectConfig': '项目配置',
-    'menu.group.mock': 'Mock 服务',
     'menu.group.tools': '测试工具',
-    'menu.group.system': '系统设置',
-    'menu.group.ops': '运行与审计',
+    // 跨项目共用、但服务于项目的资源（环境跑在哪、结果发给谁、AI 用哪个模型）——
+    // 不是平台自己的设置，别再并进「系统设置」
+    'menu.group.resource': '测试资源',
+    'menu.group.platform': '平台管理',
 
     // 通用
     'common.save': '保存',
@@ -122,10 +122,9 @@ const MESSAGES = {
     'menu.group.exec': 'Run & Output',
     'menu.group.ai': 'AI',
     'menu.group.projectConfig': 'Project Config',
-    'menu.group.mock': 'Mock Services',
     'menu.group.tools': 'Test Tools',
-    'menu.group.system': 'System Settings',
-    'menu.group.ops': 'Status & Audit',
+    'menu.group.resource': 'Test Resources',
+    'menu.group.platform': 'Platform',
 
     'common.save': 'Save',
     'common.cancel': 'Cancel',

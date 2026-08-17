@@ -5,7 +5,7 @@ import {
   FolderOutlined, FileTextOutlined, UnorderedListOutlined, BarChartOutlined,
   SettingOutlined, UserOutlined, FileSearchOutlined, ApiOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, BellOutlined, RobotOutlined,
-  ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
+  CloudServerOutlined, ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
   NodeIndexOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
   DeploymentUnitOutlined,
@@ -89,26 +89,32 @@ function AppLayout() {
     }).catch(() => {})
   }, [projectId])
 
-  // 侧边栏分组。三条规则，改的时候别破坏：
+  // 侧边栏分组。按**这个功能实际作用在什么上**分，不按菜单名字听起来像什么。
   //
-  // 1. **用 group 不用可折叠子菜单**。原来 Mock/工具/AI 是 SubMenu，却又靠
-  //    defaultOpenKeys 默认全展开 —— 等于给分组加了层壳，只多一次误折叠的机会。
-  //    更糟的是「AI 智能」在系统菜单下只挂一个子项，多一层等于没分级。
-  // 2. **同一层里按"干这件事的顺序"排，不按加进来的先后**。原来用例/接口/计划/
-  //    报告/探索/文档/自动化数据/国际化词典平铺八条，看不出哪些是一类。
-  // 3. **分组标题走 i18n**，别硬编码中文 —— 上一版有一半标题是写死的，
-  //    切到英文只翻了一半，那才是最像"没做完"的地方。
+  // 上一版按名字分，错了两处：
+  // - Mock 服务单开一档，跟「测试工具」平级。可 Mock 本来就是测试工具的一种
+  //   （造一个可控的上游好让被测系统跑起来），拆开只是因为它名字里没有"工具"两个字。
+  // - 环境配置 / 通知渠道 / AI 服务配置塞进「系统设置」。它们听起来像平台配置，
+  //   实际全是**项目跑测试要用的资源**：环境 = 跑在哪，通知渠道 = 结果发给谁，
+  //   AI 服务 = AI 功能用哪个模型（`ai_provider_configs.assigned_project_ids`
+  //   明摆着是按项目分配的）。真正"平台自己的"只有用户、服务端口、审计日志三样。
+  //
+  // 另外全部改回**可折叠的子菜单**：上一版用 group 是为了消灭「只有一个子项的伪二级」，
+  // 但顺手把"能收起来"也消灭了 —— 十几条平铺出来没法收，比多一层壳更烦。
+  // 现在没有一个子菜单只挂一项，折叠就纯是收益。展开状态存 localStorage，
+  // 否则每次跳页都弹回默认，收起来等于没收。
   const menuItems = isProjectPage ? [
     { key: '/projects', icon: <FolderOutlined />, label: t('menu.back') },
+    { type: 'divider' },
     {
-      type: 'group', key: 'g-design', label: t('menu.group.design'),
+      key: 'g-design', icon: <FileTextOutlined />, label: t('menu.group.design'),
       children: [
         { key: `/projects/${projectId}/cases`, icon: <FileTextOutlined />, label: t('menu.cases') },
         { key: `/projects/${projectId}/apis`, icon: <ApiOutlined />, label: t('menu.apis') },
       ],
     },
     {
-      type: 'group', key: 'g-exec', label: t('menu.group.exec'),
+      key: 'g-exec', icon: <BarChartOutlined />, label: t('menu.group.exec'),
       children: [
         { key: `/projects/${projectId}/plans`, icon: <UnorderedListOutlined />, label: t('menu.plans') },
         { key: `/projects/${projectId}/reports`, icon: <BarChartOutlined />, label: t('menu.reports') },
@@ -117,7 +123,7 @@ function AppLayout() {
       ],
     },
     {
-      type: 'group', key: 'g-ai', label: t('menu.group.ai'),
+      key: 'g-ai', icon: <RobotOutlined />, label: t('menu.group.ai'),
       children: [
         { key: `/projects/${projectId}/settings/ai-capabilities`, icon: <ThunderboltOutlined />, label: t('menu.ai.capabilities') },
         { key: `/projects/${projectId}/settings/skills`, icon: <FileTextOutlined />, label: t('menu.ai.skills') },
@@ -126,7 +132,7 @@ function AppLayout() {
       ],
     },
     {
-      type: 'group', key: 'g-proj-config', label: t('menu.group.projectConfig'),
+      key: 'g-proj-config', icon: <SettingOutlined />, label: t('menu.group.projectConfig'),
       children: [
         { key: `/projects/${projectId}/settings/automation-data`, icon: <DatabaseOutlined />, label: t('menu.automationData') },
         { key: `/projects/${projectId}/settings/i18n`, icon: <TranslationOutlined />, label: t('menu.i18nDict') },
@@ -135,10 +141,15 @@ function AppLayout() {
     },
   ] : [
     { key: '/projects', icon: <FolderOutlined />, label: t('menu.projects') },
-    // 工具排在设置前面：进不了项目的时候，来这儿多半是用 Mock 或调接口，不是改配置
+    { type: 'divider' },
     {
-      type: 'group', key: 'g-mock', label: t('menu.group.mock'),
+      // Mock 也在这一档：造可控上游本来就是为了让被测系统跑起来，跟压测、抓包是一类事
+      key: 'g-tools', icon: <ToolOutlined />, label: t('menu.group.tools'),
       children: [
+        { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient') },
+        { key: '/tools/load-test', icon: <ThunderboltOutlined />, label: t('menu.loadTest') },
+        { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: t('menu.proxyProbe') },
+        { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox') },
         { key: '/tools/api-mock', icon: <GlobalOutlined />, label: t('menu.apiMock') },
         { key: '/tools/llm-mock', icon: <RobotOutlined />, label: t('menu.llmMock') },
         { key: '/tools/mcp-mock', icon: <ApiOutlined />, label: t('menu.mcpMock') },
@@ -146,34 +157,39 @@ function AppLayout() {
       ],
     },
     {
-      type: 'group', key: 'g-tools', label: t('menu.group.tools'),
+      // 跨项目共用、但**服务于项目**的资源。不是平台自己的设置
+      key: 'g-resource', icon: <CloudServerOutlined />, label: t('menu.group.resource'),
       children: [
-        { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient') },
-        { key: '/tools/load-test', icon: <ThunderboltOutlined />, label: t('menu.loadTest') },
-        { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: t('menu.proxyProbe') },
-        { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox') },
+        { key: '/settings/env', icon: <GlobalOutlined />, label: t('menu.envConfig') },
+        { key: '/settings/ai-providers', icon: <RobotOutlined />, label: t('menu.aiProviders') },
+        { key: '/settings/channels', icon: <BellOutlined />, label: t('menu.channels') },
       ],
     },
     {
-      type: 'group', key: 'g-system', label: t('menu.group.system'),
+      // 平台自己：谁能用、跑得好不好、谁动过什么
+      key: 'g-platform', icon: <DeploymentUnitOutlined />, label: t('menu.group.platform'),
       children: [
-        { key: '/settings/env', icon: <SettingOutlined />, label: t('menu.envConfig') },
-        { key: '/settings/channels', icon: <BellOutlined />, label: t('menu.channels') },
-        // 原来它被塞在一个只有它一个子项的「AI 智能」子菜单里
-        { key: '/settings/ai-providers', icon: <RobotOutlined />, label: t('menu.aiProviders') },
         ...(user.role === 'admin' ? [
           { key: '/settings/users', icon: <UserOutlined />, label: t('menu.users') },
         ] : []),
-      ],
-    },
-    {
-      type: 'group', key: 'g-ops', label: t('menu.group.ops'),
-      children: [
         { key: '/settings/services', icon: <DeploymentUnitOutlined />, label: t('menu.services') },
         { key: '/settings/logs', icon: <FileSearchOutlined />, label: t('menu.logs') },
       ],
     },
   ]
+
+  // 展开哪些一级菜单。存起来 —— 不存的话每跳一次页就弹回默认，"能收起"等于没有。
+  const DEFAULT_OPEN = ['g-design', 'g-exec', 'g-ai', 'g-proj-config', 'g-tools', 'g-resource', 'g-platform']
+  const [openKeys, setOpenKeys] = useState(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem('menuOpenKeys'))
+      return Array.isArray(saved) ? saved : DEFAULT_OPEN
+    } catch { return DEFAULT_OPEN }
+  })
+  const handleOpenChange = (keys) => {
+    setOpenKeys(keys)
+    localStorage.setItem('menuOpenKeys', JSON.stringify(keys))
+  }
 
   const handleLogout = async () => {
     try { await api.post('/auth/logout') } catch { /* 忽略，重点是清本地 */ }
@@ -216,21 +232,7 @@ function AppLayout() {
         .app-layout-root {
           position: relative;
         }
-        /* 收起侧边栏时把分组标题藏掉。不藏的话 antd 会把它按 52px 宽截断，
-           侧栏上冒出「测…」「执…」「AI …」「项…」四个看不懂的残字。
-           留一条细分隔线顶替，分组的边界还在，只是不写字了。 */
-        .ant-menu-inline-collapsed .ant-menu-item-group-title {
-          height: 0;
-          padding: 0;
-          margin: 6px 10px;
-          overflow: hidden;
-          border-top: 1px solid rgba(0,0,0,0.06);
-        }
-        /* 第一个分组紧挨着「项目列表」，再加一条线就是双线了 */
-        .ant-menu-inline-collapsed .ant-menu-item-group:first-of-type .ant-menu-item-group-title {
-          border-top: none;
-          margin-top: 0;
-        }
+        /* 一级菜单收起后只剩图标，子项走 antd 的浮层，不需要额外处理 */
       `}</style>
       {/* 顶栏 */}
       <Header style={{
@@ -280,8 +282,8 @@ function AppLayout() {
             <Menu
               mode="inline"
               selectedKeys={[location.pathname]}
-              /* 没有 defaultOpenKeys 了 —— 分组用的是 group 而不是可折叠子菜单，
-                 收起侧边栏时 antd 会自己把分组标题藏掉，只留图标 */
+              openKeys={collapsed ? [] : openKeys}
+              onOpenChange={handleOpenChange}
               items={menuItems}
               onClick={({ key }) => navigate(key)}
               style={{ border: 'none', fontSize: 13, paddingTop: 8, background: 'transparent' }}
