@@ -59,6 +59,19 @@ async def update_variable(session: AsyncSession, var_id: uuid.UUID, value: str, 
 
 
 @audit_log(action="delete", target_type="global_variable")
+async def get_variable(session: AsyncSession, var_id: uuid.UUID) -> GlobalVariable:
+    """按 id 取变量，不存在就 404。
+
+    删除接口要先取出来拿 key 写审计日志（删完就查不到了），
+    但这个函数一直没写 —— DELETE /api/global-variables/{id} 因此稳定 500。
+    """
+    result = await session.execute(select(GlobalVariable).where(GlobalVariable.id == var_id))
+    var = result.scalar_one_or_none()
+    if var is None:
+        raise NotFoundError(code="VAR_NOT_FOUND", message="变量不存在")
+    return var
+
+
 async def delete_variable(session: AsyncSession, var_id: uuid.UUID) -> None:
     result = await session.execute(select(GlobalVariable).where(GlobalVariable.id == var_id))
     var = result.scalar_one_or_none()

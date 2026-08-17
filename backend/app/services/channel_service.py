@@ -44,6 +44,19 @@ async def update_channel(session: AsyncSession, ch_id: uuid.UUID, name: str | No
 
 
 @audit_log(action="delete", target_type="channel")
+async def get_channel(session: AsyncSession, ch_id: uuid.UUID) -> NotificationChannel:
+    """按 id 取渠道，不存在就 404。
+
+    删除接口要先取出来拿 name 写审计日志（删完就查不到了），
+    但这个函数一直没写 —— DELETE /api/channels/{id} 因此稳定 500。
+    """
+    result = await session.execute(select(NotificationChannel).where(NotificationChannel.id == ch_id))
+    ch = result.scalar_one_or_none()
+    if ch is None:
+        raise NotFoundError(code="CHANNEL_NOT_FOUND", message="通知渠道不存在")
+    return ch
+
+
 async def delete_channel(session: AsyncSession, ch_id: uuid.UUID) -> None:
     result = await session.execute(select(NotificationChannel).where(NotificationChannel.id == ch_id))
     ch = result.scalar_one_or_none()
