@@ -13,21 +13,31 @@ import { api } from '../../utils/request'
 const { Text, Paragraph } = Typography
 
 // 分类选项（与采集器推断的分类对齐）
+// 分类要让人**一眼看出这条是什么**，尤其分出「校验错误」和「提示消息」——
+// 那两类是断言里最常用的，混在 text 里就等于没分类
+// （导入时我曾给 2400 条一律写 "text"，一列全是 text，筛不了）。
+// 校验错误和提示消息**必须分开**：「必填」「格式不对」是可预期的输入校验，
+// 而提示里还混着成功消息，断言的写法完全不同。
 const CATEGORY_OPTIONS = [
-  { value: 'button', label: '按钮 button' },
-  { value: 'placeholder', label: '占位符 placeholder' },
-  { value: 'label', label: '标签 label' },
-  { value: 'text', label: '文本/Toast text' },
-  { value: 'title', label: '标题 title' },
-  { value: 'tab', label: '标签页 tab' },
-  { value: 'link', label: '链接 link' },
-  { value: 'menu', label: '菜单 menu' },
-  { value: 'option', label: '选项 option' },
+  { value: 'button', label: '按钮' },
+  { value: 'validation', label: '校验错误' },
+  { value: 'message', label: '提示消息' },
+  { value: 'status', label: '状态值' },
+  { value: 'placeholder', label: '输入占位' },
+  { value: 'label', label: '标签/字段名' },
+  { value: 'title', label: '标题' },
+  { value: 'tab', label: '页签' },
+  { value: 'link', label: '链接' },
+  { value: 'menu', label: '菜单' },
+  { value: 'option', label: '下拉选项' },
+  { value: 'text', label: '其他文本' },
 ]
+const CATEGORY_LABEL = Object.fromEntries(CATEGORY_OPTIONS.map((o) => [o.value, o.label]))
 
 const CATEGORY_COLOR = {
-  button: 'blue', placeholder: 'geekblue', label: 'cyan', text: 'default',
-  title: 'purple', tab: 'gold', link: 'magenta', menu: 'green', option: 'lime',
+  button: 'blue', validation: 'red', message: 'orange', status: 'green',
+  placeholder: 'geekblue', label: 'cyan', title: 'purple', tab: 'gold',
+  link: 'magenta', menu: 'lime', option: 'volcano', text: 'default',
 }
 
 // 词典里的语种键是 BCP-47（en-US / zh-CN）—— 只认裸 'en' 的话，
@@ -82,6 +92,7 @@ export default function I18nMessages() {
   // 做成一列的问题：那是个派生值，看得到却改不了；而命名写错了该改的是**键**，
   // 不存在"模块错了"这回事 —— 用一列暴露它只会让人以为这是可维护的字段。
   const [moduleFilter, setModuleFilter] = useState()
+  const [catFilter, setCatFilter] = useState()
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
 
@@ -108,8 +119,9 @@ export default function I18nMessages() {
   }, [rows])
 
   const visibleRows = useMemo(
-    () => (moduleFilter ? rows.filter((r) => moduleOf(r) === moduleFilter) : rows),
-    [rows, moduleFilter])
+    () => rows.filter((r) => (!moduleFilter || moduleOf(r) === moduleFilter)
+                          && (!catFilter || r.category === catFilter)),
+    [rows, moduleFilter, catFilter])
 
   const stats = useMemo(() => {
     const total = rows.length
@@ -289,7 +301,9 @@ export default function I18nMessages() {
       title: '分类',
       dataIndex: 'category',
       width: 120,
-      render: (v) => v ? <Tag color={CATEGORY_COLOR[v] || 'default'}>{v}</Tag> : <Text type="secondary">—</Text>,
+      render: (v) => v
+        ? <Tag color={CATEGORY_COLOR[v] || 'default'}>{CATEGORY_LABEL[v] || v}</Tag>
+        : <Text type="secondary">—</Text>,
     },
     {
       title: '来源',
@@ -346,8 +360,12 @@ export default function I18nMessages() {
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} size="small" onClick={load}>刷新</Button>
-            <Select allowClear size="small" style={{ width: 130 }} placeholder="按模块筛选"
+            <Select allowClear size="small" style={{ width: 122 }} placeholder="按模块筛选"
               value={moduleFilter} onChange={setModuleFilter} options={moduleOptions} />
+            <Select allowClear size="small" style={{ width: 122 }} placeholder="按分类筛选"
+              value={catFilter} onChange={setCatFilter}
+              options={[...new Set(rows.map((r) => r.category).filter(Boolean))]
+                .map((c) => ({ value: c, label: CATEGORY_LABEL[c] || c }))} />
             <Button icon={<ScanOutlined />} size="small" loading={scanning} onClick={handleScan}>扫描脚本检查</Button>
             <Button type="primary" icon={<PlusOutlined />} size="small" onClick={openCreate}>新增词条</Button>
           </Space>
@@ -420,7 +438,7 @@ export default function I18nMessages() {
             ]} />
           </Form.Item>
           <Form.Item name="category" label="分类">
-            <Select allowClear placeholder="按定位方式分类（可选）" options={CATEGORY_OPTIONS} />
+            <Select allowClear placeholder="如 按钮 / 校验错误" options={CATEGORY_OPTIONS} />
           </Form.Item>
           <Form.Item name="zh" label="中文 (zh)"
             tooltip="键制下中文是这个键的值之一，不是键本身。TEST_LANGUAGE=zh 时取它。">

@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # no
 
 from app.config import settings  # noqa: E402
 from app.models.i18n_message import ProjectI18nMessage  # noqa: E402
+from app.services.i18n_classify import classify  # noqa: E402
 from app.models.project import Project  # noqa: E402,F401  外键指向它，不导入解析不了
 
 DEFAULT_NS = ["common", "services", "subscription", "apps", "gateway",
@@ -129,7 +130,9 @@ async def run(project_id: str, base: str, namespaces: list[str], dry: bool) -> N
                     s.add(ProjectI18nMessage(
                         project_id=pid, key_text=key, translations=langs,
                         module=NS_MODULE.get(key.split(".")[0]),
-                        category="text", source="sut_locale"))
+                        # 分类按键路径判，不再写死 "text" —— 写死等于没分类，
+                        # 页面上一列全是 text，筛不了也看不出哪些是错误提示语。
+                        category=classify(key), source="sut_locale"))
                         # description 不写。上一版写的是「从被测系统 locale 导入：<中文>」——
                         # 前缀是废话，中文已经单独一列了，等于纯噪音，2416 条全长一样。
                         # 「说明」留给人手填键看不出来的信息（这句话在什么条件下出现）。
