@@ -42,7 +42,8 @@ const enOf = (r) => pick(r, 'en')
 // 中文：key 制的行译文里有 zh-CN；采集器那批是拿中文当 key，中文就在 key 上。
 const zhOf = (r) => pick(r, 'zh') || r.keyText || r.key_text || ''
 
-// 键的第一段是命名空间，对应被测系统的一级模块 —— **唯一能准确翻译**的一段。
+// 键的第一段是命名空间，对应被测系统的一级模块。**它不是字段，是键的一部分** ——
+// 所以只用来做筛选，不占一列、也不进编辑表单。
 //
 // 上一版试图把整条键翻成中文路径
 // （`subscription.providerDetail.tenantCard.crossTenantSubscriber`
@@ -71,6 +72,11 @@ export default function I18nMessages() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState(null)
   const [scanResult, setScanResult] = useState(null)
+  // 按模块筛选（键的第一段）。**模块不是字段，是键的一部分** ——
+  // 所以它是筛选器，不是列、也不是表单项。
+  // 做成一列的问题：那是个派生值，看得到却改不了；而命名写错了该改的是**键**，
+  // 不存在"模块错了"这回事 —— 用一列暴露它只会让人以为这是可维护的字段。
+  const [moduleFilter, setModuleFilter] = useState()
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
 
@@ -88,6 +94,17 @@ export default function I18nMessages() {
   }, [projectId, base])
 
   useEffect(() => { load() }, [load])
+
+  // 出现过的模块（键的第一段），给筛选器用
+  const moduleOptions = useMemo(() => {
+    const set = new Set()
+    rows.forEach((r) => { const m = moduleOf(r.keyText); if (m) set.add(m) })
+    return [...set].sort().map((m) => ({ value: m, label: m }))
+  }, [rows])
+
+  const visibleRows = useMemo(
+    () => (moduleFilter ? rows.filter((r) => moduleOf(r.keyText) === moduleFilter) : rows),
+    [rows, moduleFilter])
 
   const stats = useMemo(() => {
     const total = rows.length
@@ -236,16 +253,6 @@ export default function I18nMessages() {
       ),
     },
     {
-      title: '模块',
-      key: 'module',
-      width: 100,
-      render: (_, r) => {
-        const m = moduleOf(r.keyText)
-        return m ? <Text type="secondary" style={{ fontSize: 12.5 }}>{m}</Text>
-                 : <Text type="secondary">—</Text>
-      },
-    },
-    {
       // 中文和英文必须挨着 —— 原来中间夹了「分类」列，同一条文案的两种语言
       // 隔着一列比对，眼睛要来回跳。
       title: '中文 (zh)',
@@ -323,6 +330,8 @@ export default function I18nMessages() {
         extra={
           <Space>
             <Button icon={<ReloadOutlined />} size="small" onClick={load}>刷新</Button>
+            <Select allowClear size="small" style={{ width: 130 }} placeholder="按模块筛选"
+              value={moduleFilter} onChange={setModuleFilter} options={moduleOptions} />
             <Button icon={<ScanOutlined />} size="small" loading={scanning} onClick={handleScan}>扫描脚本检查</Button>
             <Button type="primary" icon={<PlusOutlined />} size="small" onClick={openCreate}>新增词条</Button>
           </Space>
@@ -339,7 +348,7 @@ export default function I18nMessages() {
           size="small"
           loading={loading}
           columns={columns}
-          dataSource={rows}
+          dataSource={visibleRows}
           pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
           locale={{ emptyText: <Empty description="暂无词条，点击「扫描脚本检查」从已生成脚本抽取，或「新增词条」手工录入" /> }}
         />
@@ -367,19 +376,17 @@ export default function I18nMessages() {
             <Input placeholder="如 services.detail.btn.enable"
               style={{ fontFamily: 'var(--font-mono)' }} />
           </Form.Item>
-          {/* **列表上有的字段，弹窗里必须都能看到。** 缺了就是「列表看到一个值、
-              进去找不着」—— 这条被指出过三次。不可编辑的也要摆出来并说明为什么，
-              不能干脆不显示。 */}
-          {editing && (
-            <Form.Item label="模块" tooltip="由键的第一段推导（apps → 应用管理），不单独存、不用改；改键就跟着变。">
-              <Input value={moduleOf(editing.keyText) || '—'} disabled />
-            </Form.Item>
-          )}
-          {editing && (
-            <Form.Item label="来源" tooltip="记录这条词从哪来：导入=从被测系统 locale 文件带进来的，手工=人在这里录的。它是履历，不该改。">
-              <Input value={editing.source === 'manual' ? '手工录入' : '从被测系统 locale 导入'} disabled />
-            </Form.Item>
-          )}
+          {/* **列表上有的字段，弹窗里必须都能看到 —— 新建和编辑都要。**
+              缺了就是「列表看到一个值、进去找不着」，这条被指出过三次。
+              不可编辑的也要摆出来并说明为什么，不能干脆不显示。
+              （反过来也成立：一个**改不了又没法维护**的派生值，压根不该出现在列表上 ——
+                「模块」原来是一列，已经删了，改成上方的筛选器。） */}
+          <Form.Item label="来源"
+            tooltip="记录这条词从哪来：导入=从被测系统 locale 文件带进来的，手工=人在这里录的。它是履历，不该改。">
+            <Input value={editing
+              ? (editing.source === 'manual' ? '手工录入' : '从被测系统 locale 导入')
+              : '手工录入（这条是你在这里新建的）'} disabled />
+          </Form.Item>
           <Form.Item name="category" label="分类">
             <Select allowClear placeholder="按定位方式分类（可选）" options={CATEGORY_OPTIONS} />
           </Form.Item>

@@ -47,11 +47,48 @@ def test_列表字段在编辑弹窗里都有入口(rel, cols_anchor, modal_anch
         f"人会在列表看到值、进去找不着。不可编辑的也要只读显示并说明为什么。")
 
 
+def test_字段不许只在编辑态显示():
+    """**上一版只在编辑态显示，新建时又不见了，等于只修了一半。**
+
+    这条守卫我写坏过两次，记下来：
+      · 第一版用 `modal[i-400:i].split("<Form.Item")[-1]` 猜上下文 —— 什么都没查。
+      · 第二版数 `{editing && (` 和 `)}` 的个数比 —— `)}` 在 JSX 里到处都是，
+        closes 永远远大于 opens，恒真。
+    **两次变异都没变红，而我当时都当成"通过"了。变异不红 = 守卫坏了，不是代码对了。**
+
+    现在按 JSX 结构判：从每个 `{editing && (` 起，用括号配平找出它真正的作用域，
+    落在里面的 label 就是"只有编辑态才显示"。
+    """
+    src = (ROOT / "pages/settings/I18nMessages.jsx").read_text(encoding="utf-8")
+    modal = src[src.index("<Modal"):]
+
+    # 找出所有 {editing && ( ... )} 的字符区间
+    guarded: list[tuple[int, int]] = []
+    for m in re.finditer(r"\{\s*editing\s*&&\s*\(", modal):
+        depth, i = 0, m.end() - 1          # 指向那个 (
+        while i < len(modal):
+            if modal[i] == "(":
+                depth += 1
+            elif modal[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            i += 1
+        guarded.append((m.start(), i))
+
+    for label in ("来源", "分类", "中文 (zh)", "英文 (en)", "说明"):
+        at = modal.index(f'label="{label}"')
+        inside = [(a, b) for a, b in guarded if a < at < b]
+        assert not inside, \
+            f"「{label}」落在 {{editing && …}} 里面 —— 新建时看不到，等于只修了一半"
+
+
 def test_只读字段要说清为什么不能改():
     """只读但不解释，等于「这里坏了」。派生值说清由什么推导，履历字段说清它是履历。"""
     src = (ROOT / "pages/settings/I18nMessages.jsx").read_text(encoding="utf-8")
     modal = src[src.index("<Modal"):]
-    for label, why in (("模块", "由键"), ("来源", "履历")):
+    # 「模块」原来也在这儿，已经删了 —— 它是键的一部分不是字段，见页面注释。
+    for label, why in (("来源", "履历"),):
         i = modal.index(f'label="{label}"')
         seg = modal[i:i + 260]
         assert "disabled" in seg, f"「{label}」没标成只读"
