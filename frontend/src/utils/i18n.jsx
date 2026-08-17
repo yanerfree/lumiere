@@ -40,11 +40,9 @@ const MESSAGES = {
     'menu.group.exec': '执行与产出',
     'menu.group.ai': 'AI 能力',
     'menu.group.projectConfig': '项目配置',
+    'menu.group.project': '项目管理',
     'menu.group.tools': '测试工具',
-    // 跨项目共用、但服务于项目的资源（环境跑在哪、结果发给谁、AI 用哪个模型）——
-    // 不是平台自己的设置，别再并进「系统设置」
-    'menu.group.resource': '测试资源',
-    'menu.group.platform': '平台管理',
+    'menu.group.system': '系统管理',
 
     // 通用
     'common.save': '保存',
@@ -122,9 +120,9 @@ const MESSAGES = {
     'menu.group.exec': 'Run & Output',
     'menu.group.ai': 'AI',
     'menu.group.projectConfig': 'Project Config',
+    'menu.group.project': 'Projects',
     'menu.group.tools': 'Test Tools',
-    'menu.group.resource': 'Test Resources',
-    'menu.group.platform': 'Platform',
+    'menu.group.system': 'System',
 
     'common.save': 'Save',
     'common.cancel': 'Cancel',

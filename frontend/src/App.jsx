@@ -5,7 +5,7 @@ import {
   FolderOutlined, FileTextOutlined, UnorderedListOutlined, BarChartOutlined,
   SettingOutlined, UserOutlined, FileSearchOutlined, ApiOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, BellOutlined, RobotOutlined,
-  CloudServerOutlined, ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
+  ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
   NodeIndexOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
   DeploymentUnitOutlined,
@@ -140,46 +140,46 @@ function AppLayout() {
       ],
     },
   ] : [
-    { key: '/projects', icon: <FolderOutlined />, label: t('menu.projects') },
-    { type: 'divider' },
+    // 这三档的划分和排序由用户指定（2026-08-17），别再按自己的理解重排。
+    // 项目列表跟环境/AI/通知渠道放一起，是因为后三样都是**项目要用的**配置，
+    // 不是平台自己的；平台自己的只有用户、日志、端口三样，归系统管理。
     {
-      // Mock 也在这一档：造可控上游本来就是为了让被测系统跑起来，跟压测、抓包是一类事
-      key: 'g-tools', icon: <ToolOutlined />, label: t('menu.group.tools'),
+      key: 'g-project', icon: <FolderOutlined />, label: t('menu.group.project'),
       children: [
-        { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient') },
-        { key: '/tools/load-test', icon: <ThunderboltOutlined />, label: t('menu.loadTest') },
-        { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: t('menu.proxyProbe') },
-        { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox') },
-        { key: '/tools/api-mock', icon: <GlobalOutlined />, label: t('menu.apiMock') },
-        { key: '/tools/llm-mock', icon: <RobotOutlined />, label: t('menu.llmMock') },
-        { key: '/tools/mcp-mock', icon: <ApiOutlined />, label: t('menu.mcpMock') },
-        { key: '/tools/oauth2-mock', icon: <SafetyCertificateOutlined />, label: t('menu.oauth2Mock') },
-      ],
-    },
-    {
-      // 跨项目共用、但**服务于项目**的资源。不是平台自己的设置
-      key: 'g-resource', icon: <CloudServerOutlined />, label: t('menu.group.resource'),
-      children: [
+        { key: '/projects', icon: <FolderOutlined />, label: t('menu.projects') },
         { key: '/settings/env', icon: <GlobalOutlined />, label: t('menu.envConfig') },
         { key: '/settings/ai-providers', icon: <RobotOutlined />, label: t('menu.aiProviders') },
         { key: '/settings/channels', icon: <BellOutlined />, label: t('menu.channels') },
       ],
     },
     {
-      // 平台自己：谁能用、跑得好不好、谁动过什么
-      key: 'g-platform', icon: <DeploymentUnitOutlined />, label: t('menu.group.platform'),
+      // Mock 也在这一档：造可控上游本来就是为了让被测系统跑起来，跟压测、抓包是一类事
+      key: 'g-tools', icon: <ToolOutlined />, label: t('menu.group.tools'),
+      children: [
+        { key: '/tools/api-mock', icon: <GlobalOutlined />, label: t('menu.apiMock') },
+        { key: '/tools/llm-mock', icon: <RobotOutlined />, label: t('menu.llmMock') },
+        { key: '/tools/mcp-mock', icon: <ApiOutlined />, label: t('menu.mcpMock') },
+        { key: '/tools/oauth2-mock', icon: <SafetyCertificateOutlined />, label: t('menu.oauth2Mock') },
+        { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: t('menu.proxyProbe') },
+        { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient') },
+        { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox') },
+        { key: '/tools/load-test', icon: <ThunderboltOutlined />, label: t('menu.loadTest') },
+      ],
+    },
+    {
+      key: 'g-system', icon: <DeploymentUnitOutlined />, label: t('menu.group.system'),
       children: [
         ...(user.role === 'admin' ? [
           { key: '/settings/users', icon: <UserOutlined />, label: t('menu.users') },
         ] : []),
-        { key: '/settings/services', icon: <DeploymentUnitOutlined />, label: t('menu.services') },
         { key: '/settings/logs', icon: <FileSearchOutlined />, label: t('menu.logs') },
+        { key: '/settings/services', icon: <DeploymentUnitOutlined />, label: t('menu.services') },
       ],
     },
   ]
 
   // 展开哪些一级菜单。存起来 —— 不存的话每跳一次页就弹回默认，"能收起"等于没有。
-  const DEFAULT_OPEN = ['g-design', 'g-exec', 'g-ai', 'g-proj-config', 'g-tools', 'g-resource', 'g-platform']
+  const DEFAULT_OPEN = ['g-design', 'g-exec', 'g-ai', 'g-proj-config', 'g-project', 'g-tools', 'g-system']
   const [openKeys, setOpenKeys] = useState(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('menuOpenKeys'))
