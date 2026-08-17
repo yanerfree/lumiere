@@ -933,8 +933,12 @@ export default function ApiManagement() {
         {/* 全局环境选择器 */}
         <div style={{ padding: '6px 10px', borderBottom: '1px solid rgba(0,0,0,0.05)', display: 'flex', alignItems: 'center', gap: 6, background: 'transparent' }}>
           <GlobalOutlined style={{ fontSize: 12, color: '#0ea5a0' }} />
+          {/* minWidth: 0 不能省。flex 子项默认 min-width:auto —— 不会缩到比内容更窄，
+              而环境标签是「stoa (网关管理平台-本地 | http://192.168.51.108:5176)」这种
+              一整串不可断的文本，于是它顶着容器往外撑，直接盖到右边的接口详情区上。
+              popupMatchSelectWidth={false} 只管下拉浮层，管不了收起来时的框。 */}
           <Select size="small" value={runEnv || '__none__'} onChange={v => handleEnvChange(v === '__none__' ? null : v)}
-            style={{ flex: 1 }} popupMatchSelectWidth={false}
+            style={{ flex: 1, minWidth: 0 }} popupMatchSelectWidth={false}
             options={[{ value: '__none__', label: '无环境' }, ...buildEnvOptions(environments)]} />
           {envVars.length > 0 && (
             <Popover trigger="click" placement="rightTop" arrow={false}

@@ -347,7 +347,14 @@ export default function ProjectList() {
                   <Button size="small" type="text" icon={<EditOutlined />} onClick={(e) => openEdit(e, p)}>编辑</Button>
                   <Popconfirm
                     title={`确定删除项目「${p.name}」？`}
-                    description="删除后相关分支和成员数据将一并清除"
+                    // 文案必须写清「会删什么」+「什么情况下删不动」：外键改成全 CASCADE 后
+                    // 一次点击是真的会把接口场景、计划、报告一起物理删掉；而有用例/知识条目/
+                    // 需求文档的项目后端会直接 409 挡回来（PROJECT_NOT_EMPTY）
+                    description={<span style={{ display: 'inline-block', maxWidth: 260 }}>
+                      分支、成员、接口场景、计划和报告将一并永久删除，无法恢复。
+                      <br />
+                      项目下若还有用例、知识条目或需求文档，需先清空或转移才能删除。
+                    </span>}
                     onConfirm={(e) => handleDelete(e, p)}
                     onCancel={(e) => e.stopPropagation()}
                   >

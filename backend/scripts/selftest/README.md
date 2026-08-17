@@ -3,9 +3,15 @@
 改「用例 → 接口」这块之后跑这两个。**要先起后端 8756 和前端 5173。**
 
 ```bash
-bash backend/scripts/selftest/selftest_api_scenario.sh   # 整模块 14 项
+bash backend/scripts/selftest/selftest_api_scenario.sh   # 接口场景整模块 16 项
 python3 backend/scripts/selftest/selftest_neighbors.py   # 共用层出口 14 项（在仓库根跑）
+python3 backend/scripts/selftest/scan_overflow.py        # 全站横向溢出（28 页 × 2 视口）
 ```
+
+`scan_overflow.py` 是**布局类 bug 的兜底**：找"把父容器撑破"的元素。
+这类 bug 源码里长得跟正常代码一模一样（根因是 CSS 计算结果，典型是 flex 子项
+`min-width:auto` 不肯缩），**grep 找不出来，只能渲染出来量**。
+改任何布局、加任何可能很长的文案（环境名带 URL、用例标题、文件路径）之后跑一遍。
 
 为什么要有它们：接口场景是**共用资产** —— 用例详情、计划执行、测试报告、分支复制
 四处都在消费它。2026-08-15 下线「接口测试」模块时，只验改动点没发现分支复制已经被

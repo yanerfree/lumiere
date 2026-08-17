@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -90,9 +90,48 @@ async def update_project(
     return project
 
 
+# 有这些数据就不许删项目 —— 都是人写出来的、删掉不可再生的东西。
+# (表, 计数用的 SQL, 中文名)
+_DELETE_BLOCKERS = [
+    # 用例挂在 branch 上，不是直接挂 project；UI 脚本和接口脚本是用例的字段，
+    # 数够用例就等于把它们都数进来了
+    ("cases", "SELECT count(*) FROM cases c JOIN branches b ON c.branch_id = b.id"
+              " WHERE b.project_id = :pid", "用例"),
+    ("knowledge_entries", "SELECT count(*) FROM knowledge_entries WHERE project_id = :pid", "知识条目"),
+    ("requirement_docs", "SELECT count(*) FROM requirement_docs WHERE project_id = :pid", "需求文档"),
+]
+
+
+async def assert_project_deletable(session: AsyncSession, project_id: uuid.UUID) -> None:
+    """项目下还有人工资产就拒绝删除。
+
+    外键现在全是 ON DELETE CASCADE（见 zzd0fkc1 迁移），也就是说删项目会连用例、
+    脚本、知识一起物理删掉且不可恢复 —— 实测有项目挂着 330 条用例，仅凭一个
+    Popconfirm 就能一键抹掉。所以这里挡住，不提供 force 之类的绕过口子：
+    要删项目，先自己把用例清空或转移，让删除这个动作本身变成低风险操作。
+
+    计划和报告不算门槛：那是执行痕迹，重跑能再生，跟着项目一起清掉是预期行为。
+    """
+    found: list[str] = []
+    for _table, sql, label in _DELETE_BLOCKERS:
+        n = await session.scalar(text(sql), {"pid": str(project_id)})
+        if n:
+            found.append(f"{label} {n} 条")
+    if found:
+        raise ConflictError(
+            code="PROJECT_NOT_EMPTY",
+            message=f"项目下还有{'、'.join(found)}，不能删除。请先清空或转移后再删项目。",
+            detail="；".join(found),
+        )
+
+
 @audit_log(action="delete", target_type="project")
 async def delete_project(session: AsyncSession, project_id: uuid.UUID) -> None:
-    """删除项目（CASCADE 自动清理 branches 和 project_members）。"""
+    """删除项目（CASCADE 自动清理 branches / 成员 / 场景 / 计划 / 报告等子表）。
+
+    ⚠ 删之前必须过 assert_project_deletable —— 级联现在是真的会把所有子表删干净。
+    """
     project = await get_project(session, project_id)
+    await assert_project_deletable(session, project_id)
     await session.delete(project)
     await session.flush()
