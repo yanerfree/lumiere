@@ -42,8 +42,12 @@ const enOf = (r) => pick(r, 'en')
 // 中文：key 制的行译文里有 zh-CN；采集器那批是拿中文当 key，中文就在 key 上。
 const zhOf = (r) => pick(r, 'zh') || r.keyText || r.key_text || ''
 
-// 键的第一段是命名空间，对应被测系统的一级模块。**它不是字段，是键的一部分** ——
-// 所以只用来做筛选，不占一列、也不进编辑表单。
+// 模块是**存下来的字段**，不是从键算的。
+//
+// 原来我从键的第一段实时推导（apps → 应用管理）。三个问题：派生值放在列表上，
+// 人默认它能改、实际改不了；键写错了（svc.foo）它就跟着显示 svc，而这时该改的
+// 是键；命名空间和「测试人员认得的菜单名」也不总是一一对应。
+// 所以存字段：导入时按命名空间预填一次，之后人和 CC 都能改。
 //
 // 上一版试图把整条键翻成中文路径
 // （`subscription.providerDetail.tenantCard.crossTenantSubscriber`
@@ -56,10 +60,11 @@ const NS_LABEL = {
   auth: '登录认证', dashboard: '概览', gateway: '网关', upstream: '负载', menu: '菜单',
   tenant: '租户', application: '应用',
 }
-const moduleOf = (key) => {
-  if (!key || /[\u4e00-\u9fff]/.test(key)) return null
-  const ns = key.split('.')[0]
-  return NS_LABEL[ns] || ns
+const moduleOf = (r) => r?.module || ''
+// 新建时按键的第一段给个默认值，省得每条都手打；人可以改掉。
+const guessModule = (key) => {
+  if (!key) return ''
+  return NS_LABEL[key.split('.')[0]] || ''
 }
 
 export default function I18nMessages() {
@@ -98,12 +103,12 @@ export default function I18nMessages() {
   // 出现过的模块（键的第一段），给筛选器用
   const moduleOptions = useMemo(() => {
     const set = new Set()
-    rows.forEach((r) => { const m = moduleOf(r.keyText); if (m) set.add(m) })
+    rows.forEach((r) => { const m = moduleOf(r); if (m) set.add(m) })
     return [...set].sort().map((m) => ({ value: m, label: m }))
   }, [rows])
 
   const visibleRows = useMemo(
-    () => (moduleFilter ? rows.filter((r) => moduleOf(r.keyText) === moduleFilter) : rows),
+    () => (moduleFilter ? rows.filter((r) => moduleOf(r) === moduleFilter) : rows),
     [rows, moduleFilter])
 
   const stats = useMemo(() => {
@@ -138,6 +143,7 @@ export default function I18nMessages() {
   const openCreate = () => {
     setEditing(null)
     form.resetFields()
+    form.setFieldsValue({ source: 'manual' })
     setModalOpen(true)
   }
 
@@ -145,6 +151,8 @@ export default function I18nMessages() {
     setEditing(r)
     form.setFieldsValue({
       keyText: r.keyText,
+      module: r.module || undefined,
+      source: r.source || 'manual',
       category: r.category || undefined,
       // 中文也要能改 —— 原来弹窗里只有英文一栏，键制之后中文是**值**，
       // 改不了等于这条词只能改一半。
@@ -168,6 +176,8 @@ export default function I18nMessages() {
     }
     const payload = {
       keyText: values.keyText,
+      module: values.module || null,
+      source: values.source || 'manual',
       category: values.category || null,
       description: values.description || null,
       translations,
@@ -251,6 +261,12 @@ export default function I18nMessages() {
           )}
         </>
       ),
+    },
+    {
+      title: '模块',
+      dataIndex: 'module',
+      width: 100,
+      render: (v) => v ? <Text style={{ fontSize: 12.5 }}>{v}</Text> : <Text type="secondary">—</Text>,
     },
     {
       // 中文和英文必须挨着 —— 原来中间夹了「分类」列，同一条文案的两种语言
@@ -374,18 +390,34 @@ export default function I18nMessages() {
             tooltip="被测系统里真实的中文文案，如「确认绑定」。这是词典的键，二期脚本用它做匹配。"
           >
             <Input placeholder="如 services.detail.btn.enable"
-              style={{ fontFamily: 'var(--font-mono)' }} />
+              style={{ fontFamily: 'var(--font-mono)' }}
+              onChange={(e) => {
+                // 模块还空着就按键的第一段带一个默认值。**只在空的时候带** ——
+                // 人已经改过了就不要再覆盖回去。
+                if (!form.getFieldValue('module')) {
+                  const g = guessModule(e.target.value)
+                  if (g) form.setFieldsValue({ module: g })
+                }
+              }} />
           </Form.Item>
           {/* **列表上有的字段，弹窗里必须都能看到 —— 新建和编辑都要。**
               缺了就是「列表看到一个值、进去找不着」，这条被指出过三次。
               不可编辑的也要摆出来并说明为什么，不能干脆不显示。
               （反过来也成立：一个**改不了又没法维护**的派生值，压根不该出现在列表上 ——
                 「模块」原来是一列，已经删了，改成上方的筛选器。） */}
-          <Form.Item label="来源"
-            tooltip="记录这条词从哪来：导入=从被测系统 locale 文件带进来的，手工=人在这里录的。它是履历，不该改。">
-            <Input value={editing
-              ? (editing.source === 'manual' ? '手工录入' : '从被测系统 locale 导入')
-              : '手工录入（这条是你在这里新建的）'} disabled />
+          <Form.Item name="module" label="模块"
+            tooltip="这条文案属于哪个一级菜单。新建时按键的第一段自动带一个，可以改。">
+            <Select allowClear showSearch placeholder="如 服务管理"
+              options={[...new Set([...Object.values(NS_LABEL), ...rows.map((r) => r.module).filter(Boolean)])]
+                .sort().map((m) => ({ value: m, label: m }))} />
+          </Form.Item>
+          <Form.Item name="source" label="来源"
+            tooltip="这条词从哪来。分错了可以改 —— 列表上看得到却改不了，比能改更让人困惑。">
+            <Select options={[
+              { value: 'manual', label: '手工录入' },
+              { value: 'sut_locale', label: '从被测系统 locale 导入' },
+              { value: 'harvested', label: '扫脚本采集（历史）' },
+            ]} />
           </Form.Item>
           <Form.Item name="category" label="分类">
             <Select allowClear placeholder="按定位方式分类（可选）" options={CATEGORY_OPTIONS} />
@@ -398,8 +430,8 @@ export default function I18nMessages() {
             <Input placeholder="如 Confirm Binding（留空=待补）" />
           </Form.Item>
           <Form.Item name="description" label="说明"
-            tooltip="留给键看不出来的信息：这句话在什么条件下才出现、和哪条用例相关。别重复中文值 —— 它已经有单独一列了。">
-            <Input placeholder="这条文案出现在哪、上下文（可选）" />
+            tooltip="**这条文案在页面上的具体位置**：一级菜单 › 页面 › 区域 › 控件。例：服务管理 › 服务详情页 › 头部「更多」下拉。也可以写它在什么条件下才出现。">
+            <Input placeholder="如 服务管理 › 服务详情页 › 头部「更多」下拉" />
           </Form.Item>
         </Form>
       </Modal>

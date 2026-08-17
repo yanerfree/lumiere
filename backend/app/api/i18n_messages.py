@@ -21,14 +21,20 @@ router = APIRouter(
 class I18nCreate(BaseSchema):
     key_text: str
     translations: dict = {}
+    module: str | None = None
     category: str | None = None
+    source: str | None = None
     description: str | None = None
 
 
 class I18nUpdate(BaseSchema):
     key_text: str | None = None
     translations: dict | None = None
+    module: str | None = None
     category: str | None = None
+    # 来源也可改。它是履历，但**列表上显示、编辑时改不了**这件事本身更糟 ——
+    # 人会以为页面坏了。想纠正错分类的，让它改。
+    source: str | None = None
     description: str | None = None
 
 
@@ -37,6 +43,7 @@ class I18nResponse(BaseSchema):
     project_id: uuid.UUID
     key_text: str
     translations: dict
+    module: str | None = None
     category: str | None = None
     source: str
     description: str | None = None
@@ -80,9 +87,10 @@ async def create_message(
         project_id=project_id,
         key_text=body.key_text,
         translations=body.translations or {},
+        module=body.module,
         category=body.category,
         description=body.description,
-        source="manual",
+        source=body.source or "manual",
     )
     session.add(r)
     await session.commit()
@@ -105,8 +113,12 @@ async def update_message(
         r.key_text = body.key_text
     if body.translations is not None:
         r.translations = body.translations
+    if body.module is not None:
+        r.module = body.module
     if body.category is not None:
         r.category = body.category
+    if body.source is not None:
+        r.source = body.source
     if body.description is not None:
         r.description = body.description
     await session.commit()

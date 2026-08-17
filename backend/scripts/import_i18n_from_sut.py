@@ -39,6 +39,14 @@ from app.models.project import Project  # noqa: E402,F401  外键指向它，不
 DEFAULT_NS = ["common", "services", "subscription", "apps", "gateway",
               "upstream", "auth", "menu", "tenant", "application", "dashboard"]
 
+# 命名空间 → 中文模块名。导入时**存进 module 字段**（不是前端算），之后人可以改。
+NS_MODULE = {
+    "common": "通用", "services": "服务管理", "subscription": "订阅管理",
+    "apps": "应用管理", "auth": "登录认证", "dashboard": "概览",
+    "gateway": "网关", "upstream": "负载", "menu": "菜单",
+    "tenant": "租户", "application": "应用",
+}
+
 
 def _fetch(url: str) -> dict | None:
     try:
@@ -120,6 +128,7 @@ async def run(project_id: str, base: str, namespaces: list[str], dry: bool) -> N
                 if not dry:
                     s.add(ProjectI18nMessage(
                         project_id=pid, key_text=key, translations=langs,
+                        module=NS_MODULE.get(key.split(".")[0]),
                         category="text", source="sut_locale"))
                         # description 不写。上一版写的是「从被测系统 locale 导入：<中文>」——
                         # 前缀是废话，中文已经单独一列了，等于纯噪音，2416 条全长一样。

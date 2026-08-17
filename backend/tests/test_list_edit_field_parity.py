@@ -76,20 +76,48 @@ def test_字段不许只在编辑态显示():
             i += 1
         guarded.append((m.start(), i))
 
-    for label in ("来源", "分类", "中文 (zh)", "英文 (en)", "说明"):
+    for label in ("模块", "来源", "分类", "中文 (zh)", "英文 (en)", "说明"):
         at = modal.index(f'label="{label}"')
         inside = [(a, b) for a, b in guarded if a < at < b]
         assert not inside, \
             f"「{label}」落在 {{editing && …}} 里面 —— 新建时看不到，等于只修了一半"
 
 
-def test_只读字段要说清为什么不能改():
-    """只读但不解释，等于「这里坏了」。派生值说清由什么推导，履历字段说清它是履历。"""
+def test_列表字段都能改():
+    """**列表上显示的字段，编辑时要能改。**
+
+    这条走过三步：先是「模块/来源」在弹窗里压根没有 → 我补成只读 →
+    仍然不对：「来源为什么不能编辑」。
+    对的：列表上看得到却改不了，比能改更让人困惑 —— 人会以为页面坏了，
+    而且分错了没有纠正的路。只读只适合真正不可变的东西（id、创建时间）。
+
+    所以两个都是可编辑控件，不许再出现 disabled。
+    """
     src = (ROOT / "pages/settings/I18nMessages.jsx").read_text(encoding="utf-8")
     modal = src[src.index("<Modal"):]
-    # 「模块」原来也在这儿，已经删了 —— 它是键的一部分不是字段，见页面注释。
-    for label, why in (("来源", "履历"),):
+    for label in ("模块", "来源"):
         i = modal.index(f'label="{label}"')
-        seg = modal[i:i + 260]
-        assert "disabled" in seg, f"「{label}」没标成只读"
-        assert why in seg, f"「{label}」只读了但没说为什么（期望提到「{why}」）"
+        seg = modal[i:i + 420]
+        assert "disabled" not in seg, f"「{label}」又变成只读了 —— 列表上看得到就该能改"
+        assert "name=" in modal[max(0, i - 90):i + 20], f"「{label}」没绑表单字段，改了存不下去"
+
+
+def test_模块是存的字段不是从键推导的():
+    """派生值放在列表上，人默认它能改、实际改不了；键写错了它跟着错，
+    而该改的是键。所以存字段：导入时预填一次，之后人和 CC 都能改。"""
+    from app.models.i18n_message import ProjectI18nMessage
+    assert "module" in ProjectI18nMessage.__table__.c, "module 没落成列，还是在前端算"
+    src = (ROOT / "pages/settings/I18nMessages.jsx").read_text(encoding="utf-8")
+    assert "const moduleOf = (r) => r?.module" in src, "moduleOf 还在从键算"
+
+
+def test_说明栏引导写页面位置():
+    """用户要的是「一眼看出这条文案在哪个页面的什么地方」，而且明确说了
+    「你写到说明里面不就行了」。所以 placeholder 和 tooltip 都要给出路径格式，
+    不能只写「可选」。"""
+    src = (ROOT / "pages/settings/I18nMessages.jsx").read_text(encoding="utf-8")
+    modal = src[src.index("<Modal"):]
+    i = modal.index('name="description"')
+    seg = modal[i:i + 700]
+    assert "›" in seg, "说明栏没给出路径格式的例子"
+    assert "位置" in seg, "说明栏没说清它是干什么的"

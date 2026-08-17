@@ -36,6 +36,9 @@ class ProjectI18nMessage(Base):
     )
     key_text: Mapped[str] = mapped_column(String(500), nullable=False)
     translations: Mapped[dict] = mapped_column(JSONB, nullable=False, server_default="{}")
+    # 模块（这条文案属于哪个一级菜单）。**存下来、可编辑**，不从键推导 ——
+    # 派生值放在列表上会让人以为能改，而键写错时它跟着错，该改的却是键。
+    module: Mapped[str | None] = mapped_column(String(64), nullable=True)
     category: Mapped[str | None] = mapped_column(String(20), nullable=True)
     source: Mapped[str] = mapped_column(String(20), nullable=False, default="harvested", server_default="harvested")
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
