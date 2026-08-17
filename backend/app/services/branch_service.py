@@ -4,8 +4,9 @@ from sqlalchemy import select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.core.audit import audit_log
+from app.core.db_errors import reraise_integrity_error
 from app.models.project import Branch
 from app.schemas.branch import CreateBranchRequest, UpdateBranchRequest
 
@@ -35,9 +36,21 @@ async def create_branch(
     session.add(branch)
     try:
         await session.flush()
-    except IntegrityError:
+    except IntegrityError as e:
         await session.rollback()
-        raise ConflictError(code="BRANCH_NAME_EXISTS", message="分支配置名称已存在")
+        # 别把 CHECK 违反也报成「已存在」—— 那会让人对着一个没有重名的列表查半天
+        reraise_integrity_error(
+            e,
+            conflict_code="BRANCH_NAME_EXISTS",
+            conflict_message="分支配置名称已存在",
+            check_messages={
+                "ck_branch_name_format": (
+                    "BRANCH_NAME_INVALID",
+                    "分支名称格式非法：仅支持字母、数字、下划线、连字符、点号"
+                    "（点号不能开头、结尾或连用）",
+                ),
+            },
+        )
     await session.refresh(branch)
     return branch
 

@@ -35,11 +35,41 @@ class TestBranchServiceCRUD:
 
     @pytest.mark.integration
     @pytest.mark.asyncio
+    async def test_dotted_name_allowed(self, db_session):
+        """v2.2.0 这种版本号要能建 —— 点号只做分隔符。"""
+        project = await self._setup(db_session)
+        branch = await branch_service.create_branch(
+            db_session, project.id, CreateBranchRequest(name="v2.2.0")
+        )
+        assert branch.name == "v2.2.0"
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
     async def test_duplicate_name_raises_conflict(self, db_session):
         project = await self._setup(db_session)
         req = CreateBranchRequest(name="default", branch="main")
-        with pytest.raises(ConflictError):
+        with pytest.raises(ConflictError) as ei:
             await branch_service.create_branch(db_session, project.id, req)
+        assert ei.value.code == "BRANCH_NAME_EXISTS"
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("bad", ["..", ".", ".hidden", "v2.", "a..b"])
+    async def test_check_violation_is_not_reported_as_duplicate(self, db_session, bad):
+        """CHECK 违反必须报「格式非法」，不能报「已存在」。
+
+        model_construct 跳过 pydantic 校验，直接把非法名送到 DB —— 否则这条
+        路径被上层挡住，谎报重名的 bug 就永远测不到。".." 会被拼进工作目录，
+        是这条约束真正要拦的东西。
+        """
+        project = await self._setup(db_session)
+        req = CreateBranchRequest.model_construct(
+            name=bad, description=None, branch="main", source_branch_id=None, copy_modules=None
+        )
+        with pytest.raises(ValidationError) as ei:
+            await branch_service.create_branch(db_session, project.id, req)
+        assert ei.value.code == "BRANCH_NAME_INVALID"
+        assert ei.value.status_code == 422
 
 
 class TestBranchServiceArchive:
