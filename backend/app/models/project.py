@@ -39,7 +39,11 @@ class Branch(Base):
     __tablename__ = "branches"
     __table_args__ = (
         UniqueConstraint("project_id", "name", name="uq_branch_project_name"),
-        CheckConstraint(r"name ~ '^[a-zA-Z0-9_\-]{1,50}$'", name="ck_branch_name_format"),
+        # 点号只能做分隔符：不能开头/结尾、不能连用（排除 "." 和 ".."，见 schemas/branch.py 注释）
+        CheckConstraint(
+            r"name ~ '^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$' AND char_length(name) <= 50",
+            name="ck_branch_name_format",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

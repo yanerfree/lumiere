@@ -8,7 +8,10 @@ from app.schemas.common import BaseSchema
 
 class CreateBranchRequest(BaseSchema):
     """创建分支配置请求"""
-    name: str = Field(min_length=1, max_length=50, pattern=r"^[a-zA-Z0-9_\-]+$")
+    # 点号只能做分隔符：不能开头/结尾、不能连用。
+    # 分支名会被拼成工作目录 {script_base_path}/{name}/（见 services/git_service.py），
+    # 放开点号后必须排除 "." 和 ".."，否则等于目录穿越。
+    name: str = Field(min_length=1, max_length=50, pattern=r"^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$")
     description: str | None = None
     branch: str = Field(default="main", max_length=100)
     source_branch_id: str | None = None  # 从此分支复制数据

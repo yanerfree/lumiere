@@ -95,7 +95,7 @@ export default function BranchSelector({ projectId }) {
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label="分支名称" rules={[
             { required: true, message: '请输入分支名称' },
-            { pattern: /^[a-zA-Z0-9_\-]+$/, message: '仅支持字母、数字、下划线、连字符' },
+            { pattern: /^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$/, message: '仅支持字母、数字、下划线、连字符、点号（点号不能开头、结尾或连用）' },
           ]}>
             <Input placeholder="如：v2.0、release-2026Q3" />
           </Form.Item>
