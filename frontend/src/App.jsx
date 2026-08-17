@@ -5,7 +5,7 @@ import {
   FolderOutlined, FileTextOutlined, UnorderedListOutlined, BarChartOutlined,
   SettingOutlined, UserOutlined, FileSearchOutlined, ApiOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, BellOutlined, RobotOutlined,
-  CloudServerOutlined, ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
+  ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
   NodeIndexOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
   DeploymentUnitOutlined,
@@ -89,22 +89,35 @@ function AppLayout() {
     }).catch(() => {})
   }, [projectId])
 
+  // 侧边栏分组。三条规则，改的时候别破坏：
+  //
+  // 1. **用 group 不用可折叠子菜单**。原来 Mock/工具/AI 是 SubMenu，却又靠
+  //    defaultOpenKeys 默认全展开 —— 等于给分组加了层壳，只多一次误折叠的机会。
+  //    更糟的是「AI 智能」在系统菜单下只挂一个子项，多一层等于没分级。
+  // 2. **同一层里按"干这件事的顺序"排，不按加进来的先后**。原来用例/接口/计划/
+  //    报告/探索/文档/自动化数据/国际化词典平铺八条，看不出哪些是一类。
+  // 3. **分组标题走 i18n**，别硬编码中文 —— 上一版有一半标题是写死的，
+  //    切到英文只翻了一半，那才是最像"没做完"的地方。
   const menuItems = isProjectPage ? [
     { key: '/projects', icon: <FolderOutlined />, label: t('menu.back') },
-    { type: 'divider' },
-    { key: `/projects/${projectId}/cases`, icon: <FileTextOutlined />, label: t('menu.cases') },
-    { key: `/projects/${projectId}/apis`, icon: <ApiOutlined />, label: t('menu.apis') },
-    { key: `/projects/${projectId}/plans`, icon: <UnorderedListOutlined />, label: t('menu.plans') },
-    { key: `/projects/${projectId}/reports`, icon: <BarChartOutlined />, label: t('menu.reports') },
-    { key: `/projects/${projectId}/exploratory`, icon: <BugOutlined />, label: t('menu.exploratory') },
-    { key: `/projects/${projectId}/documents`, icon: <FileTextOutlined />, label: t('menu.documents') },
-    { key: `/projects/${projectId}/settings/automation-data`, icon: <DatabaseOutlined />, label: '自动化数据' },
-    { key: `/projects/${projectId}/settings/i18n`, icon: <TranslationOutlined />, label: '国际化词典' },
-    { type: 'divider' },
     {
-      key: 'ai-group',
-      icon: <RobotOutlined />,
-      label: t('menu.ai'),
+      type: 'group', key: 'g-design', label: t('menu.group.design'),
+      children: [
+        { key: `/projects/${projectId}/cases`, icon: <FileTextOutlined />, label: t('menu.cases') },
+        { key: `/projects/${projectId}/apis`, icon: <ApiOutlined />, label: t('menu.apis') },
+      ],
+    },
+    {
+      type: 'group', key: 'g-exec', label: t('menu.group.exec'),
+      children: [
+        { key: `/projects/${projectId}/plans`, icon: <UnorderedListOutlined />, label: t('menu.plans') },
+        { key: `/projects/${projectId}/reports`, icon: <BarChartOutlined />, label: t('menu.reports') },
+        { key: `/projects/${projectId}/exploratory`, icon: <BugOutlined />, label: t('menu.exploratory') },
+        { key: `/projects/${projectId}/documents`, icon: <FileTextOutlined />, label: t('menu.documents') },
+      ],
+    },
+    {
+      type: 'group', key: 'g-ai', label: t('menu.group.ai'),
       children: [
         { key: `/projects/${projectId}/settings/ai-capabilities`, icon: <ThunderboltOutlined />, label: t('menu.ai.capabilities') },
         { key: `/projects/${projectId}/settings/skills`, icon: <FileTextOutlined />, label: t('menu.ai.skills') },
@@ -112,46 +125,52 @@ function AppLayout() {
         { key: `/projects/${projectId}/settings/ai`, icon: <SettingOutlined />, label: t('menu.ai.config') },
       ],
     },
-    { key: `/projects/${projectId}/logs`, icon: <FileSearchOutlined />, label: t('menu.logs') },
-  ] : [
-    { key: '/projects', icon: <FolderOutlined />, label: t('menu.projects') },
-    { type: 'divider' },
-    { key: '/settings/services', icon: <DeploymentUnitOutlined />, label: t('menu.services') },
-    { key: '/settings/env', icon: <SettingOutlined />, label: t('menu.envConfig') },
-    { key: '/settings/channels', icon: <BellOutlined />, label: t('menu.channels') },
     {
-      key: 'system-ai-group',
-      icon: <RobotOutlined />,
-      label: t('menu.ai'),
+      type: 'group', key: 'g-proj-config', label: t('menu.group.projectConfig'),
       children: [
-        { key: '/settings/ai-providers', icon: <SettingOutlined />, label: t('menu.aiProviders') },
+        { key: `/projects/${projectId}/settings/automation-data`, icon: <DatabaseOutlined />, label: t('menu.automationData') },
+        { key: `/projects/${projectId}/settings/i18n`, icon: <TranslationOutlined />, label: t('menu.i18nDict') },
+        { key: `/projects/${projectId}/logs`, icon: <FileSearchOutlined />, label: t('menu.logs') },
       ],
     },
-    ...(user.role === 'admin' ? [
-      { key: '/settings/users', icon: <UserOutlined />, label: t('menu.users') },
-    ] : []),
-    { key: '/settings/logs', icon: <FileSearchOutlined />, label: t('menu.logs') },
-    { type: 'divider' },
+  ] : [
+    { key: '/projects', icon: <FolderOutlined />, label: t('menu.projects') },
+    // 工具排在设置前面：进不了项目的时候，来这儿多半是用 Mock 或调接口，不是改配置
     {
-      key: 'mock-services',
-      icon: <CloudServerOutlined />,
-      label: 'Mock 服务',
+      type: 'group', key: 'g-mock', label: t('menu.group.mock'),
       children: [
         { key: '/tools/api-mock', icon: <GlobalOutlined />, label: t('menu.apiMock') },
         { key: '/tools/llm-mock', icon: <RobotOutlined />, label: t('menu.llmMock') },
         { key: '/tools/mcp-mock', icon: <ApiOutlined />, label: t('menu.mcpMock') },
-        { key: '/tools/oauth2-mock', icon: <SafetyCertificateOutlined />, label: 'OAuth2 Mock' },
+        { key: '/tools/oauth2-mock', icon: <SafetyCertificateOutlined />, label: t('menu.oauth2Mock') },
       ],
     },
     {
-      key: 'test-tools',
-      icon: <ToolOutlined />,
-      label: '测试工具',
+      type: 'group', key: 'g-tools', label: t('menu.group.tools'),
       children: [
         { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient') },
         { key: '/tools/load-test', icon: <ThunderboltOutlined />, label: t('menu.loadTest') },
+        { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: t('menu.proxyProbe') },
         { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox') },
-        { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: '代理观测' },
+      ],
+    },
+    {
+      type: 'group', key: 'g-system', label: t('menu.group.system'),
+      children: [
+        { key: '/settings/env', icon: <SettingOutlined />, label: t('menu.envConfig') },
+        { key: '/settings/channels', icon: <BellOutlined />, label: t('menu.channels') },
+        // 原来它被塞在一个只有它一个子项的「AI 智能」子菜单里
+        { key: '/settings/ai-providers', icon: <RobotOutlined />, label: t('menu.aiProviders') },
+        ...(user.role === 'admin' ? [
+          { key: '/settings/users', icon: <UserOutlined />, label: t('menu.users') },
+        ] : []),
+      ],
+    },
+    {
+      type: 'group', key: 'g-ops', label: t('menu.group.ops'),
+      children: [
+        { key: '/settings/services', icon: <DeploymentUnitOutlined />, label: t('menu.services') },
+        { key: '/settings/logs', icon: <FileSearchOutlined />, label: t('menu.logs') },
       ],
     },
   ]
@@ -196,6 +215,21 @@ function AppLayout() {
       <style>{`
         .app-layout-root {
           position: relative;
+        }
+        /* 收起侧边栏时把分组标题藏掉。不藏的话 antd 会把它按 52px 宽截断，
+           侧栏上冒出「测…」「执…」「AI …」「项…」四个看不懂的残字。
+           留一条细分隔线顶替，分组的边界还在，只是不写字了。 */
+        .ant-menu-inline-collapsed .ant-menu-item-group-title {
+          height: 0;
+          padding: 0;
+          margin: 6px 10px;
+          overflow: hidden;
+          border-top: 1px solid rgba(0,0,0,0.06);
+        }
+        /* 第一个分组紧挨着「项目列表」，再加一条线就是双线了 */
+        .ant-menu-inline-collapsed .ant-menu-item-group:first-of-type .ant-menu-item-group-title {
+          border-top: none;
+          margin-top: 0;
         }
       `}</style>
       {/* 顶栏 */}
@@ -246,7 +280,8 @@ function AppLayout() {
             <Menu
               mode="inline"
               selectedKeys={[location.pathname]}
-              defaultOpenKeys={['mock-services', 'test-tools', 'ai-group', 'system-ai-group']}
+              /* 没有 defaultOpenKeys 了 —— 分组用的是 group 而不是可折叠子菜单，
+                 收起侧边栏时 antd 会自己把分组标题藏掉，只留图标 */
               items={menuItems}
               onClick={({ key }) => navigate(key)}
               style={{ border: 'none', fontSize: 13, paddingTop: 8, background: 'transparent' }}
