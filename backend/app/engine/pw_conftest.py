@@ -16,7 +16,7 @@ def write_playwright_conftest(
     HAR 只在 context.close() 时 flush，所以进程超时被 kill 时拿不到，属正常。
     """
     ev = env_vars or {}
-    pw_locale = ev.get("PLAYWRIGHT_LOCALE", "zh-CN")
+    pw_locale = _resolve_locale(ev)
     _write_i18n_module(sandbox_dir, pw_locale, i18n)
     admin_user = ev.get("ADMIN_USERNAME", "")
     admin_pass = ev.get("ADMIN_PASSWORD", "")
@@ -115,6 +115,25 @@ def _do_login(page: Page, username: str, password: str, role: str = ""):
 ''', encoding="utf-8")
 
 
+# 语种开关：环境变量里配 TEST_LANGUAGE=zh / en 就行。
+# 不配就是中文 —— 绝大多数时候跑的是中文，默认值该是最常用的那个。
+#
+# 为什么不直接让人写 PLAYWRIGHT_LOCALE=en-US：那个名字要求人知道
+# ① 它是 Playwright 的概念 ② 得写成 BCP-47 全码。写错一个字（en / EN-us）
+# 就静默退回中文，而"没生效"和"译文没导"长得一模一样。
+# 短名字 + 两个值，写错的空间小得多。
+_LANG_TO_LOCALE = {"zh": "zh-CN", "en": "en-US"}
+
+
+def _resolve_locale(ev: dict) -> str:
+    """算出这次跑用哪个语种。TEST_LANGUAGE 是给人用的，PLAYWRIGHT_LOCALE 更具体所以优先。"""
+    explicit = (ev.get("PLAYWRIGHT_LOCALE") or "").strip()
+    if explicit:
+        return explicit
+    lang = (ev.get("TEST_LANGUAGE") or "").strip().lower()
+    return _LANG_TO_LOCALE.get(lang, "zh-CN")
+
+
 def _write_i18n_module(sandbox_dir: str, locale: str, mapping: dict[str, dict] | None) -> None:
     """在沙箱里写 tea_i18n.py —— 脚本用 `t("更多")` 取当前语种的文案。
 
@@ -142,5 +161,13 @@ def _write_i18n_module(sandbox_dir: str, locale: str, mapping: dict[str, dict] |
         "def t(text: str) -> str:\n"
         "    if LOCALE.startswith('zh'):\n"
         "        return text\n"
-        "    return (_TABLE.get(text) or {}).get(LOCALE) or text\n",
+        "    row = _TABLE.get(text) or {}\n"
+        "    # 精确匹配优先，再按语言前缀兜（词典键是 en-US，人可能只给 en）\n"
+        "    if LOCALE in row:\n"
+        "        return row[LOCALE]\n"
+        "    pre = LOCALE.split('-')[0]\n"
+        "    for k, v in row.items():\n"
+        "        if k.split('-')[0] == pre and v:\n"
+        "            return v\n"
+        "    return text\n",
         encoding="utf-8")

@@ -485,7 +485,8 @@ def test_创建服务后列表可见(page: Page):
          page.get_by_role("button", name=t("更多")).click()
          expect(page.get_by_test_id("sync-status-bar")).to_contain_text(t("草稿"))
 
-`t()` 由平台注入沙箱（tea_i18n.py），按环境变量 `PLAYWRIGHT_LOCALE` 取译文；
+`t()` 由平台注入沙箱（tea_i18n.py），按环境变量 **`TEST_LANGUAGE=zh|en`** 取译文
+（不配就是中文）；
 **查不到就原样返回中文**，所以词典没收录的词也不会让脚本挂掉。
 本地写的时候自己 stub 一个 `def t(s): return s` 就行。
 

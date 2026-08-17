@@ -18,9 +18,11 @@ from app.engine.pw_conftest import write_playwright_conftest
 from app.mcp.tools.sync import _scan_ui_script
 
 
-def _sandbox(locale, table):
+def _sandbox(env, table):
+    """env 可以是语种串（老写法）或环境变量字典。"""
     d = tempfile.mkdtemp()
-    write_playwright_conftest(d, {"PLAYWRIGHT_LOCALE": locale}, None, table)
+    ev = env if isinstance(env, dict) else {"PLAYWRIGHT_LOCALE": env}
+    write_playwright_conftest(d, ev, None, table)
     sys.path.insert(0, d)
     for m in list(sys.modules):
         if m == "tea_i18n":
@@ -80,9 +82,34 @@ def test_注释里的中文不算():
     assert not any("硬编码中文" in x for x in w), w
 
 
+def test_语种开关是短名字两个值():
+    """`PLAYWRIGHT_LOCALE=en-US` 要求人知道①它是 Playwright 概念②得写 BCP-47 全码。
+    写错一个字就静默退回中文，而"没生效"和"译文没导"长得一模一样。
+    `TEST_LANGUAGE=zh|en` 写错的空间小得多。"""
+    t_en = _sandbox({"TEST_LANGUAGE": "en"}, {"更多": {"en-US": "More"}}).t
+    assert t_en("更多") == "More"
+    t_up = _sandbox({"TEST_LANGUAGE": "EN"}, {"更多": {"en-US": "More"}}).t
+    assert t_up("更多") == "More", "大小写不该影响"
+
+
+def test_不配语种就是中文():
+    """绝大多数时候跑的是中文，默认值该是最常用的那个。"""
+    mod = _sandbox({}, {"更多": {"en-US": "More"}})
+    assert mod.LOCALE == "zh-CN" and mod.t("更多") == "更多"
+
+
+def test_值写错了退回中文不报错():
+    assert _sandbox({"TEST_LANGUAGE": "xx"}, {"更多": {"en-US": "More"}}).t("更多") == "更多"
+
+
+def test_只给en也能匹配到en_US():
+    """词典键是 en-US，人可能只给 en —— 按语言前缀兜一层。"""
+    assert _sandbox({"PLAYWRIGHT_LOCALE": "en"}, {"更多": {"en-US": "More"}}).t("更多") == "More"
+
+
 def test_规范里写了文案纪律():
     from app.mcp.tools.sync import _SPEC_UI_SCRIPT
-    for k in ("data-testid", "tea_i18n", "PLAYWRIGHT_LOCALE", "原样返回中文"):
+    for k in ("data-testid", "tea_i18n", "TEST_LANGUAGE", "原样返回中文"):
         assert k in _SPEC_UI_SCRIPT, f"规范缺「{k}」—— CC 只照规范写"
 
 
