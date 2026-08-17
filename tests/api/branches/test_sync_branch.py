@@ -113,43 +113,36 @@ class TestSyncBranchValidation:
 
 
 class TestSyncBranchAsync:
-    """异步同步 — mock arq pool 和 Redis"""
+    """异步同步 — 后台任务（不再走 arq/Redis）
+
+    同步早就从 arq 队列改成了 FastAPI BackgroundTasks + run_git_sync_inline，
+    这两条却还在 patch 已经不存在的 app.api.branches.get_arq_pool，直接
+    AttributeError。测的是早没了的实现，所以改成断言后台任务被挂上去。
+    """
+
+    async def _make_branch(self, client, db_session, username, project_name, path):
+        admin = await create_test_user(db_session, username=username, role="admin")
+        headers, _ = make_auth_headers(admin)
+        resp = await client.post("/api/projects", headers=headers, json={
+            "name": project_name,
+            "gitUrl": "git@example.com:test/repo.git",
+            "scriptBasePath": path,
+        })
+        project_id = resp.json()["data"]["id"]
+        resp = await client.get(f"/api/projects/{project_id}/branches", headers=headers)
+        return headers, project_id, resp.json()["data"][0]["id"]
 
     @pytest.mark.asyncio
     async def test_sync_returns_202_with_task_id(self, client, db_session):
         """AC: 提交任务返回 202 + taskId"""
-        admin = await create_test_user(db_session, username="sync_admin4", role="admin")
-        headers, _ = make_auth_headers(admin)
+        headers, project_id, branch_id = await self._make_branch(
+            client, db_session, "sync_admin4", "async-sync-project", "/tmp/async-sync")
 
-        resp = await client.post("/api/projects", headers=headers, json={
-            "name": "async-sync-project",
-            "gitUrl": "git@example.com:test/repo.git",
-            "scriptBasePath": "/tmp/async-sync",
-        })
-        project_id = resp.json()["data"]["id"]
-
-        resp = await client.get(f"/api/projects/{project_id}/branches", headers=headers)
-        branch_id = resp.json()["data"][0]["id"]
-
-        # Mock arq pool 和 Redis
-        mock_pool = AsyncMock()
-        mock_pool.enqueue_job = AsyncMock()
-
-        with patch("app.api.branches.get_arq_pool", return_value=mock_pool), \
-             patch("app.api.branches.set_task_status", new_callable=AsyncMock):
-
-            from app.deps.worker import get_arq_pool as original_dep
-            from app.main import app
-
-            app.dependency_overrides[original_dep] = lambda: mock_pool
-
-            try:
-                resp = await client.post(
-                    f"/api/projects/{project_id}/branches/{branch_id}/sync",
-                    headers=headers,
-                )
-            finally:
-                app.dependency_overrides.pop(original_dep, None)
+        # 后台任务本体不跑（会真去 clone），只验端点的返回
+        with patch("app.api.branches.set_task_status", new_callable=AsyncMock), \
+             patch("app.api.branches.run_git_sync_inline", new_callable=AsyncMock):
+            resp = await client.post(
+                f"/api/projects/{project_id}/branches/{branch_id}/sync", headers=headers)
 
         assert resp.status_code == 202
         data = resp.json()["data"]
@@ -157,42 +150,19 @@ class TestSyncBranchAsync:
         assert len(data["taskId"]) == 32  # uuid hex
 
     @pytest.mark.asyncio
-    async def test_sync_enqueues_arq_job(self, client, db_session):
-        """AC: 端点调用后 arq 任务被提交"""
-        admin = await create_test_user(db_session, username="sync_admin5", role="admin")
-        headers, _ = make_auth_headers(admin)
+    async def test_sync_schedules_background_task(self, client, db_session):
+        """AC: 端点调用后，同步任务被挂进后台任务并拿到正确参数"""
+        headers, project_id, branch_id = await self._make_branch(
+            client, db_session, "sync_admin5", "enqueue-sync-project", "/tmp/enqueue-sync")
 
-        resp = await client.post("/api/projects", headers=headers, json={
-            "name": "enqueue-sync-project",
-            "gitUrl": "git@example.com:test/repo.git",
-            "scriptBasePath": "/tmp/enqueue-sync",
-        })
-        project_id = resp.json()["data"]["id"]
+        with patch("app.api.branches.set_task_status", new_callable=AsyncMock), \
+             patch("app.api.branches.run_git_sync_inline", new_callable=AsyncMock) as mock_sync:
+            resp = await client.post(
+                f"/api/projects/{project_id}/branches/{branch_id}/sync", headers=headers)
 
-        resp = await client.get(f"/api/projects/{project_id}/branches", headers=headers)
-        branch_id = resp.json()["data"][0]["id"]
-
-        mock_pool = AsyncMock()
-        mock_pool.enqueue_job = AsyncMock()
-
-        with patch("app.api.branches.set_task_status", new_callable=AsyncMock):
-            from app.deps.worker import get_arq_pool as original_dep
-            from app.main import app
-
-            app.dependency_overrides[original_dep] = lambda: mock_pool
-
-            try:
-                await client.post(
-                    f"/api/projects/{project_id}/branches/{branch_id}/sync",
-                    headers=headers,
-                )
-            finally:
-                app.dependency_overrides.pop(original_dep, None)
-
-        # Then: enqueue_job 被调用
-        mock_pool.enqueue_job.assert_called_once()
-        call_args = mock_pool.enqueue_job.call_args
-        assert call_args[0][0] == "run_git_sync"  # 任务函数名
+        task_id = resp.json()["data"]["taskId"]
+        # BackgroundTasks 在响应发出后执行，此时应已跑过一次
+        mock_sync.assert_called_once_with(task_id, str(branch_id), str(project_id))
 
 
 class TestSyncBranchPermissions:
