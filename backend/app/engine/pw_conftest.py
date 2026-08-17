@@ -7,6 +7,7 @@ def write_playwright_conftest(
     sandbox_dir: str,
     env_vars: dict[str, str] | None = None,
     har_path: str | None = None,
+    i18n: dict[str, dict] | None = None,
 ):
     """在沙箱目录写入 Playwright conftest.py — 包含登录 fixture 和浏览器配置。
 
@@ -16,6 +17,7 @@ def write_playwright_conftest(
     """
     ev = env_vars or {}
     pw_locale = ev.get("PLAYWRIGHT_LOCALE", "zh-CN")
+    _write_i18n_module(sandbox_dir, pw_locale, i18n)
     admin_user = ev.get("ADMIN_USERNAME", "")
     admin_pass = ev.get("ADMIN_PASSWORD", "")
     tenant_user = ev.get("TENANT_USERNAME", "")
@@ -111,3 +113,34 @@ def _do_login(page: Page, username: str, password: str, role: str = ""):
         page.wait_for_url(lambda url: "/login" not in url, timeout=15000)
         page.wait_for_load_state("networkidle")
 ''', encoding="utf-8")
+
+
+def _write_i18n_module(sandbox_dir: str, locale: str, mapping: dict[str, dict] | None) -> None:
+    """在沙箱里写 tea_i18n.py —— 脚本用 `t("更多")` 取当前语种的文案。
+
+    **文案和数据要对称**（见 docs/cc-platform-loop-spec.md §2.9）：数据不许写死
+    已经有硬拦截，文案却一直是硬编码中文（`get_by_role("button", name="更多")`），
+    而 conftest 又把浏览器 locale 锁死成 zh-CN —— 于是"能不能测英文"这件事
+    根本没法回答，实测 9 个脚本 57 处写死中文。
+
+    现在语种由环境变量 PLAYWRIGHT_LOCALE 决定（它本来就在，只是以前只切浏览器
+    语言、不翻脚本文案）。词典由平台按项目注入。
+
+    **查不到就原样返回中文，绝不抛异常** —— 词典一定是不全的，
+    让脚本因为缺一条词而挂掉，比不做这个功能还糟。
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    table = {k: v for k, v in (mapping or {}).items()}
+    _Path(sandbox_dir, "tea_i18n.py").write_text(
+        "# 平台注入：按 PLAYWRIGHT_LOCALE 把中文 UI 文案换成当前语种。\n"
+        "# 查不到就原样返回 —— 词典不全是常态，不能因此让脚本挂掉。\n"
+        "import os\n\n"
+        f"LOCALE = os.getenv('PLAYWRIGHT_LOCALE', {locale!r})\n"
+        f"_TABLE = {_json.dumps(table, ensure_ascii=False)}\n\n"
+        "def t(text: str) -> str:\n"
+        "    if LOCALE.startswith('zh'):\n"
+        "        return text\n"
+        "    return (_TABLE.get(text) or {}).get(LOCALE) or text\n",
+        encoding="utf-8")

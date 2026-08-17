@@ -143,3 +143,20 @@ async def harvest_project(session: AsyncSession, project_id) -> dict:
     literals = [{"text": t, "category": c} for t, c in merged.items()]
     added = await _upsert_literals(session, project_id, literals)
     return {"added": added, "scanned": len(contents)}
+
+
+async def load_locale_table(session, project_id) -> dict[str, dict]:
+    """取项目的 i18n 词典，形状 {中文文案: {语种: 译文}}，喂给沙箱的 t()。
+
+    只取**有译文**的 —— 空 translations 的行注入进去只是让沙箱多背几百条噪音，
+    t() 查到空还是得退回中文，结果一样。
+    """
+    from sqlalchemy import select as _select
+
+    from app.models.i18n_message import ProjectI18nMessage
+
+    rows = (await session.execute(
+        _select(ProjectI18nMessage.key_text, ProjectI18nMessage.translations)
+        .where(ProjectI18nMessage.project_id == project_id)
+    )).all()
+    return {k: v for k, v in rows if isinstance(v, dict) and any((x or "").strip() for x in v.values())}

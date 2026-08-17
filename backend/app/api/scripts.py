@@ -457,7 +457,17 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
         Path(pw_output_dir).mkdir(parents=True, exist_ok=True)
         from app.engine.har import har_path_for
         from app.engine.pw_conftest import write_playwright_conftest
-        write_playwright_conftest(sandbox_dir, env_vars, har_path=har_path_for(pw_output_dir))
+        from app.services.i18n_harvest_service import load_locale_table
+        # 文案词典：脚本里的 t("更多") 靠它换语种。取不到就传空 —— t() 会原样返回中文。
+        try:
+            from app.models.project import Branch
+            _c = await session.get(Case, case_id)
+            _b = await session.get(Branch, _c.branch_id) if _c else None
+            _i18n = await load_locale_table(session, _b.project_id) if _b else {}
+        except Exception:
+            _i18n = {}
+        write_playwright_conftest(sandbox_dir, env_vars,
+                                  har_path=har_path_for(pw_output_dir), i18n=_i18n)
 
     plugin_src = Path(__file__).resolve().parent.parent / "engine" / "plugins" / "tea_capture.py"
     step_src = Path(__file__).resolve().parent.parent / "engine" / "plugins" / "tea_step.py"

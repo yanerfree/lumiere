@@ -468,6 +468,29 @@ def test_创建服务后列表可见(page: Page):
 ### 流程
 
 1. 本地写脚本，**先自己跑通**（别回推没验证过的东西）
+### 文案纪律：优先 testid，退回文案时用 `t()`
+
+**数据不许写死已经有硬拦截，文案是同一件事的另一半。**
+脚本里 `name="更多"` 这种硬编码中文，换英文环境全挂 ——
+实测 9 个脚本 57 处写死中文、只有 5 处用 testid。
+
+按这个顺序选定位方式：
+
+  1. **`data-testid`**（`page.get_by_test_id("sync-status-bar")`）—— 最稳，
+     文案改了、语种换了都不受影响。被测系统有就用它
+  2. **结构 + 角色**（`get_by_role("button")` + 位置/父级），不带 name
+  3. **文案** —— 只有前两条都不行才用，而且**必须走 `t()`**：
+
+         from tea_i18n import t
+         page.get_by_role("button", name=t("更多")).click()
+         expect(page.get_by_test_id("sync-status-bar")).to_contain_text(t("草稿"))
+
+`t()` 由平台注入沙箱（tea_i18n.py），按环境变量 `PLAYWRIGHT_LOCALE` 取译文；
+**查不到就原样返回中文**，所以词典没收录的词也不会让脚本挂掉。
+本地写的时候自己 stub 一个 `def t(s): return s` 就行。
+
+回推时会扫硬编码中文给**软警告**（不硬拦 —— 词典总有不全的时候）。
+
 2. `tb_sync_ui_script(case_id, content)` 入库
 3. `tb_run_ui_script(case_id, env_id)` 在目标环境上再跑一遍——平台跑通了才算通
 4. 失败看 `tb_get_ui_script_result(case_id)`：状态、耗时、错误摘要、截图数
@@ -1125,11 +1148,35 @@ def _detect_language(content: str, file_name: str | None) -> str:
     return "python"
 
 
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+# 只认定位/断言里的文案：name= / text= / has_text= / to_contain_text( / get_by_text(
+_UI_TEXT_RE = re.compile(
+    r"""\bname\s*[:=]\s*['"]([^'"]+)['"]"""
+    r"""|\bhas_text\s*=\s*['"]([^'"]+)['"]"""
+    r"""|get_by_text\(\s*['"]([^'"]+)['"]"""
+    r"""|to_contain_text\(\s*['"]([^'"]+)['"]""")
+
+
 def _scan_ui_script(content: str, language: str) -> tuple[list[str], list[str]]:
     """返回 (硬错误, 软警告)。规矩跟接口回推一致：外部取值一律走变量，不许写死。"""
     errors: list[str] = []
     warns: list[str] = []
     reader = "process.env" if language == "typescript" else "os.getenv"
+
+    # 硬编码的 UI 中文文案 → 软警告。**不硬拦**：词典总有不全的时候，
+    # 硬拦会把人卡死在一条查不到的词上。
+    # 只扫定位/断言里的文案（name=/text=/has_text=），不扫注释和普通字符串 ——
+    # 脚本头部的说明、变量名里带中文都不算。
+    _cn_hits = [m for m in _UI_TEXT_RE.finditer(content)
+                if _CJK_RE.search(next(g for g in m.groups() if g))]
+    if _cn_hits and "tea_i18n" not in content:
+        sample = "、".join(
+            next(g for g in m.groups() if g)[:12] for m in _cn_hits[:3])
+        warns.append(
+            f"脚本里有 {len(_cn_hits)} 处硬编码中文文案（{sample}…），换英文环境会全挂。"
+            f"优先用 data-testid 定位；必须用文案时走 `from tea_i18n import t` + "
+            f"`t(\"更多\")`，平台按 PLAYWRIGHT_LOCALE 注入译文，查不到会原样返回中文。"
+            f"详见 tb_get_sync_spec(kind='ui_script') 的「文案纪律」。")
 
     for line in content.splitlines():
         if reader in line:

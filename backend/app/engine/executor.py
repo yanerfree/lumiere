@@ -23,6 +23,7 @@ def execute_single_case(
     script_ref_func: str | None = None,
     env_vars: dict[str, str] | None = None,
     timeout: int = 300,
+    i18n: dict[str, dict] | None = None,
 ) -> dict:
     """
     在沙箱中执行单条 pytest 用例。
@@ -74,7 +75,10 @@ def execute_single_case(
         Path(pw_output_dir).mkdir(parents=True, exist_ok=True)
         from app.engine.har import har_path_for
         from app.engine.pw_conftest import write_playwright_conftest
-        write_playwright_conftest(sandbox_dir, env_vars, har_path=har_path_for(pw_output_dir))
+        # 文案词典由调用方查好传进来 —— 这个函数是同步的、跑在线程里，
+        # 拿不到 session。传空也没关系：t() 查不到就原样返回中文。
+        write_playwright_conftest(sandbox_dir, env_vars,
+                                  har_path=har_path_for(pw_output_dir), i18n=i18n)
 
     # 注入 HTTP 捕获插件 + 步骤标记器
     plugin_src = Path(__file__).parent / "plugins" / "tea_capture.py"
