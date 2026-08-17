@@ -205,3 +205,51 @@ def test_导入脚本用key路径当键():
     src = Path(imp.__file__).read_text(encoding="utf-8")
     assert 'key_text=key' in src, "又拿中文当键了"
     assert '"zh-CN": zh_text' in src, "没把中文也存成值 —— 那样切回中文就取不到"
+
+
+# ── 词典只长「测试引用到的」，不是 locale 的镜像 ──────────────────
+
+def test_引用了词典没有的键要软警告():
+    """词典的定位是**「测试引用到的文案清单」**，不是被测系统 locale 的镜像。
+    全量导进来的 2416 条里只有 31 条真被用到，剩下 2385 条是会过期的重复数据。
+    所以按需登记：引用哪条，那条才该在词典里。
+    这道门禁就是提醒去登记 —— 不然英文环境下那几处会**静默**退回中文。
+    """
+    from app.mcp.tools.sync import _scan_ui_script
+    snip = "def test_x(page):\n    "
+    e, w = _scan_ui_script(snip + 'page.get_by_role("button", name=t("no.such")).click()',
+                           "python", {"a.b"})
+    assert not e, "硬拦了 —— 词典总有没登记的时候"
+    assert any("词典里没有" in x for x in w), w
+
+
+def test_键已登记就不警告():
+    from app.mcp.tools.sync import _scan_ui_script
+    snip = "def test_x(page):\n    "
+    _, w = _scan_ui_script(snip + 'page.get_by_role("button", name=t("a.b")).click()',
+                           "python", {"a.b"})
+    assert not any("词典里没有" in x for x in w), w
+
+
+def test_拿不到词典时不报这条():
+    """查库失败不能变成"你引用错了" —— 那是平台自己的问题，别赖给 CC。"""
+    from app.mcp.tools.sync import _scan_ui_script
+    snip = "def test_x(page):\n    "
+    _, w = _scan_ui_script(snip + 'page.get_by_role("button", name=t("x.y")).click()',
+                           "python", None)
+    assert not any("词典里没有" in x for x in w), w
+
+
+def test_清理脚本只按文案位置判不在正文里搜():
+    """第一版在整段正文里搜中文，2416 条"留"了 344 条 —— 全是「取消」「管理」
+    「服务」「节点」这种两三个字的词，在注释、变量名、别的文案里到处都是。
+    改成只看定位/断言的文案位置后是 31 条。"""
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import importlib
+
+    import prune_unused_i18n as pr
+    importlib.reload(pr)
+    src = Path(pr.__file__).read_text(encoding="utf-8")
+    assert "extract_copy_literals" in src, "没用抽取规则，又在正文里搜了"
+    assert "zh in literals" in src, "判据不是「在文案位置出现过」"

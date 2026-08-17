@@ -1175,11 +1175,29 @@ _UI_TEXT_RE = re.compile(
     r"""|to_contain_text\(\s*['"]([^'"]+)['"]""")
 
 
-def _scan_ui_script(content: str, language: str) -> tuple[list[str], list[str]]:
+_T_REF_RE = re.compile(r"""\bt\(\s*['"]([^'"]+)['"]""")
+
+
+def _scan_ui_script(content: str, language: str,
+                    known_keys: set[str] | None = None) -> tuple[list[str], list[str]]:
     """返回 (硬错误, 软警告)。规矩跟接口回推一致：外部取值一律走变量，不许写死。"""
     errors: list[str] = []
     warns: list[str] = []
     reader = "process.env" if language == "typescript" else "os.getenv"
+
+    # 引用了词典里没有的键 → 软警告。
+    # 词典的定位是**「测试引用到的文案清单」**，不是被测系统 locale 的镜像 ——
+    # 全量导进来的 2416 条里只有 31 条真被用到，剩下 2385 条是会过期的重复数据，
+    # 已清掉。所以是**按需登记**：CC 引用哪条，那条才该在词典里。
+    # 这道门禁就是提醒它去登记，不然英文环境下那几处会静默退回中文。
+    _refs = {m.group(1) for m in _T_REF_RE.finditer(content)}
+    if _refs and known_keys is not None:
+        _missing = sorted(_refs - set(known_keys))
+        if _missing:
+            warns.append(
+                f"引用了 {len(_missing)} 个词典里没有的键（{'、'.join(_missing[:3])}…）—— "
+                f"英文环境下这几处会静默退回中文。去「国际化词典」把它们登记上"
+                f"（键 + 中文 + 英文），键从被测系统 locale 文件里取。")
 
     # 硬编码的 UI 中文文案 → 软警告。**不硬拦**：词典总有不全的时候，
     # 硬拦会把人卡死在一条查不到的词上。
@@ -1266,7 +1284,21 @@ async def sync_ui_script(
     if lang not in ("python", "typescript"):
         return {"error": f"language 只支持 python / typescript，收到 {language}"}
 
-    errors, warns = _scan_ui_script(content, lang)
+    # 已登记的键，用来判「引用了词典里没有的」。查不到就传 None（不报这条）。
+    _known = None
+    try:
+        from app.models.i18n_message import ProjectI18nMessage
+        from app.models.project import Branch as _Br
+        _c = await session.get(Case, cid)
+        _b = await session.get(_Br, _c.branch_id) if _c else None
+        if _b:
+            _known = set((await session.execute(
+                select(ProjectI18nMessage.key_text)
+                .where(ProjectI18nMessage.project_id == _b.project_id)
+            )).scalars().all())
+    except Exception:  # noqa: BLE001
+        _known = None
+    errors, warns = _scan_ui_script(content, lang, _known)
 
     # ── 断言门禁（B5）──
     # 唯一的硬拦截：一条断言都没有。"跑通了但什么都不验证"是最常见的作弊路径，
