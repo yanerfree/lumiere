@@ -89,10 +89,26 @@ class TokenCache:
         self._lock = asyncio.Lock()
 
     def _login_url(self) -> str | None:
-        if self._env.get("LOGIN_URL"):
-            return self._env["LOGIN_URL"]
-        base = self._env.get("BASE_URL")
-        return f"{base.rstrip('/')}/api/auth/login" if base else None
+        """自动登录用哪个地址。**LOGIN_URL 是路径就拼上 BASE_URL。**
+
+        环境里 LOGIN_URL 存的是 `/api/auth/login`（步骤里写 `${BASE_URL}${LOGIN_URL}`
+        本来就是拼起来用的）。原来这里直接拿它当完整 URL 发请求，httpx 报
+        「Request URL is missing an 'http://' or 'https://' protocol」，异常被吞掉
+        只留一行 warning —— 后果是**自动登录从来没成功过**：
+          · 共享资源（automation_resources）的探测一律 401 → state=unknown →
+            `${资源名}` 永远注入不进来，于是每条链只好自己写一步「按名字查上游」
+            并硬断言它存在，一个底座缺失就放大成一批链全红
+          · 401 被动刷新也失效（拿不到新 token）
+        实测这个项目 4 个共享资源全年 unknown，没人发现 —— 因为链子自己带登录步骤，
+        照样能跑，只有共享资源这条路悄悄死了。
+        """
+        lu = str(self._env.get("LOGIN_URL") or "").strip()
+        base = str(self._env.get("BASE_URL") or "").rstrip("/")
+        if lu.lower().startswith("http"):
+            return lu
+        if lu:
+            return f"{base}/{lu.lstrip('/')}" if base else None
+        return f"{base}/api/auth/login" if base else None
 
     async def get_token(self, client: httpx.AsyncClient, role: str = "ADMIN") -> str | None:
         async with self._lock:
@@ -225,14 +241,21 @@ def _resolve_variables(text, env: dict) -> str:
 
 
 def _t(ref: str, env: dict) -> str:
-    """`${T:ref}` → 当前语种的那句话。
+    """`${T:ref}` → 当前语种的那句话。`${T:键|中文原文}` 把中文也带上。
 
     ref 是**语言中立的 key**（`services.form.nameRequired`）—— 中文和英文都是它的值。
     也认中文原文（采集器从脚本里抽的那批就是拿中文当 key 的），是为了兼容。
 
-    查不到就原样返回，绝不抛 —— 词典一定是不全的。中文原文当 key 时，
-    原样返回正好就是中文的正确答案。
+    **带上 `|中文原文` 有两个作用**：读断言的人一眼知道在验什么（光看键名看不出来），
+    以及词典查不到时退回中文，而不是把键名当文案去比（那必然假红）。
+        ${T:services.form.nameDuplicated|服务名已存在}
+
+    查不到就退回中文 / 原样返回，绝不抛 —— 词典一定是不全的。
     """
+    hint = None
+    if "|" in ref:
+        ref, hint = ref.split("|", 1)
+        ref = ref.strip()
     lang = (env.get("TEST_LANGUAGE") or "").strip().lower()
     locale = str(env.get("PLAYWRIGHT_LOCALE")
                  or {"en": "en-US", "zh": "zh-CN"}.get(lang, "zh-CN"))
@@ -243,7 +266,7 @@ def _t(ref: str, env: dict) -> str:
     for k, v in row.items():
         if k.split("-")[0] == pre and v:
             return v
-    return ref
+    return hint if hint is not None else ref
 
 
 def _resolve_obj(obj, env: dict):
@@ -277,9 +300,39 @@ def _unresolved_refs(*objs) -> list[str]:
     return names
 
 
+def _split_path(path: str) -> list[str]:
+    """按 `.` 切段，方括号里的 `.` 不算分隔符 —— 过滤值本身可能带点：`[name=svc-a.b]`。"""
+    out: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for ch in path:
+        if ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth = max(0, depth - 1)
+        if ch == "." and depth == 0:
+            out.append("".join(buf))
+            buf = []
+        else:
+            buf.append(ch)
+    out.append("".join(buf))
+    return out
+
+
+_SELECTOR_RE = re.compile(r'\[([^\[\]]+)\]')
+
+
 def _extract_value(body, path: str):
-    """按 JSONPath-lite 从响应体取值，支持点号 + 数组下标：
-    data.token / data.isolation_rules[0].id / data.items[0] / data[0].name / [0].id
+    """按 JSONPath-lite 从响应体取值。三种选择器：
+
+    - 下标：`data.items[0].id`，**负数从后往前** `data.items[-1].id`
+    - 按字段值过滤：`data.items[name=${svcName}].id` —— 取第一条 name 等于该值的
+    - 混用：`data.items[status=pending][0].id`
+
+    **过滤器是为了消灭 `data[0]`。** 下标是另一种写死（见 tb_get_sync_spec 的变量纪律）：
+    列表顺序、排序口径、分页一变，`data[0]` 就静默指向别的业务对象，断言照过。
+    实测撞到：`/todos` 按 created_at 升序且满页，本次新建的那条压根不在第一页。
+    有了过滤器就按业务标识定位，顺序怎么变都对得上。
 
     **`$.` 前缀一并接受。** MCP 工具的参数说明里写的是 "jsonpath"，
     外部 CC 照着写 `$.data.token` 是完全合理的，而这里只认 `data.token` ——
@@ -294,40 +347,102 @@ def _extract_value(body, path: str):
         return body
     elif path.startswith("$["):
         path = path[1:]
-    for seg in path.split("."):
+    for seg in _split_path(path):
         if val is None:
             return None
-        m = re.match(r'^([^\[\]]*)((?:\[\d+\])*)$', seg)
+        m = re.match(r'^([^\[\]]*)((?:\[[^\[\]]+\])*)$', seg)
         if not m:
             # 段里含无法解析的字符，退化为整段当作字典 key
             if isinstance(val, dict):
                 val = val.get(seg)
                 continue
             return None
-        key, idx_part = m.group(1), m.group(2)
+        key, sel_part = m.group(1), m.group(2)
         if key:
             if isinstance(val, dict):
                 val = val.get(key)
             else:
                 return None
-        for idx in re.findall(r'\[(\d+)\]', idx_part):
-            i = int(idx)
-            if isinstance(val, list) and 0 <= i < len(val):
+        for sel in _SELECTOR_RE.findall(sel_part):
+            sel = sel.strip()
+            if not isinstance(val, list):
+                return None
+            if re.fullmatch(r'-?\d+', sel):
+                i = int(sel)
+                if i < 0:
+                    i += len(val)
+                if not (0 <= i < len(val)):
+                    return None
                 val = val[i]
+            elif "=" in sel:
+                star = sel.startswith("*")
+                f, _, want = (sel[1:] if star else sel).partition("=")
+                hits = [e for e in val
+                        if _scalar_eq(_extract_value(e, f.strip()), want.strip())]
+                # `[*k=v]` 取**全部命中**，配 length 才能断"有且只有一条"。
+                # 少了它，唯一性根本没法验：`[k=v]` 只取第一条，被测系统真接受了
+                # 第二条同名，断言照样绿 —— 活体跑回推链路时就是这么被
+                # tb_check_assertion_bite 抓出来的（still_green）。
+                # 而 length 对整个列表用又不行：`?search=` 在被测系统里不是严格过滤。
+                val = hits if star else (hits[0] if hits else None)
             else:
                 return None
     return val
 
 
+def expected_of(a: dict):
+    """一条断言的期望值 —— `expected` 和 `value` **两种键名都认**。
+
+    为什么会有两种：库里的口径是 status 写 `value`、body_field 写 `expected`
+    （前端编辑器就是这么存的，规范里的例子也是），而写的人自然会两处都用 `expected`。
+    同一个概念两个键名，于是**判定和显示各挑了一个**：
+
+      · 判定（status 分支）只读 `value` → `{"type":"status","expected":200}` 拿到 None
+      · 报错那一行读的是 `expected` → 打印出「期望 200，实际 200，判失败」
+
+    实测代价：CC 新建的 23 步场景**全红**，逐字重跑两次结果相同，而 8/16 建的老场景
+    15/15 全绿 —— 差别只有这一个键名。连锁反应还有：清理步骤实际 204 成功却被判 fail，
+    tb_check_env_hygiene 于是报了 3 条"残留"，那 3 个 id 去查全是 404。
+
+    两个键都给的时候 `expected` 优先 —— 那是历史形态 `{value: 字段路径,
+    expected: 期望值}`（见 field_of）。**取期望值只许走这一个函数。**
+    """
+    v = a.get("expected")
+    return a.get("value") if v is None else v
+
+
+def field_of(a: dict, operator: str | None = None):
+    """断言的字段路径 —— `field`，或历史形态里的 `value`（那时期望值在 `expected`）。"""
+    if a.get("field"):
+        return a["field"]
+    if a.get("expected") is not None or operator in ("not_empty", "is_empty", "not_exists"):
+        return a.get("value")
+    return None
+
+
+def _as_int(v):
+    """状态码统一成整数比较 —— 变量插值出来的是字符串（"200"），不转必然假红。"""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return v
+
+
 def _expects_status(assertions: list[dict], code: int) -> bool:
-    """断言是否预期该状态码（401 重试判断用）。"""
+    """断言是否预期该状态码（401 重试判断用）。
+
+    `in [401, 403]` 也算预期 —— 原来只判 `int(value) == code`，列表进来
+    int() 直接抛，于是"这一步本来就该 401"被当成 token 过期，白重试一轮。
+    """
     for a in assertions or []:
-        if a.get("type") == "status":
-            try:
-                if int(a.get("value")) == code:
-                    return True
-            except (TypeError, ValueError):
-                pass
+        if a.get("type") != "status":
+            continue
+        exp = expected_of(a)
+        if isinstance(exp, (list, tuple)):
+            if any(_as_int(x) == code for x in exp):
+                return True
+        elif _as_int(exp) == code:
+            return True
     return False
 
 
@@ -337,7 +452,19 @@ def _expects_status(assertions: list[dict], code: int) -> bool:
 _VALID_OPS = {
     "status": ("==", "!=", "in"),
     "body_contains": ("contains", "not_contains"),
-    "body_field": ("==", "!=", "not_empty", "contains", "not_contains"),
+    # is_empty / length / 大小比较是后补的：
+    # · is_empty —— 「列表应该是空的」以前根本表达不了，只能拿 body_contains not_contains
+    #   某个字段名去绕，而那是在整个响应体里搜字符串，别的地方出现同名字段就假绿。
+    # · length —— 按字段过滤之后断「恰好一条」。没有它，过滤器只能证明"有"，
+    #   证明不了"只有这一条"。
+    # · > < >= <= —— 编辑器的下拉里本来就有「大于/小于」，而执行器不认，
+    #   人在页面上选了就得到「不认识的操作符」，永远失败。
+    # not_exists 是活体跑回推链路时逼出来的：`data[name=${svcName}].id` 在东西被删掉之后
+    # 取不到值（过滤没命中），而 is_empty 故意不认 None（那是"字段改名"，混在一起会把
+    # 改名假绿掉）。少了它，「删完按名字查不到」只能退回 body_contains not_contains
+    # 在整个响应体里搜字符串 —— 正是要消灭的那种绕法。
+    "body_field": ("==", "!=", "not_empty", "is_empty", "not_exists", "contains",
+                   "not_contains", "length", ">", "<", ">=", "<="),
 }
 
 
@@ -383,6 +510,15 @@ def _as_number(v):
     return None
 
 
+def _is_blank(v) -> bool:
+    """空容器/空串算空；数字 0 和布尔 false **不算空**（那是有意义的值）。"""
+    if isinstance(v, str):
+        return v.strip() == ""
+    if isinstance(v, (list, dict, tuple, set)):
+        return len(v) == 0
+    return False
+
+
 def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> list[dict]:
     results = []
     for a in assertions:
@@ -405,15 +541,15 @@ def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> li
                             "error": f"不认识的断言类型「{a_type}」；支持：{'、'.join(_VALID_OPS)}"})
             continue
 
-        expected = a.get("expected", a.get("value"))
-        field_path = a.get("field") or (a.get("value") if a.get("expected") is not None or operator == "not_empty" else None)
+        expected = expected_of(a)
+        field_path = field_of(a, operator)
 
         if a_type == "status":
-            expected = a.get("value")
-            try:
-                expected = int(expected)
-            except (TypeError, ValueError):
-                pass
+            # **别在这儿重新取一遍期望值。** 原来这行是 `expected = a.get("value")`，
+            # 把上面的口径覆盖掉，于是 `{"type":"status","expected":200}` 变成 None、
+            # 200 == None 判失败，而报错那行读 expected、打印「期望 200」。见 expected_of。
+            expected = ([_as_int(x) for x in expected]
+                        if isinstance(expected, (list, tuple)) else _as_int(expected))
             actual = status_code
             if operator == "==":
                 passed = actual == expected
@@ -422,7 +558,8 @@ def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> li
             elif operator == "in":
                 passed = actual in (expected if isinstance(expected, list) else [expected])
         elif a_type == "body_contains":
-            contain_val = a.get("value", a.get("expected", ""))
+            _cv = expected_of(a)
+            contain_val = "" if _cv is None else _cv
             op = operator if operator in ("contains", "not_contains") else "contains"
             hit = str(contain_val) in str(resp_body)
             passed = hit if op == "contains" else not hit
@@ -435,7 +572,42 @@ def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> li
             elif operator == "!=":
                 passed = not _scalar_eq(actual, expected)
             elif operator == "not_empty":
-                passed = actual is not None and actual != ""
+                # 空数组/空对象**必须算空**。原来只判 `actual != ""`，于是
+                # `{"type":"body_field","field":"data.items","operator":"not_empty"}`
+                # 在 `"items": []` 上是绿的 —— 「查出来应该有数据」这条断言
+                # 恰好在没数据时通过，是纯假绿。
+                passed = actual is not None and not _is_blank(actual)
+            elif operator == "not_exists":
+                # 路径压根取不到值：过滤没命中、字段不在、数组为空取不到下标。
+                # ⚠ 字段名写错也一样取不到 → 这条会**恒真**。所以回推门禁要求
+                # 同一条路径在前面有一步断过 not_empty/==（证明它取得到过），
+                # 见 sync._missing_path_baseline。
+                passed = actual is None
+            elif operator == "is_empty":
+                # 只有"取到了且是空容器"才算通过。字段不存在（None）**不算空**：
+                # 那是接口改了字段名，跟"列表为空"是两件事，混在一起会把改名假绿掉。
+                passed = actual is not None and _is_blank(actual)
+            elif operator == "length":
+                # **对象不算**。`data.items[name=x]` 过滤出来的是一个对象，
+                # 它的 len 是键数 —— 拿它断「恰好一条」会因为"这条对象刚好有 1 个字段"
+                # 而通过，是纯假绿。断条数只能对列表用。
+                if isinstance(actual, (list, tuple, str)) and _as_number(expected) is not None:
+                    passed = len(actual) == _as_number(expected)
+                    actual = len(actual)
+                else:
+                    results.append({**a, "passed": False, "actual": actual,
+                                    "error": "length 只能用在数组/字符串上（对象的长度是键数，"
+                                             "拿它断条数会假绿），期望值要是数字"})
+                    continue
+            elif operator in (">", "<", ">=", "<="):
+                a_num, e_num = _as_number(actual), _as_number(expected)
+                if a_num is None or e_num is None:
+                    results.append({**a, "passed": False, "actual": actual,
+                                    "error": f"{operator} 要两边都是数字；"
+                                             f"实际取到 {actual!r}，期望值 {expected!r}"})
+                    continue
+                passed = {">": a_num > e_num, "<": a_num < e_num,
+                          ">=": a_num >= e_num, "<=": a_num <= e_num}[operator]
             elif operator == "contains":
                 passed = expected is not None and str(expected) in str(actual)
             elif operator == "not_contains":
@@ -443,6 +615,27 @@ def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> li
 
         results.append({**a, "passed": passed, "actual": actual})
     return results
+
+
+def _inject_accept_language(headers: dict, env: dict) -> None:
+    """按 `TEST_LANGUAGE` 给请求带上 `Accept-Language`。
+
+    **这是 `${T:}` 的另一半，此前是缺的。** 断言那边按 TEST_LANGUAGE 取译文，
+    请求这边却从来不告诉被测系统"我要哪个语种" —— 于是切到 en 只有期望值变了，
+    响应还是原样，`${T:}` 断言必红。而这是**假红**：排查的人会去查产品，
+    查半天发现是测试自己没把语种发过去。
+
+    步骤自己写了 Accept-Language 就不动它（大小写都算），那是有意为之。
+    """
+    lang = (env.get("TEST_LANGUAGE") or "").strip().lower()
+    if not lang or not isinstance(headers, dict):
+        return
+    if any(str(k).lower() == "accept-language" for k in headers):
+        return
+    headers["Accept-Language"] = _LANG_TO_TAG.get(lang, lang)
+
+
+_LANG_TO_TAG = {"zh": "zh-CN", "en": "en-US"}
 
 
 async def run_single_step(
@@ -462,6 +655,7 @@ async def run_single_step(
     url = _resolve_variables(step.url, env)
     headers = _resolve_obj(step.headers or {}, env)
     body = _resolve_obj(step.body, env)
+    _inject_accept_language(headers, env)
 
     # 变量没解析出来时 _resolve_variables 会原样留下 ${NAME}，直接发出去只会得到
     # 一个莫名其妙的 404/422，看不出是"环境/场景变量没配"。这里发之前就拦下来说清楚。
@@ -542,6 +736,10 @@ async def run_single_step(
         extracted: list[dict] = []
         if step.variables_extract:
             for var_name, path in (step.variables_extract or {}).items():
+                # 提取路径里的 ${var} 也要解析 —— 过滤器最有用的地方正是这里：
+                # `data[description=${svcName}].id` 才是"拿到本次那条的 id"的正解。
+                # 不解析的话只能退回 `data[0].id`，而那是规范自己禁止的写法。
+                path = _resolve_variables(str(path), env)
                 val = _extract_value(resp_body, path) if resp_body else None
                 if val is not None:
                     env[var_name] = str(val)
@@ -649,6 +847,44 @@ async def run_step(
     return result
 
 
+async def _auto_create_resource(client, base: str, headers: dict, res, env: dict) -> dict:
+    """探到「确实没有」时，照 `create_def` 把共享底座建出来。
+
+    **为什么改成平台自建。** 原来的规矩是"探不到就报变量未解析，你自己去造" ——
+    纪律上说得通，实践上把一个资源缺失放大成一整批脚本红：二十条链都引用同一个
+    共享上游，它没了就二十条一起挂，而每条链自己都没有能力兜（接口场景是声明式
+    JSON，写不出 if/else）。资源怎么造**已经登记在 create_def 里**了，那就该由
+    平台在跑之前补上，而不是让人挨个去救。
+
+    三道闸，一道都不能少：
+      · **只在 state=missing 时建** —— 那是"请求成功且明确没匹配上"。
+        401/5xx/超时是 unknown，一次 token 过期就照着建会造出一堆重复底座。
+      · **只试一次，不重试** —— 失败就如实报，让链子红在"变量未解析"上并带上原因。
+      · **4xx 冲突当成"别人刚建好"** —— 并发跑时两条链可能同时探到 missing，
+        撞唯一约束的那条不该失败，复探一次就能拿到那个 id。
+    """
+    cd = res.create_def or {}
+    url = str(cd.get("url") or "")
+    if not url:
+        return {"ok": False, "reason": "create_def 里没有 url"}
+    url = _resolve_variables(url, env)
+    if not url.lower().startswith("http"):
+        url = f"{base}/{url.lstrip('/')}"
+    method = (cd.get("method") or "POST").upper()
+    body = _resolve_obj(cd.get("body"), env)
+    h = {**headers, "Content-Type": "application/json"}
+    try:
+        resp = await client.request(method, url, headers=h, json=body)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "reason": f"补建请求失败: {e}"}
+    if resp.status_code < 300:
+        return {"ok": True, "reason": f"已按 create_def 补建（{method} {url} → {resp.status_code}）"}
+    if resp.status_code in (400, 409, 422):
+        return {"ok": True, "conflict": True,
+                "reason": f"补建撞了冲突（{resp.status_code}）—— 多半是并发的另一条链刚建好，复探一次"}
+    return {"ok": False, "reason": f"补建失败 HTTP {resp.status_code}: {resp.text[:160]}"}
+
+
 async def _resolve_automation_resources(session, scenario, env: dict, token_cache=None) -> dict:
     """把项目级前置资源（automation_resources）的 extract 值解析成变量。
 
@@ -676,23 +912,40 @@ async def _resolve_automation_resources(session, scenario, env: dict, token_cach
     if not resources:
         return {}, []
 
-    headers = {}
-    token = env.get("AUTH_TOKEN")
-    async with httpx.AsyncClient(timeout=15, verify=False) as probe_client:
-        if not token and token_cache is not None:
-            token = await token_cache.get_token(probe_client)
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-
     out: dict = {}
     report: list[dict] = []
     async with httpx.AsyncClient(timeout=15, verify=False) as client:
         for res in resources:
+            # **每条资源可以指定用哪个角色的 token**（exists_check.role，默认 ADMIN）。
+            # 实测撞到：读上游 ADMIN 能读，但 `upstream:create` 是租户管理员的能力，
+            # 拿 ADMIN 去补建回 403 INSUFFICIENT_CAPABILITY。角色写死成 ADMIN 就等于
+            # 「能探不能补」，而补建恰恰是这条路的价值所在。
+            role = str((res.exists_check or {}).get("role") or "ADMIN").upper()
+            headers = {}
+            token = env.get("AUTH_TOKEN")
+            if not token and token_cache is not None:
+                token = await token_cache.get_token(client, role)
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
             try:
                 item = await precheck_service._check_one(client, base, headers, res)
             except Exception as ex:
                 report.append({"name": res.name, "ok": False, "reason": f"探测异常: {ex}"})
                 continue
+            # 确实没有 + 登记过怎么造 → 平台补建，然后复探一次。
+            # 只认 missing（探测请求成功且明确没匹配上），unknown 一律不动。
+            created_note = None
+            if item.get("state") == "missing" and res.create_def:
+                r = await _auto_create_resource(client, base, headers, res, env)
+                created_note = r["reason"]
+                if r.get("ok"):
+                    try:
+                        item = await precheck_service._check_one(client, base, headers, res)
+                    except Exception as ex:  # noqa: BLE001
+                        report.append({"name": res.name, "ok": False,
+                                       "reason": f"补建后复探异常: {ex}", "autoCreate": created_note})
+                        continue
+
             vals = item.get("values") or {}
             for k, v in vals.items():
                 out[k] = v
@@ -702,12 +955,20 @@ async def _resolve_automation_resources(session, scenario, env: dict, token_cach
                     out.setdefault(res.name, first)
             if not item.get("exists"):
                 report.append({"name": res.name, "ok": False,
-                               "reason": item.get("reason") or "未在当前环境找到"})
+                               "reason": item.get("reason") or "未在当前环境找到",
+                               **({"autoCreate": created_note} if created_note else {}),
+                               **({"hint": "登记 create_def 之后平台会在跑前自动补建 —— "
+                                           "这条没登记，所以只能你自己造"}
+                                  if not res.create_def and item.get("state") == "missing" else {})})
             elif not vals:
                 report.append({"name": res.name, "ok": False,
                                "reason": "资源存在，但 exists_check.extract 没抽到值（检查 JSONPath）"})
             else:
-                report.append({"name": res.name, "ok": True, "vars": sorted(vals.keys())})
+                row = {"name": res.name, "ok": True, "vars": sorted(vals.keys())}
+                if created_note:
+                    # 补建这件事必须说出来：环境被平台改过，人要知道
+                    row["autoCreated"] = created_note
+                report.append(row)
     return out, report
 
 
@@ -718,7 +979,14 @@ async def run_scenario(
     base_env: dict | None = None,
     token_cache: TokenCache | None = None,
     env_name: str | None = None,
+    persist: bool = True,
 ) -> AsyncIterator[RunEvent]:
+    """persist=False：照常跑、照常发事件，但**不写 last_status / last_response、不 commit**。
+
+    给变异验证用（故意跳掉动作步、看验证步会不会红）。那种运行天然是全红的，
+    写进去会把用例的接口维度、页面上的步骤状态、执行历史全带成"这条挂了" ——
+    而它其实是一次**诊断**，不是一次回归。
+    """
     async with _run_semaphore:
         # 变量优先级：步骤提取 > 场景变量(SV_*) > 运行时 > 用户选择的环境(base_env) > 场景 env_variables
         # origins 与 env 平行维护，记录每个键"从哪来"，供运行详情做溯源展示。
@@ -771,11 +1039,14 @@ async def run_scenario(
         # 跑前预检结论：缺哪个前置资源要当场说，别等用到它的那一步才报"变量未解析"
         if precheck_report:
             missing = [r for r in precheck_report if not r.get("ok")]
+            created = [r for r in precheck_report if r.get("autoCreated")]
             yield RunEvent(type="precheck_result", data={
                 "scenarioId": str(scenario.id),
                 "total": len(precheck_report),
                 "readyCount": len(precheck_report) - len(missing),
                 "missing": missing,
+                # 平台动了被测环境，必须说出来 —— 悄悄补建比不补建更糟
+                "autoCreated": created,
                 "resources": precheck_report,
             })
 
@@ -785,14 +1056,16 @@ async def run_scenario(
                 result = await run_step(step, env, client, token_cache, origins=origins, step_index=i)
                 results.append(result)
 
-                step.last_status = result.status
-                step.last_response = {
-                    "statusCode": result.status_code,
-                    "duration": result.duration,
-                    "body": result.response_body,
-                    "assertions": result.assertions,
-                    "request": result.request_data,
-                } if not result.error else {"error": result.error, "request": result.request_data}
+                if persist:
+                    step.last_status = result.status
+                    step.last_response = {
+                        "statusCode": result.status_code,
+                        "duration": result.duration,
+                        "body": result.response_body,
+                        "assertions": result.assertions,
+                        "request": result.request_data,
+                    } if not result.error else {"error": result.error,
+                                                "request": result.request_data}
 
                 # 详情随事件一起下发。以前只发状态码，前端要靠内存里那份 scenario 的
                 # lastResponse 取详情 —— 那是跑之前加载的，跑完不刷新就是空，展开只会看到
@@ -812,7 +1085,10 @@ async def run_scenario(
                     "assertions": result.assertions,
                 })
 
-        await session.commit()
+        if persist:
+            await session.commit()
+        # persist=False 时上面压根没往 step 上写东西，所以不 commit 就等于没留痕；
+        # 不要在这里 rollback/expunge —— 那会连带清掉调用方 session 里别的东西。
 
         scenario_result = ScenarioResult(
             scenario_id=str(scenario.id),
@@ -964,12 +1240,16 @@ def describe_assertion(a: dict) -> str:
     **这是唯一的渲染口径**：报告轨迹、MCP 返回都用它，前端 RunResultPanel 里
     那份是它的镜像（改了这儿记得同步，两处说法不一样比不说更糟）。
     """
+    field = field_of(a, a.get("operator")) or ""
+    exp = expected_of(a)
+    if exp is not None and str(exp) == str(field):
+        exp = ""          # 历史形态 `{value: 字段路径}`：别把路径当期望值再印一遍
     return a.get("message") or " ".join(
         str(x) for x in (
             _ASSERT_LABELS.get(a.get("type"), a.get("type") or "断言"),
-            a.get("field") or "",
+            field,
             a.get("operator") or "==",
-            a.get("value") if a.get("value") is not None else a.get("expected"),
+            "" if exp is None else exp,
         ) if str(x) != ""
     )
 
@@ -989,7 +1269,7 @@ def _type_hint(a: dict) -> str:
     布尔**故意不兜** —— 放过去的话「期望 true、实际 1」也会算相等，那是假绿。
     所以这里只负责把话说明白，判定不放松。
     """
-    expected = a.get("value") if a.get("value") is not None else a.get("expected")
+    expected = expected_of(a)
     actual = a.get("actual")
     if expected is None or actual is None:
         return ""
@@ -1024,9 +1304,18 @@ def failure_detail(assertions, error) -> dict:
         "failedAssertions": [{
             "type": a.get("type"), "field": a.get("field"),
             "operator": a.get("operator") or "==",
-            "expected": a.get("value") if a.get("value") is not None else a.get("expected"),
+            "expected": expected_of(a),
             "actual": a.get("actual"),
         } for a in bad],
+        # **通过的那几条也要列出来。** 只列失败的，等于看不出"其余断言到底求值了没有" ——
+        # 实测 CC 卡在这儿：状态码那条恒失败（键名 bug），body_field 的新过滤语法
+        # `data[*key=val]` 有没有被求值、取到了什么，返回里一个字都没有，
+        # 于是"改对了没有"这件事无从判断。一条一行，够看清就行。
+        "checked": [{
+            "desc": describe_assertion(a),
+            "passed": bool(a.get("passed")),
+            "actual": a.get("actual"),
+        } for a in (assertions or []) if isinstance(a, dict)][:12],
     }
 
 

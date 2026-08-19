@@ -50,6 +50,9 @@ class UpdateCaseRequest(BaseSchema):
     script_ref_func: str | None = None
     is_flaky: bool | None = None
     remark: str | None = None
+    # 关联 bug：整份覆盖（传 [] 就是清空 = 不再卡着）。每条 {ref, url?, status, note?}
+    bug_refs: list[dict] | None = None
+    tags: list[str] | None = None
     # AI 审核扩展（FR21-FR28）
     # 审核标签：NULL=待提审（不存值）/ pending=待审 / approved=已审 / rejected=不通过
     review_status: Literal["pending", "approved", "rejected"] | None = None
@@ -112,6 +115,16 @@ class CaseResponse(BaseSchema):
     # 自动隔离：非空且未过期 = 还在隔离中；evidence 是判定依据，人要能复核
     quarantined_until: datetime | None = None
     flaky_evidence: dict | None = None
+    # 「卡在外部条件上」：自述等什么。不是状态，只为了让看板分清
+    # 「没人写」和「写不了」—— 不给前端的话，人看到的还是一片"未开始"。
+    blocked_external: str | None = None
+    # 关联 bug + 标签。派生的两个布尔别让前端自己算 ——
+    # 「还卡着」和「可以继续了」是两处（列表、CC 的 check_branch）都要用的判断，
+    # 各算一遍必然分叉。
+    bug_refs: list | None = None
+    tags: list | None = None
+    blocked_by_bug: bool = False
+    retest_pending: bool = False
     # P0 两阶段：有人确认过「预期结果」这一列没有。改了步骤/预期结果会清掉
     expected_confirmed_at: datetime | None = None
     expected_confirmed_by: uuid.UUID | None = None

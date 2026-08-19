@@ -10,6 +10,7 @@ from app.models.case import Case
 from app.models.plan import PlanCase
 from app.models.report import TestReportScenario
 from app.schemas.case import CreateCaseRequest, UpdateCaseRequest
+from app.services import bug_ref_service
 from app.services.import_service import _get_or_create_folder, _next_case_code
 
 
@@ -26,7 +27,11 @@ def sync_manual_status(case) -> None:
     写的时候直接落 completed，徽标和下拉就永远一致，也不用再派生。
     """
     has = bool(case.steps or [])
-    if has and case.manual_status in ("draft", "debugging"):
+    # **None 也要算 draft。** 新建时这个函数跑在 flush 之前，列的 server_default
+    # 还没落下来，`case.manual_status` 是 None —— 于是两个分支都不命中，带着 3 步
+    # 建出来的用例停在 draft，看板上永远挂一条「有脆弱点：manual 还在 draft」，
+    # 而判词让人去改一个从来没错的东西。活体跑回推链路时就撞到这条。
+    if has and case.manual_status in (None, "", "draft", "debugging"):
         case.manual_status = "completed"
     elif not has and case.manual_status == "completed":
         case.manual_status = "draft"
@@ -155,6 +160,13 @@ async def update_case(
         case.is_flaky = data.is_flaky
     if data.remark is not None:
         case.remark = data.remark
+    # 关联 bug / 标签：整份覆盖（传 [] = 清空 = 不再卡着）。
+    # previous 传进去是为了"状态没变就别刷时间戳" —— 否则改个标题就把
+    # 「什么时候标的 fixed」冲掉了。
+    if data.bug_refs is not None:
+        case.bug_refs = bug_ref_service.normalize_bug_refs(data.bug_refs, case.bug_refs)
+    if data.tags is not None:
+        case.tags = bug_ref_service.normalize_tags(data.tags)
     # AI 审核扩展（FR21-FR28）
     if data.review_status is not None:
         if data.review_status == "rejected" and not (data.review_reason and data.review_reason.get("category")):
@@ -203,6 +215,7 @@ async def list_cases(
     ui_status: str | None = None,
     api_status: str | None = None,
     pushed_within: str | None = None,
+    bug_state: str | None = None,
 ) -> tuple[list[Case], int]:
     """分页查询用例列表，支持多条件筛选。返回 (cases, total)。
 
@@ -223,6 +236,20 @@ async def list_cases(
         base = base.where(Case.deleted_at.is_not(None))
     else:
         base = base.where(Case.deleted_at.is_(None))
+
+    # 关联 bug 两态。**在 SQL 里筛，不在内存里** —— 列表是分页的，
+    # 拿当前页去过滤会得到"第 3 页只剩 1 条"这种结果。
+    # JSONB 里判"有没有 status=open 的元素"用 @> 数组包含。
+    if bug_state in ("blocked", "retest", "none"):
+        from sqlalchemy import text as _text
+        has_open = _text("cases.bug_refs @> '[{\"status\": \"open\"}]'::jsonb")
+        has_fixed = _text("cases.bug_refs @> '[{\"status\": \"fixed\"}]'::jsonb")
+        if bug_state == "blocked":
+            base = base.where(has_open)
+        elif bug_state == "retest":
+            base = base.where(has_fixed, ~has_open)
+        else:
+            base = base.where(or_(Case.bug_refs.is_(None), ~has_open, ~has_fixed))
 
     if pushed_within in ("today", "week"):
         now = datetime.now(timezone.utc).astimezone()
@@ -612,9 +639,87 @@ async def copy_cases_from_branch(
             script_ref_file=source.script_ref_file,
             script_ref_func=source.script_ref_func,
             remark=source.remark,
+            # 承诺（做几维、为什么不做某一维）和预期的落款都跟着走 ——
+            # 不带过去，复制出来的用例在新分支上"没人确认过预期、也不知道要做到哪一步"
+            target_level=source.target_level,
+            target_level_reason=source.target_level_reason,
+            expected_confirmed_at=source.expected_confirmed_at,
+            expected_confirmed_by=source.expected_confirmed_by,
+            expected_confirmed_actor=source.expected_confirmed_actor,
+            expected_confirmed_note=source.expected_confirmed_note,
         )
+        sync_manual_status(new_case)
         session.add(new_case)
+        await session.flush()
+
+        # ── 真·深拷贝：场景变量 / 接口场景 / UI 脚本 ──
+        # 按钮上写着"深拷贝，含步骤和场景"，而原来只拷了用例这一行：
+        # 接口场景、UI 脚本、场景变量一个都没带过去。复制出来是个空壳，
+        # 新分支上还得让 CC 把脚本全部重推一遍 —— 那这个功能等于没用。
+        # **执行状态刻意不拷**：在新分支上一次都没跑过，维度状态从头开始。
+        await _copy_case_assets(session, source, new_case, target_branch_id)
         copied += 1
 
     await session.flush()
     return {"copied": copied}
+
+
+async def copy_case_side_assets(session: AsyncSession, source_id: uuid.UUID,
+                                new_case_id: uuid.UUID) -> None:
+    """复制挂在用例上的两样东西：场景变量、活跃 UI 脚本。
+
+    两条复制路径（用例级「从分支复制」、建分支时整分支拷）都要用它。
+    尤其是 UI 脚本：`script_ref_file` 本来就跟着复制，脚本正文却留在源分支 ——
+    复制出来的用例指着一个不存在的脚本，点执行才发现没有。
+    """
+    from app.models.scenario_variable import ScenarioVariable
+    from app.models.script import Script
+
+    for v in (await session.execute(
+        select(ScenarioVariable).where(ScenarioVariable.case_id == source_id)
+    )).scalars().all():
+        session.add(ScenarioVariable(
+            case_id=new_case_id, name=v.name, kind=v.kind,
+            value_template=v.value_template, var_type=v.var_type, description=v.description,
+        ))
+
+    for sp in (await session.execute(
+        select(Script).where(Script.case_id == source_id, Script.status == "active")
+    )).scalars().all():
+        session.add(Script(
+            case_id=new_case_id, script_type=sp.script_type, language=sp.language,
+            file_name=sp.file_name, func_name=sp.func_name, content=sp.content,
+            status="active", version=1, source=sp.source,
+        ))
+
+
+async def _copy_case_assets(session: AsyncSession, source: Case, new_case: Case,
+                            target_branch_id: uuid.UUID) -> None:
+    """把用例挂着的产物一起复制：场景变量、接口场景（含步骤）、活跃 UI 脚本。"""
+    from app.models.api_test import ApiTestScenario, ApiTestStep
+
+    await copy_case_side_assets(session, source.id, new_case.id)
+
+    for sc in (await session.execute(
+        select(ApiTestScenario).where(ApiTestScenario.source_case_id == source.id)
+    )).scalars().all():
+        new_sc = ApiTestScenario(
+            project_id=sc.project_id, branch_id=target_branch_id,
+            code=new_case.case_code,          # 编号跟用例走（一个用例一条场景）
+            title=sc.title, priority=sc.priority, source=sc.source, status="draft",
+            description=sc.description, source_case_id=new_case.id,
+            created_by=sc.created_by, env_variables=sc.env_variables,
+        )
+        session.add(new_sc)
+        await session.flush()
+        for st in (await session.execute(
+            select(ApiTestStep).where(ApiTestStep.scenario_id == sc.id)
+            .order_by(ApiTestStep.sort_order)
+        )).scalars().all():
+            session.add(ApiTestStep(
+                scenario_id=new_sc.id, sort_order=st.sort_order, group_name=st.group_name,
+                name=st.name, method=st.method, url=st.url, headers=st.headers, body=st.body,
+                assertions=st.assertions, variables_extract=st.variables_extract,
+                enabled=st.enabled, wait_ms=st.wait_ms,
+                retry_timeout_ms=st.retry_timeout_ms, retry_interval_ms=st.retry_interval_ms,
+            ))

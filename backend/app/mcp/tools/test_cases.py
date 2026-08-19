@@ -259,6 +259,10 @@ async def update_case(
     target_level_reason: str | None = None,
     expected_confirmed_by: str | None = None,
     expected_confirmed_note: str | None = None,
+    reconfirm: bool = False,
+    blocked_external: str | None = None,
+    bug_refs: list | None = None,
+    tags: list | None = None,
 ) -> dict:
     """改一条已有用例的内容。只传要改的字段，没传的原样不动。
 
@@ -272,6 +276,25 @@ async def update_case(
     **不能改状态**：ui_status / api_status / manual_status 一概不收。状态由平台
     按执行事实推进，或由人拍板，这是红线；你要说"这条现在能跑了"，去跑一遍，
     让执行结果说话。
+
+    `blocked_external`：这条**卡在外部条件上**（等环境变量加上、等某接口上线）就写一句
+    等什么。它不是状态、不影响任何流程，只解决一件事 ——「我没写」和「我写不了，
+    因为外面缺东西」在看板上长得一模一样，于是每轮都要人挨个来问。条件到位了传空串撤掉。
+
+    `bug_refs`：这条**跑出来是红的、但红的原因不在用例**（产品 bug）就关联上去。
+    每条 `{"ref": "UAG-123 或一句话", "url": "可选", "status": "open|fixed", "note": "可选"}`。
+    整份覆盖，传 `[]` 清空。**平台不判 bug 死活**：你标 `fixed` 只是"据说修好了"，
+    列表随即显示「待重跑」；重跑绿了平台自动把 fixed 的关联摘掉，红着就留着 ——
+    这就是"这条什么时候能继续"的唯一信号，别再靠 remark 里写一句自然语言。
+    还卡着（有 open）的用例，`tb_run_ui_scripts_batch` 默认跳过：重跑除了刷红没有信息量。
+
+    `tags`：自由分拣词（`冒烟`、`需要真数据`、`等三方联调`），最多 20 个、每个 32 字内。
+    别拿它表达状态或审核结论 —— 那两样有确定语义、驱动门禁，标签只用来筛。
+
+    改步骤/预期会清掉「预期已确认」。`reconfirm=True` 用于**措辞润色**：
+    实质没变（补一句措辞、改错别字），依据沿用原落款，只重盖时间。
+    实测一轮因此重填了 12 条几百字的依据 —— 重填时人不会真的重读，
+    等于把"确认"变成了走过场。实质变了就别用它，老老实实重新对一遍。
     """
     from sqlalchemy import select
 
@@ -318,27 +341,58 @@ async def update_case(
     if target_level is not None and target_level not in ("spec", "spec_api", "full"):
         return {"error": "target_level 只能是 spec / spec_api / full"}
 
+    # 落款要在 update_case **之前**取 —— 改步骤/预期会把四个字段一起清掉，
+    # 清完再取就只剩 None，reconfirm 沿用不到任何东西。
+    prev_conf = (case.expected_confirmed_note, case.expected_confirmed_actor,
+                 case.expected_confirmed_by)
+
     changed = [k for k, v in (("title", title), ("priority", priority),
                               ("preconditions", preconditions), ("steps", steps),
-                              ("expectedResult", expected_result)) if v is not None]
+                              ("expectedResult", expected_result),
+                              ("bugRefs", bug_refs), ("tags", tags)) if v is not None]
     data = UpdateCaseRequest(
         title=title, priority=priority, preconditions=preconditions,
         steps=steps, expected_result=expected_result,
+        bug_refs=bug_refs, tags=tags,
     )
     case = await case_service.update_case(session, cid, data)
     if target_level_reason is not None:
         case.target_level_reason = (target_level_reason or "").strip()[:1000] or None
     if target_level is not None:
         case.target_level = target_level
+    # 「卡在外部条件上」：写一句等什么，写空字符串＝解除标注（条件到位了自己撤）
+    if blocked_external is not None:
+        case.blocked_external = blocked_external.strip()[:500] or None
+
+    reconfirmed = False
     if (expected_confirmed_note or "").strip():
         from datetime import datetime, timezone
         case.expected_confirmed_note = expected_confirmed_note.strip()[:2000]
         case.expected_confirmed_actor = (expected_confirmed_by or "未署名").strip()[:100]
         case.expected_confirmed_at = datetime.now(timezone.utc)
+    elif reconfirm and prev_conf[0]:
+        # 措辞润色：依据原样沿用，只重盖时间。落款文本不动 ——
+        # 让 CC 重打一遍几百字，重填出来的也不是新确认。
+        from datetime import datetime, timezone
+        (case.expected_confirmed_note, case.expected_confirmed_actor,
+         case.expected_confirmed_by) = prev_conf
+        case.expected_confirmed_at = datetime.now(timezone.utc)
+        reconfirmed = True
     await session.commit()
 
     result = {**_case_to_dict(case), "targetLevel": case.target_level,
               "targetLevelReason": case.target_level_reason, "changed": changed}
+    if case.bug_refs or bug_refs is not None:
+        result["bugRefs"] = case.bug_refs or []
+        result["blockedByBug"] = case.blocked_by_bug
+        result["retestPending"] = case.retest_pending
+    if case.tags or tags is not None:
+        result["tags"] = case.tags or []
+    if reconfirmed:
+        result["reconfirmed"] = case.expected_confirmed_actor
+    elif reconfirm and not prev_conf[0]:
+        warnings = list(warnings) + [
+            "reconfirm=True 但这条本来就没有落款，没东西可沿用 —— 要带 expected_confirmed_note。"]
     # 改了步骤或预期，平台会把"预期已确认"标记清掉 —— 说出来，否则 CC 以为还确认着
     if ("steps" in changed or "expectedResult" in changed) and not case.expected_confirmed_at:
         warnings = list(warnings) + [

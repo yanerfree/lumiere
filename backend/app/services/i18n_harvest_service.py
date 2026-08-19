@@ -189,6 +189,8 @@ async def load_locale_table(session, project_id) -> dict[str, dict]:
 
     只取**有译文**的 —— 空 translations 的行注入进去只是让沙箱多背几百条噪音，
     t() 查到空还是得退回中文，结果一样。
+
+    返回里**两种命名空间拼法都在**（见 ui_text_render.with_aliases）。
     """
     from sqlalchemy import select as _select
 
@@ -198,4 +200,31 @@ async def load_locale_table(session, project_id) -> dict[str, dict]:
         _select(ProjectI18nMessage.key_text, ProjectI18nMessage.translations)
         .where(ProjectI18nMessage.project_id == project_id)
     )).all()
-    return {k: v for k, v in rows if isinstance(v, dict) and any((x or "").strip() for x in v.values())}
+    table = {k: v for k, v in rows
+             if isinstance(v, dict) and any((x or "").strip() for x in v.values())}
+    # 两种拼法互认（`ns:a.b` ↔ `ns.a.b`）—— 词典里是点号、脚本里按被测系统写冒号，
+    # 不认的话查不到就静默退回中文：英文环境下测的其实是中文，一点红都没有。
+    from app.services.ui_text_render import with_aliases
+    return with_aliases(table)
+
+
+async def load_locale_table_for_case(session, case_id) -> dict[str, dict]:
+    """按用例取项目词典 —— **两条执行路径共用这一个**。
+
+    原来页面那条（api/scripts.py）自己查一遍，MCP 那条（mcp/tools/ui_scripts.py）
+    压根没查 —— 而 CC 走的正是 MCP 这条。后果：脚本里的 `t("services.list.xxx")`
+    查不到表，**原样返回那串键**，选择器拿键去匹配必然找不到元素，
+    整条链红在「element not found」上，谁都看不出是词典没注入。
+    实测就是这么撞上的（语种演示那条用例第一次跑）。
+
+    取不到就返回空表 —— t() 会原样返回 ref，中文当 ref 时正好还是对的。
+    """
+    try:
+        from app.models.case import Case
+        from app.models.project import Branch
+
+        case = await session.get(Case, case_id)
+        branch = await session.get(Branch, case.branch_id) if case else None
+        return await load_locale_table(session, branch.project_id) if branch else {}
+    except Exception:  # noqa: BLE001
+        return {}

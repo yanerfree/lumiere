@@ -23,6 +23,12 @@ def write_playwright_conftest(
     tenant_user = ev.get("TENANT_USERNAME", "")
     tenant_pass = ev.get("TENANT_PASSWORD", "")
     base_url = ev.get("BASE_URL", "")
+    lang_key = ev.get("UI_LANG_STORAGE_KEY", "")
+    # 存进去的**值**也各家不同：stoa 要 BCP-47（zh-CN/en-US），testBench 自己要短码（zh/en）。
+    # 默认 BCP-47；要短码就在环境里配 UI_LANG_STORAGE_VALUE={lang}。
+    # 猜错的代价还是"设了没生效"：键对了值不认，页面照旧原语种，断言全红。
+    lang_value = (ev.get("UI_LANG_STORAGE_VALUE") or "{locale}") \
+        .replace("{locale}", pw_locale).replace("{lang}", pw_locale.split("-")[0])
     har_literal = repr(har_path) if har_path else "None"
 
     Path(sandbox_dir, "conftest.py").write_text(f'''import pytest
@@ -62,6 +68,21 @@ def pytest_runtest_teardown(item, nextitem):
     """
     print("##TEARDOWN##", flush=True)
 
+
+# 被测系统自己的语言开关。**浏览器 locale 换不动它** —— 实测 stoa：locale 设成 en-US
+# 页面照旧全中文，它读的是 localStorage 的 `stoa-lang`。这就是"语种设了没生效"的根子：
+# 平台把期望值换成了英文，被测系统却还在说中文，断言全红，人先去查产品。
+# 环境里配一行 UI_LANG_STORAGE_KEY=<键名>，这里在页面脚本跑之前把它种下去。
+LANG_STORAGE_KEY = "{lang_key}"
+LANG_STORAGE_VALUE = "{lang_value}"
+
+@pytest.fixture
+def context(context):
+    if LANG_STORAGE_KEY:
+        context.add_init_script(
+            "try{{localStorage.setItem(%r, %r)}}catch(e){{}}" % (LANG_STORAGE_KEY, LANG_STORAGE_VALUE)
+        )
+    return context
 
 @pytest.fixture(autouse=True)
 def set_timeout(page: Page):
@@ -151,25 +172,45 @@ def _write_i18n_module(sandbox_dir: str, locale: str, mapping: dict[str, dict] |
     import json as _json
     from pathlib import Path as _Path
 
-    table = {k: v for k, v in (mapping or {}).items()}
+    # **按当前语种先解析平**：沙箱里拿到的是 {键: 这次该用的那句话}，一个扁平字典。
+    # 以前注入的是 {键: {语种: 文案}}，取值得在运行时挑语种 —— 那逼着脚本写成函数调用
+    # `t("键")`，而脚本里别的取值全是 os.getenv(...)：同一份脚本里两套取法，
+    # 读的人看不出 t() 也是"平台注入的数据"。摊平之后就能写成变量表下标。
+    flat: dict[str, str] = {}
+    for ref, row in (mapping or {}).items():
+        if not isinstance(row, dict):
+            continue
+        val = row.get(locale)
+        if not val:                                  # en 找 en-US，zh 找 zh-CN
+            pre = locale.split("-")[0]
+            val = next((v for k, v in row.items() if k.split("-")[0] == pre and v), None)
+        if val:
+            flat[ref] = val
+
     _Path(sandbox_dir, "tea_i18n.py").write_text(
-        "# 平台注入：按 PLAYWRIGHT_LOCALE 把中文 UI 文案换成当前语种。\n"
-        "# 查不到就原样返回 —— 词典不全是常态，不能因此让脚本挂掉。\n"
+        "# 平台注入：这次执行该用的 UI 文案表（已按语种解析好）。\n"
+        "# 语种由环境变量 TEST_LANGUAGE=zh|en 决定，脚本不用管。\n"
         "import os\n\n"
-        f"LOCALE = os.getenv('PLAYWRIGHT_LOCALE', {locale!r})\n"
-        f"_TABLE = {_json.dumps(table, ensure_ascii=False)}\n\n"
-        "def t(ref: str) -> str:\n"
-        "    \"\"\"ref 可以是 key（services.form.name，推荐）或中文原文（采集器抽的那些）。\n\n"
-        "    查不到就原样返回 —— 词典不全是常态，不能因此让脚本挂掉。\n"
+        f"LOCALE = os.getenv('PLAYWRIGHT_LOCALE', {locale!r})\n\n"
+        "class _Text(dict):\n"
+        "    \"\"\"平台注入的文案表 —— 当变量表用，别当函数用。\n\n"
+        "        TEXT[\"services.list.searchPlaceholder\"]                      # 取当前语种那句话\n"
+        "        TEXT.get(\"services.list.searchPlaceholder\", \"搜索服务名 / 路由…\")  # 推荐\n\n"
+        "    推荐带上中文原文（就是 dict.get 的默认值）：读脚本的人一眼知道在验什么，\n"
+        "    词典里没收录时也退回中文，而不是把键名当文案去匹配（那必然找不到元素）。\n"
         "    \"\"\"\n"
-        "    row = _TABLE.get(ref) or {}\n"
-        "    if LOCALE in row and row[LOCALE]:\n"
-        "        return row[LOCALE]\n"
-        "    pre = LOCALE.split('-')[0]\n"
-        "    for k, v in row.items():\n"
-        "        if k.split('-')[0] == pre and v:\n"
-        "            return v\n"
-        "    # key 制查不到该语种、或压根没这条 → 原样返回。\n"
-        "    # 中文原文当 key 时，这正好就是中文的正确答案。\n"
-        "    return ref\n",
+        # 裸下标查不到就**抛**，不返回键名。返回键名的下场：正例红在「找不到元素」上
+        # （看得见），而「不应出现」那类负例**假绿** —— 键名当文案去匹配，匹配不到任何
+        # 元素，"不该存在"当然成立。恒真断言不喊疼，所以宁可当场炸。
+        # 词典不全是常态 → 那就用带默认值的 TEXT.get(键, "中文原文")，它照旧不抛。
+        "    def __missing__(self, ref):\n"
+        "        raise KeyError(\n"
+        "            f'文案键 {ref!r} 不在平台注入的词典里。裸下标 TEXT[键] 查不到会直接抛 ——\\n'\n"
+        "            f'返回键名的话，「不应出现」那类断言会假绿（键名匹配不到任何元素）。\\n'\n"
+        "            f'两条任选：把这个键登记进项目词典（tb_upsert_i18n_terms），\\n'\n"
+        "            f'或改用 TEXT.get({ref!r}, \"中文原文\")（查不到退回中文，不抛）。')\n\n"
+        f"TEXT = _Text({_json.dumps(flat, ensure_ascii=False)})\n\n"
+        "def t(ref: str, zh: str = None) -> str:\n"
+        "    \"\"\"i18next 那套写法的别名，老脚本还在用；新脚本直接用 TEXT。\"\"\"\n"
+        "    return TEXT.get(ref, zh if zh is not None else ref)\n",
         encoding="utf-8")

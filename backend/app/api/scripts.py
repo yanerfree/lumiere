@@ -190,13 +190,17 @@ async def run_script(
     content = script.content
 
     # 把环境变量注入脚本中 os.getenv 的默认值
-    for var_name, var_value in env_vars.items():
-        content = re.sub(
-            rf'({re.escape(var_name)}\s*=\s*os\.getenv\(\s*"{re.escape(var_name)}"\s*,\s*)(["\']).*?\2',
-            lambda m, v=var_value: f'{m.group(1)}{m.group(2)}{v}{m.group(2)}',
-            content,
-            count=1,
-        )
+    # 按 os.getenv 里的**键**替换，不要求左边同名（见 ui_text_render.bake_env_defaults）
+    from app.services.ui_text_render import bake_env_defaults as _bake
+    content, _ = _bake(content, env_vars)
+
+    # 文案占位 ${键|中文} —— **这条路以前没渲染**（run-stream 那条渲染了，这条漏了：
+    # 又是"同一件事几处各写一份"。占位没换掉时正例红、负例假绿，见 executor 里那道拦截）。
+    if script_type == "ui":
+        from app.services.i18n_harvest_service import load_locale_table_for_case
+        from app.services.ui_text_render import locale_of, render as render_text
+        content, _ = render_text(content, await load_locale_table_for_case(session, case_id),
+                                 locale_of(env_vars))
 
     sandbox_dir = tempfile.mkdtemp(prefix="tb_run_")
     try:
@@ -430,12 +434,32 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
 
     file_name = script.file_name or "test_ui.py"
     content = script.content
-    for var_name, var_value in env_vars.items():
-        content = re.sub(
-            rf'({re.escape(var_name)}\s*=\s*os\.getenv\(\s*"{re.escape(var_name)}"\s*,\s*)(["\']).*?\2',
-            lambda m, v=var_value: f'{m.group(1)}{m.group(2)}{v}{m.group(2)}',
-            content, count=1,
-        )
+    # 按 os.getenv 里的**键**替换，不要求左边同名（见 ui_text_render.bake_env_defaults）
+    from app.services.ui_text_render import bake_env_defaults as _bake
+    content, _ = _bake(content, env_vars)
+
+    # 文案占位 ${键|中文} 在执行前替换掉 —— 和 MCP 那条路共用同一个渲染，
+    # 别再各写一份（上次"词典只在一条路注入"就是这么埋的）。
+    from app.services.i18n_harvest_service import load_locale_table_for_case
+    from app.services.ui_text_render import locale_of, render as render_text
+    _tbl = await load_locale_table_for_case(session, case_id)
+    content, _text_stat = render_text(content, _tbl, locale_of(env_vars))
+
+    # 占位没解析出来就**不开跑**。这条路不过 executor（自己起 pytest 子进程），
+    # 所以那道拦截在这儿要再写一次 —— 理由见 ui_text_render.unresolved()：
+    # 负例（"不应出现"）在占位坏掉时会假绿，跑绿了什么都证明不了。
+    from app.services.ui_text_render import unresolved as _unresolved_text
+    _left = _unresolved_text(content)
+    if _left:
+        yield _sse_done({
+            "status": "error", "duration_ms": 0,
+            "error_summary": (f"{len(_left)} 处文案占位没解析出来，拒绝执行："
+                              f"{'、'.join(_left[:5])}" + ("…" if len(_left) > 5 else "")
+                              + "。先在「国际化词典」登记 key+zh+en，或在占位里补 ${键|中文原文}。"
+                                "不拦的话「不应出现」那类断言会假绿。"),
+            "steps": [], "screenshots": [], "captured_requests": [],
+        })
+        return
 
     sandbox_dir = tempfile.mkdtemp(prefix="tb_run_")
     script_path = Path(sandbox_dir) / file_name
@@ -450,15 +474,7 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
         Path(pw_output_dir).mkdir(parents=True, exist_ok=True)
         from app.engine.har import har_path_for
         from app.engine.pw_conftest import write_playwright_conftest
-        from app.services.i18n_harvest_service import load_locale_table
-        # 文案词典：脚本里的 t("更多") 靠它换语种。取不到就传空 —— t() 会原样返回中文。
-        try:
-            from app.models.project import Branch
-            _c = await session.get(Case, case_id)
-            _b = await session.get(Branch, _c.branch_id) if _c else None
-            _i18n = await load_locale_table(session, _b.project_id) if _b else {}
-        except Exception:
-            _i18n = {}
+        _i18n = _tbl          # 上面渲染时已经取过，别再查一遍
         write_playwright_conftest(sandbox_dir, env_vars,
                                   har_path=har_path_for(pw_output_dir), i18n=_i18n)
 
@@ -767,10 +783,27 @@ async def export_scripts(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     script_type: str | None = Query(default=None, alias="type"),
+    env_id: uuid.UUID | None = Query(default=None, alias="envId"),
+    lang: str = Query(default="zh"),
+    include_credentials: bool = Query(default=False, alias="includeCredentials"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
 ):
-    """导出分支下所有 active 脚本为 zip 压缩包（可直接 pytest 运行）。"""
+    """导出分支下所有 active 脚本为 zip —— **下下来就能 pytest 跑**。
+
+    口径变过一次。原来只是"存档"：直接压脚本正文，README 里写着"跑不起来，这是预期的"。
+    但一份跑不起来的备份，等平台真没了才发现跑不起来 —— 那时才是最需要它能跑的时候。
+    现在传 `envId` 就把执行需要的东西一起打进去：
+
+      · 文案占位 `${键|中文}` 按 lang 渲染成当前语种（词典按项目取）
+      · `os.getenv("X", "默认")` 的默认值换成该环境的真值
+      · conftest.py（page fixture 的 locale/视口、被测系统语种开关、tea_step 装载）
+      · 沙箱插件 tea_step/tea_autolog/tea_capture
+      · requirements.txt + README 里三行命令
+
+    **凭据默认不打进去**（原来那条"不会有包含凭据这种选项"的口径，只放开成显式开关）：
+    默认生成 env.sh 里留占位，`includeCredentials=true` 才填真值。
+    """
     query = (
         select(Script, Case.case_code)
         .join(Case, Script.case_id == Case.id)
@@ -785,34 +818,118 @@ async def export_scripts(
     if not rows:
         raise NotFoundError(code="NO_SCRIPTS", message="没有可导出的脚本")
 
+    # 环境值 + 词典：传了 envId 才有，不传就退回"只存档"（正文原样）
+    env_vars: dict = {}
+    i18n: dict = {}
+    if env_id:
+        from app.services.variable_service import build_run_env
+        env_vars = {k: v for k, v in (await build_run_env(session, env_id)).items()
+                    if k != "__I18N__"}
+    from app.mcp.tools.sync import _SECRET_RE
+    from app.services.i18n_harvest_service import load_locale_table
+    from app.services.ui_text_render import bake_env_defaults, locale_of, render
+    try:
+        from app.models.project import Branch as _Branch
+        _b = await session.get(_Branch, branch_id)
+        i18n = await load_locale_table(session, _b.project_id) if _b else {}
+    except Exception:  # noqa: BLE001
+        i18n = {}
+    locale = locale_of({**env_vars, "TEST_LANGUAGE": lang})
+    secret_keys = sorted(k for k in env_vars if _SECRET_RE.search(k))
+    skip = set() if include_credentials else set(secret_keys)
+
     # 用**用例编号**建目录，不能只用 file_name —— CC 回推上来的脚本几乎都叫
     # test_ui.py / test_api.py，扁平放一起会同名互相覆盖：实测 6 个脚本压出来
     # 只剩 2 个文件。备份的意义是"平台没了资产还在"，覆盖掉就等于没备份。
     buf = io.BytesIO()
     manifest = []
     seen: set[str] = set()
+    unresolved: set[str] = set()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for script_obj, case_code in rows:
             path = backup_path(case_code, script_obj.script_type,
                                script_obj.file_name, seen)
             seen.add(path)
-            zf.writestr(path, script_obj.content)
+            content = script_obj.content or ""
+            if env_id:
+                content, stat = render(content, i18n, locale)
+                unresolved |= set(stat["missing"])
+                # **场景变量是按用例的**，不在环境变量里。少了它，脚本里
+                # `PROJECT_ID = os.getenv("SV_projectId","")` 拿到空串，
+                # 地址拼成 /projects//cases —— 实测就是这么挂的。
+                per_case = dict(env_vars)
+                try:
+                    from app.services.scenario_variable_service import (
+                        add_bare_names, resolve_scenario_variables,
+                    )
+                    add_bare_names(per_case, await resolve_scenario_variables(
+                        session, script_obj.case_id, global_lookup=per_case))
+                except Exception:  # noqa: BLE001
+                    pass
+                content, _ = bake_env_defaults(content, per_case, skip=skip)
+            zf.writestr(path, content)
             manifest.append(f"{case_code}\t{script_obj.script_type}\t{path}")
 
         zf.writestr("MANIFEST.tsv", "用例编号\t类型\t文件\n" + "\n".join(manifest))
-        zf.writestr("README.md", (
-            "# 用例脚本备份\n\n"
-            f"共 {len(rows)} 个脚本，按用例编号分目录。对照见 MANIFEST.tsv。\n\n"
-            "## 这份备份能干什么\n\n"
-            "存档。平台哪天没了，脚本正文还在。\n\n"
-            "## 直接跑得起来吗\n\n"
-            "**跑不起来，这是预期的。** 脚本里的取值来自三层，都不在这个包里：\n\n"
-            "1. 场景变量（平台按用例存，执行时注入）\n"
-            "2. 项目级全局引用 —— `BASE_URL` / 账号 / token，按环境注入\n"
-            "3. 步骤间提取物（上一步的响应里取的）\n\n"
-            "**凭据一个字都不在这个包里**，也不会有「包含凭据」这种选项。\n"
-            "要跑，把脚本放回平台执行，或在目标环境自己补齐上面这些值。\n"
-        ))
+
+        if env_id:
+            import tempfile as _tf
+            from pathlib import Path as _P
+
+            from app.engine.pw_conftest import write_playwright_conftest
+            _d = _tf.mkdtemp()
+            write_playwright_conftest(_d, {**env_vars, "TEST_LANGUAGE": lang}, i18n=i18n)
+            for f in ("conftest.py", "tea_i18n.py"):
+                if (_P(_d) / f).exists():
+                    zf.writestr(f, (_P(_d) / f).read_text(encoding="utf-8"))
+            plug = _P(__file__).resolve().parent.parent / "engine" / "plugins"
+            for f in ("tea_step.py", "tea_autolog.py", "tea_capture.py"):
+                if (plug / f).exists():
+                    zf.writestr(f, (plug / f).read_text(encoding="utf-8"))
+            zf.writestr("requirements.txt", "pytest>=8\npytest-playwright>=0.5\nhttpx>=0.27\n")
+            # **必须带这个**：CC 回推的脚本几乎都叫 test_ui.py，分目录放之后同名模块
+            # 会撞 pytest 的导入（import file mismatch），整个包一条都收集不起来。
+            # importlib 导入模式按路径建模块名，不再靠 basename 唯一。
+            zf.writestr("pytest.ini", "[pytest]\naddopts = -q --import-mode=importlib\n")
+            zf.writestr("env.sh", "# 执行前 source 一下。非凭据的值已经烧进脚本，这里只剩凭据。\n"
+                        + ("".join(f"export {k}={env_vars[k]!r}\n" for k in secret_keys)
+                           if include_credentials
+                           else "".join(f"export {k}=<填这里>\n" for k in secret_keys)
+                             + "# 想连凭据一起打包：导出时加 includeCredentials=true\n"))
+            zf.writestr("README.md", (
+                "# 用例脚本备份（可执行）\n\n"
+                f"共 {len(rows)} 个脚本，按用例编号分目录，对照见 MANIFEST.tsv。\n"
+                f"文案已按 **{lang}**（{locale}）渲染，环境值已烧进脚本。\n\n"
+                "## 怎么跑\n\n"
+                "```bash\n"
+                "pip install -r requirements.txt && playwright install chromium\n"
+                "source env.sh          # 只剩凭据要填\n"
+                "pytest -q\n"
+                "```\n\n"
+                "## 里面有什么\n\n"
+                "| 文件 | 作用 |\n|---|---|\n"
+                "| `tests/<用例编号>/…` | 脚本正文（文案占位已渲染、os.getenv 默认值已烧真值）|\n"
+                "| `conftest.py` | page fixture 的 locale/视口、被测系统语种开关、tea_step 装载 |\n"
+                "| `tea_*.py` | 平台沙箱的埋点插件，conftest 会 import |\n"
+                "| `env.sh` | 凭据（默认占位）|\n\n"
+                + ("⚠ **这份包里有凭据明文**（导出时选了 includeCredentials），别外传。\n\n"
+                   if include_credentials else
+                   "凭据默认不打包。要一份完全自包含的：导出时加 `includeCredentials=true`。\n\n")
+                + (f"⚠ 有 {len(unresolved)} 个文案键词典里没有、占位也没带中文，"
+                   f"原样留在脚本里：{sorted(unresolved)[:5]}。\n"
+                   f"平台上这种脚本**会被拒绝执行**；本地跑更坑 —— 正例红在"
+                   f"「找不到元素」上，而「不应出现」那类断言会**假绿**"
+                   f"（占位匹配不到任何元素，'不该存在'当然成立）。\n"
+                   f"先把这几个键登记进项目词典，或在占位里补 `${{键|中文原文}}`。\n"
+                   if unresolved else "")
+            ))
+        else:
+            zf.writestr("README.md", (
+                "# 用例脚本备份（只存档）\n\n"
+                f"共 {len(rows)} 个脚本，按用例编号分目录。对照见 MANIFEST.tsv。\n\n"
+                "**这份跑不起来** —— 没带执行环境。要能直接跑的：导出时带上 `envId`"
+                "（页面上「导出备份」已经会带当前环境），平台会把文案、环境值、conftest、"
+                "插件一起打进去。\n"))
 
     buf.seek(0)
     return StreamingResponse(

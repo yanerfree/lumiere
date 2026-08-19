@@ -109,7 +109,9 @@ def test_只给en也能匹配到en_US():
 
 def test_规范里写了文案纪律():
     from app.mcp.tools.sync import _SPEC_UI_SCRIPT
-    for k in ("data-testid", "tea_i18n", "TEST_LANGUAGE", "原样返回中文"):
+    # 「退回中文」这句是兜底行为的承诺，措辞随 TEXT 取代 t() 变过一次，
+    # 钉的是这件事被写清楚，不是某个具体句子
+    for k in ("data-testid", "tea_i18n", "TEST_LANGUAGE", "退回中文"):
         assert k in _SPEC_UI_SCRIPT, f"规范缺「{k}」—— CC 只照规范写"
 
 
@@ -209,19 +211,21 @@ def test_导入脚本用key路径当键():
 
 # ── 词典只长「测试引用到的」，不是 locale 的镜像 ──────────────────
 
-def test_引用了词典没有的键要软警告():
-    """词典的定位是**「测试引用到的文案清单」**，不是被测系统 locale 的镜像。
-    全量导进来的 2416 条里只有 31 条真被用到，剩下 2385 条是会过期的重复数据。
-    所以按需登记：引用哪条，那条才该在词典里。
-    这道门禁就是提醒去登记 —— 不然英文环境下那几处会**静默**退回中文。
+def test_引用了词典没有的键要硬拦():
+    """**立场变过：从软警告改成硬拦。** 占位换不掉时，正例红在「找不到元素」上还看得见，
+    而「不应出现」那类断言**假绿** —— 键名当文案去匹配，匹配不到任何元素，
+    "不该存在"当然成立。带了中文原文（${键|中文}）的仍然只是软警告，因为它退回中文不会挂。
     """
     from app.mcp.tools.sync import _scan_ui_script
     snip = "def test_x(page):\n    "
-    e, w = _scan_ui_script(snip + 'page.get_by_role("button", name=t("no.such")).click()',
-                           "python", {"a.b"})
-    assert not e, "硬拦了 —— 词典总有没登记的时候"
-    assert any("词典里没有" in x for x in w), w
-
+    errors, warns = _scan_ui_script(
+        snip + 'page.get_by_role("button", name="${no.such.key}").click()',
+        "python", known_keys={"a.b"})
+    assert any("no.such" in e for e in errors), errors
+    _, w2 = _scan_ui_script(
+        snip + 'page.get_by_role("button", name="${no.such.key|确定}").click()',
+        "python", known_keys={"a.b"})
+    assert any("no.such" in x for x in w2), w2
 
 def test_键已登记就不警告():
     from app.mcp.tools.sync import _scan_ui_script

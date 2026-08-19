@@ -405,7 +405,7 @@ _register(
 _register(
     test_cases.create_case,
     name="tb_create_case",
-    description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。**入库要过门禁**：标题完全同名硬拒、标题含模糊词（操作成功/显示正常/无报错/符合预期）硬拒。标题相似只提醒不拦。**P0 三件套不拦你**：同源生成的三份产物容易互相一致而不正确（典型是把「创建成功」做成「返回 200」），所以预期要**读需求 + 读实现，然后自己判断**（见 instructions ①-A）：一致就按它写、不用问人；不一致就**按需求写预期**、让它红，再提 product_defect 归因交人确认 —— 那才是发现问题；需求没覆盖就自己按同类功能/行业惯例判，判不出来才带着判断去问用户。默认自己判断；**定需求、确认 bug、卡住了、发现范围外的问题、要动影响别人的东西** —— 这几类必须找人，而且要带着判断去问。把依据用 expected_confirmed_by / expected_confirmed_note 带上来（落款写清是文档还是人，例：「docs/订阅.md §3.2」/「用户（对话确认）」）—— 平台只记录、不拦截，没带只回一句提醒。⚠ **别把实测结果直接当预期**：系统有 bug 时你会把 bug 写成「预期」，而三份产物同源，会一起错还全绿。参数: branch_id, title, module(中文如'服务管理'), case_type(**这条在测什么形态的东西，跟做不做 UI 无关**：e2e=场景（验证一个完整功能，多步编排）/ api=单接口（针对单个接口的参数、边界、越权）；做几维看 target_level), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result, target_level(这条要做到什么程度: spec只要步骤/spec_api步骤+接口/full三件套，默认spec), **target_level_reason(不做某一维就说一句为什么——只有 target_level 一个值时，人分不出你是判断过不需要、还是没想就用了默认值；不写只提醒不拦)**, expected_confirmed_by(跟谁确认的), expected_confirmed_note(确认了什么，把对话里那句原话带上来)",
+    description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。**入库要过门禁**：标题完全同名硬拒、标题含模糊词（操作成功/显示正常/无报错/符合预期）硬拒。标题相似只提醒不拦。**P0 三件套不拦你**：同源生成的三份产物容易互相一致而不正确（典型是把「创建成功」做成「返回 200」），所以预期要**读需求 + 读实现，然后自己判断**（见 instructions ①-A）：一致就按它写、不用问人；不一致就**按需求写预期**、让它红，再提 product_defect 归因交人确认 —— 那才是发现问题；需求没覆盖就自己按同类功能/行业惯例判，判不出来才带着判断去问用户。默认自己判断；**定需求、确认 bug、卡住了、发现范围外的问题、要动影响别人的东西** —— 这几类必须找人，而且要带着判断去问。把依据用 expected_confirmed_by / expected_confirmed_note 带上来（落款写清是文档还是人，例：「docs/订阅.md §3.2」/「用户（对话确认）」）—— 平台只记录、不拦截，没带只回一句提醒。⚠ **别把实测结果直接当预期**：系统有 bug 时你会把 bug 写成「预期」，而三份产物同源，会一起错还全绿。参数: branch_id, title, module(中文如'服务管理'), case_type(**看测试对象**：api=单接口 —— 测试对象是**某一个接口的参数、权限**；e2e=场景 —— 测试对象是**某功能是否按需实现**。跟做不做 UI 无关（做几维看 target_level），跟步骤多少也无关。⚠ 为这条用例造数据用了几个接口，不影响判断 —— 造数据不是测试对象；做几维看 target_level), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result, target_level(这条要做到什么程度: spec只要步骤/spec_api步骤+接口/full三件套，默认spec), **target_level_reason(不做某一维就说一句为什么——只有 target_level 一个值时，人分不出你是判断过不需要、还是没想就用了默认值；不写只提醒不拦)**, expected_confirmed_by(跟谁确认的), expected_confirmed_note(确认了什么，把对话里那句原话带上来)",
 )
 
 _section("Mock 与观测")
@@ -459,7 +459,7 @@ _register(
 _register(
     test_cases.update_case,
     name="tb_update_case",
-    description="改一条已有用例的内容（只传要改的字段，没传的原样不动）。**你写错了自己改，别喊人** —— 标题打错字、步骤和实测不符（比如写「跳转回列表」、实际跳的是详情页），都用这个修。过的是和建用例同一套门禁（模糊词硬拒、同模块同名硬拒、步骤粒度自动拆），同名检查会排除自己。**改不了状态**：ui_status/api_status/manual_status 一概不收 —— 状态由平台按执行事实推进或由人拍板；你要说「这条能跑了」，就去跑一遍让结果说话。改了步骤或预期结果会自动清掉「预期已确认」标记（返回里会提醒），要重新跟用户对一遍。参数: case_id(用例UUID), title, priority, preconditions, steps([{seq,action,expected}]), expected_result, target_level(spec/spec_api/full), target_level_reason(不做某一维的理由), expected_confirmed_by, expected_confirmed_note",
+    description="改一条已有用例的内容（只传要改的字段，没传的原样不动）。**你写错了自己改，别喊人** —— 标题打错字、步骤和实测不符（比如写「跳转回列表」、实际跳的是详情页），都用这个修。过的是和建用例同一套门禁（模糊词硬拒、同模块同名硬拒、步骤粒度自动拆），同名检查会排除自己。**改不了状态**：ui_status/api_status/manual_status 一概不收 —— 状态由平台按执行事实推进或由人拍板；你要说「这条能跑了」，就去跑一遍让结果说话。改了步骤或预期结果会自动清掉「预期已确认」标记（返回里会提醒），要重新跟用户对一遍。**只是措辞润色**（实质没变、补一句措辞、改错别字）就传 reconfirm=true：依据沿用原落款、只重盖时间，不用把几百字重打一遍。参数: case_id(用例UUID), title, priority, preconditions, steps([{seq,action,expected}]), expected_result, target_level(spec/spec_api/full), target_level_reason(不做某一维的理由), expected_confirmed_by, expected_confirmed_note, reconfirm(措辞润色时沿用原落款), **blocked_external**(这条卡在外部条件上就写一句等什么——等环境变量加上、等某接口上线。它不是状态、不免检任何阻塞，只为了让看板分清「没人写」和「写不了」，否则每轮都要人挨个来问；条件到位传空串撤掉), **bug_refs**(这条跑出来红、但红的原因不在用例＝产品 bug，就关联上去：[{ref:'UAG-123 或一句话', url:'可选', status:'open|fixed', note:'可选'}]，整份覆盖、传 [] 清空。平台不判 bug 死活：标 fixed 只表示「据说修好了」，列表随即显示「待重跑」，重跑绿了平台自动摘掉关联、红着就留着 —— 这是「这条什么时候能继续」的唯一信号，别写在 remark 里。有 open 的用例 tb_run_ui_scripts_batch 默认跳过、不计入通过率), **tags**(自由分拣词如「冒烟」「需要真数据」，最多 20 个、每个 32 字内；别用它表达状态或审核结论)",
 )
 
 _register(
@@ -602,6 +602,18 @@ _register(
 )
 
 _register(
+    api_tests.check_env_hygiene,
+    name="tb_check_env_hygiene",
+    description="【查测试残留】被测环境里有没有本项目跑出来的孤儿数据。两类：①这条链造了东西却**没有清理步骤** —— 每跑一次留一份，堆多了会让 data[0]、满页分页那类断言时红时绿（看着像被测系统的问题，其实是自己攒的垃圾）②最后一次运行没跑到清理步骤，那次造的 id 已从创建步骤的响应里抽出来，删它的请求就是那条清理步骤本身。⚠ 只看接口场景、只看得见**最后一次运行**：更早的残留、UI 脚本造的、手工造的平台都没记录，**报 0 条不等于环境干净**。参数: project_id(项目UUID), branch_id(可选，只看某分支)",
+)
+
+_register(
+    api_tests.check_assertion_bite,
+    name="tb_check_assertion_bite",
+    description="【验断言到底有没有用】把**改状态的那个动作步**跳掉跑一遍：后面的断言该红就是有效，照样绿就是恒真（动作前后都成立，动作坏了也不会红）。绿的用例≠有效的用例——方向写反的断言也是绿的，断言条数和强度指纹都判不了这件事，只有「删掉原因、看结果是否消失」能判。跳的必须是动作步（审批通过/禁用服务/驳回/删除），别跳产出 id 的创建步（后面全卡在变量未解析，什么都证明不了）。只读：不写步骤状态、不建报告、不动用例维度；但**请求是真发的**（没被跳掉的步骤照跑）。⚠ 跳的就是清理步时，那一趟造的数据不会被删 —— 残留归你自己收（tb_check_env_hygiene 看不见它，变异运行不留痕）。参数: case_id(用例UUID), skip_steps(要跳掉的步骤名，逗号分隔，必须和场景里的名字完全一致), env_id(强烈建议，不传没有 BASE_URL/账号链子跑不起来)",
+)
+
+_register(
     api_tests.run_api_test,
     name="tb_run_api_test",
     description="**真的跑一遍**接口场景，返回每步的状态码和断言结果。参数: scenario_ids(逗号分隔的场景UUID列表), env_id(可选但强烈建议：传了才注入该环境的 BASE_URL/账号/token，${BASE_URL} 这类引用才能解析)",
@@ -647,6 +659,12 @@ _register(
 _section("UI 脚本")
 
 _register(
+    ui_scripts.render_ui_script,
+    name="tb_render_ui_script",
+    description="【本地要跑就用它】把用例的 UI 脚本渲染成**一个能直接 pytest 跑的文件**：库里存的是带占位的原文（文案 ${键|中文}、取值 os.getenv），平台执行时才补齐，本地拿原文跑不通。这里一次烧进三样：①文案占位→当前语种那句话 ②os.getenv 默认值→该环境真值 ③被测系统自己的语种开关（在同一个文件里加 context fixture 种 localStorage——少这条最坑：脚本渲染成英文了、系统还说中文，必红）。凭据默认不烧（同族工具对凭证一律脱敏，不开后门），返回里给 exportEnv 让你 export 那两三个；要完全自包含就传 include_credentials=true（凭据会出现在返回内容里，仅本机用）。textUnresolved 是没换掉的键——先登记词条或补 |中文。参数: case_id(用例UUID), lang(zh|en，默认 zh), env_id(强烈建议), include_credentials(默认 false)",
+)
+
+_register(
     ui_scripts.run_ui_script,
     name="tb_run_ui_script",
     description="执行**单条**用例的 Playwright UI 脚本（聚焦调试用），返回通过/失败，失败自动截图。参数: case_id(用例UUID), env_id(环境UUID，必须包含 BASE_URL)",
@@ -690,7 +708,7 @@ _register(
 _register(
     sync.sync_orchestrated_scenario,
     name="tb_sync_orchestrated_scenario",
-    description="【用例·编排的接口场景】把你**活体验证过**的多步接口链显式写回，绑定 source_case_id 并共享该用例场景变量。入库前硬拦截悬空 ${x}、软警告疑似写死。参数: project_id, branch_id, title, steps([{name,method,url,headers,body,assertions:[{type,operator,expected/value,field}],variables_extract:{name:jsonpath},group_name,enabled,**retry_timeout_ms**,retry_interval_ms,wait_ms}])——异步下发导致的抢跑用 retry_timeout_ms（断言没过就整步重发直到过或超时），别再插假步骤占时间窗；详见 tb_get_sync_spec(kind='timing'), source_case_id(强烈建议), folder_name(可选), priority(默认P1), description(可选)",
+    description="【用例·编排的接口场景】把你**活体验证过**的多步接口链显式写回，绑定 source_case_id 并共享该用例场景变量。入库前硬拦截悬空 ${x}、软警告疑似写死和「和前面某步逐字相同的断言」（同一请求上动作前后断同一件事＝没验动作）。参数: project_id, branch_id, title, steps([{name,method,url,headers,body,assertions:[{type,operator,expected/value,field}],variables_extract:{name:jsonpath},group_name,enabled,**retry_timeout_ms**,retry_interval_ms,wait_ms}])——异步下发导致的抢跑用 retry_timeout_ms（断言没过就整步重发直到过或超时），别再插假步骤占时间窗；详见 tb_get_sync_spec(kind='timing'), source_case_id(必填), folder_name(可选), priority(默认P1), description(可选), **mode**(replace=整条覆盖，默认；patch=按 step name 只改点名的那几步、其余原样保留——改几个断言不用重发全链。name 必须和现有步骤完全一致，找不到就拒绝；加步骤/改名用 replace)",
 )
 
 _register(
@@ -708,7 +726,7 @@ _register(
 _register(
     sync.upsert_automation_resource,
     name="tb_upsert_automation_resource",
-    description="【共享基础数据·登记怎么找到它】路线B专用：多条用例共用、反复重建代价大的底座(上游/负载、隔离上下文、长期存在的应用)。用法=先 tb_list_global_data 查有没有 → 没有就**你自己调接口造出来且不清理** → 再用本工具登记 exists_check。之后每次跑，平台在第一步之前自动探测并注入 ${资源名}，换环境也能找到对应资源。注意 match 要用 name/code 这类稳定标识，不能用 id(等于换个地方写死)；探不到时平台**不会**替你补建（create_def 只登记备查、不执行），只会报「变量未解析」——要补就调 tb_list_global_data(probe=true, env_id=...) 看哪条 state=missing，然后你自己按它的 createDef 造。只属于本条用例的数据别用这个，那种该在场景开头自建、末尾清理。参数: project_id, name(引用名), exists_check(必填,{method,url,match,extract}), create_def(可选,登记备查当初怎么造的), description, keep(默认true)",
+    description="【共享基础数据·登记怎么找到它】路线B专用：多条用例共用、反复重建代价大的底座(上游/负载、隔离上下文、长期存在的应用)。用法=先 tb_list_global_data 查有没有 → 没有就**你自己调接口造出来且不清理** → 再用本工具登记 exists_check。之后每次跑，平台在第一步之前自动探测并注入 ${资源名}，换环境也能找到对应资源。注意 match 要用 name/code 这类稳定标识，不能用 id(等于换个地方写死)。**create_def 别省**：探到「确实没有」（探测请求成功但没匹配上）时平台会照它自动补建，补了会在运行结论里明说；401/5xx/超时算「没查成」，一律不动（一次 token 过期就照着建会造出一堆重复底座）。没登记 create_def 就只能报「变量未解析」等你自己造。只属于本条用例的数据别用这个，那种该在场景开头自建、末尾清理。参数: project_id, name(引用名), exists_check(必填,{method,url,match,extract,**role**(可选,默认ADMIN,探测与补建用哪个角色的token——读得到不等于建得了，实测建上游要租户管理员能力)), create_def(可选,登记备查当初怎么造的), description, keep(默认true)",
 )
 
 _register(
@@ -722,6 +740,12 @@ _register(
         "参数: case_id(用例UUID), content(脚本正文，不是路径), "
         "language(可选 python/typescript，不传自动判), file_name(可选)"
     ),
+)
+
+_register(
+    sync.upsert_i18n_terms,
+    name="tb_upsert_i18n_terms",
+    description="【登记国际化词典】脚本里要用 t() 的文案在这里登记（按 key upsert）。有语言中立键就用键（services.form.name）——多义词只能这么区分；只有中文就用中文当键。带 i18next 命名空间的键两种拼法互认（`ns:a.b` = `ns.a.b`），查词时同一条，登记一次就够。⚠ 用键**必须先登记**：t() 查不到会原样返回那串键，选择器拿它匹配必然红；中文当键则退回中文不会挂。没 en 译文的词条注入后在英文环境仍退回中文。参数: project_id, items([{key(必填), zh(中文当键时可省), en, module, category(button/placeholder/label/text), description}])",
 )
 
 _register(

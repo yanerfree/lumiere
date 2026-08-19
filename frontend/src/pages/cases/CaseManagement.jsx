@@ -5,7 +5,6 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { api, getValidToken } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
 import { useEnv, buildEnvOptions } from '../../utils/env'
-import TestForgeModal from './TestForgeModal'
 
 // 和 scenario-gen/Stage5Review 用同一套分类，两处对不上的话质量统计会分裂
 const REJECT_CATEGORIES = [
@@ -98,7 +97,6 @@ export default function CaseManagement() {
 
   // 导入
   const [importOpen, setImportOpen] = useState(false)
-  const [testforgeOpen, setTestforgeOpen] = useState(false)
   const [importResult, setImportResult] = useState(null)
   const [importing, setImporting] = useState(false)
 
@@ -109,6 +107,9 @@ export default function CaseManagement() {
 
   // 新建模块
   const [folderModalOpen, setFolderModalOpen] = useState(false)
+  const [bugFilter, setBugFilter] = useState('')
+  const [renamingFolder, setRenamingFolder] = useState(null)   // {id, name}
+  const [renameValue, setRenameValue] = useState('')
   const [folderForm] = Form.useForm()
   const [savingFolder, setSavingFolder] = useState(false)
 
@@ -180,11 +181,12 @@ export default function CaseManagement() {
       // 「刚回推的」——CC 是写一条推一条、没有批量接口，所以一次会话的产出在
       // 时间上天然连成一片，用时间窗就能看到"这一轮干了什么"。
       if (pushedWithin) params.set('pushedWithin', pushedWithin)
+      if (bugFilter) params.set('bugState', bugFilter)
       const res = await api.get(`/projects/${projectId}/branches/${globalBranchId}/cases?${params}`)
       setCases(res.data || [])
       setTotal(res.pagination?.total || 0)
     } catch { /* */ } finally { setLoading(false) }
-  }, [projectId, globalBranchId, page, pageSize, keyword, statusFilter, readyFilter, selectedFolderId, pushedWithin])
+  }, [projectId, globalBranchId, page, pageSize, keyword, statusFilter, readyFilter, selectedFolderId, pushedWithin, bugFilter])
 
   useEffect(() => { fetchFolders() }, [fetchFolders])
   useEffect(() => { fetchCases() }, [fetchCases])
@@ -273,6 +275,25 @@ export default function CaseManagement() {
       }
     }
     return null
+  }
+
+  // 用例挂在目录上，「模块」就是那条目录路径 —— 列表里的模块/子模块两列靠它现推。
+  // （cases.module / submodule 字段在迁移 zza0dead1 里删了，接口不返回，
+  //   两列原来一直渲染 '-'。真实信息在目录树上，推一次就有。）
+  const folderPathOf = (folderId) => {
+    if (!folderId) return []
+    const walk = (nodes, path) => {
+      for (const n of nodes) {
+        const next = [...path, n.name]
+        if (n.id === folderId) return next
+        if (n.children?.length) {
+          const hit = walk(n.children, next)
+          if (hit) return hit
+        }
+      }
+      return null
+    }
+    return walk(folderTree, []) || []
   }
 
   // 构建模块 TreeSelect 数据（支持 N 层，显示完整路径）
@@ -418,11 +439,14 @@ export default function CaseManagement() {
   }
   // 导出备份：脚本正文打包成 zip。价值不在"拿去别处跑"（变量和环境不跟着走，
   // 跑不通是预期的），在**逃生**——平台哪天没了，这堆资产还在。
-  const handleExportBackup = async () => {
+  const handleExportBackup = async (envId, lang = 'zh') => {
     if (!globalBranchId) { message.warning('请先选择分支'); return }
     try {
       const token = await getValidToken()
-      const res = await fetch(`/api/projects/${projectId}/branches/${globalBranchId}/scripts/export`, {
+      // 带 envId → 导出的是**能直接 pytest 跑**的包（文案已按语种渲染、os.getenv 默认值
+      // 已烧成该环境的真值、conftest 和沙箱插件都在）。不带 → 退回"只存档"那份。
+      const q = envId ? `?envId=${envId}&lang=${lang}` : ''
+      const res = await fetch(`/api/projects/${projectId}/branches/${globalBranchId}/scripts/export${q}`, {
         headers: { Authorization: `Bearer ${token}` },
       })
       if (!res.ok) {
@@ -436,7 +460,7 @@ export default function CaseManagement() {
       a.download = `用例备份-${new Date().toLocaleDateString('zh-CN').replace(/\//g, '-')}.zip`
       a.click()
       URL.revokeObjectURL(a.href)
-      message.success('备份已下载')
+      message.success(envId ? '备份已下载（可直接 pytest 跑）' : '备份已下载（只存档，跑不起来）')
     } catch (e) { message.error(e.message || '备份失败') }
   }
 
@@ -572,6 +596,7 @@ export default function CaseManagement() {
   // ---- 目录树 ----
   const buildTreeData = (nodes) => nodes.map(n => ({
     title: `${n.name} (${n.caseCount})`,
+    rawName: n.name,          // title 里拼了计数，改名弹窗要的是原名
     key: n.id,
     children: n.children?.length > 0 ? buildTreeData(n.children) : undefined,
   }))
@@ -585,9 +610,10 @@ export default function CaseManagement() {
 
   // ---- 列表列（可配置） ----
   const allColumns = [
-    { key: 'caseCode', title: '用例ID', dataIndex: 'caseCode', width: 135, defaultVisible: true, render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c' }}>{v}</span> },
-    { key: 'title', title: '标题', dataIndex: 'title', ellipsis: true, defaultVisible: true, fixed: true, render: (v, row) => (
-      <span
+    { key: 'caseCode', title: '用例ID', dataIndex: 'caseCode', width: 158, defaultVisible: true,
+      render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c', whiteSpace: 'nowrap' }}>{v}</span> },
+    { key: 'title', title: '标题', dataIndex: 'title', ellipsis: { showTitle: false }, defaultVisible: true, fixed: true, render: (v, row) => (
+      <Tooltip title={v} placement="topLeft" mouseEnterDelay={0.3}><span
         // 必须 stopPropagation：行上 onRow 也挂了同一个 navigate，而它的放行判断只认
         // .ant-btn/.ant-checkbox-wrapper/a —— 这里是裸 span，两个 handler 都会跑，
         // 同一个 URL 被 push 两次。详情页的返回按钮 navigate(-1) 于是要点两下才退得出去。
@@ -595,7 +621,7 @@ export default function CaseManagement() {
         style={{ color: '#1d2129', cursor: 'pointer', fontWeight: 500 }}
         onMouseEnter={e => e.target.style.color = '#0ea5a0'}
         onMouseLeave={e => e.target.style.color = '#1d2129'}
-      >{row.isCore && <Tooltip title="核心/标杆用例（供其他用例参考生成）"><StarFilled style={{ color: '#fa8c16', marginRight: 4, fontSize: 12 }} /></Tooltip>}{v}</span>
+      >{row.isCore && <StarFilled title="核心/标杆用例（供其他用例参考生成）" style={{ color: '#fa8c16', marginRight: 4, fontSize: 12 }} />}{v}</span></Tooltip>
     )},
     // 类型 = **这条用例在测什么形态的东西**，只有两类：
     //   场景   —— 验证一个完整功能，多步编排（配下去 → 真生效 → 看得见的地方验出来）
@@ -622,8 +648,17 @@ export default function CaseManagement() {
     // 状态只要不是「无」就说明有。两列并排是把同一件事说两遍，而且它们
     // 各自读不同字段，实测出现过一列说有、另一列说未开始。
     { key: 'priority', title: '优先级', dataIndex: 'priority', width: 56, align: 'center', defaultVisible: true, render: v => <Tag style={{ background: priorityBg[v], color: priorityColors[v], border: 'none', margin: 0 }}>{v}</Tag> },
-    { key: 'module', title: '模块', dataIndex: 'module', width: 100, defaultVisible: false, render: v => <span style={{ fontSize: 12 }}>{v || '-'}</span> },
-    { key: 'subModule', title: '子模块', dataIndex: 'subModule', width: 100, defaultVisible: false, render: v => <span style={{ fontSize: 12 }}>{v || '-'}</span> },
+    // 模块/子模块**没有对应字段**：cases.module / submodule 早在迁移 zza0dead1 里删了，
+    // 接口也不返回，于是这两列一直渲染 '-'（用户截图指出来的就是这个）。
+    // 模块信息真实存在于目录树上，这里按 folderId 现推：顶层目录=模块，叶子目录=子模块。
+    { key: 'module', title: '模块', dataIndex: 'folderId', width: 110, defaultVisible: true,
+      ellipsis: { showTitle: false },
+      render: v => { const m = folderPathOf(v)[0] || '-'
+        return <Tooltip title={m} placement="topLeft"><span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{m}</span></Tooltip> } },
+    { key: 'subModule', title: '子模块', dataIndex: 'folderId', width: 110, defaultVisible: false,
+      ellipsis: { showTitle: false },
+      render: v => { const p = folderPathOf(v), m = p.length > 1 ? p[p.length - 1] : '-'
+        return <Tooltip title={m} placement="topLeft"><span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{m}</span></Tooltip> } },
     { key: 'lifecycleStatus', title: '状态', dataIndex: 'lifecycleStatus', width: 68, defaultVisible: true, render: v => { const m = lifecycleMap[v] || lifecycleMap.draft; return <Tag style={{ background: m.bg, color: m.color, border: 'none', margin: 0, fontSize: 11 }}>{m.label}</Tag> } },
     // 三个维度挤成 10px 的小圆点，得逐个 hover 才知道是什么 —— 字号提到 11、
     // 整组一个 tooltip 一次说清三维，不用挨个悬停
@@ -652,18 +687,13 @@ export default function CaseManagement() {
     } },
     // 审核列。NULL（待提审）不显示任何东西 —— 绝大多数用例都在那个态，
     // 挂个灰标签只是噪音。三维全完成自动进「待审」，人可以不审。
-    { key: 'review', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center',
-      defaultVisible: true, render: v => v && REVIEW[v] ? (
-        <span style={{ fontSize: 11, padding: '0 6px', borderRadius: 6, lineHeight: '18px',
-          background: REVIEW[v].bg, color: REVIEW[v].color }}>{REVIEW[v].label}</span>
-      ) : <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span> },
-    { key: 'source', title: '来源', dataIndex: 'source', width: 48, align: 'center', defaultVisible: true, render: v => <span style={{ fontSize: 11, color: v === 'ai' ? '#7cacf8' : '#c9cdd4' }}>{v === 'imported' ? '导入' : v === 'ai' ? 'AI' : '手动'}</span> },
+    { key: 'source', title: '来源', dataIndex: 'source', width: 48, align: 'center', defaultVisible: false, render: v => <span style={{ fontSize: 11, color: v === 'ai' ? '#7cacf8' : '#c9cdd4' }}>{v === 'imported' ? '导入' : v === 'ai' ? 'AI' : '手动'}</span> },
     // 三种状态，别混成一个 F：
     //   人工标记 F   —— 人自己撤
     //   已隔离       —— 人主动点的，到期自己回来，**执行时跳过**
     //   不稳定       —— 平台检测到的，**照常执行**，只是提示该去查
     // 检测到不稳定不等于被隔离：自动把它藏起来 = 自动让人不去查这个问题。
-    { key: 'isFlaky', dataIndex: 'isFlaky', width: 66, align: 'center', defaultVisible: true,
+    { key: 'isFlaky', dataIndex: 'isFlaky', width: 66, align: 'center', defaultVisible: false,
       title: (
         <Tooltip title="结果反复翻转的用例会自动打上标记。这一列大部分时候是空的 —— 空 = 目前没有不稳定的用例，不是功能没跑。">
           <span style={{ borderBottom: '1px dotted #c9cdd4' }}>Flaky</span>
@@ -690,8 +720,56 @@ export default function CaseManagement() {
     // review_status 只对平台侧 AI 流水线产的那批用例有意义（那条路已下线，
     // 47 条停在待审、只有 1 条被点过通过）。CC 回推的用例走的是三件套维度状态，
     // 两套审核并排显示，人分不清该看哪个 —— 默认收起，要看的人自己在齿轮里开。
-    { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center', defaultVisible: false, render: (v, row) => {
-      if (!v) return null
+    // 审核只留这一列。原来有两列都叫「审核」、都读 reviewStatus：一列只读、一列可操作，
+    // 同一屏两个同名列，人不知道该看哪个（用户直接指出来了）。留可操作那份。
+    // 默认收起：review_status 只对已下线的平台侧 AI 流水线那批用例有意义
+    // （见 tests/test_case_module_audit.py::test_审核列默认收起）
+    // 关联 bug 一列三态。「待重跑」是这一列存在的**主要理由** ——
+    // 卡 bug 谁都看得见（跑出来是红的），"bug 说修好了、该谁去重跑一遍"
+    // 以前只能靠 remark 里一句自然语言，没人筛得出来。
+    { key: 'bugRefs', title: '关联bug', dataIndex: 'bugRefs', width: 132, defaultVisible: true,
+      render: (v, row) => {
+        const refs = v || []
+        if (!refs.length) return <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span>
+        const openRefs = refs.filter(r => (r.status || 'open') === 'open')
+        const label = openRefs.length ? openRefs.map(r => r.ref).join('、') : '待重跑'
+        const tip = (
+          <div style={{ fontSize: 12 }}>
+            {refs.map((r, i) => (
+              <div key={i}>{r.status === 'fixed' ? '已修·待重跑' : '阻塞中'}：{r.ref}
+                {r.note ? `（${r.note}）` : ''}</div>
+            ))}
+            {!openRefs.length && <div style={{ marginTop: 4, color: '#86909c' }}>重跑绿了会自动摘掉关联</div>}
+          </div>
+        )
+        return (
+          <Tooltip title={tip} placement="topLeft">
+            <Tag color={openRefs.length ? 'error' : 'warning'}
+              style={{ fontSize: 10, margin: 0, maxWidth: 120, overflow: 'hidden',
+                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+              onClick={e => e.stopPropagation()}>{label}</Tag>
+          </Tooltip>
+        )
+      } },
+    { key: 'tags', title: '标签', dataIndex: 'tags', width: 120, defaultVisible: true,
+      render: v => {
+        const tags = v || []
+        if (!tags.length) return <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span>
+        return (
+          <Tooltip title={tags.join('、')} placement="topLeft">
+            <span style={{ display: 'inline-flex', gap: 2, maxWidth: 112, overflow: 'hidden' }}>
+              {tags.map(t => (
+                <Tag key={t} style={{ fontSize: 10, margin: 0, background: '#f2f3f5', color: '#4e5969',
+                                      border: 'none', maxWidth: 108, overflow: 'hidden',
+                                      textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t}</Tag>
+              ))}
+            </span>
+          </Tooltip>
+        )
+      } },
+    { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center', defaultVisible: true, render: (v, row) => {
+      // 没提审过要给占位。原来 return null，那一格空着像列坏了
+      if (!v) return <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span>
       if (v === 'approved') return <Tag style={{ fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none', margin: 0 }}>已审</Tag>
       if (v === 'rejected') return <Tag color="error" style={{ fontSize: 10, margin: 0 }}>已拒</Tag>
       return (
@@ -711,8 +789,7 @@ export default function CaseManagement() {
       const color = v.total >= 85 ? '#0ea5a0' : v.total >= 70 ? '#4e8af0' : '#faad14'
       return <span style={{ color, fontWeight: 600, fontSize: 12 }}>{v.total}</span>
     }},
-    { key: 'scriptRefFile', title: '脚本文件', dataIndex: 'scriptRefFile', width: 200, ellipsis: true, defaultVisible: false, render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#86909c' }}>{v || '-'}</span> },
-    { key: 'teaId', title: 'TEA ID', dataIndex: 'teaId', width: 150, defaultVisible: false, render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v || '-'}</span> },
+
     { key: 'createdAt', title: '创建时间', dataIndex: 'createdAt', width: 150, defaultVisible: false, render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v ? new Date(v).toLocaleString('zh-CN') : '-'}</span> },
     { key: 'updatedAt', title: '更新时间', dataIndex: 'updatedAt', width: 150, defaultVisible: false, render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v ? new Date(v).toLocaleString('zh-CN') : '-'}</span> },
     { key: 'actions', title: '操作', width: statusFilter === 'deleted' ? 128 : 80, align: 'center', defaultVisible: true, render: (_, row) => (
@@ -834,7 +911,15 @@ export default function CaseManagement() {
                 selectedKeys={selectedFolderId ? [selectedFolderId] : []}
                 titleRender={(node) => (
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                    <span>{node.title}</span>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={node.title}>{node.title}</span>
+                    <span style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
+                    <Tooltip title="改名">
+                      <Button type="text" size="small" icon={<EditOutlined />}
+                        onClick={e => { e.stopPropagation(); setRenamingFolder({ id: node.key, name: node.rawName }); setRenameValue(node.rawName) }}
+                        style={{ color: '#c9cdd4', opacity: 0.5, fontSize: 11 }}
+                        onMouseEnter={e => e.currentTarget.style.opacity = 1}
+                        onMouseLeave={e => e.currentTarget.style.opacity = 0.5} />
+                    </Tooltip>
                     <Popconfirm
                       title="确定删除此目录？"
                       description="仅允许删除空目录"
@@ -854,6 +939,7 @@ export default function CaseManagement() {
                         onMouseEnter={e => e.currentTarget.style.opacity = 1}
                         onMouseLeave={e => e.currentTarget.style.opacity = 0.5} />
                     </Popconfirm>
+                    </span>
                   </div>
                 )}
               />
@@ -922,6 +1008,14 @@ export default function CaseManagement() {
                   { value: 'today', label: '今天回推的' },
                   { value: 'week', label: '近 7 天回推的' },
                 ]} />
+              <Select size="small" value={bugFilter} onChange={v => { setBugFilter(v); setPage(1) }}
+                style={{ width: 150 }} popupMatchSelectWidth={false}
+                options={[
+                  { value: '', label: '关联bug：不限' },
+                  { value: 'blocked', label: '卡在产品bug' },
+                  { value: 'retest', label: '待重跑（已修）' },
+                  { value: 'none', label: '没关联' },
+                ]} />
               <Select size="small" value={readyFilter} onChange={v => { setReadyFilter(v); setPage(1) }}
                 style={{ width: 150 }} popupMatchSelectWidth={false}
                 options={[
@@ -939,9 +1033,10 @@ export default function CaseManagement() {
                     一个月无人问津 —— 那条路的形态（先喂文档、先建任务、再确认、再等平台跑）
                     对着一个手上就有 Claude Code 的用户，仪式太重。
                     实现和数据一概没动，下线的只是入口；用例仍由外部 CC 活体验证后回推。 */}
-                <Tooltip title="从 API 接口定义生成手工测试用例，需要接口信息">
-                  <Button ghost icon={<ApiOutlined />} onClick={() => setTestforgeOpen(true)}>从接口生成</Button>
-                </Tooltip>
+                {/* 「从接口生成」已下线（2026-08-19 用户决定）：它建的是 testforge task JSON，
+                    真正生成用例的是 CC 侧 /tf-forge —— 平台这一步只是替 CC 拼一份任务文件，
+                    而 CC 自己就能读接口树（tb_list_api_tree / tb_get_api_node）。
+                    后端 /testforge/* 端点保留：tf-forge skill 还按老 task 文件跑得动。 */}
                 {/* 批量「AI 生成脚本」已下线：走的是 scripts/generate-stream 那条平台侧生成管道，
                     实测跑不通（详情页的单条入口同批下线）。UI 脚本改由外部 Claude Code 写好跑通后
                     经 tb_sync_ui_script 回推。 */}
@@ -959,7 +1054,20 @@ export default function CaseManagement() {
                   </Button>
                 </Tooltip>
                 <Tooltip title="把本分支的脚本正文打包成 zip 存档。用途是「平台没了资产还在」，不是拿去别处直接跑（变量和环境不跟着走）">
-                  <Button icon={<DownloadOutlined />} size="small" onClick={handleExportBackup}>导出备份</Button>
+                  <Dropdown trigger={['click']} menu={{ items: [
+                    ...environments.flatMap(e => [
+                      { key: `${e.id}|zh`, label: `${e.name}（中文）` },
+                      { key: `${e.id}|en`, label: `${e.name}（英文）` },
+                    ]),
+                    { type: 'divider' },
+                    { key: 'archive', label: '只存档（不带环境，跑不起来）' },
+                  ], onClick: ({ key }) => {
+                    if (key === 'archive') { handleExportBackup(null); return }
+                    const [envId, lang] = key.split('|')
+                    handleExportBackup(envId, lang)
+                  } }}>
+                    <Button icon={<DownloadOutlined />} size="small">导出备份</Button>
+                  </Dropdown>
                 </Tooltip>
                 <Tooltip title="从本项目其它分支复制用例到当前分支（深拷贝，含步骤和场景）">
                   <Button icon={<CopyOutlined />} size="small" onClick={openCopy}>从分支复制</Button>
@@ -1276,7 +1384,7 @@ export default function CaseManagement() {
           <Form.Item name="name" label="模块名称"
             rules={[{ required: true, message: '请输入模块名称' }, { max: 50, message: '最多50个字符' }]}
           >
-            <Input placeholder="如：AUTH、USER_MGMT" style={{ textTransform: 'uppercase' }} />
+            <Input placeholder="如：LLM Providers、订阅管理" />
           </Form.Item>
           <Form.Item name="parentId" label="父模块（可选）">
             <TreeSelect
@@ -1287,6 +1395,43 @@ export default function CaseManagement() {
             />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* 模块改名 */}
+      <Modal
+        title={`模块改名 · ${renamingFolder?.name || ''}`}
+        open={!!renamingFolder}
+        onCancel={() => setRenamingFolder(null)}
+        okText="保存"
+        cancelText="取消"
+        width={420}
+        onOk={async () => {
+          const name = (renameValue || '').trim()
+          if (!name) { message.warning('名称不能为空'); return }
+          if (name === renamingFolder.name) { setRenamingFolder(null); return }
+          try {
+            const r = await api.patch(
+              `/projects/${projectId}/branches/${globalBranchId}/folders/${renamingFolder.id}?name=${encodeURIComponent(name)}`)
+            const d = r?.data || {}
+            message.success(`已改名为「${name}」`
+              + (d.childFoldersUpdated ? `，子模块 ${d.childFoldersUpdated} 个跟着改` : '')
+              + (d.apiTestFoldersRenamed ? `，接口场景目录 ${d.apiTestFoldersRenamed} 个跟着改` : ''))
+            setRenamingFolder(null)
+            fetchFolders()
+            fetchCases()
+          } catch { /* request.js 显示错误 */ }
+        }}
+      >
+        <Input value={renameValue} onChange={e => setRenameValue(e.target.value)}
+          placeholder="如：LLM Providers、订阅管理" maxLength={100} autoFocus
+          onPressEnter={e => e.target.blur()} style={{ marginTop: 12 }} />
+        {/* 编号不跟着改这件事必须写在这里 —— 人看到 TC-LLMPROVI- 还在，
+            第一反应是"改漏了"，然后去手改编号，那才真出事。 */}
+        <div style={{ fontSize: 12, color: '#86909c', marginTop: 10, lineHeight: 1.7 }}>
+          子模块、列表模块列、导出、同名的接口场景目录都一起改。<br />
+          <b>用例编号不变</b>（如 TC-LLMPROVI-00001）—— 编号是 Claude Code 回推、
+          脚本、报告共用的锚点，改了等于把已发出去的引用全断掉。
+        </div>
       </Modal>
 
       {/* 列设置弹窗 */}
@@ -1301,13 +1446,16 @@ export default function CaseManagement() {
         width={400}
       >
         <div style={{ marginTop: 12 }}>
-          <p style={{ fontSize: 12, color: '#86909c', marginBottom: 12 }}>勾选需要显示的列（标题列始终显示）</p>
+          <p style={{ fontSize: 12, color: '#86909c', marginBottom: 12 }}>勾选需要显示的列。顺序和表格一致；标题列锁定，始终显示</p>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {allColumns.filter(c => !c.fixed).map(col => (
-              <label key={col.key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', padding: '4px 8px', borderRadius: 12, background: visibleColumnKeys.includes(col.key) ? '#e0f7f6' : 'transparent' }}>
+            {/* **和表格一一对齐**：固定列（标题）也列出来，勾选框锁死 ——
+                原来它不在名单里，人对着列设置数不出表格上那一列是哪来的。 */}
+            {allColumns.map(col => (
+              <label key={col.key} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: col.fixed ? 'not-allowed' : 'pointer', padding: '4px 8px', borderRadius: 12, background: (col.fixed || visibleColumnKeys.includes(col.key)) ? '#e0f7f6' : 'transparent', opacity: col.fixed ? 0.75 : 1 }}>
                 <input
                   type="checkbox"
-                  checked={visibleColumnKeys.includes(col.key)}
+                  checked={col.fixed || visibleColumnKeys.includes(col.key)}
+                  disabled={col.fixed}
                   onChange={e => {
                     if (e.target.checked) {
                       setVisibleColumnKeys(prev => [...prev, col.key])
@@ -1317,7 +1465,9 @@ export default function CaseManagement() {
                   }}
                 />
                 <span style={{ fontSize: 13 }}>{col.title}</span>
-                {col.defaultVisible && <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#e0f7f6', color: '#0ea5a0' }}>默认</Tag>}
+                {col.fixed
+                  ? <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: 'rgba(0,0,0,0.04)', color: '#86909c' }}>始终显示</Tag>
+                  : col.defaultVisible && <Tag style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none', background: '#e0f7f6', color: '#0ea5a0' }}>默认</Tag>}
               </label>
             ))}
           </div>
@@ -1387,15 +1537,6 @@ export default function CaseManagement() {
           </div>
         )}
       </Modal>
-
-      <TestForgeModal
-        projectId={projectId}
-        branchId={globalBranchId}
-        folders={folderTree}
-        open={testforgeOpen}
-        onClose={() => setTestforgeOpen(false)}
-        onImported={() => fetchCases()}
-      />
 
       {/* 空目录清理：名单摆出来，勾了才删 */}
       <Modal title="清理空目录" open={!!emptyFolders} onCancel={() => setEmptyFolders(null)}

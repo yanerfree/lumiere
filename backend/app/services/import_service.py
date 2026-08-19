@@ -34,6 +34,11 @@ async def _get_or_create_folder(
     )
     module_folder = result.scalar_one_or_none()
     if module_folder is None:
+        # 精确路径没命中，再看有没有哪个顶级目录**改名前**叫这个。
+        # 人在页面上把「LLM PROVIDERS」改成「模型供应商」之后，CC 手上还是旧词，
+        # 直接建新目录的话同一个模块就裂成两个了。
+        module_folder = await _by_former_name(session, branch_id, module_upper, None)
+    if module_folder is None:
         module_folder = CaseFolder(
             branch_id=branch_id,
             parent_id=None,
@@ -50,7 +55,9 @@ async def _get_or_create_folder(
 
     # 查找或创建 submodule 目录（depth=2）
     sub_upper = submodule.upper()
-    sub_path = f"{module_path}/{sub_upper}"
+    # 路径从**父目录当前的 path** 拼，不是从传进来的字符串拼 ——
+    # 父目录可能是通过旧名命中的，用旧名拼出来的路径谁都不匹配。
+    sub_path = f"{module_folder.path}/{sub_upper}"
 
     result = await session.execute(
         select(CaseFolder).where(
@@ -59,6 +66,8 @@ async def _get_or_create_folder(
         )
     )
     sub_folder = result.scalar_one_or_none()
+    if sub_folder is None:
+        sub_folder = await _by_former_name(session, branch_id, sub_upper, module_folder.id)
     if sub_folder is None:
         sub_folder = CaseFolder(
             branch_id=branch_id,
@@ -95,6 +104,21 @@ def _module_tag(module: str) -> str:
     if not tag:
         tag = re.sub(r"[^A-Z0-9]", "", (module or "").upper())
     return (tag or "MOD")[:8]
+
+
+async def _by_former_name(session: AsyncSession, branch_id: uuid.UUID,
+                          name_upper: str, parent_id: uuid.UUID | None):
+    """按「改名前的名字」找目录。找不到返回 None。
+
+    别名只在**同一层、同一个父**下认：顶级模块跟别人的子模块重名是常事
+    （「订阅管理」既可能是顶级模块，也可能是别的模块下的子模块）。
+    """
+    q = select(CaseFolder).where(
+        CaseFolder.branch_id == branch_id,
+        CaseFolder.former_names.contains([name_upper]),
+    )
+    q = q.where(CaseFolder.parent_id == parent_id) if parent_id else q.where(CaseFolder.parent_id.is_(None))
+    return (await session.execute(q)).scalars().first()
 
 
 async def _next_case_code(

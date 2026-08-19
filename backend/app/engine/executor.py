@@ -69,6 +69,34 @@ def execute_single_case(
             timeout=timeout,
         )
 
+    # 未解析的文案占位 → **不许开跑**。
+    # 占位坏掉时正例红在「找不到元素」上（看得见），而「不应出现」这类负例**假绿** ——
+    # 匹配不到任何元素，"不该存在"当然成立。恒真断言不会自己喊疼，只能拦在执行前。
+    # 实测（CC 活体回推 v4）：同一趟里第 10、12 步两条负例全绿，真相是占位压根没被替换。
+    # 放在这里是因为四条执行路径都过这个函数 —— 连"某条路忘了渲染文案"也一起拦住。
+    from app.services.ui_text_render import unresolved as _unresolved_text
+    _left = _unresolved_text(script_content)
+    if _left:
+        try:
+            os.unlink(junit_xml_path)
+        except OSError:
+            pass
+        return {
+            "status": "error",
+            "duration_ms": 0,
+            "error_summary": (
+                f"{len(_left)} 处文案占位没解析出来，拒绝执行："
+                f"{'、'.join(_left[:5])}"
+                + ("…" if len(_left) > 5 else "")
+                + "。不拦的话「不应出现」那类断言会假绿（占位匹配不到任何元素，"
+                  "'不该存在'当然成立），跑绿了也证明不了任何事。"
+                  "两条任选：tb_upsert_i18n_terms 登记 key+zh+en，"
+                  "或占位里补上 ${键|中文原文}。"
+            ),
+            "stdout": "",
+            "steps": [],
+        }
+
     pw_output_dir = None
     if is_playwright_script(script_content):
         pw_output_dir = str(Path(sandbox_dir) / ".pw_results")

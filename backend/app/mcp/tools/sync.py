@@ -131,6 +131,99 @@ _ENUM_VALUE_RE = re.compile(r"^[a-z][a-z0-9_-]{0,20}$")
 _BOOL_STRINGS = {"true", "false", "True", "False"}
 
 
+# 断言的期望值/字段路径**只有一个取法**，跟执行器共用 —— 显示和判定各挑一个键名，
+# 就是「期望 200，实际 200，判失败」那个 bug 的形状（见 expected_of 的说明）。
+from app.services.api_test_runner import (  # noqa: E402
+    _DEFAULT_OP as _DEF_OP, expected_of as _exp_of, field_of as _field_of,
+)
+
+# 这些 operator 必须有期望值，没有就**永远判不过** —— 拦在入库
+_NEEDS_EXPECTED = {
+    "status": ("==", "!=", "in"),
+    "body_contains": ("contains", "not_contains"),
+    "body_field": ("==", "!=", "length", ">", "<", ">=", "<=", "contains", "not_contains"),
+}
+
+
+def _step_def_sig(st) -> str:
+    """一个步骤的**定义**指纹（不含运行结果）。取字典或 ORM 对象都行。"""
+    get = st.get if isinstance(st, dict) else (lambda k, d=None: getattr(st, k, d))
+    return json.dumps([
+        (get("method") or "GET").upper(), str(get("url") or "").strip(),
+        get("headers"), get("body"), get("assertions"), get("variables_extract"),
+        bool(get("enabled", True)),
+        int(get("wait_ms") or 0), int(get("retry_timeout_ms") or 0),
+        int(get("retry_interval_ms") or 300),
+    ], sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _carried_evidence(carry: dict, st: dict) -> tuple:
+    """这个步骤能不能沿用上一次运行的结果 → (last_status, last_response)。
+
+    **定义变了就丢。** 改了 url/断言/提取的步骤，旧的 last_response 已经不代表它了，
+    留着会让 tb_check_env_hygiene 拿过期的 id 去报残留 —— 那比看不见更糟。
+    """
+    sig, status, resp = carry.get(str(st.get("name") or ""), (None, None, None))
+    return (status, resp) if sig is not None and sig == _step_def_sig(st) else (None, None)
+
+
+def _canon_assertion(a: dict) -> dict:
+    """键名归一到**前端编辑器的口径**：status / body_contains 用 `value`，
+    body_field 用 `field` + `expected`。
+
+    执行器现在两种键名都认（`expected_of`），这里只管别让库里长出两种形状：
+    存两种的话，页面上打开再保存会规回一种，于是 diff 里多出一堆无意义变更，
+    而"库里到底是哪一种"又变回靠猜。
+    """
+    if not isinstance(a, dict):
+        return a
+    out = dict(a)
+    a_type = out.get("type")
+    op = out.get("operator") or _DEF_OP.get(a_type, "==")
+    exp = _exp_of(out)
+    if a_type == "body_field":
+        fld = _field_of(out, op)
+        out.pop("value", None)
+        if fld is not None:
+            out["field"] = fld
+        if op in ("not_empty", "is_empty", "not_exists") or exp is None or exp == fld:
+            out.pop("expected", None)     # 这几个 operator 不看期望值
+        else:
+            out["expected"] = exp
+    else:
+        out.pop("expected", None)
+        if exp is not None:
+            out["value"] = exp
+    return out
+
+
+def _unevaluatable_assertions(seq: int, st: dict) -> list[dict]:
+    """**永远判不过**的断言 —— 期望值缺了，或 body_field 没给字段路径。
+
+    这类不能放行：它不是"可能红"，是**必然红，而且报错像平台在说胡话**。
+    实测（CC 的 23 步场景）：状态码断言写成 `{"type":"status","expected":200}`，
+    而执行器那时只读 `value` → 拿到 None → 200 == None 判失败，报错却打印「期望 200」。
+    键名那半已经在执行器里收口了（两种都认）；这里拦的是**真的什么都没给**那半 ——
+    否则同一个"全红且看不懂"的现象会换个入口再来一次。
+    """
+    out = []
+    for a in (st.get("assertions") or []):
+        if not isinstance(a, dict):
+            continue
+        a_type = a.get("type")
+        op = a.get("operator") or _DEF_OP.get(a_type, "==")
+        name = st.get("name") or f"step{seq}"
+        if a_type == "body_field" and _field_of(a, op) is None:
+            out.append({"step": seq, "name": name, "assertion": a,
+                        "why": "body_field 没给字段路径（field）—— 执行器会拿整个响应体去比，必然不过。"})
+            continue
+        if op in _NEEDS_EXPECTED.get(a_type, ()) and _exp_of(a) is None:
+            out.append({"step": seq, "name": name, "assertion": a,
+                        "why": f"{a_type} {op} 必须有期望值（expected 或 value），"
+                               f"这条一个都没给 —— 跑起来永远判不过。"})
+    return out
+
+
 def _typo_assertions(seq: int, st: dict) -> list[dict]:
     """断言的期望值被写成字符串，而响应里是布尔 —— **必然假红**。
 
@@ -148,7 +241,7 @@ def _typo_assertions(seq: int, st: dict) -> list[dict]:
     for a in (st.get("assertions") or []):
         if not isinstance(a, dict):
             continue
-        exp = a.get("expected") if a.get("expected") is not None else a.get("value")
+        exp = _exp_of(a)
         if not isinstance(exp, str) or "${" in exp:
             continue
         if exp in _BOOL_STRINGS:
@@ -203,6 +296,120 @@ def _needs_retry(seq: int, st: dict) -> dict | None:
                  f"建议 retry_timeout_ms=10000（断言没过就整步重发，直到过或超时）。"
                  f"**不要**改成插一个「等待」步骤占时间窗。",
     }
+
+
+# 步骤名里声明了「这是保持型断言」的词。声明过就不再唠叨。
+# 「一致」「还原」也算：`最后回读：两个开关必须与执行前一致` 就是一条还原校验。
+_STEADY_RE = re.compile(r"保持|不变|仍(应|然)|依旧|不中断|不应|全程|始终|一致|还原")
+
+
+def _assert_sig(a: dict) -> tuple[str, str]:
+    """(断的是哪个东西, 断成什么样)。
+
+    **operator 归到"什么样"那一半**：`body_contains contains X` 和
+    `not_contains X` 断的是同一个东西的两种结果，算进"值变了"才能认出
+    「申请前没有 → 申请后有 → 驳回后又没有」这种状态确实动过的链。
+    """
+    key = json.dumps({k: a.get(k) for k in ("type", "field")}, sort_keys=True, ensure_ascii=False)
+    val = json.dumps([a.get("operator"), _exp_of(a)],
+                     sort_keys=True, ensure_ascii=False, default=str)
+    return key, val
+
+
+def _nondiscriminating(norm: list[dict]) -> list[dict]:
+    """同一个请求上，这一步的断言和前面某一步**逐字相同** → 它不区分中间那些动作。
+
+    这是「全绿但抓不到问题」里唯一能机械判定的一半。实测那条：
+    TC-DYGL-00002 有一步「驳回后打网关仍 401」，而它从申请到驳回**全程都是 401**——
+    驳回逻辑坏掉这条断言照样绿。平台判不了断言强弱，但判得出
+    「同一 method+url 上，动作前后断的是同一件事」，那就等于没验动作。
+
+    保持型断言本身是合法的（「弃用后存量调用不中断」正该这么写），
+    所以**在步骤名里声明**（保持/不变/仍/依旧/始终…）就不再提示 ——
+    平台要的不是它消失，是它别装成"验过了"。
+
+    **在真实 23 条场景 / 460 步上标定过。** 直接按 method+url 比会报 42 条，
+    绝大多数是假的，三条 narrowing 把它压到只剩真的那种：
+
+    ① **只看读操作。** 写操作的状态码断言验的是**这一次调用**成不成功，
+       天然不该跟上一次比（一级审批、二级审批都 POST /approve 都断 200，各自都对）。
+    ② **headers 和 body 算进"同一个请求"。** 多角色场景里同一个 URL 是不同的人在读
+       （`Authorization: Bearer ${tokenA}` vs `${tokenB}`），登录也是同一个 POST
+       不同的账号 —— 那压根不是同一个请求。
+    ③ **中间证明过状态离开又回来的，不算。** `基准 200 → 禁用后 404 → 启用后 200`
+       里最后那个 200 是有效断言：启用没生效它就红在 404 上。判据是两次相同断言之间，
+       同一请求上有没有**同一件事、不同期望值**的断言。
+    """
+    out: list[dict] = []
+    # 每个请求签名下按顺序记 (第几步, {断的哪个东西: 断成什么样})
+    seen: dict[tuple, list[tuple[int, dict[str, str]]]] = {}
+    for i, st in enumerate(norm):
+        method = (st.get("method") or "GET").upper()
+        if method not in ("GET", "HEAD", "OPTIONS"):
+            continue
+        sig = (method, str(st.get("url") or "").strip(),
+               json.dumps(st.get("headers"), sort_keys=True, ensure_ascii=False, default=str),
+               json.dumps(st.get("body"), sort_keys=True, ensure_ascii=False, default=str))
+        hist = seen.setdefault(sig, [])
+        cur = dict(_assert_sig(a) for a in (st.get("assertions") or []) if isinstance(a, dict))
+        if not cur:
+            continue
+        # **整步比，不逐条比。** 只要有一条断言不一样，这一步至少在那一维上是区分动作的；
+        # 逐条比会把「恢复 200 + body 含 httpbin」里的 body 那条单独揪出来滥报。
+        twin = next((idx for idx, prev in reversed(hist) if prev == cur), None)
+        hist.append((i + 1, cur))
+        if twin is None or _STEADY_RE.search(str(st.get("name") or "")):
+            continue
+        # twin 之后，同一个东西被断成过别的样子吗？断过就说明状态真的离开又回来了，
+        # 这一步是在验"回来了"，不是恒真（基准 200 → 禁用后 404 → 启用后 200）。
+        moved = any(idx > twin and any(k in cur and v != cur[k] for k, v in prev.items())
+                    for idx, prev in hist)
+        if moved:
+            continue
+        out.append({
+            "step": i + 1, "field": "assertions",
+            "value": f"这一步的断言和第 {twin} 步一模一样（同一个请求，中间没有任何断言"
+                     f"证明它变过）—— 那几步动作坏掉它也不会红，等于没验动作。"
+                     f"要么加一条能区分动作的断言（状态/字段值变成什么），"
+                     f"要么在步骤名里写明这是保持型（保持/不变/仍/依旧）。",
+        })
+    return out
+
+
+def _missing_path_baseline(norm: list[dict]) -> list[dict]:
+    """断了「空 / 取不到」（not_exists、is_empty、length==0），但这条路径**从来没被证明过有东西**。
+
+    活体跑回推链路时逼出来的一条：`data[name=${svcName}].id not_exists` 用来验
+    「删完按名字查不到」是对的写法，但**字段名写错也一样取不到** —— 于是它恒真，
+    而且是那种最舒服的恒真：一路全绿。
+
+    判据是结构性的、不会误报：同一条 field 路径，在这一步之前有没有任何一步
+    断过 not_empty / == / contains（都要求取到值）。有 = 基准建过了；没有 = 这条
+    从头到尾没人证明过它取得到。
+    """
+    proven: set[str] = set()
+    out: list[dict] = []
+    for i, st in enumerate(norm):
+        for a in (st.get("assertions") or []):
+            if not isinstance(a, dict) or a.get("type") != "body_field":
+                continue
+            field = str(a.get("field") or "")
+            op = a.get("operator") or "=="
+            empty_ish = (op == "not_exists" or op == "is_empty"
+                         or (op == "length" and str(a.get("expected")) == "0"))
+            if empty_ish:
+                if field and field not in proven:
+                    out.append({
+                        "step": i + 1, "field": "assertions",
+                        "value": f"`{field}` 断的是「空/取不到」，但前面没有任何一步证明过"
+                                 f"这条路径取得到值 —— **字段名写错也是取不到**，"
+                                 f"这条会一路恒真。在删/清理之前加一步用同一条路径断 "
+                                 f"not_empty（东西还在时它必须取得到），基准就有了。",
+                    })
+            elif op in ("not_empty", "==", "!=", "contains", "length", ">", "<", ">=", "<="):
+                if field:
+                    proven.add(field)
+    return out
 
 
 def _looks_hardcoded(value: str, field_path: str = "") -> bool:
@@ -327,10 +534,17 @@ _SPEC_VARIABLES = """## 变量分层（回推纪律的基准，务必分清）
 隔离上下文、长期存在的消费方应用）。三步：
 
 1. `tb_list_global_data` 先查项目里登记过没有；
-2. **没有就你自己调接口造出来**（活体验证时顺手造），造完 **不要清理** —— 它要留给后续场景复用；
-3. 造好后（或本来就有）用 `tb_upsert_automation_resource` 登记 `exists_check`：
-   写明「怎么按名字/条件找到它 + 从响应里抽哪个字段当 id」。之后每次跑，平台会在
-   第一个步骤之前自动探一次并注入 `${资源名}`，换环境也能找到那个环境里的对应资源。
+2. 没有就你造一次（活体验证时顺手造），造完 **不要清理** —— 它要留给后续场景复用；
+3. 用 `tb_upsert_automation_resource` 登记两样：`exists_check`（怎么按名字找到它 +
+   抽哪个字段当 id）和 **`create_def`（当初是怎么造的）**。之后每次跑，平台在第一个
+   步骤之前探一次并注入 `${资源名}`；**探到"确实没有"就照 create_def 自动补建**，
+   补了会在运行结论里明说。所以 create_def 不是备查，是兜底 —— 别省。
+
+⚠ 只在探测**明确没匹配上**时补建；401/5xx/超时算"没查成"，一律不动
+（一次 token 过期就照着建，会在被测环境里造一堆重复底座）。
+⚠ **别把共享底座写成硬依赖**：`${资源名}` 引用就够了，不要再自己加一步
+「按名字查上游」并断言它必须存在 —— 那等于把"底座缺失"变成二十条链一起红，
+而链子自己没有 if/else 能兜。登记好 create_def，缺失这件事由平台在跑前解决。
 
 ⚠ `exists_check` 的 `match` 必须用**稳定标识**（name / code 这类），**不要用 id** ——
 用 id 去 match 等于换个地方写死，换环境照样匹配不上。
@@ -346,6 +560,11 @@ _SPEC_VARIABLES = """## 变量分层（回推纪律的基准，务必分清）
 ```
 
 自检：这条链换到一个**干净环境**还能不能跑通？跑不通就是 A 没造全，或 B 漏了第 2 步。
+
+⚠ **路线 A 必须自己删干净。** 造了不删的链每跑一次留一份，堆多了会反过来毁掉断言 ——
+列表里同类数据一多，`data[0]` 指向别人、满页把本次那条挤到第二页，断言开始时红时绿，
+而人会当成被测系统的缺陷去查。`tb_check_env_hygiene(project_id)` 报两类：
+造了东西却没有清理步骤、最后一次运行没跑到清理（残留 id 和删它的请求都给出来）。
 
 自检标准：**这条链换到一个干净环境还能不能跑通？** 跑不通就说明前置数据没交代清楚。"""
 
@@ -371,25 +590,88 @@ _SPEC_API_SCENARIO = """## 用例编排的接口场景（tb_sync_orchestrated_sc
 }
 ```
 断言类型（对齐执行器 _check_assertions）：
-- `status`：字段用 `value`（状态码），operator ∈ ==/!=/in
-- `body_field`：`field`=JSONPath（点号+下标，如 data.items[0].id），operator ∈ ==/!=/not_empty/contains/not_contains，比较值放 `expected`
-- `body_contains`：`value`=子串，operator ∈ contains/not_contains
+- `status`：`value`=状态码，operator ∈ ==/!=/in
+- `body_field`：`field`=路径，比较值放 `expected`，operator ∈
+  ==/!=/not_empty/is_empty/not_exists/length/contains/not_contains/>/</>=/<=
+  · `is_empty` 取到了、是空容器（`"items": []`）
+  · `not_exists` 路径取不到值（过滤没命中、字段不在）——「删完按名字查不到」用它。
+    ⚠ 字段名写错也取不到 → 恒真。所以删之前必须有一步用**同一条路径**断 not_empty
+    当基准，否则回推时会收到警告
+- `body_contains`：`value`=子串，operator ∈ contains/not_contains。
+  它在**整个响应体**里搜字符串 —— 别拿它当"某字段等于某值"用，别处出现同一串就假绿。
+  「列表应为空」用 `is_empty`，不要用 `not_contains` 搜字段名去绕。
 
-variables_extract：`{变量名: JSONPath}`，把响应里的值抽成变量供**后续步骤** ${变量名} 用（典型：登录抽 token、创建抽 id、清理按 id 删）。
+`field` 路径 = 点号 + 三种选择器：
+- `data.items[0].id` 下标 · `data.items[-1].id` 倒数第一
+- `data.items[name=${svcName}].id` **按字段值过滤**，取第一条命中的
+- `data.items[*name=${svcName}]` 取**全部命中**（不能再往后接字段），配 `length` 断
+  「有且只有一条」—— **验唯一性只有这一种写法**：`[k=v]` 只取第一条，被测系统真收下了
+  第二条同名，断言照样绿（实测就是这么被 tb_check_assertion_bite 抓出来的）
+- 断条数用 `length`，且**只能对列表用**：URL 上带查询条件让服务端过滤，再
+  `{"field":"data.items","operator":"length","expected":1}`。
+  对 `data.items[k=v]` 用 length 是错的 —— 那取到的是一个对象，长度是它的键数
 
-强烈建议传 source_case_id 关联对应功能用例——这样运行时会自动注入该用例的场景变量，UI 与接口共用一份定义。### 断言错误提示语：用 `${T:中文}`，别写死
+**别用下标定位业务对象。** `data[0]` 是另一种写死：排序口径、分页、别人造的数据一变，
+它就静默指向另一个对象，断言照过。实测三次差点误报缺陷 —— 跨租户列表首列是消费方
+租户名不是应用名；`/todos` 按 created_at 升序且满页，本次新建那条被截在后面。
+**读列表做断言前先确认排序与分页口径**，然后按业务标识过滤。
+
+variables_extract：`{变量名: 路径}`，供**后续步骤** ${变量名} 用（登录抽 token、创建抽 id、清理按 id 删）。
+
+### 断言纪律
+
+**新写的断言先让它红一次再让它绿。** 没红过的断言等于没验证过 ——
+方向写反、路径写错、恒真，三种都是绿的。
+
+跑绿之后用 `tb_check_assertion_bite(case_id, skip_steps='动作步名', env_id)` 收一次：
+它把那个**改状态的动作步**跳掉再跑一遍，后面该红的必须红。
+  · `bites` 红了 → 这条断言咬得住这个动作
+  · `still_green` 照样绿 → 恒真，改成断动作真正改变的那个东西（状态字段变成什么）
+  · `inconclusive` 没发出请求 → 你跳的是产出 id 的创建步，换成跳改状态那步
+只读运行，不写步骤状态也不动用例维度，但**请求是真发的**（制备和清理照跑）。
+
+**动作前后断同一件事＝没验动作。** 「驳回后打网关仍 401」，若申请时就是 401，
+驳回逻辑坏掉它照样绿。回推时平台会比对整步断言并警告（同一请求、中间没有任何断言
+证明它变过）。
+
+保持型／否定断言合法（「弃用后存量调用不中断」正该这么写），两个条件：
+  ① **在步骤名里写明**（保持/不变/仍/依旧/始终/一致），平台据此不再提示；
+  ② **基准要在动作之前建**。链子里必须有一步先证明它当时不是这个值 ——
+     「驳回后仍 401」后面再补一步「重新获批后 200」不算基准，那证明的是之后，
+     不是之前。没有前置基准，这条断言从头到尾都是绿的，平台也判不出来。
+
+**别缩小断言作用域。** 页面级→行级、整体→单字段：条数没少，强度降了。
+
+### 改几个断言不用重发全链
+
+`mode='patch'` + 只传要改的那几步，按 step name 匹配，其余原样保留。
+name 必须和现有步骤完全一致，对不上整批拒绝（怕静默漏改）；加步骤或改名用 `mode='replace'`。
+
+### 断言错误提示语：用 `${T:中文}`，别写死
 
 **文案不是 UI 专属的。** 接口的错误提示语跟着语种变（Accept-Language 一改，
 `message` 字段就从中文变英文），断言里写死中文，跑英文环境照样全红。
 
     ❌ {"type": "body_contains", "value": "服务名已存在"}
-    ✅ {"type": "body_contains", "value": "${T:服务名已存在}"}
+    ✅ {"type": "body_contains", "value": "${T:services.form.nameDuplicated|服务名已存在}"}
+    竖线后面是中文原文：读断言的人一眼看懂在验什么，词典没收录时也退回它（不会拿键名去比）
 
 `${T:…}` 由平台按环境变量 `TEST_LANGUAGE=zh|en` 换成当前语种（不配就是中文），
+同时平台会给每个请求带上 `Accept-Language`（步骤自己写了就不覆盖）——
+两边都换，被测系统才会真的回那个语种的文案，
 译文取自项目国际化词典。**词典里查不到就原样返回中文**，所以没收录的话也不会挂。
 
-判据很简单：**这个断言值是被测系统给用户看的文字吗？** 是就套 `${T:}`。
-状态码、枚举值（active/draft）、字段名不用 —— 那些不会因为语种变。
+判据：**这个断言值是被测系统给用户看的文字吗？** 是就套 `${T:}`。
+状态码、枚举值（active/draft）、字段名不用 —— 那些不随语种变。
+词条自己登记：`tb_upsert_i18n_terms`。
+
+**但先找有没有稳定错误码 —— 有就断码，别断文案。** 实测这个 409 回的是
+`{"error":{"code":"SERVICE_NAME_CONFLICT","message":"service name already exists in this
+tenant: tb-dup-xxxx"}}`：message 是英文的（压根没走 i18n）**还拼了动态服务名**，
+拿它做等值断言必挂，套 `${T:}` 也没用（词典里没有它，返回原文照样对不上）。
+    ✅ {"type":"body_field","field":"error.code","operator":"==","expected":"SERVICE_NAME_CONFLICT"}
+    ⚠ 只能断文案、且文案里带动态内容时，用 contains 断那段固定的，别断整句。
+顺序就是：**错误码 > `${T:}` 文案 > contains 片段**。
 
 """
 
@@ -429,10 +711,22 @@ _SPEC_TIMING = """## 异步下发怎么办：别插假步骤占时间窗，用 w
 
 _SPEC_CASE = """## 步骤用例（tb_create_case，非本模块，但一并说明口径）
 
-活体验证后回写步骤用例：case_type=e2e，步骤是**页面操作**（点按钮/填表单），
+**case_type 看测试对象：**
+- `api` 单接口 —— 测试对象是**某一个接口的参数、权限**
+- `e2e` 场景 —— 测试对象是**某功能是否按需实现**
+- 为这条用例造数据用了几个接口，不影响判断 —— 造数据不是测试对象
+
+活体验证后回写步骤用例：多步编排的功能验证用 case_type=e2e，步骤是**页面操作**（点按钮/填表单），
 按钮名/字段标签/Toast 文案用被测系统真实文案；预期结果必须 UI 可见；禁止模糊词
 （操作成功/显示正常/无报错）；每条只验一个点；preconditions 分环境前置+数据前置；
-steps 每项含 seq/action/expected；多角色加 [管理员]/[租户] 标记。"""
+steps 每项含 seq/action/expected；多角色加 [管理员]/[租户] 标记。
+
+改步骤/预期会清掉「预期已确认」。只是**措辞润色**（实质没变）就传
+`tb_update_case(reconfirm=true)`：依据沿用原落款、只重盖时间。实质变了就重新对一遍。
+
+**写不了就说清等什么**：`tb_update_case(blocked_external='等环境变量 X 加上')`。
+「我没写」和「外面缺东西我写不了」在看板上长得一模一样，不标注就每轮都要人来问你。
+它不免检任何阻塞，只是归责；条件到位了传空串撤掉。"""
 
 
 _SPEC_UI_SCRIPT = """## 用例的 UI 脚本（tb_sync_ui_script）
@@ -479,36 +773,138 @@ def test_创建服务后列表可见(page: Page):
 - TypeScript：必须有 `test(...)` —— 平台用 `npx playwright test` 跑它。默认文件名 ui.spec.ts
 - 两种都支持，按内容/文件名自动判，也可以显式传 language
 
-### 流程
+### 多角色：一人一个 browser context，不要清 storage 换人
 
-1. 本地写脚本，**先自己跑通**（别回推没验证过的东西）
+审批类功能天然多角色（申请人／审批人／二级审批人）。**别用一个 page 反复清
+storage 换人** —— 清 storage 擦不掉内存里的 store 和查询缓存，实测渲染进程会挂死
+（连 `Page.screenshot` 都 30s 超时）；而且"一个会话扮多个人"本来就不是真实场景。
+
+```python
+def test_申请后审批通过(browser, browser_context_args):
+    # 必须带上 browser_context_args：语种和视口是平台在这个 fixture 里注入的，
+    # 自己裸开 new_context() 会退回默认 locale，上面那套文案纪律当场失效。
+    rest = {k: v for k, v in browser_context_args.items() if k != "record_har_path"}
+    applicant = browser.new_context(**browser_context_args)   # 第一个留着录 HAR
+    approver = browser.new_context(**rest)                    # 其余去掉：同一个
+    p1, p2 = applicant.new_page(), approver.new_page()         # HAR 路径会互相覆盖
+    ...                                  # 各自登录、各自操作
+    applicant.close(); approver.close()  # 不 close 就没有 HAR，失败时没有网络证据
+```
+
+### 扫描/遍历类的"找不到"断言：先等就绪锚点
+
+「翻遍列表都找不到这条」这类**负例**在空列表上**恒真** —— 一张卡都没渲染出来时
+"找不到"当然成立。而触发过重新拉取（审批完、提交完、切了 tab）之后正好有个空窗期，
+断言就在那一瞬间通过，日志里看着是绿的，实际一条都没扫。
+
+所以扫描前必须先锚定一个**就绪信号**，且这个信号要能区分"列表还没回来"和"列表回来了但没有它"：
+
+```python
+expect(page.locator(".todo-card")).to_have_count(3, timeout=15000)   # 先等数量落到预期
+# 再去扫身份 —— 这时"扫遍都没有"才是真结论
+for card in page.locator(".todo-card").all():
+    assert svc_name not in card.inner_text()
+```
+
+判据：**如果这段断言在"页面上一条数据都没有"时也会通过，它就还缺一个锚点。**
+（实测 CC 的 TC-DYGL-00016：第一版平台跑 44/44 全绿，加了"卡片数从 4 落到 3"这个锚点后
+步骤数变成 58 —— 多出来的 14 步正是原先被空窗期跳过的扫描。）
+
+### 导航：SPA 别等 load
+
+`page.goto()` 默认等 `load`，在 SPA + 有轮询的页面上会卡满 30s。
+用 `page.goto(url, wait_until="domcontentloaded")` + **显式元素断言**当就绪信号。
+`networkidle` 同样别用 —— 轮询永远不会 idle。
+
 ### 文案纪律：优先 testid，退回文案时用 `t()`
 
-（**接口断言同样受语种影响** —— 错误提示语跟着 Accept-Language 变。
-接口场景那边用 `${T:中文}` 占位，见 tb_get_sync_spec(kind='api_scenario')。）
-
 **数据不许写死已经有硬拦截，文案是同一件事的另一半。**
-脚本里 `name="更多"` 这种硬编码中文，换英文环境全挂 ——
-实测 9 个脚本 57 处写死中文、只有 5 处用 testid。
+`name="更多"` 换英文环境全挂 —— 实测 9 个脚本 57 处写死中文、只有 5 处用 testid。
+（接口断言同样受语种影响，那边用 `${T:中文}`，见 tb_get_sync_spec(kind='api_scenario')。）
 
-按这个顺序选定位方式：
+定位方式按这个顺序选：
 
-  1. **`data-testid`**（`page.get_by_test_id("sync-status-bar")`）—— 最稳，
-     文案改了、语种换了都不受影响。被测系统有就用它
+  1. **`data-testid`**（`page.get_by_test_id("sync-status-bar")`）—— 文案改了、
+     语种换了都不受影响。被测系统有就用它
   2. **结构 + 角色**（`get_by_role("button")` + 位置/父级），不带 name
-  3. **文案** —— 只有前两条都不行才用，而且**必须走 `t()`**：
+  3. **文案** —— 前两条都不行才用，而且**必须写成占位变量 `${键|中文原文}`**，
+     跟接口断言完全同形（那边是 `${T:键|中文}`），一眼就是"平台给的值"：
 
-         from tea_i18n import t
-         page.get_by_role("button", name=t("更多")).click()
-         expect(page.get_by_test_id("sync-status-bar")).to_contain_text(t("草稿"))
+         page.get_by_role("button", name="${services.action.more|更多}").click()
+         expect(page.get_by_test_id("sync-status-bar")).to_contain_text("${status.draft|草稿}")
 
-`t()` 由平台注入沙箱（tea_i18n.py），按环境变量 **`TEST_LANGUAGE=zh|en`** 取译文
-（不配就是中文）；
-**查不到就原样返回中文**，所以词典没收录的词也不会让脚本挂掉。
-本地写的时候自己 stub 一个 `def t(s): return s` 就行。
+     竖线后面是中文原文：读脚本的人一眼知道在验什么，词典缺这个语种时也退回中文。
+     不带点号的 `${BASE_URL}` 不是文案键，平台不碰它（环境变量走 os.getenv）。
+
+     要循环/拼接的场合用注入的表：`from tea_i18n import TEXT` → `TEXT.get("键", "中文")`
+     （`t("键","中文")` 是 i18next 那套写法的别名，老脚本还在用，等价）。
+
+`TEXT` 由平台注入沙箱（tea_i18n.py），内容是**按 `TEST_LANGUAGE=zh|en` 解析好的**{键: 文案}（不配就是中文）—— 脚本里当变量表用，不用自己挑语种。
+
+⚠ **浏览器 locale 换不动被测系统。** 实测 stoa：context locale 设成 en-US，页面照旧全中文 ——
+它的语种存在 `localStorage['stoa-lang']`。所以环境里还要配一行
+`UI_LANG_STORAGE_KEY=<那个键名>`，平台会在页面脚本跑之前把当前语种种进去。
+不配的话：期望值换成了英文、被测系统还在说中文，**全红，而且是假红**。
+自己 `browser.new_context()` 开的上下文不吃这个注入（init script 挂在平台给的 context 上），
+多角色脚本里要么复用 `context` fixture，要么自己种一遍 —— **`add_init_script` 收的是
+语句正文，不是函数**：
+
+```python
+ctx.add_init_script("try{localStorage.setItem('stoa-lang','en-US')}catch(e){}")   # ✅ 会执行
+ctx.add_init_script("() => { localStorage.setItem('stoa-lang','en-US') }")        # ❌ 只定义了个箭头函数，永不执行
+```
+
+写成箭头函数**不报错、也不生效**：语种没换过去，脚本按英文断言、系统还说中文，
+**全红而且是假红**（实测 CC 第一次跑 TEST_LANGUAGE=en 就栽在这里）。
+**ref 优先用语言中立键**（`services.form.name`）—— 多义词只能这么区分，
+拿中文当键时「服务」在标题和按钮上永远是同一条。
+
+⚠ **占位没换掉的话平台直接拒绝执行**，所以竖线后面的中文别省：
+  · `${键|中文}` → 词典有就用译文；词典有键但缺这个语种 → 退回它自己的中文；
+    词典压根没这条 → 退回你写的中文。三种都跑得起来
+  · `${键}` 光写键、词典里又没这条 → **回推被硬拦，执行被拒**
+    （返回里列出 textPlaceholdersUnresolved）。为什么不是"让它红在找不到元素上"：
+    那只对正例成立。「不应出现」这类**负例会假绿** —— 未替换的占位匹配不到任何元素，
+    "不该存在"当然成立。恒真断言不会自己喊疼，只能拦在执行前
+  · 同理，`TEXT["键"]` 裸下标查不到会**抛 KeyError**（不再静默返回键名）；
+    要兜底就写 `TEXT.get("键", "中文原文")`
+  · 拿中文当键 → 不会挂，但中文一改键就失效（静默退回原文），
+    而且多义词区分不开（「服务」在标题和按钮上是两回事）
+
+键可以带 i18next 的命名空间：`${subscription:manage.rejectBtn|驳回}`。
+**两种分隔符互认** —— 被测系统里是 `t('subscription:manage.rejectBtn')`，平台词典里
+存的是全点号 `subscription.manage.rejectBtn`，查词时两种拼法指向同一条，随便写哪种。
+
+**本地怎么跑**：调 `tb_render_ui_script(case_id, lang, env_id)` —— 它吐**一个能直接
+pytest 跑的文件**（文案、环境变量默认值、被测系统的语种开关都烧进去了）。
+凭据默认不烧，返回里 `exportEnv` 告诉你 export 哪几个；要完全自包含传
+`include_credentials=true`。`textUnresolved` 非空就先登记词条或补上 `|中文原文`。
+
+
+登记通道：`tb_upsert_i18n_terms(project_id, items=[{key, zh, en}])`。没有 en 译文的
+词条注入后在英文环境仍退回中文 —— 登记了不等于能测英文。
+
+**英文环境要在本地先验**，不然"本地跑通再回推"这条纪律在文案上是空的：
+本地 stub `def t(s): return s` 只能跑中文。做法是把词典拉到本地当真表，
+`TEST_LANGUAGE=en` 跑一遍：
+
+```python
+try:
+    from tea_i18n import t                      # 平台沙箱里有
+except ImportError:                             # 本地：读一份词典副本
+    import json, os
+    _T = json.load(open("i18n.local.json", encoding="utf-8"))
+    _L = "en-US" if os.getenv("TEST_LANGUAGE") == "en" else "zh-CN"
+    def t(ref): return (_T.get(ref) or {}).get(_L) or ref
+```
+副本从平台取：`GET {平台地址}/api/projects/{project_id}/i18n-messages` 返回
+`{data: [{keyText, translations}]}`，自己转成 `{keyText: translations}` 存成上面那个文件。
 
 回推时会扫硬编码中文给**软警告**（不硬拦 —— 词典总有不全的时候）。
 
+### 流程
+
+1. 本地写脚本，**先自己跑通**（别回推没验证过的东西）
 2. `tb_sync_ui_script(case_id, content)` 入库
 3. `tb_run_ui_script(case_id, env_id)` 在目标环境上再跑一遍——平台跑通了才算通
 4. 失败看 `tb_get_ui_script_result(case_id)`：状态、耗时、错误摘要、截图数
@@ -549,6 +945,63 @@ async def get_sync_spec(kind: str = "all") -> dict:
 # 2. 回推：用例编排的接口场景
 # ─────────────────────────────────────────────────────────────
 
+_STEP_FIELDS = ("name", "method", "url", "headers", "body", "assertions",
+                "variables_extract", "enabled", "group_name",
+                "wait_ms", "retry_timeout_ms", "retry_interval_ms")
+
+
+async def _merge_patch(session: AsyncSession, bid: uuid.UUID, scid: uuid.UUID,
+                       incoming: list[dict], patched: list[str]) -> list[dict] | dict:
+    """把 incoming 按 step name 合并进现有场景，返回完整的步骤列表（出错则返回 {"error": ...}）。
+
+    **为什么要它**：整条覆盖是唯一入库方式时，改 3 个断言要重发 27 步。
+    费 token 是小事，**重发时手误引入新问题**才是大事 —— 那 24 步没人再看一遍。
+    """
+    prev = (await session.execute(
+        select(ApiTestScenario).where(ApiTestScenario.branch_id == bid,
+                                      ApiTestScenario.source_case_id == scid)
+        .order_by(ApiTestScenario.created_at)
+    )).scalars().first()
+    if prev is None:
+        return {"error": "这条用例还没有接口场景，patch 无从下手：先用 mode='replace' 整条推一次。"}
+    old = (await session.execute(
+        select(ApiTestStep).where(ApiTestStep.scenario_id == prev.id)
+        .order_by(ApiTestStep.sort_order)
+    )).scalars().all()
+
+    by_name: dict[str, int] = {}
+    for s in old:
+        by_name[s.name] = by_name.get(s.name, 0) + 1
+
+    want: dict[str, dict] = {}
+    for st in incoming:
+        nm = str(st.get("name") or "").strip()
+        if not nm:
+            return {"error": "patch 模式下每个 step 必须有 name —— 它是唯一的匹配依据。"}
+        if nm in want:
+            return {"error": f"patch 里有两个同名 step「{nm}」，认不出改哪一条。"}
+        want[nm] = st
+
+    unknown = [n for n in want if n not in by_name]
+    if unknown:
+        return {"error": "这些 step name 在现有场景里找不到，已拒绝（怕静默漏改）：",
+                "notFound": unknown, "existingNames": [s.name for s in old],
+                "hint": "名字要和现有步骤完全一致；要加新步骤或改名就用 mode='replace' 整条推。"}
+    ambiguous = [n for n in want if by_name[n] > 1]
+    if ambiguous:
+        return {"error": f"现有场景里有同名步骤（{'、'.join(ambiguous)}），patch 认不出改哪一条："
+                         f"改用 mode='replace'。"}
+
+    merged: list[dict] = []
+    for s in old:
+        base = {f: getattr(s, f) for f in _STEP_FIELDS}
+        if s.name in want:
+            base.update({k: v for k, v in want[s.name].items() if k in _STEP_FIELDS})
+            patched.append(s.name)
+        merged.append(base)
+    return merged
+
+
 async def sync_orchestrated_scenario(
     session: AsyncSession,
     project_id: str,
@@ -559,6 +1012,7 @@ async def sync_orchestrated_scenario(
     folder_name: str | None = None,
     priority: str = "P1",
     description: str | None = None,
+    mode: str = "replace",
 ) -> dict:
     """把活体验证过的接口链显式写入「用例·编排的接口场景」。
 
@@ -590,7 +1044,20 @@ async def sync_orchestrated_scenario(
         for f in ("headers", "body", "assertions", "variables_extract"):
             if f in st:
                 st[f] = _loads(st[f])
+        # 断言键名归一（status→value、body_field→field+expected），见 _canon_assertion
+        if isinstance(st.get("assertions"), list):
+            st["assertions"] = [_canon_assertion(a) for a in st["assertions"]]
         norm.append(st)
+
+    # ── mode=patch：只改点名的那几步，其余原样留着 ──
+    if mode not in ("replace", "patch"):
+        return {"error": "mode 只能是 replace（整条覆盖）或 patch（按 name 只改点名的步骤）"}
+    patched: list[str] = []
+    if mode == "patch":
+        norm_or_err = await _merge_patch(session, bid, uuid.UUID(source_case_id), norm, patched)
+        if isinstance(norm_or_err, dict):
+            return norm_or_err
+        norm = norm_or_err
 
     # ── 建立引用允许名单 ──
     allow: set[str] = set(BUILTIN_VARS)
@@ -630,6 +1097,7 @@ async def sync_orchestrated_scenario(
     dangling: list[dict] = []
     warnings: list[dict] = []
     bad_types: list[dict] = []
+    dead_asserts: list[dict] = []
     extracted: set[str] = set()
     for i, st in enumerate(norm):
         refs = _collect_refs(st.get("url"), st.get("headers"), st.get("body"), st.get("assertions"))
@@ -651,6 +1119,8 @@ async def sync_orchestrated_scenario(
                 warnings.append({"step": i + 1, "field": f"body.{path}" if path else "body", "value": val[:60]})
         # 断言里把布尔/数字写成字符串 → 硬拦。见 _bool_typed_as_string。
         bad_types.extend(_typo_assertions(i + 1, st))
+        # 期望值/字段路径压根没给 → 硬拦（必然红，且报错看不懂）。见 _unevaluatable_assertions。
+        dead_asserts.extend(_unevaluatable_assertions(i + 1, st))
         # 异步下发的断言没开重试 → 软警告。见 _needs_retry。
         r = _needs_retry(i + 1, st)
         if r:
@@ -659,6 +1129,22 @@ async def sync_orchestrated_scenario(
         extra = st.get("variables_extract")
         if isinstance(extra, dict):
             extracted.update(extra.keys())
+
+    # 动作前后同一条断言 → 软警告。见 _nondiscriminating。
+    warnings.extend(_nondiscriminating(norm))
+    # not_exists 没有基准 → 软警告。见 _missing_path_baseline。
+    warnings.extend(_missing_path_baseline(norm))
+
+    if dead_asserts:
+        return {
+            "error": "有断言永远判不过，已拒绝入库 —— 缺期望值/字段路径的断言不是"
+                     "「可能红」，是必然红，而报错会长得像平台在说胡话。",
+            "deadAssertions": dead_asserts,
+            "hint": "状态码写 {\"type\":\"status\",\"operator\":\"==\",\"value\":200}"
+                    "（in 的话 value 是数组）；响应字段写 {\"type\":\"body_field\","
+                    "\"field\":\"data.status\",\"operator\":\"==\",\"expected\":\"pending\"}。"
+                    "expected / value 两种键名执行器都认，但**总得给一个**。",
+        }
 
     if bad_types:
         return {
@@ -709,6 +1195,7 @@ async def sync_orchestrated_scenario(
         return {"error": "找不到可用的用户来记录 created_by（需要至少一个 active 用户）"}
 
     replaced = False
+    carry: dict[str, tuple] = {}      # 步骤名 → (定义指纹, last_status, last_response)
     if existing is not None:
         # 覆盖：保留原 code（外部可能已引用），换掉步骤与元信息
         scenario = existing
@@ -719,6 +1206,15 @@ async def sync_orchestrated_scenario(
             scenario.folder_id = folder_id
         if description:
             scenario.description = description
+        # **重推前把上一次运行的证据留住。** 步骤行是删了重建的，于是
+        # last_status / last_response 一并没了 —— 而 tb_check_env_hygiene 判"上次跑到清理没有"
+        # 靠的就是它。实测后果：CC 跑完再 patch 一次，那条链的运行痕迹归零，
+        # 工具从此看不见残留（"报 0 条"于是变成一句空话）。
+        # 只对**定义没变**的步骤沿用：定义改了，旧结果就是过期的，不该继续代表它。
+        for _old in (await session.execute(
+            select(ApiTestStep).where(ApiTestStep.scenario_id == scenario.id)
+        )).scalars().all():
+            carry[_old.name] = (_step_def_sig(_old), _old.last_status, _old.last_response)
         await session.execute(
             sa_delete(ApiTestStep).where(ApiTestStep.scenario_id == scenario.id)
         )
@@ -761,10 +1257,17 @@ async def sync_orchestrated_scenario(
         session.add(scenario)
     await session.flush()
 
+    kept_evidence = 0
     for i, st in enumerate(norm):
+        # 定义没变的步骤沿用上一次的运行结果（见上面 carry 那段）
+        prev_status, prev_resp = _carried_evidence(carry, st)
+        if prev_status:
+            kept_evidence += 1
         session.add(ApiTestStep(
             scenario_id=scenario.id,
             sort_order=i,
+            last_status=prev_status,
+            last_response=prev_resp,
             group_name=st.get("group_name"),
             name=st.get("name") or f"step{i + 1}",
             method=(st.get("method") or "GET").upper(),
@@ -798,13 +1301,20 @@ async def sync_orchestrated_scenario(
         "code": code,
         "title": title,
         "stepCount": len(norm),
+        **({"keptLastRunEvidence": kept_evidence} if kept_evidence else {}),
         "sourceCaseId": str(scid) if scid else None,
         "scenarioVariablesLinked": scenario_var_names,
         "hardcodeWarnings": warnings,
         "replacedExisting": replaced,
-        "message": (f"已覆盖同名场景 {code}" if replaced else f"已新建场景 {code}")
-                   + f"（{len(norm)} 步）"
-                   + (f"，⚠ {len(warnings)} 处疑似写死（仅提醒，已入库）" if warnings else "，无写死告警"),
+        "mode": mode,
+        "patchedSteps": patched,
+        "message": (f"已按 name 改了 {len(patched)} 步（{'、'.join(patched)}），"
+                    f"其余 {len(norm) - len(patched)} 步原样保留"
+                    if mode == "patch" else
+                    (f"已覆盖同名场景 {code}" if replaced else f"已新建场景 {code}")
+                    + f"（{len(norm)} 步）")
+                   + (f"，⚠ {len(warnings)} 处待看（疑似写死/断言不区分动作，仅提醒，已入库）"
+                      if warnings else "，无告警"),
     }
 
 
@@ -902,6 +1412,85 @@ async def upsert_scenario_variables(
                    + (f"，{len(errors)} 个失败" if errors else "")
                    + (f"。⚠ {len(antipatterns)} 处反模式（见 antipatterns，已入库但建议改）"
                       if antipatterns else ""),
+    }
+
+
+_HAS_ZH = re.compile(r"[一-鿿]")
+
+
+async def upsert_i18n_terms(session: AsyncSession, project_id: str, items: list) -> dict:
+    """把脚本里要用的文案登记进项目国际化词典（按 key upsert）。
+
+    **这是 `t()` 的登记通道。** 以前只有页面能录，MCP 没有 —— 于是纪律要求
+    「文案走 t()」，而 CC 想补一条词只能把键值整理成表交给人工，实测就这么卡住过。
+
+    键怎么选：
+      · 有语言中立键（`services.form.name`）就用它 —— 多义词只能这么区分，
+        「服务」在标题和按钮上是两回事，拿中文当键就永远指向同一条。
+      · 只有中文就用中文当键，此时 zh 不填也行（中文键的中文就是它自己）。
+
+    ⚠ **用键的前提是先登记**：`t("services.form.name")` 查不到时原样返回那串键，
+    选择器拿它去匹配必然找不到 → 红。中文当键则退回中文，不会挂。
+    ⚠ 没有 en 译文的词条注入后 `t()` 在英文环境仍退回中文 —— 登记了不等于能测英文。
+    """
+    from app.models.i18n_message import ProjectI18nMessage
+
+    pid = uuid.UUID(project_id)
+    items = _loads(items)
+    if not isinstance(items, list) or not items:
+        return {"error": "items 必须是非空数组：[{key, zh, en, module, category}]"}
+
+    created, updated, errors, no_en = [], [], [], []
+    for i, raw in enumerate(items):
+        it = _loads(raw)
+        if not isinstance(it, dict):
+            errors.append({"index": i, "why": "不是对象"})
+            continue
+        key = str(it.get("key") or it.get("key_text") or "").strip()
+        if not key:
+            errors.append({"index": i, "why": "key 必填"})
+            continue
+        zh = str(it.get("zh") or it.get("zh-CN") or "").strip()
+        en = str(it.get("en") or "").strip()
+        if not zh and _HAS_ZH.search(key):
+            zh = key           # 中文当键：它的中文就是它自己，补上才能被反查到
+        if not en:
+            no_en.append(key)
+        # 语种键写 BCP-47 全码，跟从被测系统 locale 导进来的 2400+ 条对齐 ——
+        # 一行里同时躺着 "en" 和 "en-US" 迟早会分叉（解析两种都认，人却分不出哪个是新的）。
+        trans = {k: v for k, v in (("zh-CN", zh), ("en-US", en)) if v}
+
+        row = (await session.execute(
+            select(ProjectI18nMessage).where(ProjectI18nMessage.project_id == pid,
+                                             ProjectI18nMessage.key_text == key)
+        )).scalars().first()
+        if row:
+            row.translations = {**(row.translations or {}), **trans}
+            if it.get("module"):
+                row.module = str(it["module"])[:64]
+            if it.get("category"):
+                row.category = str(it["category"])[:20]
+            if it.get("description"):
+                row.description = str(it["description"])
+            updated.append(key)
+        else:
+            session.add(ProjectI18nMessage(
+                project_id=pid, key_text=key[:500], translations=trans,
+                module=(str(it["module"])[:64] if it.get("module") else None),
+                category=(str(it["category"])[:20] if it.get("category") else None),
+                description=it.get("description"), source="manual",
+            ))
+            created.append(key)
+
+    await session.commit()
+    return {
+        "status": "ok" if not errors else "partial",
+        "created": created, "updated": updated, "errors": errors,
+        "missingEn": no_en,
+        "message": f"新增 {len(created)}、更新 {len(updated)} 条词条"
+                   + (f"，{len(errors)} 条失败" if errors else "")
+                   + (f"。⚠ {len(no_en)} 条没有 en 译文：英文环境下 t() 仍退回中文，"
+                      f"用它做断言测不出英文" if no_en else ""),
     }
 
 
@@ -1075,14 +1664,19 @@ async def upsert_automation_resource(
     ⚠ extract 路径**相对 match 命中的那一条**写，直接 "id"，别写 "data.items[0].id" ——
       下标是另一种写死，列表顺序一变就静默抽到别的资源，步骤照跑不报错。
       （绝对路径仍兼容：命中项上取不到时会退回整包解析。）
-    ⚠ 探不到时不会自动补建（create_def 暂只登记备查、不执行），只会让引用它的步骤报
-      「变量未解析」，并在运行结果顶部提示缺哪个。所以第 2 步不能省。
+    ⚠ **create_def 别省，它是兜底不是备查**：探到「确实没有」（探测请求成功但没匹配上）
+      时平台会照它在跑前补建，并在运行结论里明说补了什么。没登记就只能让引用它的步骤
+      报「变量未解析」。401/5xx/超时算「没查成」，一律不动 —— 一次 token 过期就照着建，
+      会在被测环境里造出一堆重复底座。
 
     exists_check 形如 {"method":"GET","url":"${BASE_URL}/api/v1/upstreams?page_size=100",
                       "match":{"field":"name","equals":"autotest-default-upstream"},
-                      "extract":{"upstreamId":"id"}}
+                      "extract":{"upstreamId":"id"}, "role":"TENANT"}
+      · `role`（可选，默认 ADMIN）：探测和补建用哪个角色的 token，对应环境里的
+        `{ROLE}_USERNAME/{ROLE}_PASSWORD`。实测有坑：读上游 ADMIN 能读，但建上游
+        要租户管理员的能力（ADMIN 去建回 403），所以这类资源要写 role="TENANT"。
     create_def   形如 {"method":"POST","url":"${BASE_URL}/api/v1/upstreams","body":{...}}
-                 （登记备查，说明这资源当初是怎么造的；平台暂不自动执行）
+                 （这资源当初是怎么造的；探到确实没有时平台照它补建）
     """
     from app.models.automation_resource import AutomationResource
 
@@ -1138,8 +1732,11 @@ async def upsert_automation_resource(
         "hasCreateDef": res.create_def is not None,
         "message": f"已{'更新' if action == 'updated' else '登记'}前置资源「{res.name}」。"
                    f"场景开跑前会自动探测并注入，步骤里用 ${{{res.name}}} 引用，别再写死 UUID。"
-                   " ⚠ 探不到时不会自动补建（create_def 暂只登记不执行），"
-                   "只会让引用它的步骤报「变量未解析」——请确认该资源在目标环境确实存在。",
+                   + (" 探到确实没有时会照 create_def 自动补建（补了会在运行结论里说），"
+                      "401/5xx/超时算没查成、不会乱建。"
+                      if res.create_def is not None else
+                      " ⚠ **没登记 create_def**：探不到时平台补不了，引用它的步骤会报"
+                      "「变量未解析」。把当初怎么造的补登上来，这个资源就再也不会拖垮链子。"),
     }
 
 
@@ -1175,7 +1772,82 @@ _UI_TEXT_RE = re.compile(
     r"""|to_contain_text\(\s*['"]([^'"]+)['"]""")
 
 
-_T_REF_RE = re.compile(r"""\bt\(\s*['"]([^'"]+)['"]""")
+
+def _strip_noncode(content: str) -> str:
+    '''去掉三引号块和行注释 —— 只有真代码才算引用。
+
+    活体验证时撞到：脚本 docstring 里写了用法示例 t("键", "中文原文")，
+    扫描器把「键」当成真引用，报「词典里没有这个键」。**在文档里解释怎么用，
+    反被门禁警告**，那种提示看两次就没人信了。
+    只用于软警告那两条扫描；写死地址/凭据的硬拦截仍扫全文（注释里贴凭据也不行）。
+    '''
+    out = re.sub(r'(?s)""".*?"""', '', content)
+    out = re.sub(r"(?s)'''.*?'''", '', out)
+    return re.sub(r'(?m)^[ \t]*#.*$', '', out)
+
+from app.services.ui_text_render import REF_RE as _PH_RE, text_key as _text_key  # noqa: E402
+
+# 三种写法都要认出来，并分清"带没带中文兜底"：
+#   TEXT["键"]                  没带 → 查不到会拿键名去匹配，必然找不到元素
+#   TEXT.get("键", "中文原文")   带了 → 查不到退回中文，不挂但测不出英文
+#   t("键"[, "中文"])           i18next 那套老写法，库里还有脚本在用
+# 第一支直接用渲染那边的正则 —— **别再各写一份**：门禁这份原来不认命名空间键
+# （`subscription:stats.x`），于是 CC 照规范写的占位在门禁眼里根本不存在，
+# 一句警告都没有，而执行时也没替换掉（同一个漏洞两处一起漏）。
+_T_REF_RE = re.compile(
+    _PH_RE.pattern                                                       # ${键|中文}
+    + r"""|TEXT\.get\(\s*['"]([^'"]+)['"]\s*(,\s*['"][^'"]*['"])?"""
+    + r"""|TEXT\[\s*['"]([^'"]+)['"]\s*\]"""
+    + r"""|\bt\(\s*['"]([^'"]+)['"]\s*(,\s*['"][^'"]*['"])?""")
+
+
+def _t_refs(code: str) -> dict[str, bool]:
+    """{键: 有没有带中文兜底}。"""
+    out: dict[str, bool] = {}
+    for m in _T_REF_RE.finditer(code):
+        if m.group(1):                      # ${键|中文}
+            ref, has = _text_key(m.group(1)), bool(m.group(2))
+            if ref is None:                 # ${BASE_URL} 之类：环境变量，不是文案键
+                continue
+        elif m.group(3):                    # TEXT.get("键"[, "中文"])
+            ref, has = m.group(3), bool(m.group(4))
+        elif m.group(5):                    # TEXT["键"]
+            ref, has = m.group(5), False
+        else:                               # t("键"[, "中文"])
+            ref, has = m.group(6), bool(m.group(7))
+        out[ref] = out.get(ref, False) or has
+    return out
+
+
+# 中文字面量出现在这些地方是**正当**的，不该报：步骤名/日志/失败信息、变量赋值（造数据）
+_SAFE_CN_SINK = re.compile(
+    r"""(?:tea_step|print|pytest\.fail|pytest\.skip|fail|skip|log\w*)\(\s*['"]"""
+    r"""|^\s*\w+\s*=\s*['"]""", re.M)
+_ANY_CN_LIT = re.compile(
+    r"""(?P<pre>[^\n]{0,40}?)(?P<q>['"])(?P<t>[^'"\n]*[一-鿿][^'"\n]*)(?P=q)""")
+
+
+def _stray_cn_literals(code: str) -> list[str]:
+    """代码里还剩哪些中文字面量 —— 定位器 API 之外的也要抓。
+
+    **这条是被自己漏改逼出来的**：改造网关那 5 个脚本时，
+    `_open_more_menu(page, "发布上线")` 一处没换掉 —— 文案传给的是**自定义函数**，
+    按 API 名单扫的规则（name=/get_by_text/filter(has_text=…）看不见它，
+    我和平台扫描器一起漏了，直到跑英文才红出来。
+    所以反过来判：正文里的中文字面量，除了那几个正当去处（tea_step 步骤名、print/fail
+    信息、变量赋值造数据），其余一律提醒 —— 它极可能是拿去定位/断言的。
+    """
+    out: list[str] = []
+    for m in _ANY_CN_LIT.finditer(code):
+        txt = m.group("t")
+        if txt.startswith("${"):
+            continue
+        pre = m.group("pre")
+        if _SAFE_CN_SINK.search(pre + m.group("q")):
+            continue
+        if txt not in out:
+            out.append(txt)
+    return out
 
 
 def _scan_ui_script(content: str, language: str,
@@ -1190,28 +1862,58 @@ def _scan_ui_script(content: str, language: str,
     # 全量导进来的 2416 条里只有 31 条真被用到，剩下 2385 条是会过期的重复数据，
     # 已清掉。所以是**按需登记**：CC 引用哪条，那条才该在词典里。
     # 这道门禁就是提醒它去登记，不然英文环境下那几处会静默退回中文。
-    _refs = {m.group(1) for m in _T_REF_RE.finditer(content)}
-    if _refs and known_keys is not None:
-        _missing = sorted(_refs - set(known_keys))
-        if _missing:
+    code = _strip_noncode(content)          # 注释/文档串里的示例不算引用
+    _hint = _t_refs(code)
+    if _hint and known_keys is not None:
+        # 两种命名空间拼法都算已登记（`ns:a.b` ↔ `ns.a.b`）：词典里存的是点号、
+        # 脚本按被测系统写冒号。不认的话门禁把明明有的词报成"没登记"——
+        # 实测 5 条里 4 条是这么误报的，而现在这条是**硬拦**，误报就直接卡住回推。
+        from app.services.ui_text_render import key_aliases
+        _known_all = {a for k in known_keys for a in key_aliases(k)}
+        _missing = sorted(set(_hint) - _known_all)
+        _naked = [k for k in _missing if not _hint[k]]
+        if _naked:
+            # **硬拦，不是警告。** 这种脚本平台压根不会跑（executor 那道拦截会拒），
+            # 放行只是让人多跑一趟；更要紧的是它坏起来一半是看不见的：
+            # 正例红在「找不到元素」，而「不应出现」那类负例**假绿**（占位/键名匹配不到
+            # 任何元素，"不该存在"当然成立）。恒真断言不会自己喊疼。
+            errors.append(
+                f"{len(_naked)} 处文案键词典里没有、又没带中文原文"
+                f"（{'、'.join(_naked[:3])}…）—— 平台会**拒绝执行**这个脚本："
+                f"占位换不掉时正例红在「找不到元素」上、而「不应出现」那类断言会假绿。"
+                f"两条都做：写成 ${{键|中文原文}}，并用 tb_upsert_i18n_terms 登记 key+zh+en。")
+        _with_hint = [k for k in _missing if _hint[k]]
+        if _with_hint:
             warns.append(
-                f"引用了 {len(_missing)} 个词典里没有的键（{'、'.join(_missing[:3])}…）—— "
-                f"英文环境下这几处会静默退回中文。去「国际化词典」把它们登记上"
-                f"（键 + 中文 + 英文），键从被测系统 locale 文件里取。")
+                f"{len(_with_hint)} 处 t() 引用的键词典里没有，但带了中文原文"
+                f"（{'、'.join(_with_hint[:3])}…）—— 不会挂（退回中文），"
+                f"但**英文环境下测的还是中文**。要真能测英文就把它们登记上。")
 
     # 硬编码的 UI 中文文案 → 软警告。**不硬拦**：词典总有不全的时候，
     # 硬拦会把人卡死在一条查不到的词上。
     # 只扫定位/断言里的文案（name=/text=/has_text=），不扫注释和普通字符串 ——
     # 脚本头部的说明、变量名里带中文都不算。
-    _cn_hits = [m for m in _UI_TEXT_RE.finditer(content)
+    # `${键|中文}` 里的中文**不算硬编码** —— 那正是规范要求的写法。
+    # 不排掉的话：照规范写反被门禁骂"有 3 处硬编码中文"，实测第一条自测用例就中招。
+    code_no_ph = _PH_RE.sub("PH", code)          # 同一个正则，见 _T_REF_RE 上面那段
+    _cn_hits = [m for m in _UI_TEXT_RE.finditer(code_no_ph)
                 if _CJK_RE.search(next(g for g in m.groups() if g))]
+    # 定位器 API 之外的中文（典型：传给自定义 helper 的文案）—— 见 _stray_cn_literals
+    stray = [t for t in _stray_cn_literals(code)
+             if t not in [next(g for g in m.groups() if g) for m in _cn_hits]]
+    if stray:
+        warns.append(
+            f"正文里还有 {len(stray)} 处中文字面量不在定位器 API 上（{'、'.join(stray[:3])}…）——"
+            f"如果它们最终被拿去定位/断言（比如传给自己写的 helper），"
+            f"换英文环境一样会挂。是文案就写成 ${{键|中文}}；是步骤名/日志就不用管。")
     if _cn_hits and "tea_i18n" not in content:
         sample = "、".join(
             next(g for g in m.groups() if g)[:12] for m in _cn_hits[:3])
         warns.append(
             f"脚本里有 {len(_cn_hits)} 处硬编码中文文案（{sample}…），换英文环境会全挂。"
-            f"优先用 data-testid 定位；必须用文案时走 `from tea_i18n import t` + "
-            f"`t(\"更多\")`，平台按 PLAYWRIGHT_LOCALE 注入译文，查不到会原样返回中文。"
+            f"优先用 data-testid 定位；必须用文案时写成占位变量 "
+            f"`\"${{services.action.more|更多}}\"` —— 平台按 TEST_LANGUAGE 在执行前替换成"
+            f"当前语种，词典缺这个语种就退回竖线后面的中文。"
             f"详见 tb_get_sync_spec(kind='ui_script') 的「文案纪律」。")
 
     for line in content.splitlines():

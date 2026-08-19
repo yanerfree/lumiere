@@ -572,7 +572,9 @@ const opMeta = {
 }
 
 const assertTypes = [{ value: 'status', label: '状态码' }, { value: 'jsonPath', label: 'Response JSON' }, { value: 'contains', label: '包含' }, { value: 'header', label: '响应头' }]
-const assertOps = [{ value: 'eq', label: '等于' }, { value: 'ne', label: '不等于' }, { value: 'gt', label: '大于' }, { value: 'lt', label: '小于' }, { value: 'contains', label: '包含' }, { value: 'notContains', label: '不包含' }, { value: 'notEmpty', label: '非空' }, { value: 'in', label: '属于(多选其一)' }]
+// 每一项都必须在后端 _VALID_OPS 里认得（api_test_runner）。下拉里多一个执行器不认的，
+// 人选了就得到「不认识的操作符」，那一步永远失败 —— gt/lt 就这么错了很久。
+const assertOps = [{ value: 'eq', label: '等于' }, { value: 'ne', label: '不等于' }, { value: 'gt', label: '大于' }, { value: 'lt', label: '小于' }, { value: 'gte', label: '大于等于' }, { value: 'lte', label: '小于等于' }, { value: 'contains', label: '包含' }, { value: 'notContains', label: '不包含' }, { value: 'notEmpty', label: '非空' }, { value: 'isEmpty', label: '为空' }, { value: 'notExists', label: '取不到(没命中)' }, { value: 'length', label: '长度等于' }, { value: 'in', label: '属于(多选其一)' }]
 
 function opSummary(op) {
   if (op.type === 'assertion') {
@@ -637,8 +639,10 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
                 {(op.assertType === 'jsonPath' || op.assertType === 'header') && (
                   <Tooltip title="JSONPath 示例：$.data.id, $.list[0].name, $.total"><Input spellCheck={false} size="small" value={op.path || ''} placeholder="$.data.id" onChange={e => up('path', e.target.value)} style={{ width: 160, fontFamily: 'var(--font-mono)', fontSize: 11 }} /></Tooltip>
                 )}
-                <Select size="small" value={op.operator || 'eq'} onChange={v => up('operator', v)} options={assertOps} style={{ width: 80 }} />
-                {op.operator !== 'notEmpty' && (
+                {/* 80 宽度只够两个字：加了「大于等于」「长度等于」之后会截成「大于…」，
+                    下拉里根本看不出选的是哪个。 */}
+                <Select size="small" value={op.operator || 'eq'} onChange={v => up('operator', v)} options={assertOps} style={{ width: 104 }} />
+                {!['notEmpty', 'isEmpty', 'notExists'].includes(op.operator) && (
                   <Input spellCheck={false} size="small" value={op.expected || ''} placeholder={op.assertType === 'status' ? '200' : '期望值'} onChange={e => up('expected', e.target.value)} style={{ flex: 1, minWidth: 80, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                 )}
               </div>
@@ -1875,9 +1879,19 @@ function genStepsCode(steps, indent = '    ') {
         if (a.assertType === 'status') lines.push(`${indent}assert response.status_code == ${a.expected || 200}`)
         else if (a.assertType === 'jsonPath' && a.path) {
           const expr = 'response.json()' + a.path.replace('$.', '').split('.').map(p => `["${p}"]`).join('')
+          // 每个 operator 都要出一行。认不出来的**必须留一条注释**——
+          // 静默少导一条断言，导出的脚本比步骤本身弱，而看的人以为是等价的。
+          const v = isNaN(a.expected) ? `"${a.expected}"` : a.expected
+          const cmp = { eq: '==', ne: '!=', gt: '>', lt: '<', gte: '>=', lte: '<=' }[a.operator]
           if (a.operator === 'notEmpty') lines.push(`${indent}assert ${expr}`)
-          else if (a.operator === 'eq') { const v = isNaN(a.expected) ? `"${a.expected}"` : a.expected; lines.push(`${indent}assert ${expr} == ${v}`) }
+          else if (a.operator === 'isEmpty') lines.push(`${indent}assert len(${expr}) == 0`)
+          else if (a.operator === 'notExists') lines.push(`${indent}assert ${expr.replace('response.json()', 'response.json()')} is None`)
+          else if (a.operator === 'length') lines.push(`${indent}assert len(${expr}) == ${a.expected}`)
+          else if (cmp) lines.push(`${indent}assert ${expr} ${cmp} ${v}`)
           else if (a.operator === 'contains') lines.push(`${indent}assert "${a.expected}" in str(${expr})`)
+          else if (a.operator === 'notContains') lines.push(`${indent}assert "${a.expected}" not in str(${expr})`)
+          else if (a.operator === 'in') lines.push(`${indent}assert ${expr} in [${String(a.expected || '').split(',').map(x => (isNaN(x) ? `"${x.trim()}"` : x.trim())).join(', ')}]`)
+          else lines.push(`${indent}# TODO 这条断言导不出来：${a.operator} ${a.expected ?? ''}`)
         } else if (a.assertType === 'contains' && a.expected) lines.push(`${indent}assert "${a.expected}" in response.text`)
       }
       if (op.type === 'extractor' && op.variable && op.path) {

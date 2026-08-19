@@ -60,7 +60,13 @@ _LIVE = _LOCATE + _NOTES_READ + ["tb_add_project_note"] + [
     "tb_upsert_scenario_variables", "tb_list_scenario_variables",
     "tb_upsert_automation_resource",
     "tb_sync_orchestrated_scenario",
+    # 断言里的错误提示语走 ${T:中文}，用的是同一份词典，所以这一档也要能登记
+    "tb_upsert_i18n_terms",
     "tb_list_api_tests", "tb_get_api_test", "tb_run_api_test",
+    # 跑绿之后还得回答"这些断言有没有用" —— 跳掉动作步再跑一遍，该红的必须红
+    "tb_check_assertion_bite",
+    # 自己造的垃圾会反过来毁掉自己的断言（列表堆满之后 data[0] 指向别人）
+    "tb_check_env_hygiene",
     # 产出完自己先跑一遍交付门禁，别再自己宣布"这条可以交付了"
     "tb_check_deliverable", "tb_check_branch",
 ]
@@ -80,6 +86,10 @@ _UISCRIPT = _LOCATE + _NOTES_READ + [
     "tb_list_scenario_variables", "tb_upsert_scenario_variables",
     "tb_list_environments", "tb_get_merged_variables",
     "tb_sync_ui_script", "tb_run_ui_script", "tb_get_ui_script_result",
+    # 本地跑之前先渲染一份（文案占位在平台执行前才替换，本地跑要先换掉）
+    "tb_render_ui_script",
+    # 文案纪律要求走 t()，那就得有地方登记词条 —— 缺这个通道，纪律就只能靠人工转抄
+    "tb_upsert_i18n_terms",
     "tb_check_deliverable", "tb_check_branch",
 ]
 

@@ -196,6 +196,10 @@ async def run_api_test(
         elif event.type == "precheck_result":
             # 共享资源探测：探不到的话后面引用 ${资源名} 的步骤会直接不发请求。
             # 不回给调用方，CC 只能看到"某一步 statusCode=null"，无从查起。
+            for c in (event.data.get("autoCreated") or []):
+                results.append({"precheck": f"共享资源「{c['name']}」当前环境没有，"
+                                            f"平台已按 create_def 补建（keep=true，不会被清理）",
+                                "detail": c.get("autoCreated")})
             miss = event.data.get("missing") or []
             if miss:
                 results.append({
@@ -302,3 +306,66 @@ async def _count_steps(session: AsyncSession, scenario_id: uuid.UUID) -> int:
         select(func.count()).where(ApiTestStep.scenario_id == scenario_id)
     )
     return result.scalar() or 0
+
+
+async def check_assertion_bite(
+    session: AsyncSession,
+    case_id: str,
+    skip_steps: str,
+    env_id: str | None = None,
+) -> dict:
+    """把动作步跳掉跑一遍，看后面的断言会不会红 —— **回答"这条断言到底有没有用"**。
+
+    绿的用例不等于有效的用例：一条方向写反的断言是绿的，一条恒真断言
+    （动作前后都成立）也是绿的。数量和指纹都判不了这件事，只有**删掉原因、
+    看结果是否消失**能判。
+
+    用法：`skip_steps` 填那个**改状态的动作步**名字（审批通过／禁用服务／驳回／删除），
+    别填产出 id 的创建步 —— 跳掉创建，后面全部卡在"变量未解析"，什么也证明不了。
+
+    只读：不写步骤状态、不建报告、不动用例维度 —— 它是一次诊断，不是一次回归。
+    ⚠ 但**请求是真发的**：没被跳掉的步骤照跑，会在被测系统里造数据。
+    跳的正是清理步时，那一趟的残留不会被删，也不在 tb_check_env_hygiene 的视野里
+    （变异运行不留痕）—— 自己收尾。
+
+    参数: case_id(用例UUID), skip_steps(要跳掉的步骤名，多个用逗号分隔),
+    env_id(强烈建议，不传就没有 BASE_URL/账号，链子跑不起来)
+    """
+    from app.services.assertion_bite import check_assertion_bite as _run
+
+    scenario = (await session.execute(
+        select(ApiTestScenario).where(ApiTestScenario.source_case_id == uuid.UUID(case_id))
+        .order_by(ApiTestScenario.created_at)
+    )).scalars().first()
+    if scenario is None:
+        return {"error": f"用例 {case_id} 还没有接口场景，没东西可验。"}
+
+    base_env: dict = {}
+    env_name = None
+    if env_id:
+        from app.services import environment_service
+        try:
+            merged = await environment_service.get_merged_variables(session, uuid.UUID(env_id))
+            base_env = {item["key"]: item["value"] for item in merged}
+        except Exception:  # noqa: BLE001
+            pass
+    names = [n.strip() for n in (skip_steps or "").split(",") if n.strip()]
+    return await _run(session, scenario.id, names, base_env=base_env, env_name=env_name)
+
+
+async def check_env_hygiene(
+    session: AsyncSession,
+    project_id: str,
+    branch_id: str | None = None,
+) -> dict:
+    """被测环境里有没有测试残留 —— 平台只报**它能证明的那部分**。
+
+    两类：①这条链造了东西却没有清理步骤（每跑一次留一份）②最后一次运行没跑到清理，
+    那次造的 id 已从创建步骤的响应里抽出来，删它的请求就是那条清理步骤。
+
+    ⚠ 只看接口场景、且只看得见最后一次运行 —— 报 0 条不等于环境是干净的。
+
+    参数: project_id(项目UUID), branch_id(可选，只看某个分支)
+    """
+    from app.services.env_hygiene import check_env_hygiene as _run
+    return await _run(session, project_id, branch_id)

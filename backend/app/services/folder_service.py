@@ -1,4 +1,4 @@
-"""用例目录服务 — 树形查询、创建、删除"""
+"""用例目录服务 — 树形查询、创建、改名、删除"""
 import uuid
 
 from sqlalchemy import select, func, and_
@@ -105,7 +105,9 @@ async def create_folder(
     folder = CaseFolder(
         branch_id=branch_id,
         parent_id=parent_id,
-        name=name_upper,
+        # name 存人写的原样（"LLM Providers"），path 存大写（匹配键）。
+        # 原来 name 也强制大写，页面上一律 SHOUTING，还没有任何地方能改回来。
+        name=name.strip(),
         path=path,
         depth=depth,
     )
@@ -120,6 +122,113 @@ async def create_folder(
         "depth": folder.depth,
         "caseCount": 0,
         "children": [],
+    }
+
+
+def rewrite_child_path(child_path: str, old_path: str, new_path: str) -> str:
+    """把子目录的 path 前缀换成新的。抽成纯函数是为了能直接测**只换前缀这一段**。
+
+    坑在 `str.replace`：模块 `LLM` 改名，子目录 `LLM/LLM CALL` 会被换成两处，
+    变成 `新名/新名 CALL`。所以只切一次、且只认「old_path + /」这个边界。
+    """
+    if child_path == old_path:
+        return new_path
+    prefix = old_path + "/"
+    if not child_path.startswith(prefix):
+        return child_path          # 不是它的子孙，一个字都不动
+    return new_path + "/" + child_path[len(prefix):]
+
+
+async def rename_folder(session: AsyncSession, branch_id: uuid.UUID,
+                        folder_id: uuid.UUID, new_name: str) -> dict:
+    """给模块/子模块改名，并把**跟着这个名字走的东西一起改**。
+
+    改名是显示层的事，匹配层不能跟着晃：
+      · `path` 一律大写，它是匹配键 —— CC 回推时按 `module` 字符串找目录
+        （import_service._get_or_create_folder 按 path 匹配）。
+      · `name` 存人写的原样，页面和导出显示它。
+        所以「LLM PROVIDERS」改成「LLM Providers」只动显示，CC 照旧命中同一个目录；
+        真改成别的词才会动 path。
+
+    一起改的：自己 + 所有子目录的 path、同名的接口场景目录。
+    **不改的：用例编号。** 编号里的模块前缀是生成时算的（TC-LLMPROVI-00001），
+    而编号是 CC 回推、脚本文件名、报告、跨分支引用共同的锚点 —— 改了等于
+    把已经发出去的引用全断掉。返回值里把这件事说清楚，别让人以为漏改了。
+    """
+    name = (new_name or "").strip()
+    if not name:
+        raise ValidationError(code="INVALID_NAME", message="目录名不能为空")
+    if "/" in name:
+        raise ValidationError(code="INVALID_NAME", message="目录名不能含 /")
+    if len(name) > 100:
+        raise ValidationError(code="INVALID_NAME", message="目录名最长 100 字")
+
+    folder = (await session.execute(
+        select(CaseFolder).where(CaseFolder.id == folder_id,
+                                 CaseFolder.branch_id == branch_id)
+    )).scalar_one_or_none()
+    if folder is None:
+        raise NotFoundError(code="FOLDER_NOT_FOUND", message="目录不存在")
+
+    old_name, old_path = folder.name, folder.path
+    seg = name.upper()
+    parent_path = old_path.rsplit("/", 1)[0] if "/" in old_path else None
+    new_path = f"{parent_path}/{seg}" if parent_path else seg
+
+    if new_path != old_path:
+        clash = (await session.execute(
+            select(CaseFolder).where(CaseFolder.branch_id == branch_id,
+                                     CaseFolder.path == new_path)
+        )).scalar_one_or_none()
+        if clash is not None:
+            raise ConflictError(code="FOLDER_EXISTS", message=f"同级下已有「{name}」")
+
+    folder.name = name
+    folder.path = new_path
+
+    # 记下旧名。CC 手上还是旧词（它的 module 字符串写在自己的笔记/脚本里），
+    # 没有别名它会另建一个旧名目录 —— 同一个模块裂成两个，用例分散在两边。
+    olds = [x for x in (folder.former_names or []) if x != seg]
+    if old_name.upper() != seg and old_name.upper() not in olds:
+        olds.append(old_name.upper())
+    folder.former_names = olds[-10:] or None      # 只留最近 10 个，够用且不无限长
+
+    moved = 0
+    if new_path != old_path:
+        for child in (await session.execute(
+            select(CaseFolder).where(CaseFolder.branch_id == branch_id,
+                                     CaseFolder.path.startswith(old_path + "/"))
+        )).scalars().all():
+            child.path = rewrite_child_path(child.path, old_path, new_path)
+            moved += 1
+
+    # 接口场景目录跟用例模块同名（CC 回推时按模块名建）。不一起改，
+    # 用例侧叫新名、接口场景侧还挂在旧名下，同一个模块看着像两个。
+    from app.models.api_test_folder import ApiTestFolder
+    api_renamed = 0
+    for af in (await session.execute(
+        select(ApiTestFolder).where(ApiTestFolder.branch_id == branch_id,
+                                    func.upper(ApiTestFolder.name) == old_name.upper())
+    )).scalars().all():
+        af.name = name
+        api_renamed += 1
+
+    cases = (await session.execute(
+        select(func.count(Case.id)).where(Case.folder_id == folder_id,
+                                          Case.deleted_at.is_(None))
+    )).scalar_one()
+
+    await session.flush()
+    return {
+        "id": str(folder_id),
+        "name": name,
+        "path": new_path,
+        "oldName": old_name,
+        "childFoldersUpdated": moved,
+        "apiTestFoldersRenamed": api_renamed,
+        "cases": cases,
+        "matchKeyChanged": new_path != old_path,
+        "caseCodesUnchanged": True,
     }
 
 

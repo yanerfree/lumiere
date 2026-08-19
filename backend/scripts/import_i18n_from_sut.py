@@ -90,7 +90,11 @@ def build_pairs(base: str, namespaces: list[str]) -> dict[str, dict]:
         fz, fe = _flatten(zh), _flatten(en)
         hit = 0
         for key, zh_text in fz.items():
-            full_key = f"{ns}.{key}"      # 带上命名空间，跨文件不会撞
+            # 带上命名空间，跨文件不会撞。**用点号拼**（`subscription.manage.rejectBtn`）——
+            # 而被测系统自己写的是 i18next 的冒号形态 `t('subscription:manage.rejectBtn')`。
+            # 两种拼法在查词时互认（ui_text_render.key_aliases），脚本里随便写哪种都命中；
+            # 库里只留点号这一种，别改成冒号 —— 改了这个脚本再跑一遍会把 31 条全变成重复行。
+            full_key = f"{ns}.{key}"
             en_text = fe.get(key)
             # 没有对应英文、或两边一样（多半是没翻译的占位）→ 不收
             #

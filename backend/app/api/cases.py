@@ -216,6 +216,8 @@ async def list_cases(
     ui_status: str | None = Query(default=None, alias="uiStatus"),
     api_status: str | None = Query(default=None, alias="apiStatus"),
     pushed_within: str | None = Query(default=None, alias="pushedWithin"),
+    # blocked=还卡在产品 bug / retest=bug 说修好了待重跑 / none=没关联
+    bug_state: str | None = Query(default=None, alias="bugState"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
 ):
@@ -227,6 +229,7 @@ async def list_cases(
         include_deleted=include_deleted, review_status=review_status,
         lifecycle_status=lifecycle_status, manual_status=manual_status,
         ui_status=ui_status, api_status=api_status, pushed_within=pushed_within,
+        bug_state=bug_state,
     )
     assets = await case_service.list_case_assets(session, [c.id for c in cases])
     data = []
@@ -760,6 +763,29 @@ async def create_folder(
     """创建模块/子模块目录"""
     folder = await folder_service.create_folder(session, branch_id, name, parent_id)
     return {"data": folder}
+
+
+@folders_router.patch("/{folder_id}")
+async def rename_folder(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    name: str = Query(..., min_length=1, max_length=100),
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """给模块/子模块改名，子目录路径和同名的接口场景目录一起改。
+
+    用例编号不动 —— 编号是 CC 回推、脚本、报告共用的锚点。
+    返回里带 `caseCodesUnchanged`，页面照它提示，别让人以为漏改了。
+    """
+    result = await folder_service.rename_folder(session, branch_id, folder_id, name)
+    await write_audit_log(session, action="rename", target_type="case_folder",
+                          target_id=folder_id, target_name=result["name"],
+                          changes={"from": result["oldName"], "to": result["name"],
+                                   "childFolders": result["childFoldersUpdated"]})
+    await session.commit()
+    return {"data": result}
 
 
 @folders_router.delete("/{folder_id}")

@@ -86,10 +86,15 @@ def _summarize_requests(reqs: list[dict] | None) -> dict:
     interesting = []
     for r in reqs:
         st = r.get("status")
-        bucket = f"{st // 100}xx" if isinstance(st, int) else "无响应"
+        # Playwright 把**被取消/失败**的请求记成 0 或 -1。原来直接 `st // 100`，
+        # 于是摘要里冒出 `-1xx`、`0xx` 这种没人看得懂的桶（实测 UI 跑完就是 `-1xx: 2`）。
+        # 更要紧的是下面那行：`st >= 400` 判不到它们，**被取消的请求整个从
+        # 「值得看」里漏掉** —— 而"页面为什么没加载出来"的答案常常就在那几条里。
+        has_response = isinstance(st, int) and st >= 100
+        bucket = f"{st // 100}xx" if has_response else "无响应（被取消/失败）"
         by_status[bucket] = by_status.get(bucket, 0) + 1
         is_write = (r.get("method") or "").upper() not in ("GET", "HEAD", "OPTIONS")
-        is_bad = not isinstance(st, int) or st >= 400
+        is_bad = not has_response or st >= 400
         if is_bad or is_write:
             interesting.append({
                 "startedAt": r.get("startedAt"),

@@ -81,6 +81,14 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
     risks: list[dict] = []
     notes: list[dict] = []
 
+    # 卡在外部条件上：照样把该报的阻塞都报出来（不许拿它当免检），
+    # 但把「等什么」摆在最前面 —— 否则 api_scenario_missing 和"压根没写"长得一样。
+    if (getattr(case, "blocked_external", None) or "").strip():
+        notes.append({"kind": "blocked_external",
+                      "detail": f"这条自述卡在外部条件上：{case.blocked_external}。"
+                                f"下面的阻塞照旧算阻塞 —— 这只是说明责任在谁。"
+                                f"条件到位后用 tb_update_case(blocked_external='') 撤掉。"})
+
     target = case.target_level or "spec"
     owed_dims = ["manual"] + (["api"] if target in ("spec_api", "full") else []) \
         + (["ui"] if target == "full" else [])
@@ -469,6 +477,8 @@ async def check_branch(session: AsyncSession, branch_id: str,
 
     rows, deliverable, blocked, risky = [], 0, 0, 0
     waiting_review = 0
+    blocked_ext = 0
+    bug_blocked = retest = 0
     for c in cases:
         r = await check_deliverable(session, str(c.id))
         if r.get("error"):
@@ -478,6 +488,12 @@ async def check_branch(session: AsyncSession, branch_id: str,
         blocked += 0 if ok else 1
         risky += 1 if r["risks"] else 0
         waiting_review += 1 if c.review_status == "pending" else 0
+        if not ok and (getattr(c, "blocked_external", None) or "").strip():
+            blocked_ext += 1
+        if c.blocked_by_bug:
+            bug_blocked += 1
+        elif c.retest_pending:
+            retest += 1
         rows.append({
             "caseCode": r["caseCode"],
             "title": r["title"][:40],
@@ -490,6 +506,16 @@ async def check_branch(session: AsyncSession, branch_id: str,
             "riskKinds": sorted({x["kind"] for x in r["risks"]}),
             "noteCount": len(r["notes"]),
             "review": c.review_status or "待提审",
+            # 有阻塞时最该先看的就是"是谁的活"：自述等外部条件的单独列出来，
+            # 否则一屏 api_scenario_missing 里分不出哪条是没人写、哪条是写不了
+            "blockedExternal": (getattr(c, "blocked_external", None) or None),
+            # 关联 bug 的两态。**这是"这条能不能继续"的唯一读法**：
+            #   blockedByBug=true  → 还卡着，别重跑（跑了只是刷红）
+            #   retestPending=true → 据说修好了，**该你重跑一遍**，绿了平台自动摘关联
+            "bugRefs": [f"{r.get('ref')}({r.get('status')})" for r in (c.bug_refs or [])] or None,
+            "blockedByBug": c.blocked_by_bug or None,
+            "retestPending": c.retest_pending or None,
+            "tags": (c.tags or None),
         })
 
     gaps = await _module_ui_gaps(session, cases)
@@ -497,13 +523,17 @@ async def check_branch(session: AsyncSession, branch_id: str,
         "total": len(rows),
         "summary": {
             "可交付": deliverable, "有阻塞": blocked,
+            "其中卡在外部条件": blocked_ext,
+            "卡在产品bug": bug_blocked, "待重跑（bug说修好了）": retest,
             "有脆弱点": risky, "待你审": waiting_review,
         },
         "moduleGaps": gaps,
         "cases": rows,
         "verdict": _branch_verdict(len(rows), deliverable, blocked, risky, waiting_review, gaps),
         "usage": "blockers=交不了，必须先修；riskKinds=交得了但会偶发红；"
-                 "review=pending 表示三维都完成了、等你审（不审也能建计划跑）。",
+                 "review=pending 表示三维都完成了、等你审（不审也能建计划跑）；"
+                 "blockedByBug=卡在产品 bug，别重跑；retestPending=bug 说修好了，"
+                 "该重跑一遍，绿了平台自动摘掉关联。",
     }
 
 

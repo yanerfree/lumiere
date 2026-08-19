@@ -782,18 +782,25 @@ def test_备份包有对照清单():
     assert "MANIFEST.tsv" in inspect.getsource(scripts_api.export_scripts)
 
 
-def test_备份README必须说明跑不起来是预期的():
-    """脚本的取值来自场景变量/全局引用/步骤提取物，都不在包里。
-    不说清楚的话，人会以为备份坏了 —— 他缺的是环境，不是资产。
-    另外必须写明凭据不在包里，且不提供"包含凭据"这种选项。
+def test_备份README按有没有带环境分两种口径():
+    """口径变过一次：原来只是"存档"，README 写死"跑不起来，这是预期的"。
+    但一份跑不起来的备份，等平台真没了才发现跑不起来 —— 那时才最需要它能跑。
+    现在分两种，README 必须各说各话，别让人以为备份坏了（他缺的是环境，不是资产）：
+      · 不带 envId → 只存档，明说这份跑不起来、以及怎么导一份能跑的
+      · 带 envId  → 文案/环境值/conftest/插件都打进去，给出三行命令
+    凭据这条没松：**默认不打包**，只留占位；要自包含得显式 includeCredentials=true，
+    而且包里得有一行警告（否则带凭据的 zip 和不带的长得一样，谁都分不出哪份能外传）。
     """
     import inspect
 
     from app.api import scripts as scripts_api
 
     src = inspect.getsource(scripts_api.export_scripts)
-    assert "跑不起来，这是预期的" in src
-    assert "凭据一个字都不在这个包里" in src
+    assert "**这份跑不起来**" in src, "不带 envId 那份要明说"
+    assert "pip install -r requirements.txt" in src, "带 envId 那份要给能抄的命令"
+    assert "凭据默认不打包" in src
+    assert "这份包里有凭据明文" in src, "显式带凭据时必须警告"
+    assert "include_credentials" in src and "填这里" in src, "默认只留占位"
 
 
 # ── CC 闭环体检：跑整条链时抓到的 ────────────────────────────────────
@@ -1547,18 +1554,31 @@ def test_写步骤要推进manual_status():
     assert "case.steps = data.steps\n        sync_manual_status(case)" in src, "改步骤时没同步"
 
 
-def test_审核列默认收起():
-    """review_status 只对平台侧 AI 流水线那批用例有意义（那条路已下线，
-    47 条停在待审、只有 1 条被点过通过）。和三件套维度状态并排显示，
-    人分不清该看哪个。
+def test_审核和模块列默认显示_来源和Flaky默认收起():
+    """默认显示哪几列由使用者定，这里钉的是**当前裁定**（2026-08-19 用户要求）：
+    默认显示 用例ID/标题/类型/优先级/**模块**/状态/覆盖/**审核**/操作；
+    来源 和 Flaky 默认收起（用得少，占宽度）。
+    原来的裁定是"审核默认收起"（review_status 只对已下线的 AI 流水线有意义）——
+    现在审核/评分要接重做后的 AI 评审，所以摆到默认里。
     """
     from pathlib import Path
 
     jsx = (Path(__file__).resolve().parents[2]
            / "frontend/src/pages/cases/CaseManagement.jsx").read_text(encoding="utf-8")
-    block = jsx[jsx.index("key: 'reviewStatus'"):]
-    block = block[:block.index("\n")]
-    assert "defaultVisible: false" in block, "审核列又默认显示了"
+
+    def default_of(key: str) -> str:
+        seg = jsx[jsx.index(f"key: '{key}'"):]
+        import re as _re
+        m = _re.search(r"defaultVisible:\s*(true|false)", seg[:400])
+        return m.group(1) if m else "false"
+
+    assert default_of("reviewStatus") == "true", "审核列该默认显示"
+    assert default_of("module") == "true", "模块列该默认显示"
+    assert default_of("source") == "false", "来源列该默认收起"
+    assert default_of("isFlaky") == "false", "Flaky 列该默认收起"
+    # 列设置弹窗要和表格一一对齐：固定列（标题）也列出来，只是勾选框锁死
+    assert "allColumns.map(col => (" in jsx, "列设置漏了固定列，对不上表格"
+    assert "始终显示" in jsx
 
 
 # ── 抢跑假红：步骤级等待/重试 ───────────────────────────────────────

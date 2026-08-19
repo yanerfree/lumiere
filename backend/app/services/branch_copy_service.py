@@ -161,9 +161,21 @@ async def _copy_cases(
             script_ref_file=c.script_ref_file,
             script_ref_func=c.script_ref_func,
             remark=c.remark,
+            # 承诺（做几维）和预期落款跟着走。不带过去，新分支上每条用例都是
+            # 「没人确认过预期」，第一次回推就被门禁挡住，人得把依据重填一遍。
+            target_level=c.target_level,
+            target_level_reason=c.target_level_reason,
+            expected_confirmed_at=c.expected_confirmed_at,
+            expected_confirmed_by=c.expected_confirmed_by,
+            expected_confirmed_actor=c.expected_confirmed_actor,
+            expected_confirmed_note=c.expected_confirmed_note,
         )
         session.add(new_case)
         await session.flush()          # 要立刻拿到新 id 去建映射
+        # 场景变量 + UI 脚本正文。script_ref_file 上面已经拷了，正文不拷就是个空指针。
+        from app.services.case_service import copy_case_side_assets, sync_manual_status
+        sync_manual_status(new_case)
+        await copy_case_side_assets(session, c.id, new_case.id)
         case_map[c.id] = new_case.id
         count += 1
 

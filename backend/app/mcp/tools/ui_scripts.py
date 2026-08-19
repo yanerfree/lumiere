@@ -81,13 +81,38 @@ async def run_ui_script(
     file_name = script.file_name or "test_ui.py"
     content = script.content
 
-    for var_name, var_value in env_vars.items():
-        content = re.sub(
-            rf'({re.escape(var_name)}\s*=\s*os\.getenv\(\s*"{re.escape(var_name)}"\s*,\s*)(["\']).*?\2',
-            lambda m, v=var_value: f'{m.group(1)}{m.group(2)}{v}{m.group(2)}',
-            content,
-            count=1,
-        )
+    # 环境变量默认值：按 os.getenv 里的**键**替换，不要求左边同名 ——
+    # `PROJECT_ID = os.getenv("SV_projectId", "")` 这种写法原来一个都替换不到
+    # （平台跑时真环境变量在进程里，运行时照样取得到，所以一直没暴露）。
+    from app.services.ui_text_render import bake_env_defaults as _bake
+    content, _ = _bake(content, env_vars)
+
+    # 文案词典：脚本里的 ${键|中文} 和 TEXT 都靠它换语种。**这条路以前没注入**，
+    # 于是取不到文案、选择器拿键去匹配，红在「element not found」上。
+    from app.services.i18n_harvest_service import load_locale_table_for_case
+    from app.services.ui_text_render import locale_of, render as render_text
+    i18n = await load_locale_table_for_case(session, cid)
+    content, text_stat = render_text(content, i18n, locale_of(env_vars))
+
+    # 占位没解析出来就**不开跑**（executor 里也有同一道拦截；这里提前拦是为了把
+    # 该登记哪几个键直接说清楚，也不留一条没意义的执行记录）。
+    # 为什么必须拦死而不是"让它红在找不到元素上"：那只对正例成立。
+    # 「不应出现」这类负例会**假绿** —— 未替换的占位匹配不到任何元素，
+    # "不该存在"当然成立。实测（CC 活体回推 v4）：正例红了、同一趟里两条负例全绿。
+    from app.services.ui_text_render import unresolved as _unresolved_text
+    left = _unresolved_text(content)
+    if left:
+        return {
+            "status": "error",
+            "error_summary": f"{len(left)} 处文案占位没解析出来，拒绝执行",
+            "textPlaceholdersUnresolved": left,
+            "why": ("跑了也没意义：正例会红在「找不到元素」上，而「不应出现」那类断言会"
+                    "**假绿**（未替换的占位匹配不到任何元素，'不该存在'当然成立）。"),
+            "fix": ("两条任选一条：① tb_upsert_i18n_terms(project_id, "
+                    "items=[{key, zh, en}]) 把这几个键登记上；"
+                    "② 占位里补中文原文写成 ${键|中文原文}（英文环境下会退回中文，"
+                    "不挂但测的是中文那一版）。"),
+        }
 
     sandbox_dir = tempfile.mkdtemp(prefix="tb_ui_")
     try:
@@ -103,6 +128,7 @@ async def run_ui_script(
                 script_ref_func=script.func_name,
                 env_vars=env_vars,
                 timeout=120,
+                i18n=i18n,
             )
         )
     finally:
@@ -132,6 +158,10 @@ async def run_ui_script(
         "duration_ms": result.get("duration_ms"),
         "error_summary": result.get("error_summary"),
         "stepCount": len(steps),
+        # 文案占位有没有全部换掉 —— 没换掉的会以字面量 ${...} 进选择器，
+        # 必然"找不到元素"。不说出来，人会去查前端。
+        **({"textPlaceholdersUnresolved": text_stat["missing"]} if text_stat["missing"] else {}),
+        **({"textFellBackToChinese": text_stat["fellBack"]} if text_stat["fellBack"] else {}),
         # seq 用枚举补 —— parse_step_json 的输出里没有这个键，
         # 取不到就全是 null，人没法说"第几步挂了"。
         "steps": [{
@@ -164,11 +194,30 @@ async def run_ui_scripts_batch(
     session: AsyncSession = None,
 ) -> dict:
     """批量执行多个用例的 UI 脚本（AI-free，逐个跑真实 Playwright），返回聚合结果。
-    case_ids: 逗号分隔的用例 UUID 列表。用于减少人工、回归批量跑。"""
+    case_ids: 逗号分隔的用例 UUID 列表。用于减少人工、回归批量跑。
+
+    **卡在产品 bug 的用例（有 open 的 bug_refs）直接跳过**，不进通过率口径：
+    重跑一条已知因产品 bug 而红的用例，除了把维度状态打回 debugging、
+    刷一条红记录之外没有任何信息量。跳掉的会在 `skippedBlockedByBug` 里逐条列出 ——
+    静默跳过比跑一遍更糟，人会以为它跑绿了。
+    bug 标成 fixed 之后就不再跳（那正是"该重跑一遍"的意思）。
+    """
     ids = [x.strip() for x in (case_ids or "").split(",") if x.strip()]
     results = []
     passed = failed = skipped = 0
+    blocked_by_bug: list[dict] = []
     for cid in ids:
+        case = await session.get(Case, uuid.UUID(cid)) if session else None
+        if case is not None and case.blocked_by_bug:
+            open_refs = [r.get("ref") for r in (case.bug_refs or [])
+                         if r.get("status", "open") == "open"]
+            blocked_by_bug.append({"case_id": cid, "caseCode": case.case_code,
+                                   "openBugs": open_refs})
+            results.append({"case_id": cid, "status": "skipped",
+                            "error_summary": f"卡在产品 bug：{'、'.join(open_refs)}",
+                            "duration_ms": None})
+            skipped += 1
+            continue
         try:
             # 批量 = 回归，进通过率口径；失败允许把维度状态打回 debugging
             r = await run_ui_script(case_id=cid, env_id=env_id, session=session, run_mode="regression")
@@ -188,14 +237,23 @@ async def run_ui_scripts_batch(
             skipped += 1
         else:
             failed += 1
-    return {
+    # 通过率的分母要扣掉跳过的 —— 拿"卡在产品 bug 的条数"去拉低通过率，
+    # 等于把产品的问题记在测试头上，报告一看就是"回归又掉了"。
+    ran = len(ids) - len(blocked_by_bug)
+    out = {
         "total": len(ids),
         "passed": passed,
         "failed": failed,
         "skipped": skipped,
-        "pass_rate": round(passed / len(ids) * 100, 1) if ids else 0,
+        "pass_rate": round(passed / ran * 100, 1) if ran else 0,
         "results": results,
     }
+    if blocked_by_bug:
+        out["skippedBlockedByBug"] = blocked_by_bug
+        out["note"] = (f"{len(blocked_by_bug)} 条卡在产品 bug，本轮没跑（不计入通过率）。"
+                       "bug 修好了就用 tb_update_case(bug_refs=[{...,'status':'fixed'}]) "
+                       "标一下，下轮会跑；跑绿后平台自动摘掉关联。")
+    return out
 
 
 async def get_ui_script_result(
@@ -243,3 +301,105 @@ async def get_ui_script_result(
             **evidence,
         },
     }
+
+
+async def render_ui_script(
+    case_id: str,
+    lang: str = "zh",
+    env_id: str | None = None,
+    include_credentials: bool = False,
+    session: AsyncSession = None,
+) -> dict:
+    """把用例的 UI 脚本渲染成**一个能直接 pytest 跑的文件** —— 给本地跑用。
+
+    库里存的是"带占位的原文"（文案 `${键|中文}`、取值 `os.getenv(...)`），
+    平台执行时才把三样东西补齐。本地拿到的如果只是原文，就跑不通 ——
+    所以这里一次把三样都烧进去：
+
+      ① 文案占位 → 当前语种那句话（词典按项目取）
+      ② `NAME = os.getenv("NAME", "默认")` 的默认值 → 该环境的真值
+      ③ 被测系统自己的语种开关 → 在同一个文件里加一个 context fixture 种 localStorage
+         （少这一条最坑：脚本渲染成英文了、系统还在说中文，必红）
+
+    凭据默认**不烧进去**（`ADMIN_PASSWORD` 这类）：同族工具一直对凭证脱敏，
+    这里不该开后门。所以默认返回里会给一行 `exportEnv`，把那几个变量 export 了再跑；
+    确实要一个自包含文件就传 `include_credentials=true`（凭据会出现在返回内容里，仅本机用）。
+
+    参数: case_id(用例UUID), lang(zh|en，默认 zh), env_id(强烈建议——不传就只渲染文案),
+    include_credentials(默认 false)
+    """
+    import re
+
+    from app.services.i18n_harvest_service import load_locale_table_for_case
+    from app.services.ui_text_render import locale_of, render
+
+    cid = uuid.UUID(case_id)
+    script = await script_service.get_active_script(session, cid, "ui")
+    if not script:
+        return {"error": "这条用例还没有 UI 脚本"}
+
+    table = await load_locale_table_for_case(session, cid)
+    locale = locale_of({"TEST_LANGUAGE": lang})
+    content, stat = render(script.content, table, locale)
+
+    # ── ② 环境变量：把 os.getenv 那行的默认值换成真值（和平台执行时同一套替换）──
+    ev: dict = {}
+    if env_id:
+        from app.services.variable_service import build_run_env
+        ev = await build_run_env(session, uuid.UUID(env_id))
+        from app.services.scenario_variable_service import (
+            add_bare_names, resolve_scenario_variables,
+        )
+        add_bare_names(ev, await resolve_scenario_variables(session, cid, global_lookup=ev))
+        ev = {k: v for k, v in ev.items() if k != "__I18N__"}
+
+    from app.mcp.tools.sync import _SECRET_RE
+    from app.services.ui_text_render import bake_env_defaults
+    skip = set() if include_credentials else {k for k in (ev or {}) if _SECRET_RE.search(k)}
+    content, baked = bake_env_defaults(content, ev or {}, skip=skip)
+    need_export = sorted(k for k in skip
+                         if re.search(rf'os\.getenv\(\s*["\']{re.escape(k)}["\']', content))
+
+    # ── ③ 被测系统的语种开关：写进同一个文件（模块里定义的 fixture 会覆盖插件的）──
+    lang_key = (ev or {}).get("UI_LANG_STORAGE_KEY") or ""
+    if lang_key:
+        lang_val = ((ev or {}).get("UI_LANG_STORAGE_VALUE") or "{locale}") \
+            .replace("{locale}", locale).replace("{lang}", locale.split("-")[0])
+        if "import pytest" not in content:
+            content = "import pytest\n" + content
+        content += (
+            "\n\n# 平台执行时由沙箱 conftest 注入；本地跑要有这一段，"
+            "否则被测系统还是原来那个语种（脚本换成英文了、系统还说中文 → 必红）。\n"
+            "@pytest.fixture\n"
+            "def context(context):\n"
+            f"    context.add_init_script(\"try{{localStorage.setItem({lang_key!r}, {lang_val!r})}}"
+            "catch(e){}\")\n"
+            "    return context\n"
+        )
+
+    out = {
+        "caseId": case_id,
+        "lang": lang,
+        "locale": locale,
+        "fileName": script.file_name or "test_ui.py",
+        "content": content,
+        "bakedVariables": sorted(baked),
+        "textResolved": sorted(set(stat["resolved"])),
+        "textFellBackToChinese": sorted(set(stat["fellBack"])),
+        # 没换掉的占位会以字面量进选择器，本地一样跑不通 —— 先去登记词条
+        "textUnresolved": sorted(set(stat["missing"])),
+        "langSwitchInjected": bool(lang_key),
+    }
+    if need_export:
+        out["exportEnv"] = " ".join(f"{k}=<{k}>" for k in sorted(need_export))
+        out["usage"] = ("content 存成 fileName，把 exportEnv 里那几个凭据 export 了直接 pytest 跑。"
+                        "要一个不用 export 的自包含文件就传 include_credentials=true。"
+                        + ("textUnresolved 非空先 tb_upsert_i18n_terms 登记，或在占位里补 |中文原文。"
+                           if stat["missing"] else ""))
+    else:
+        out["usage"] = ("content 存成 fileName，直接 pytest 跑，不用再配任何东西。"
+                        + ("textUnresolved 非空先 tb_upsert_i18n_terms 登记。"
+                           if stat["missing"] else ""))
+    if not env_id:
+        out["usage"] = "只渲染了文案 —— 传 env_id 才会烧进环境变量和语种开关。" + out["usage"]
+    return out

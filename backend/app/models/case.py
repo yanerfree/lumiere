@@ -37,6 +37,10 @@ class CaseFolder(Base):
     )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # 改过的旧名字（大写段，不含路径）。CC 回推按 module 字符串找目录，
+    # 改完名它手上还是旧词 —— 没有这张别名，旧词会**另建一个同名目录**，
+    # 同一个模块在页面上裂成两个，谁都看不出为什么。
+    former_names: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     depth: Mapped[int] = mapped_column(Integer, nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -126,6 +130,31 @@ class Case(Base):
 
     # P0 两阶段的第二阶段：有人逐条看过「预期结果」这一列并认可。
     # 改了步骤或预期结果会清掉 —— 确认的是当时那一版，不是终身通行证。
+    # 「卡在外部条件上」：等的是什么，一句话（等环境变量 X 加上、等某接口上线）。
+    # **不做成状态枚举** —— 状态由执行事实推进（红线），这只是一句归责说明：
+    # 「我没写」和「我写不了，因为外面缺东西」在看板上必须分得开。
+    blocked_external: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 卡在**产品 bug** 上：跟 blocked_external（等环境/等接口上线）是两回事 ——
+    # 那种是"我还写不了"，这种是"我写完了、跑出来是红的，而红的原因不在用例"。
+    # 每条：{ref, url?, status: open|fixed, note?, updatedAt}。ref 是外部单号或一句话。
+    # 为什么不做成一张缺陷表：平台不是缺陷系统，真单子在 GitHub / Jira / 群里。
+    # 这里只需要一个**指针 + 一个开关**，回答"这条为什么红""什么时候能继续"。
+    bug_refs: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 标签：自由词，CC 和人都能写（`阻塞`、`冒烟`、`P0回归`、`需要真数据`）。
+    # 跟审核标签/生命周期状态刻意分开 —— 那两个有确定语义、驱动门禁，标签只是分拣。
+    tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+    @property
+    def blocked_by_bug(self) -> bool:
+        """还卡在 bug 上（至少一条 open）。"""
+        from app.services.bug_ref_service import blocked_by_bug
+        return blocked_by_bug(self)
+
+    @property
+    def retest_pending(self) -> bool:
+        """bug 说修好了、这条还没重跑绿 —— 「可以继续了」的那个信号。"""
+        from app.services.bug_ref_service import retest_pending
+        return retest_pending(self)
     expected_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expected_confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True

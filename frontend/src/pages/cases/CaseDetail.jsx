@@ -7,7 +7,7 @@ import {
   ThunderboltOutlined, TagOutlined, AppstoreOutlined, ApiOutlined,
   FlagOutlined, WarningOutlined, CodeOutlined, CopyOutlined, FileTextOutlined,
   DesktopOutlined, CheckCircleOutlined, StarOutlined, StarFilled, ImportOutlined,
-  DatabaseOutlined, CaretRightOutlined,
+  DatabaseOutlined, CaretRightOutlined, BugOutlined, TagsOutlined,
 } from '@ant-design/icons'
 import { api, getValidToken } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -2084,6 +2084,9 @@ export default function CaseDetail() {
 
   // 隔离态直接从 quarantinedUntil 算 —— 到期即失效，不需要谁去清标记
   const quarantined = !!caseData?.quarantinedUntil && new Date(caseData.quarantinedUntil) > new Date()
+  // 只读展示：这一栏由 CC 通过 tb_update_case(blocked_external=...) 写，人不在这儿改 ——
+  // 它记的是「写不了的原因」，该由干活那边自述，条件到位了也该由它撤。
+  const blockedExternal = caseData?.blockedExternal || ''
   // 检测到不稳定 ≠ 被隔离。检测只标记，隔离要人自己点。
   const unstable = !!caseData?.flakyEvidence
 
@@ -2123,6 +2126,8 @@ export default function CaseDetail() {
   const [scriptRefFile, setScriptRefFile] = useState('')
   const [scriptRefFunc, setScriptRefFunc] = useState('')
   const [remark, setRemark] = useState('')
+  const [tags, setTags] = useState([])
+  const [bugRefs, setBugRefs] = useState([])
   const [steps, setSteps] = useState([{ seq: 1, action: '', expected: '' }])
   const [variablesUsed, setVariablesUsed] = useState([])
   const [newVarInput, setNewVarInput] = useState('')
@@ -2200,6 +2205,8 @@ export default function CaseDetail() {
         apiStatus: c.apiStatus || 'draft',
         reviewStatus: c.reviewStatus || null,
         isCore: c.isCore || false,
+        tags: c.tags || [],
+        bugRefs: c.bugRefs || [],
       }
 
       setTitle(vals.title); setType(vals.type); setPriority(vals.priority)
@@ -2219,6 +2226,7 @@ export default function CaseDetail() {
       setRemark(vals.remark); setSteps(vals.steps); setVariablesUsed(vals.variablesUsed)
       setApiScenario(vals.apiScenario); setUiScenario(vals.uiScenario)
       setIsApiTemplate(vals.isApiTemplate); setIsUiTemplate(vals.isUiTemplate)
+      setTags(vals.tags); setBugRefs(vals.bugRefs)
 
       savedRef.current = JSON.stringify(vals)
 
@@ -2262,6 +2270,7 @@ export default function CaseDetail() {
     steps, variablesUsed, apiScenario, uiScenario,
     isApiTemplate, isUiTemplate,
     lifecycleStatus, manualStatus, uiStatus, apiStatus, reviewStatus, isCore, targetLevel,
+    tags, bugRefs,
   })
   const isDirty = caseData && currentSnap !== savedRef.current
 
@@ -2323,6 +2332,7 @@ export default function CaseDetail() {
         remark, steps, variablesUsed, apiScenario, uiScenario,
         isApiTemplate, isUiTemplate,
         lifecycleStatus, manualStatus, uiStatus, apiStatus, reviewStatus, isCore, targetLevel,
+        tags, bugRefs,
       })
       savedRef.current = currentSnap
       setCaseData(prev => ({ ...prev }))
@@ -2409,6 +2419,55 @@ export default function CaseDetail() {
                 items={DIM_STATUS_KEYS.map(s => ({ key: s, label: dimStatusMap[s].label, dot: 'circle', color: dimStatusMap[s].color }))} />
             </InlineProp>
           )})}
+          {/* 「卡在外部条件上」：CC 自述等什么。看板上「没人写」和「写不了」原来长得
+              一模一样，每轮都要人挨个去问一遍。它不是状态、不免检任何阻塞，只是归责。 */}
+          {blockedExternal && (
+            <InlineProp icon={<WarningOutlined />} value={`等外部·${blockedExternal}`}
+              color="#fa8c16" bg="#fff7e6" />
+          )}
+          {/* 关联 bug：人和 CC 都能写。**标 fixed 不等于关系解除** ——
+              解除由「重跑绿了」这个执行事实决定，平台自动摘；这里只表达
+              「据说修好了，该重跑一遍」。 */}
+          <InlineProp icon={<BugOutlined />}
+            value={bugRefs.some(r => (r.status || 'open') === 'open')
+              ? `卡 bug·${bugRefs.filter(r => (r.status || 'open') === 'open').length}`
+              : bugRefs.length ? '待重跑' : '无关联bug'}
+            color={bugRefs.some(r => (r.status || 'open') === 'open') ? '#e8453c'
+              : bugRefs.length ? '#fa8c16' : '#86909c'}
+            bg={bugRefs.some(r => (r.status || 'open') === 'open') ? '#fff1f0'
+              : bugRefs.length ? '#fff7e6' : 'rgba(0,0,0,0.02)'}>
+            <div style={{ minWidth: 320 }}>
+              {bugRefs.map((r, i) => (
+                <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
+                  <Input size="small" value={r.ref} placeholder="单号或一句话"
+                    onChange={e => setBugRefs(prev => prev.map((x, j) => j === i ? { ...x, ref: e.target.value } : x))} />
+                  <Select size="small" value={r.status || 'open'} style={{ width: 92, flexShrink: 0 }}
+                    onChange={v => setBugRefs(prev => prev.map((x, j) => j === i ? { ...x, status: v } : x))}
+                    options={[{ value: 'open', label: '阻塞中' }, { value: 'fixed', label: '已修' }]} />
+                  <Button size="small" type="text" danger icon={<DeleteOutlined />}
+                    onClick={() => setBugRefs(prev => prev.filter((_, j) => j !== i))} />
+                </div>
+              ))}
+              <Button size="small" type="dashed" block
+                onClick={() => setBugRefs(prev => [...prev, { ref: '', status: 'open' }])}>+ 关联一个 bug</Button>
+              <div style={{ fontSize: 11, color: '#86909c', marginTop: 8, lineHeight: 1.6 }}>
+                标「已修」= 据说修好了 → 列表显示「待重跑」；重跑绿了平台自动摘掉关联。<br />
+                还有「阻塞中」的，批量回归会跳过这条，也不计入通过率。
+              </div>
+            </div>
+          </InlineProp>
+          <InlineProp icon={<TagsOutlined />}
+            value={tags.length ? tags.join('、').slice(0, 18) : '无标签'}
+            color={tags.length ? '#4e5969' : '#86909c'}>
+            <div style={{ minWidth: 280 }}>
+              <Select mode="tags" size="small" value={tags} onChange={setTags}
+                style={{ width: '100%' }} placeholder="回车添加，如：冒烟 / 需要真数据"
+                tokenSeparators={[',', '，', ' ']} open={false} />
+              <div style={{ fontSize: 11, color: '#86909c', marginTop: 8 }}>
+                只用来筛，不表达状态和审核结论。最多 20 个、每个 32 字内。
+              </div>
+            </div>
+          </InlineProp>
           <InlineProp icon={<WarningOutlined />}
             value={quarantined ? '已隔离' : unstable ? '不稳定' : flaky ? 'Flaky' : '正常'}
             color={quarantined ? '#e8453c' : unstable ? '#fa8c16' : flaky ? '#faad14' : '#86909c'}

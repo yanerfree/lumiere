@@ -223,6 +223,12 @@ def apply_case_status(case, script_type: str, status: str, run_mode: str = DEBUG
     if passed:
         if getattr(case, dim_attr) in ("debugging", "draft"):
             setattr(case, dim_attr, "completed")
+        # 跑绿了 → 标了 fixed 的关联 bug 自动摘掉，「待重跑」这个提示随之消失。
+        # 靠 CC 记得回来清的话，第一次忘了就永远挂着一条假阻塞；
+        # 摘掉的判据是执行事实，跟「状态由执行推进」同源。open 的一条都不动 ——
+        # 判定 bug 死活不是平台的事。
+        from app.services.bug_ref_service import clear_fixed_refs
+        clear_fixed_refs(case)
     elif run_mode == REGRESSION:
         setattr(case, dim_attr, "debugging")
     sync_review_status(case)

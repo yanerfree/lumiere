@@ -19,8 +19,10 @@ const ASSERT_TYPE_OUT = { status: 'status', jsonPath: 'body_field', contains: 'b
 // 「删后列表里还在」—— 断言反了、还判失败，人看半天以为是被测系统的问题。
 // 编辑器只要动任何一步，saveNodes 会把**所有**步骤回写一遍，所以一次误映射
 // 会波及整条链，不止你改的那一步。
-const OP_IN = { '==': 'eq', '!=': 'ne', '>': 'gt', '<': 'lt', contains: 'contains', not_contains: 'notContains', not_empty: 'notEmpty', in: 'in' }
-const OP_OUT = { eq: '==', ne: '!=', gt: '>', lt: '<', contains: 'contains', notContains: 'not_contains', notEmpty: 'not_empty', in: 'in' }
+// is_empty / length / >= / <= 同理：漏了映射，人在编辑器里存一次就被兜成 eq，
+// 「列表应为空」变成「列表 == 空」，断言悄悄换了意思。
+const OP_IN = { '==': 'eq', '!=': 'ne', '>': 'gt', '<': 'lt', '>=': 'gte', '<=': 'lte', contains: 'contains', not_contains: 'notContains', not_empty: 'notEmpty', is_empty: 'isEmpty', not_exists: 'notExists', length: 'length', in: 'in' }
+const OP_OUT = { eq: '==', ne: '!=', gt: '>', lt: '<', gte: '>=', lte: '<=', contains: 'contains', notContains: 'not_contains', notEmpty: 'not_empty', isEmpty: 'is_empty', notExists: 'not_exists', length: 'length', in: 'in' }
 
 // 断言没带 operator 时，按类型给默认值（编辑器侧的写法）
 const DEFAULT_OP = { status: 'eq', body_field: 'eq', body_contains: 'contains', header: 'eq' }
@@ -101,7 +103,19 @@ export function nodeToStepPatch(node) {
         }
       }
       else if (type === 'body_contains') a.value = op.expected
-      else { a.field = op.path || ''; a.expected = op.expected }
+      else {
+        a.field = op.path || ''
+        // 输入框里拿到的永远是字符串。**布尔必须还原成布尔** ——
+        // 库里本来是 `expected: false`，在编辑器里打开再保存就变成 `"false"`，
+        // 而平台故意不做布尔兜底（兜了「期望 true、实际 1」就会算相等，那是假绿），
+        // 于是这条断言从此必挂，报错还长得像平台在说胡话（期望 false｜实际 False）。
+        // 数字不用管：_scalar_eq 已经按数值比（插值出来必然是字符串）。
+        const v = op.expected
+        a.expected = v === 'true' ? true : v === 'false' ? false : v
+        // 「非空 / 为空」不看期望值，输入框也是隐藏的 —— 别把上一次选别的操作符时
+        // 留在 state 里的旧值带进库，报告里会印出「响应字段 data.x 为空 false」这种胡话
+        if (['not_empty', 'is_empty', 'not_exists'].includes(a.operator)) delete a.expected
+      }
       assertions.push(a)
     } else if (op.type === 'extractor' && op.variable) {
       variablesExtract[op.variable] = op.path || ''
@@ -121,7 +135,9 @@ export function nodeToStepPatch(node) {
     headers: Object.keys(headers).length ? headers : null,
     body,
     assertions,
-    variablesExtract,
+    // 没有提取物就写 null，别写 {} —— 回推进来的是 null，保存一次全都变成 {}，
+    // 18 步的场景里 12 步"改动"了，而实际什么都没变；再对比改动就全是噪音
+    variablesExtract: Object.keys(variablesExtract).length ? variablesExtract : null,
     waitMs: node.waitMs ?? 0,
     retryTimeoutMs: node.retryTimeoutMs ?? 0,
     retryIntervalMs: node.retryIntervalMs ?? 300,
