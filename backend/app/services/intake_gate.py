@@ -39,7 +39,10 @@ P0_QUOTA = 0.15
 DUP_WARN = 0.60
 
 # 模糊词 —— 写了等于没写，验不出对错
-_VAGUE = re.compile(r"操作成功|显示正常|无报错|符合预期|功能正常|正确显示|正常展示|没有问题")
+# 「验不出对错」的词。后半段是评审评测补的 —— 「各功能均正常」跟「功能正常」
+# 是同一个毛病，但原来的词表匹配不上，于是那条垃圾用例三轮全部过审。
+_VAGUE = re.compile(r"操作成功|显示正常|无报错|符合预期|功能正常|正确显示|正常展示|没有问题"
+                    r"|均正常|都正常|一切正常|运行正常|表现正常|无异常|符合要求|正常使用")
 
 # 一批用例该覆盖的操作类型。全压在"创建"上是最常见的倾斜。
 _OP_KINDS = {
@@ -72,6 +75,89 @@ def _similar(a: str, b: str) -> float:
     gb = {nb[i:i + 2] for i in range(len(nb) - 1)} or {nb}
     inter = len(ga & gb)
     return inter / min(len(ga), len(gb)) if ga and gb else 0.0
+
+
+# ── 模块名 ────────────────────────────────────────────────────────
+# 实测两种毛病，都发生在"CC 随手起个名"这一下：
+#   ① 「监控-请求日志」建成了**一级**模块 —— 它明显是两级，写成一级之后
+#      同一个「监控」下的其他用例找不到家，导航栏一屏全是长名字的一级目录。
+#   ② 同一个模块被拼成好几个：「LLM PROVIDERS」/「LLM Providers」/「llm_providers」
+#      —— path 是大写归一的，所以后两个能撞上；但「LLM-PROVIDERS」就是新的一个了。
+# 这两件都判得死，所以硬拒；判不死的（该不该挂到某个已有模块下）只提示。
+
+_LEVEL_SEP = re.compile(r"[-/_:：·|>＞→]|\s+[-–—]\s+")
+
+
+def _norm_module(name: str) -> str:
+    """模块名归一：去掉分隔符和空格、统一大小写。用来判"是不是同一个模块"。"""
+    return re.sub(r"[\s\-/_:：·|]", "", (name or "")).upper()
+
+
+def check_module_name(name: str, existing: list[str], is_top_level: bool = True
+                      ) -> tuple[list[str], list[str]]:
+    """模块名规范。返回 (硬错误, 软警告)。existing 是同级已有的名字。"""
+    errors: list[str] = []
+    warns: list[str] = []
+    n = (name or "").strip()
+    if not n:
+        return ["模块名不能为空"], warns
+
+    # **重名写法先判**：`llm_providers` 既像两级、又是已有「LLM PROVIDERS」的
+    # 另一种写法。这时候该说的是"用现成那个名字"，说"拆成 llm + providers"是把人带歪。
+    same = [e for e in existing if _norm_module(e) == _norm_module(n) and e != n]
+    if same:
+        return [f"已经有「{same[0]}」了 —— 「{n}」只是写法不同（大小写/分隔符），"
+                f"放行就会把同一个模块拆成两个。用现成的那个名字。"], warns
+
+    m = _LEVEL_SEP.search(n)
+    if m and is_top_level:
+        left, _, right = n.partition(m.group(0))
+        left, right = left.strip(), right.strip()
+        if left and right:
+            # **警告不硬拦**（判据规范 ①③）：合法写法存在且不少 ——
+            # 「A/B 测试」「CI/CD」「OAuth2.0-登录」都是一个名字，不是两级。
+            # 拼成一级顶多是导航难看，不影响任何正确性，不配硬拦。
+            warns.append(
+                f"⚠ 「{n}」看着像两级。如果确实是两级，传 "
+                f"module=\"{left}\" + submodule=\"{right}\" —— "
+                f"拼成一级之后「{left}」下的其他用例找不到家，导航栏也会被长名字撑满。"
+                f"**如果它本来就是一个词**（A/B 测试、CI/CD 这种），忽略这条。"
+            )
+
+    if is_top_level and existing:
+        warns.append(
+            f"⚠ 「{n}」是**新建的一级模块**。现有一级模块：{'、'.join(existing[:12])}。"
+            f"确认它不该是其中某个的子模块 —— 一级模块是按被测系统的功能域分的，"
+            f"不是按你这一轮在测什么分的。"
+        )
+    return errors, warns
+
+
+# ── 标题形状 ────────────────────────────────────────────────────
+# 现在的标题长这样：「消费方租户管理员自己申请跨租户订阅时一级节点自动跳过，
+# 提供方直接批二级后订阅生效」—— 得读完整句才知道在测什么，而列表上只露标题。
+# 规范成「**对象+动作**-预期」两段：前段十几个字一眼看完，后段是结论。
+# 分隔符用**短横、不留空格** —— 列表里标题就那么点宽度，别浪费。
+#   租户管理员跨租户订阅-一级自动跳过、二级批完即生效
+# 好处不只是好读：**前段就是"测什么"，后段就是"预期什么"**，
+# 评审判"这条在验什么、验到了没有"不用再从整句里猜。
+_TITLE_SEP = re.compile(r"\s*[—–\-:：]\s*|，(?=.{6,})")
+HEAD_MAX = 20
+
+
+def check_title_shape(title: str) -> list[str]:
+    """标题形状 —— **只提示**（判据规范 ③：合法写法存在，短标题本来就不需要分段）。"""
+    t = (title or "").strip()
+    if not t or len(t) <= HEAD_MAX:
+        return []                       # 短标题本身就是一眼可读的，不用分段
+    m = _TITLE_SEP.search(t)
+    head = t[:m.start()] if m else t
+    if m and len(head) <= HEAD_MAX:
+        return []
+    return [f"⚠ 标题 {len(t)} 字、前段没断开，列表上得读完整句才知道在测什么。"
+            f"写成「对象+动作-预期」两段（短横、不留空格），前段 {HEAD_MAX} 字内："
+            f"「租户管理员跨租户订阅-一级自动跳过、二级批完即生效」。"
+            f"细节放预期结果里，标题只要一眼能认出是哪个功能。"]
 
 
 async def check_one(
@@ -122,10 +208,24 @@ async def check_one(
             f"跑起来也只会重复消耗。"
         )
 
+    warns.extend(check_title_shape(title))
+
     # 闸 2 的一半：标题里的模糊词
     m = _VAGUE.search(title or "")
     if m:
-        errors.append(f"标题里有模糊词「{m.group(0)}」—— 验不出对错。写清楚具体预期什么。")
+        # 模糊词是**唯一结论**时才硬拦。合法写法：模糊词只是限定语之一，
+        # 旁边有量化条件 ——「批量导入 1000 条无报错且耗时 < 30s」里的「无报错」
+        # 不是空话，它配着两个可验的数。一律硬拦会把这种标题也挡掉。
+        rest = _VAGUE.sub("", title or "")
+        concrete = bool(re.search(r"\d|[<>≤≥=]|返回|状态码|字段|提示|不可|禁止|失败|拒绝", rest))
+        if concrete:
+            warns.append(
+                f"⚠ 标题里有「{m.group(0)}」这种模糊词。旁边有具体条件所以不拦，"
+                f"但能替换成那个具体条件的话更好 —— 列表上只露标题。")
+        else:
+            errors.append(
+                f"标题里有模糊词「{m.group(0)}」，而整句里没有任何可验的具体内容 —— "
+                f"这种标题跑起来永远是绿的。写清楚具体预期什么（哪个文案/字段/状态码）。")
 
     return errors, warns
 

@@ -22,6 +22,11 @@ async def _get_or_create_folder(
     if not module:
         return None, 0, 0
 
+    # **先 strip**。回推里带一个尾空格（"平台自身 "）就会建出第二个同名模块 ——
+    # 页面上两行长得一模一样，谁都看不出为什么用例分散在两边。实测踩到过。
+    module = module.strip()
+    if not module:
+        return None, 0, 0
     module_upper = module.upper()
     module_path = module_upper
 
@@ -42,7 +47,7 @@ async def _get_or_create_folder(
         module_folder = CaseFolder(
             branch_id=branch_id,
             parent_id=None,
-            name=module_upper,
+            name=module,          # 显示名存原样，path 才是大写匹配键
             path=module_path,
             depth=1,
         )
@@ -54,6 +59,9 @@ async def _get_or_create_folder(
         return module_folder.id, new_modules, 0
 
     # 查找或创建 submodule 目录（depth=2）
+    submodule = submodule.strip()
+    if not submodule:
+        return module_folder.id, new_modules, 0
     sub_upper = submodule.upper()
     # 路径从**父目录当前的 path** 拼，不是从传进来的字符串拼 ——
     # 父目录可能是通过旧名命中的，用旧名拼出来的路径谁都不匹配。
@@ -72,7 +80,7 @@ async def _get_or_create_folder(
         sub_folder = CaseFolder(
             branch_id=branch_id,
             parent_id=module_folder.id,
-            name=sub_upper,
+            name=submodule,
             path=sub_path,
             depth=2,
         )

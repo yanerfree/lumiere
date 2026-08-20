@@ -144,6 +144,22 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
     # 而「待发布」这个环节根本已经不存在。CC 照着这句话去找按钮会找不到。
     dim_status = {"manual": case.manual_status, "ui": case.ui_status, "api": case.api_status}
     waiting_human = case.review_status == "pending"
+    # **AI 评审打回的要说出来。** 三维都跑绿之后审核标签会自动进 pending，
+    # 而 AI 评审可能已经把它判成 rejected —— 那时"等你审"是句假话：
+    # 该做的是照 review_reason 里的 findings 改，不是等人点通过。
+    ai_rejected = (case.review_status == "rejected"
+                   and (case.quality_score or {}).get("by") == "ai")
+    if ai_rejected:
+        rr = case.review_reason or {}
+        must = [f for f in (rr.get("findings") or []) if f.get("severity") in ("blocker", "major")]
+        notes.append({"kind": "ai_review_rejected",
+                      "detail": f"AI 评审打回（{(case.quality_score or {}).get('total')} 分）："
+                                f"{rr.get('text') or ''}"
+                                + (f" 必须先改：" + "；".join(
+                                    f"{m.get('where')}→{str(m.get('problem'))[:60]}" for m in must[:3])
+                                   if must else "")
+                                + " 改完调 tb_review_case 复核。"})
+
     not_ready = [d for d in owed_dims if dim_status.get(d) in ("draft", "debugging")]
     if not_ready and not blockers:
         # 没有硬阻塞却维度没到「完成」：多半是跑过但没经平台记账，或者压根没在
@@ -478,7 +494,7 @@ async def check_branch(session: AsyncSession, branch_id: str,
     rows, deliverable, blocked, risky = [], 0, 0, 0
     waiting_review = 0
     blocked_ext = 0
-    bug_blocked = retest = 0
+    bug_blocked = bug_history = 0
     for c in cases:
         r = await check_deliverable(session, str(c.id))
         if r.get("error"):
@@ -492,8 +508,8 @@ async def check_branch(session: AsyncSession, branch_id: str,
             blocked_ext += 1
         if c.blocked_by_bug:
             bug_blocked += 1
-        elif c.retest_pending:
-            retest += 1
+        elif c.has_fixed_bug:
+            bug_history += 1
         rows.append({
             "caseCode": r["caseCode"],
             "title": r["title"][:40],
@@ -509,12 +525,12 @@ async def check_branch(session: AsyncSession, branch_id: str,
             # 有阻塞时最该先看的就是"是谁的活"：自述等外部条件的单独列出来，
             # 否则一屏 api_scenario_missing 里分不出哪条是没人写、哪条是写不了
             "blockedExternal": (getattr(c, "blocked_external", None) or None),
-            # 关联 bug 的两态。**这是"这条能不能继续"的唯一读法**：
-            #   blockedByBug=true  → 还卡着，别重跑（跑了只是刷红）
-            #   retestPending=true → 据说修好了，**该你重跑一遍**，绿了平台自动摘关联
+            # 关联 bug：
+            #   blockedByBug=true → 还卡着（bug 没修好/没验回来），别重跑，跑了只是刷红
+            #   hasFixedBug=true  → **痕迹**：这条曾经抓到过 bug、已经验回来了，不是待办
             "bugRefs": [f"{r.get('ref')}({r.get('status')})" for r in (c.bug_refs or [])] or None,
             "blockedByBug": c.blocked_by_bug or None,
-            "retestPending": c.retest_pending or None,
+            "hasFixedBug": c.has_fixed_bug or None,
             "tags": (c.tags or None),
         })
 
@@ -524,7 +540,7 @@ async def check_branch(session: AsyncSession, branch_id: str,
         "summary": {
             "可交付": deliverable, "有阻塞": blocked,
             "其中卡在外部条件": blocked_ext,
-            "卡在产品bug": bug_blocked, "待重跑（bug说修好了）": retest,
+            "卡在产品bug": bug_blocked, "抓到过bug已验回来": bug_history,
             "有脆弱点": risky, "待你审": waiting_review,
         },
         "moduleGaps": gaps,
@@ -532,8 +548,8 @@ async def check_branch(session: AsyncSession, branch_id: str,
         "verdict": _branch_verdict(len(rows), deliverable, blocked, risky, waiting_review, gaps),
         "usage": "blockers=交不了，必须先修；riskKinds=交得了但会偶发红；"
                  "review=pending 表示三维都完成了、等你审（不审也能建计划跑）；"
-                 "blockedByBug=卡在产品 bug，别重跑；retestPending=bug 说修好了，"
-                 "该重跑一遍，绿了平台自动摘掉关联。",
+                 "blockedByBug=卡在产品 bug（还没验回来），别重跑；"
+                 "hasFixedBug=这条抓到过 bug 且已验回来，是痕迹不是待办。",
     }
 
 

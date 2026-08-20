@@ -1,18 +1,23 @@
-"""关联 bug + 标签 —— 回答两个问题：这条为什么红、什么时候能继续。
+"""关联 bug + 标签 —— 记住「这条用例发现过什么 bug、什么时候验回来的」。
 
-平台不做缺陷系统：真单子在 GitHub / Jira / 群里。这里只存**指针 + 开关**。
+平台不做缺陷系统：真单子在 GitHub / Jira / 群里。这里存的是**映射 + 痕迹**。
 
-状态机就一条线，中间没有人工判定 bug 死活的余地：
+    关联 open   发现 bug，这条红的原因不在用例。批量回归跳过它（跑了只是刷红）
+        │
+        │  git 上那条 issue 关闭 / 人告知修好了 → CC 回来调
+        ▼
+    标 fixed    **调通之后**才标。这条关联从此是历史记录，永久留着
+        │
+        └─ 没调通 → 留在 open，补一句 note 说清现在卡在哪
 
-    open ──人/CC 标 fixed──▶ fixed（列表显示「待重跑」）
-                                  │
-                        regression 跑绿 ──▶ 自动摘掉关联（回到正常）
-                                  │
-                        跑红 ──▶ 关联留着，说明 bug 其实没修好
+**fixed 不是"据说修好了"，是"我回来调过、通了"。** 中间那段（issue 关了但还没调）
+它就该留在 open —— 那正是"还没验回来"的意思。
 
-**为什么跑绿要自动摘**：靠 CC 记得回来清，第一次忘了就永远挂着一条假阻塞。
-摘掉的判据是执行事实（跑绿），跟「状态由执行推进」那条红线同源。
-**为什么不自动把 open 标成 fixed**：那是判定 bug 死活，平台没有依据。
+**为什么不清空**：清掉就看不出这条用例曾经发现过 bug。那是这份数据最值钱的部分 ——
+哪些用例真的抓到过问题、抓到过几次，是评估用例价值的唯一依据。
+传 `[]` 只用于**关联错了**（挂到了不相干的 bug 上），不是正常的结束方式。
+
+平台任何路径都不会自己改 status：判定 bug 死活、判定验没验过，都是人和 CC 的事。
 """
 from __future__ import annotations
 
@@ -115,25 +120,13 @@ def blocked_by_bug(case) -> bool:
     return any(r.get("status", OPEN) == OPEN for r in _refs(case))
 
 
-def retest_pending(case) -> bool:
-    """可以继续了：一条 open 都没有，但有标了 fixed 的还没跑绿过。
+def has_fixed_bug(case) -> bool:
+    """这条用例**发现过 bug 且已经验回来了**（有 fixed、没有 open）。
 
-    这就是「怎么知道这条用例可以继续」的那个信号 —— CC 的 check_branch
-    和列表都读它，不各算一遍。
+    它是痕迹，不是待办：列表上灰着显示，不催任何人。
+    「哪些用例真抓到过问题」就是按它筛。
     """
     refs = _refs(case)
     if not refs or blocked_by_bug(case):
         return False
     return any(r.get("status") == FIXED for r in refs)
-
-
-def clear_fixed_refs(case) -> int:
-    """跑绿时摘掉已修的关联，返回摘了几条。open 的一条都不动。"""
-    refs = _refs(case)
-    if not refs:
-        return 0
-    keep = [r for r in refs if r.get("status", OPEN) == OPEN]
-    if len(keep) == len(refs):
-        return 0
-    case.bug_refs = keep or None
-    return len(refs) - len(keep)

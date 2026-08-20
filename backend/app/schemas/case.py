@@ -124,7 +124,9 @@ class CaseResponse(BaseSchema):
     bug_refs: list | None = None
     tags: list | None = None
     blocked_by_bug: bool = False
-    retest_pending: bool = False
+    # 痕迹：这条曾经发现过 bug 且已验回来。列表灰着显示，不催任何人
+    has_fixed_bug: bool = False
+    bug_found_count: int = 0
     # P0 两阶段：有人确认过「预期结果」这一列没有。改了步骤/预期结果会清掉
     expected_confirmed_at: datetime | None = None
     expected_confirmed_by: uuid.UUID | None = None

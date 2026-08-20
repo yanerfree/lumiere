@@ -10,6 +10,7 @@ from app.api.users import router as users_router
 from app.api.projects import router as projects_router
 from app.api.branches import router as branches_router
 from app.api.cases import router as cases_router, folders_router
+from app.api.case_review import router as case_review_router
 from app.api.variables import router as variables_router
 from app.api.plans import router as plans_router, reports_router
 from app.api.tasks import router as tasks_router
@@ -291,6 +292,7 @@ app.include_router(users_router)
 app.include_router(projects_router)
 app.include_router(branches_router, dependencies=_SCOPED)
 app.include_router(cases_router, dependencies=_SCOPED)
+app.include_router(case_review_router, dependencies=_SCOPED)
 app.include_router(folders_router, dependencies=_SCOPED)
 app.include_router(variables_router)
 app.include_router(plans_router)

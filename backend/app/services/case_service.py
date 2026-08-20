@@ -240,16 +240,19 @@ async def list_cases(
     # 关联 bug 两态。**在 SQL 里筛，不在内存里** —— 列表是分页的，
     # 拿当前页去过滤会得到"第 3 页只剩 1 条"这种结果。
     # JSONB 里判"有没有 status=open 的元素"用 @> 数组包含。
-    if bug_state in ("blocked", "retest", "none"):
+    if bug_state in ("blocked", "fixed", "none"):
+        # 用 NOT (...) 写成一整条 text，**不能对 text() 取 `~`** ——
+        # SQLAlchemy 对 TextClause 取反会在 _negate() 里 AssertionError（实测炸过）。
         from sqlalchemy import text as _text
-        has_open = _text("cases.bug_refs @> '[{\"status\": \"open\"}]'::jsonb")
-        has_fixed = _text("cases.bug_refs @> '[{\"status\": \"fixed\"}]'::jsonb")
+        OPEN = "cases.bug_refs @> '[{\"status\": \"open\"}]'::jsonb"
+        FIXED = "cases.bug_refs @> '[{\"status\": \"fixed\"}]'::jsonb"
         if bug_state == "blocked":
-            base = base.where(has_open)
-        elif bug_state == "retest":
-            base = base.where(has_fixed, ~has_open)
+            base = base.where(_text(OPEN))
+        elif bug_state == "fixed":
+            base = base.where(_text(f"{FIXED} AND NOT ({OPEN})"))
         else:
-            base = base.where(or_(Case.bug_refs.is_(None), ~has_open, ~has_fixed))
+            base = base.where(_text("(cases.bug_refs IS NULL OR jsonb_typeof(cases.bug_refs) <> 'array'"
+                                " OR jsonb_array_length(cases.bug_refs) = 0)"))
 
     if pushed_within in ("today", "week"):
         now = datetime.now(timezone.utc).astimezone()

@@ -7,7 +7,7 @@ import {
   ThunderboltOutlined, TagOutlined, AppstoreOutlined, ApiOutlined,
   FlagOutlined, WarningOutlined, CodeOutlined, CopyOutlined, FileTextOutlined,
   DesktopOutlined, CheckCircleOutlined, StarOutlined, StarFilled, ImportOutlined,
-  DatabaseOutlined, CaretRightOutlined, BugOutlined, TagsOutlined,
+  DatabaseOutlined, CaretRightOutlined, BugOutlined, TagsOutlined, SearchOutlined,
 } from '@ant-design/icons'
 import { api, getValidToken } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -922,7 +922,7 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
 }
 
 function ScenarioEditor({
-  scenario, setScenario, dimStatus,
+  scenario, setScenario, dimStatus, setDimStatus,
   isTemplate, setIsTemplate, type, accentColor,
   onImportTemplate, manualSteps, caseTitle,
   projectId, branchId, caseId,
@@ -1863,7 +1863,7 @@ function ScenarioEditor({
           <Button size="small" danger type="text" onClick={() => {
             Modal.confirm({
               title: '确认删除场景', content: '删除后场景数据将清空，确定继续？',
-              onOk: () => { setScenario(null); setScenarioStatus('draft'); setIsTemplate(false) },
+              onOk: () => { setScenario(null); setDimStatus?.('draft'); setIsTemplate(false) },
             })
           }}><DeleteOutlined /> 删除</Button>
         </Space>
@@ -1874,7 +1874,7 @@ function ScenarioEditor({
         <>
           {type === 'api' ? (
             <ApiStepList steps={steps} onChange={newSteps => updateScenario({ steps: newSteps })} accentColor={accentColor}
-                environments={environments} runEnv={runEnv} onEnvChange={setRunEnv} />
+                environments={environments} runEnv={runEnv} onEnvChange={onEnvChange} />
           ) : (
             <div style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -2126,6 +2126,8 @@ export default function CaseDetail() {
   const [scriptRefFile, setScriptRefFile] = useState('')
   const [scriptRefFunc, setScriptRefFunc] = useState('')
   const [remark, setRemark] = useState('')
+  const [aiReview, setAiReview] = useState(null)
+  const [aiReviewing, setAiReviewing] = useState(false)
   const [tags, setTags] = useState([])
   const [bugRefs, setBugRefs] = useState([])
   const [steps, setSteps] = useState([{ seq: 1, action: '', expected: '' }])
@@ -2428,31 +2430,98 @@ export default function CaseDetail() {
           {/* 关联 bug：人和 CC 都能写。**标 fixed 不等于关系解除** ——
               解除由「重跑绿了」这个执行事实决定，平台自动摘；这里只表达
               「据说修好了，该重跑一遍」。 */}
+          {/* 单条 AI 评审：详情页才是"改完立刻复核"的地方 —— 列表那个批量入口
+              适合验收一批，不适合边改边看。 */}
+          <InlineProp icon={<SearchOutlined />}
+            value={aiReview ? `AI ${aiReview.verdict === 'approved' ? '过审' : '打回'}·${aiReview.total}`
+              : caseData.qualityScore?.total != null ? `AI 评分 ${caseData.qualityScore.total}` : 'AI 评审'}
+            color={aiReview ? (aiReview.verdict === 'approved' ? '#0ea5a0' : '#e8453c') : '#86909c'}
+            bg={aiReview ? (aiReview.verdict === 'approved' ? '#f6ffed' : '#fff1f0') : 'rgba(0,0,0,0.02)'}>
+            <div style={{ minWidth: 380 }}>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <Button size="small" type="primary" loading={aiReviewing}
+                  onClick={async () => {
+                    setAiReviewing(true)
+                    try {
+                      const r = await api.post(
+                        `/projects/${projectId}/branches/${branchId}/cases/${caseId}/ai-review`)
+                      setAiReview(r.data); loadData()
+                    } catch (e) {
+                      message.error(e?.response?.data?.error?.message || '评审失败')
+                    } finally { setAiReviewing(false) }
+                  }}>评审这一条</Button>
+                <Button size="small" loading={aiReviewing}
+                  onClick={async () => {
+                    setAiReviewing(true)
+                    try {
+                      const r = await api.post(
+                        `/projects/${projectId}/branches/${branchId}/cases/${caseId}/ai-review?runFirst=true`)
+                      setAiReview(r.data); loadData()
+                    } catch (e) {
+                      message.error(e?.response?.data?.error?.message || '评审失败')
+                    } finally { setAiReviewing(false) }
+                  }}>先跑一遍再评</Button>
+              </div>
+              {aiReview ? (
+                <div style={{ fontSize: 12, lineHeight: 1.7 }}>
+                  <div style={{ marginBottom: 6 }}>
+                    <b>{aiReview.verdictReason}</b>
+                    {aiReview.summary ? <span style={{ color: '#4e5969' }}> · {aiReview.summary}</span> : null}
+                  </div>
+                  {Object.entries(aiReview.dimensions || {}).map(([k, d]) => (
+                    <div key={k} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                      <span style={{ color: '#86909c' }}>{d.label}（{d.weight}%）</span>
+                      <span style={{ color: d.score >= 80 ? '#0ea5a0' : d.score >= 60 ? '#faad14' : '#e8453c' }}>
+                        {d.score}</span>
+                    </div>
+                  ))}
+                  {(aiReview.findings || []).filter(f => f.severity !== 'minor').map((f, i) => (
+                    <div key={i} style={{ marginTop: 6 }}>
+                      <Tag color={f.severity === 'blocker' ? 'error' : 'warning'}
+                        style={{ fontSize: 10, margin: '0 4px 0 0' }}>
+                        {f.severity === 'blocker' ? '致命' : '重要'}</Tag>
+                      <span style={{ color: '#86909c' }}>{f.where}</span>：{f.problem}
+                      {f.fix && <span style={{ color: '#0ea5a0' }}> → {f.fix}</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: '#86909c', lineHeight: 1.7 }}>
+                  六维：场景合理性 / 验证点到位 / 接口必要性 / UI 脚本 / 覆盖遗漏 / 纪律。<br />
+                  有致命问题一律打回（分数线 80）。「先跑一遍再评」会真跑这条的接口场景 ——
+                  断言咬不咬得住静态看不出来。
+                </div>
+              )}
+            </div>
+          </InlineProp>
           <InlineProp icon={<BugOutlined />}
             value={bugRefs.some(r => (r.status || 'open') === 'open')
               ? `卡 bug·${bugRefs.filter(r => (r.status || 'open') === 'open').length}`
-              : bugRefs.length ? '待重跑' : '无关联bug'}
+              : bugRefs.length ? `抓到过 bug·${bugRefs.length}` : '无关联bug'}
             color={bugRefs.some(r => (r.status || 'open') === 'open') ? '#e8453c'
-              : bugRefs.length ? '#fa8c16' : '#86909c'}
+              : bugRefs.length ? '#4e5969' : '#86909c'}
             bg={bugRefs.some(r => (r.status || 'open') === 'open') ? '#fff1f0'
-              : bugRefs.length ? '#fff7e6' : 'rgba(0,0,0,0.02)'}>
-            <div style={{ minWidth: 320 }}>
+              : 'rgba(0,0,0,0.02)'}>
+            <div style={{ minWidth: 340 }}>
               {bugRefs.map((r, i) => (
                 <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
                   <Input size="small" value={r.ref} placeholder="单号或一句话"
                     onChange={e => setBugRefs(prev => prev.map((x, j) => j === i ? { ...x, ref: e.target.value } : x))} />
-                  <Select size="small" value={r.status || 'open'} style={{ width: 92, flexShrink: 0 }}
+                  <Select size="small" value={r.status || 'open'} style={{ width: 108, flexShrink: 0 }}
                     onChange={v => setBugRefs(prev => prev.map((x, j) => j === i ? { ...x, status: v } : x))}
-                    options={[{ value: 'open', label: '阻塞中' }, { value: 'fixed', label: '已修' }]} />
+                    options={[{ value: 'open', label: '还没验回来' }, { value: 'fixed', label: '已修复' }]} />
                   <Button size="small" type="text" danger icon={<DeleteOutlined />}
                     onClick={() => setBugRefs(prev => prev.filter((_, j) => j !== i))} />
                 </div>
               ))}
               <Button size="small" type="dashed" block
                 onClick={() => setBugRefs(prev => [...prev, { ref: '', status: 'open' }])}>+ 关联一个 bug</Button>
-              <div style={{ fontSize: 11, color: '#86909c', marginTop: 8, lineHeight: 1.6 }}>
-                标「已修」= 据说修好了 → 列表显示「待重跑」；重跑绿了平台自动摘掉关联。<br />
-                还有「阻塞中」的，批量回归会跳过这条，也不计入通过率。
+              {/* 「删」那个按钮很容易被当成正常的收尾动作用 —— 说清楚它不是。 */}
+              <div style={{ fontSize: 11, color: '#86909c', marginTop: 8, lineHeight: 1.7 }}>
+                「还没验回来」= 批量回归跳过这条，也不计入通过率。<br />
+                bug 关闭后回来调通，改成「已修复」—— <b>记录永久保留</b>，
+                这条用例曾经抓到过 bug 是它的价值证明。<br />
+                删除只用于关联错了，不是正常的收尾方式。
               </div>
             </div>
           </InlineProp>
@@ -2685,7 +2754,7 @@ export default function CaseDetail() {
                 {hasApi && (
                   <ScenarioEditor
                     scenario={apiScenario} setScenario={setApiScenario}
-                    dimStatus={apiStatus}
+                    dimStatus={apiStatus} setDimStatus={setApiStatus}
                     isTemplate={isApiTemplate} setIsTemplate={setIsApiTemplate}
                     type="api" accentColor="#0ea5a0"
                     onImportTemplate={() => { setTemplateModalType('api'); setTemplateModalOpen(true) }}
@@ -2702,7 +2771,7 @@ export default function CaseDetail() {
             { key: 'ui', label: <span><DesktopOutlined style={{ marginRight: 4, color: hasUi ? '#7c5cbf' : undefined }} />UI 测试{hasUi && <Tooltip title="脚本逻辑步骤数（源自手动步骤）。实际执行步数见「执行轨迹」，两者通常不同"><span style={{ fontSize: 11, color: '#7c5cbf', marginLeft: 4, borderBottom: '1px dotted #7c5cbf' }}>({(uiScenario?.steps?.length || uiScenario?.lastResults?.length || 0)}步)</span></Tooltip>}</span>, children: (
               <ScenarioEditor
                 scenario={uiScenario} setScenario={setUiScenario}
-                dimStatus={uiStatus}
+                dimStatus={uiStatus} setDimStatus={setUiStatus}
                 isTemplate={isUiTemplate} setIsTemplate={setIsUiTemplate}
                 type="e2e" accentColor="#7c5cbf"
                 onImportTemplate={() => { setTemplateModalType('ui'); setTemplateModalOpen(true) }}
@@ -2784,10 +2853,10 @@ export default function CaseDetail() {
         onSelect={(sc) => {
           if (templateModalType === 'api') {
             setApiScenario(sc)
-            setApiScenarioStatus('draft')
+            setApiStatus('draft')
           } else {
             setUiScenario(sc)
-            setUiScenarioStatus('draft')
+            setUiStatus('draft')
           }
           message.success('模板已导入，记得保存')
         }}

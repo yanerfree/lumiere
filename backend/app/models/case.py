@@ -151,10 +151,18 @@ class Case(Base):
         return blocked_by_bug(self)
 
     @property
-    def retest_pending(self) -> bool:
-        """bug 说修好了、这条还没重跑绿 —— 「可以继续了」的那个信号。"""
-        from app.services.bug_ref_service import retest_pending
-        return retest_pending(self)
+    def has_fixed_bug(self) -> bool:
+        """**这条用例曾经发现过 bug，并且已经验回来了**（有 fixed、没有 open）。
+
+        是痕迹不是待办 —— 「哪些用例真抓到过问题」按它筛。
+        """
+        from app.services.bug_ref_service import has_fixed_bug
+        return has_fixed_bug(self)
+
+    @property
+    def bug_found_count(self) -> int:
+        """这条用例总共关联过几个 bug（含已修的）。痕迹的量化。"""
+        return len([r for r in (self.bug_refs or []) if isinstance(r, dict)])
     expected_confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     expected_confirmed_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True

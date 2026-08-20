@@ -155,4 +155,4 @@ def test_门禁真的接在回推入口上():
     src = inspect.getsource(sync.sync_orchestrated_scenario)
     assert "_typo_assertions" in src, "断言类型检查没接进回推入口"
     assert "_needs_retry" in src, "缺重试检查没接进回推入口"
-    assert "badAssertions" in src, "拦下来之后没把明细回给调用方，CC 不知道改哪一步"
+    assert "bool_as_string" in src, "拦下来之后没把明细回给调用方，CC 不知道改哪一步"

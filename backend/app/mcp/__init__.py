@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks, deliverable
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks, deliverable, review
 
 mcp = FastMCP(
     name="testBench",
@@ -381,13 +381,19 @@ _section("用例·手工步骤")
 _register(
     test_cases.list_cases,
     name="tb_list_cases",
-    description="列出分支下的用例（手工步骤那一层）。找已有用例、确认编号、看某模块测了哪些时用。**断点续跑靠它**：传 pending_only=true 只返回还欠着的那些 —— target_level 说这条要做到哪一步（spec 只要步骤 / spec_api 步骤+接口 / full 三件套），三个维度状态说已经做到哪一步，差集就是待办；返回里的 owes 直接列出还欠哪几维。中断之后重跑不用从头来，也不会把做完的又捡回来重做。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, module(按模块名，省得先查folder_id), priority(P0/P1/P2/P3), case_type(e2e=场景 / api=单接口), target_level(spec/spec_api/full), ui_status/api_status/manual_status(draft草稿/debugging调试中/completed完成), pending_only(默认false)",
+    description="列出分支下的用例（手工步骤那一层）。找已有用例、确认编号、看某模块测了哪些时用。**断点续跑靠它**：传 pending_only=true 只返回还欠着的那些 —— target_level 说这条要做到哪一步（spec 只要步骤 / spec_api 步骤+接口 / full 三件套），三个维度状态说已经做到哪一步，差集就是待办；返回里的 owes 直接列出还欠哪几维。中断之后重跑不用从头来，也不会把做完的又捡回来重做。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, module(按模块名，省得先查folder_id), priority(P0/P1/P2/P3), case_type(e2e=场景 / api=单接口), target_level(spec/spec_api/full), ui_status/api_status/manual_status(draft草稿/debugging调试中/completed完成), pending_only(默认false)，**bug_state**('blocked'=关联的 bug 还没验回来，跟 git 上已关闭 issue 取交集就是该回来调的那批，批量回归也会跳过它们；'fixed'=抓到过 bug 且已验回来的痕迹清单；'none'=从没关联过)",
 )
 
 _register(
     test_cases.get_case,
     name="tb_get_case",
     description="读一条用例的全部内容：手工步骤、前置条件、预期结果、模块归属。改它或给它挂接口场景之前先读一遍。参数: case_id(用例UUID)",
+)
+
+_register(
+    review.review_case,
+    name="tb_review_case",
+    description="【回推完自己先过一遍，别等人】按六维评审一条用例并落库审核结论：场景合理性 / 验证点到位 / 接口必要性 / UI 脚本正确性 / 覆盖遗漏 / 可执行与纪律（不适用的维度自动摊掉权重）。**判定不由 AI 说**：有 blocker 一律不过、加权低于 80 不过，规则在平台代码里。blocker = 放进回归就是假绿或根本跑不了（断言恒真、只断控制面状态就当生效、预期照着实现抄、UI 脚本必挂）。返回 mustFix 逐条指到步骤名/断言/脚本位置。run_first=true 会先真跑一遍接口场景再评（debug 模式不进通过率）——断言咬不咬得住静态看不出来。参数: case_id(用例UUID), run_first(可选), env_id(试跑用的环境UUID)",
 )
 
 _register(
@@ -405,7 +411,15 @@ _register(
 _register(
     test_cases.create_case,
     name="tb_create_case",
-    description="新建一条用例（手工步骤）。用例是「测什么」的载体——接口场景和 UI 脚本都挂在它下面，所以先有用例再有脚本。编号和目录自动生成。**入库要过门禁**：标题完全同名硬拒、标题含模糊词（操作成功/显示正常/无报错/符合预期）硬拒。标题相似只提醒不拦。**P0 三件套不拦你**：同源生成的三份产物容易互相一致而不正确（典型是把「创建成功」做成「返回 200」），所以预期要**读需求 + 读实现，然后自己判断**（见 instructions ①-A）：一致就按它写、不用问人；不一致就**按需求写预期**、让它红，再提 product_defect 归因交人确认 —— 那才是发现问题；需求没覆盖就自己按同类功能/行业惯例判，判不出来才带着判断去问用户。默认自己判断；**定需求、确认 bug、卡住了、发现范围外的问题、要动影响别人的东西** —— 这几类必须找人，而且要带着判断去问。把依据用 expected_confirmed_by / expected_confirmed_note 带上来（落款写清是文档还是人，例：「docs/订阅.md §3.2」/「用户（对话确认）」）—— 平台只记录、不拦截，没带只回一句提醒。⚠ **别把实测结果直接当预期**：系统有 bug 时你会把 bug 写成「预期」，而三份产物同源，会一起错还全绿。参数: branch_id, title, module(中文如'服务管理'), case_type(**看测试对象**：api=单接口 —— 测试对象是**某一个接口的参数、权限**；e2e=场景 —— 测试对象是**某功能是否按需实现**。跟做不做 UI 无关（做几维看 target_level），跟步骤多少也无关。⚠ 为这条用例造数据用了几个接口，不影响判断 —— 造数据不是测试对象；做几维看 target_level), priority(P0-P3), preconditions(前置条件), steps([{seq,action,expected}]), expected_result, target_level(这条要做到什么程度: spec只要步骤/spec_api步骤+接口/full三件套，默认spec), **target_level_reason(不做某一维就说一句为什么——只有 target_level 一个值时，人分不出你是判断过不需要、还是没想就用了默认值；不写只提醒不拦)**, expected_confirmed_by(跟谁确认的), expected_confirmed_note(确认了什么，把对话里那句原话带上来)",
+    description="回写一条**活体验证过**的步骤用例。凭文档想象的用例跑不通也没人认。"
+                "**标题写成「对象+动作-预期」两段**（短横、不留空格），前段 20 字内一眼看完（列表上只露标题）；"
+                "**每个步骤名带角色前缀**：前置:/操作:/验证:/清理: —— 写了前缀平台就不用猜你的意图，判得准也不误报。"
+                "case_type 看**测试对象**：api=某一个接口的参数/权限；e2e=场景（某功能是否按需实现）。"
+                "**跟做不做 UI 无关**（做几维看 target_level: spec/spec_api/full），跟步骤多少也无关；造数用了几个接口不影响判断。"
+                "门禁：模糊词硬拒、同模块同名硬拒、步骤粒度自动拆。"
+                "参数: branch_id, title, module, case_type, priority(P0-P3), preconditions, "
+                "steps([{seq,action,expected}]), expected_result, submodule, target_level, target_level_reason, "
+                "expected_confirmed_by/expected_confirmed_note(跟用户确认过「这条要验什么」就带上，平台只记录不拦)"
 )
 
 _section("Mock 与观测")
@@ -459,7 +473,19 @@ _register(
 _register(
     test_cases.update_case,
     name="tb_update_case",
-    description="改一条已有用例的内容（只传要改的字段，没传的原样不动）。**你写错了自己改，别喊人** —— 标题打错字、步骤和实测不符（比如写「跳转回列表」、实际跳的是详情页），都用这个修。过的是和建用例同一套门禁（模糊词硬拒、同模块同名硬拒、步骤粒度自动拆），同名检查会排除自己。**改不了状态**：ui_status/api_status/manual_status 一概不收 —— 状态由平台按执行事实推进或由人拍板；你要说「这条能跑了」，就去跑一遍让结果说话。改了步骤或预期结果会自动清掉「预期已确认」标记（返回里会提醒），要重新跟用户对一遍。**只是措辞润色**（实质没变、补一句措辞、改错别字）就传 reconfirm=true：依据沿用原落款、只重盖时间，不用把几百字重打一遍。参数: case_id(用例UUID), title, priority, preconditions, steps([{seq,action,expected}]), expected_result, target_level(spec/spec_api/full), target_level_reason(不做某一维的理由), expected_confirmed_by, expected_confirmed_note, reconfirm(措辞润色时沿用原落款), **blocked_external**(这条卡在外部条件上就写一句等什么——等环境变量加上、等某接口上线。它不是状态、不免检任何阻塞，只为了让看板分清「没人写」和「写不了」，否则每轮都要人挨个来问；条件到位传空串撤掉), **bug_refs**(这条跑出来红、但红的原因不在用例＝产品 bug，就关联上去：[{ref:'UAG-123 或一句话', url:'可选', status:'open|fixed', note:'可选'}]，整份覆盖、传 [] 清空。平台不判 bug 死活：标 fixed 只表示「据说修好了」，列表随即显示「待重跑」，重跑绿了平台自动摘掉关联、红着就留着 —— 这是「这条什么时候能继续」的唯一信号，别写在 remark 里。有 open 的用例 tb_run_ui_scripts_batch 默认跳过、不计入通过率), **tags**(自由分拣词如「冒烟」「需要真数据」，最多 20 个、每个 32 字内；别用它表达状态或审核结论)",
+    description="改一条已有用例。只传要改的字段。**你写错了自己改，别喊人**（标题打错字、步骤和实测不符都用这个）。"
+                "过和建用例同一套门禁，同名检查排除自己。"
+                "**改不了状态**：ui/api/manual_status 一概不收 —— 状态由执行事实或人推进；要说「这条能跑了」就去跑一遍。"
+                "改步骤或预期会清掉「预期已确认」；只是措辞润色传 reconfirm=true（沿用原落款、只重盖时间）。"
+                "参数: case_id, title, priority, preconditions, steps([{seq,action,expected}]), expected_result, "
+                "target_level(spec/spec_api/full), target_level_reason, expected_confirmed_by, expected_confirmed_note, reconfirm, "
+                "**blocked_external**(卡在外部条件就写一句等什么；不是状态、不免检阻塞，只为分清「没人写」和「写不了」；条件到位传空串), "
+                "**bug_refs**([{ref,url,status:open|fixed,note}]，整份覆盖)：跑出来红但原因不在用例＝产品 bug 就关联上。"
+                "open=还没验回来（批量回归跳过它、不计通过率）；fixed=**你回来调通了**才标。"
+                "**关联是永久痕迹，标完 fixed 别清** —— 清了就看不出这条曾抓到过 bug；[] 只用于关联错了。"
+                "待办来源：tb_list_cases(bug_state='blocked') 跟 git 上已关闭 issue 取交集。, "
+                "**tags**(自由分拣词，≤20 个/每个 ≤32 字；不表达状态和审核结论), "
+                "**module/submodule**(放错目录自己搬，目录不存在自动建；用例编号不跟着变)"
 )
 
 _register(
@@ -702,7 +728,7 @@ _section("回推入库")
 _register(
     sync.get_sync_spec,
     name="tb_get_sync_spec",
-    description="【回推第一步·先调】获取回推规范：变量三层怎么选、步骤/断言/提取物 JSON 形状、禁止写死的正反例。参数: kind(case/api_scenario/variables/timing/all，默认all)",
+    description="【回推第一步·先调】获取回推规范：变量三层怎么选、步骤/断言/提取物 JSON 形状、禁止写死的正反例，以及**场景怎么切、怎么才算验到了**（一条只验一件事 / 对照组拆两条 / 写完要读回 / 「生效」的判据不是控制面状态字段）。参数: kind(case/api_scenario/scenario_shape/ui_script/variables/timing/all，默认all)",
 )
 
 _register(

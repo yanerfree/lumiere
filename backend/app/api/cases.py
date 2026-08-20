@@ -216,7 +216,7 @@ async def list_cases(
     ui_status: str | None = Query(default=None, alias="uiStatus"),
     api_status: str | None = Query(default=None, alias="apiStatus"),
     pushed_within: str | None = Query(default=None, alias="pushedWithin"),
-    # blocked=还卡在产品 bug / retest=bug 说修好了待重跑 / none=没关联
+    # blocked=关联的 bug 还没验回来 / fixed=抓到过 bug 已验回来（痕迹） / none=从没关联
     bug_state: str | None = Query(default=None, alias="bugState"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),

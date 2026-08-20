@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox, Dropdown } from 'antd'
+import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox, Dropdown, Alert } from 'antd'
 import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, getValidToken } from '../../utils/request'
@@ -408,37 +408,33 @@ export default function CaseManagement() {
     } catch (e) { message.error(e.message || '操作失败') }
   }
 
-  const handleQualityReview = () => {
+  // AI 评审改成**逐条评**：原来是把一个模块的标题列表塞进一次 prompt，
+  // 出来的是"缺少安全测试场景"这类放到哪个项目都成立的话（用户看完的评价是"不适用"）。
+  // 现在每条都带着它的接口场景断言、UI 脚本正文、执行记录去评，结论能指到具体步骤。
+  const handleQualityReview = async () => {
     if (!globalBranchId) { message.warning('请先选择分支'); return }
     setReviewOpen(true)
     setReviewResult(null)
     setReviewSteps([])
     setReviewLoading(true)
-
-    const url = `/projects/${projectId}/branches/${globalBranchId}/skills/tb-quality-review`
-    const body = { folderId: selectedFolderId || undefined }
-
-    api.stream(url, body, {
-      onChunk: (data) => {
-        if (data.type === 'step_start' || data.type === 'step_done') {
-          setReviewSteps(prev => [...prev, data])
-        }
-        if (data.type === 'error') {
-          message.error(data.message)
-          setReviewLoading(false)
-        }
-      },
-      onDone: (data) => {
-        if (data && data.report) {
-          setReviewResult(data)
-        }
-        setReviewLoading(false)
-      },
-      onError: (msg) => { message.error(msg); setReviewLoading(false) },
-    })
+    try {
+      const body = selectedRowKeys.length
+        ? { caseIds: selectedRowKeys }
+        : { folderId: selectedFolderId || undefined }
+      const res = await api.post(
+        `/projects/${projectId}/branches/${globalBranchId}/ai-review/batch`, body)
+      setReviewResult(res.data)
+      fetchCases()          // 审核标签和评分会落库，列表要刷新
+    } catch (e) {
+      message.error(e?.response?.data?.error?.message || 'AI 评审失败')
+    } finally {
+      setReviewLoading(false)
+    }
   }
+
   // 导出备份：脚本正文打包成 zip。价值不在"拿去别处跑"（变量和环境不跟着走，
   // 跑不通是预期的），在**逃生**——平台哪天没了，这堆资产还在。
+  // （AI 评审改逐条那次改动把这个函数连带删掉了，两个调用点还在，点「导出备份」直接白屏。）
   const handleExportBackup = async (envId, lang = 'zh') => {
     if (!globalBranchId) { message.warning('请先选择分支'); return }
     try {
@@ -724,29 +720,39 @@ export default function CaseManagement() {
     // 同一屏两个同名列，人不知道该看哪个（用户直接指出来了）。留可操作那份。
     // 默认收起：review_status 只对已下线的平台侧 AI 流水线那批用例有意义
     // （见 tests/test_case_module_audit.py::test_审核列默认收起）
-    // 关联 bug 一列三态。「待重跑」是这一列存在的**主要理由** ——
-    // 卡 bug 谁都看得见（跑出来是红的），"bug 说修好了、该谁去重跑一遍"
-    // 以前只能靠 remark 里一句自然语言，没人筛得出来。
-    { key: 'bugRefs', title: '关联bug', dataIndex: 'bugRefs', width: 132, defaultVisible: true,
+    // 关联 bug 一列两态。**留痕是这一列存在的主要理由** ——
+    // 「这条用例曾经抓到过 bug」以前只存在于当时那次对话里，会话一结束就没了，
+    // 而"哪些用例真抓到过问题"是评估用例价值的唯一依据。
+    { key: 'bugRefs', title: '关联bug', dataIndex: 'bugRefs', width: 136, defaultVisible: true,
       render: (v, row) => {
         const refs = v || []
         if (!refs.length) return <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span>
         const openRefs = refs.filter(r => (r.status || 'open') === 'open')
-        const label = openRefs.length ? openRefs.map(r => r.ref).join('、') : '待重跑'
+        const label = openRefs.length
+          ? openRefs.map(r => r.ref).join('、')
+          : `已修 ${refs.length}`
         const tip = (
           <div style={{ fontSize: 12 }}>
             {refs.map((r, i) => (
-              <div key={i}>{r.status === 'fixed' ? '已修·待重跑' : '阻塞中'}：{r.ref}
-                {r.note ? `（${r.note}）` : ''}</div>
+              <div key={i} style={{ marginBottom: 2 }}>
+                {r.status === 'fixed' ? '✓ 已验回来' : '● 还没验回来'}：{r.ref}
+                {r.note ? `（${r.note}）` : ''}
+                {r.fixedAt ? ` · ${String(r.fixedAt).slice(0, 10)}` : ''}
+              </div>
             ))}
-            {!openRefs.length && <div style={{ marginTop: 4, color: '#86909c' }}>重跑绿了会自动摘掉关联</div>}
+            <div style={{ marginTop: 4, color: '#86909c' }}>
+              {openRefs.length
+                ? 'bug 关闭后回来调通，把它标成「已修复」；批量回归当前会跳过这条'
+                : '这条用例抓到过 bug，记录永久保留'}
+            </div>
           </div>
         )
         return (
           <Tooltip title={tip} placement="topLeft">
-            <Tag color={openRefs.length ? 'error' : 'warning'}
-              style={{ fontSize: 10, margin: 0, maxWidth: 120, overflow: 'hidden',
-                       textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            <Tag color={openRefs.length ? 'error' : undefined}
+              style={{ fontSize: 10, margin: 0, maxWidth: 124, overflow: 'hidden',
+                       textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                       ...(openRefs.length ? {} : { background: '#f2f3f5', color: '#86909c', border: 'none' }) }}
               onClick={e => e.stopPropagation()}>{label}</Tag>
           </Tooltip>
         )
@@ -770,8 +776,23 @@ export default function CaseManagement() {
     { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center', defaultVisible: true, render: (v, row) => {
       // 没提审过要给占位。原来 return null，那一格空着像列坏了
       if (!v) return <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span>
-      if (v === 'approved') return <Tag style={{ fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none', margin: 0 }}>已审</Tag>
-      if (v === 'rejected') return <Tag color="error" style={{ fontSize: 10, margin: 0 }}>已拒</Tag>
+      // 结论是**谁**下的必须看得见：AI 评审和人工审核长得一样的话，
+      // 人既不知道该不该复核，也不知道凭什么过的。
+      const byAi = row.qualityScore?.by === 'ai'
+      const why = [row.reviewReason?.text, row.reviewReason?.summary].filter(Boolean).join(' · ')
+      const wrap = (tag) => byAi ? (
+        <Tooltip title={<div style={{ fontSize: 12, maxWidth: 320 }}>
+          AI 评审 {row.qualityScore?.total} 分{why ? ` —— ${why}` : ''}
+          {(row.reviewReason?.findings || []).filter(f => f.severity !== 'minor').slice(0, 4).map((f, i) => (
+            <div key={i} style={{ marginTop: 4 }}>· [{f.severity === 'blocker' ? '致命' : '重要'}] {f.where}：{f.problem}</div>
+          ))}
+        </div>}>{tag}</Tooltip>
+      ) : tag
+      if (v === 'approved') return wrap(
+        <Tag style={{ fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none', margin: 0 }}>
+          {byAi ? 'AI 过' : '已审'}</Tag>)
+      if (v === 'rejected') return wrap(
+        <Tag color="error" style={{ fontSize: 10, margin: 0 }}>{byAi ? 'AI 打回' : '已拒'}</Tag>)
       return (
         <Dropdown trigger={['click']} menu={{ items: [
           { key: 'approved', label: '通过' },
@@ -1013,8 +1034,8 @@ export default function CaseManagement() {
                 options={[
                   { value: '', label: '关联bug：不限' },
                   { value: 'blocked', label: '卡在产品bug' },
-                  { value: 'retest', label: '待重跑（已修）' },
-                  { value: 'none', label: '没关联' },
+                  { value: 'fixed', label: '抓到过bug（已修）' },
+                  { value: 'none', label: '从没关联' },
                 ]} />
               <Select size="small" value={readyFilter} onChange={v => { setReadyFilter(v); setPage(1) }}
                 style={{ width: 150 }} popupMatchSelectWidth={false}
@@ -1040,7 +1061,7 @@ export default function CaseManagement() {
                 {/* 批量「AI 生成脚本」已下线：走的是 scripts/generate-stream 那条平台侧生成管道，
                     实测跑不通（详情页的单条入口同批下线）。UI 脚本改由外部 Claude Code 写好跑通后
                     经 tb_sync_ui_script 回推。 */}
-                <Tooltip title="AI 从完整性/准确性/有效性/可执行性 4 维度评审当前模块的用例质量，输出评分和改进建议">
+                <Tooltip title="按六维逐条评审（场景合理性/验证点到位/接口必要性/UI脚本/覆盖遗漏/纪律）：勾选了就评勾选的，没勾就评当前模块。结论落库到审核标签和评分">
                   <Button icon={<SearchOutlined />} onClick={() => handleQualityReview()}>AI 评审</Button>
                 </Tooltip>
                 <Button icon={<UploadOutlined />} size="small" onClick={() => setImportOpen(true)}>导入</Button>
@@ -1474,67 +1495,74 @@ export default function CaseManagement() {
         </div>
       </Modal>
 
-      {/* AI 质量评审结果 */}
+      {/* AI 评审结果：逐条列结论。**过没过、卡在哪一条**要一眼看到 */}
       <Modal
-        title={<Space><SearchOutlined /> AI 质量评审</Space>}
+        title={<Space><SearchOutlined /> AI 评审（六维·逐条）</Space>}
         open={reviewOpen}
         onCancel={() => setReviewOpen(false)}
-        width={700}
+        width={860}
         footer={[<Button key="close" onClick={() => setReviewOpen(false)}>关闭</Button>]}
       >
         {reviewLoading && (
           <div style={{ textAlign: 'center', padding: 40 }}>
             <LoadingOutlined style={{ fontSize: 24 }} />
-            <p style={{ marginTop: 12 }}>AI 正在评审用例质量...</p>
-            {reviewSteps.map((s, i) => (
-              <Tag key={i} style={{ margin: 2 }}>{s.title || s.summary || s.step}</Tag>
-            ))}
+            <p style={{ marginTop: 12 }}>逐条评审中（每条都要读它的断言和脚本，慢一些）…</p>
           </div>
         )}
-        {reviewResult && (
+        {!reviewLoading && reviewResult && (
           <div>
-            <div style={{ textAlign: 'center', marginBottom: 20 }}>
-              <div style={{ fontSize: 48, fontWeight: 700, color: reviewResult.score >= 75 ? '#0ea5a0' : reviewResult.score >= 60 ? '#faad14' : '#e8453c' }}>
-                {reviewResult.score}
-              </div>
-              <Tag color={reviewResult.score >= 75 ? 'cyan' : reviewResult.score >= 60 ? 'warning' : 'error'} style={{ fontSize: 14 }}>
-                {reviewResult.level}
-              </Tag>
-              <div style={{ marginTop: 8, color: '#86909c' }}>
-                评审了 {reviewResult.caseCount} 条用例，涉及 {reviewResult.apiCount} 个 API 端点
-              </div>
+            <div style={{ display: 'flex', gap: 16, marginBottom: 16, alignItems: 'baseline' }}>
+              <span style={{ fontSize: 32, fontWeight: 700, color: '#0ea5a0' }}>
+                {reviewResult.approved}</span>
+              <span style={{ color: '#86909c' }}>过审</span>
+              <span style={{ fontSize: 32, fontWeight: 700, color: '#e8453c' }}>
+                {reviewResult.rejected}</span>
+              <span style={{ color: '#86909c' }}>打回</span>
+              {reviewResult.failed > 0 && <Tag color="warning">{reviewResult.failed} 条评审失败</Tag>}
+              <span style={{ marginLeft: 'auto', color: '#86909c' }}>
+                均分 {reviewResult.avgScore}
+              </span>
             </div>
-
-            {reviewResult.report?.dimensions && (
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 16 }}>
-                {Object.entries(reviewResult.report.dimensions).map(([key, dim]) => (
-                  <div key={key} style={{ padding: '8px 12px', background: 'transparent', borderRadius: 12, borderLeft: `3px solid ${dim.score >= 80 ? '#0ea5a0' : dim.score >= 60 ? '#faad14' : '#e8453c'}` }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{fontWeight:600}}>{{completeness:'完整性',accuracy:'准确性',effectiveness:'有效性',executability:'可执行性'}[key] || key}</span>
-                      <span style={{fontWeight:600}}>{dim.score} 分 ({dim.weight}%)</span>
-                    </div>
-                    {dim.issues?.length > 0 && dim.issues.map((issue, i) => (
-                      <div key={i} style={{ fontSize: 12, color: '#e8453c', marginTop: 2 }}>- {issue}</div>
-                    ))}
+            {reviewResult.truncated && (
+              <Alert type="warning" showIcon style={{ marginBottom: 12 }}
+                message="超过 30 条只评了前 30 条 —— 按模块分批评，报告才看得完" />
+            )}
+            <div style={{ maxHeight: 460, overflow: 'auto' }}>
+              {(reviewResult.results || []).map((r, i) => (
+                <div key={i} style={{ padding: '10px 12px', marginBottom: 8, borderRadius: 12,
+                  background: r.verdict === 'approved' ? '#f6ffed' : '#fff7f6' }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <Tag color={r.verdict === 'approved' ? 'success' : 'error'} style={{ margin: 0 }}>
+                      {r.error ? '评审失败' : r.verdict === 'approved' ? '过审' : '打回'}
+                    </Tag>
+                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c' }}>
+                      {r.caseCode}</span>
+                    <span style={{ fontWeight: 500 }}>{r.title}</span>
+                    <span style={{ marginLeft: 'auto', fontWeight: 600 }}>{r.total}</span>
                   </div>
-                ))}
-              </div>
-            )}
-
-            {reviewResult.report?.suggestions?.length > 0 && (
-              <div style={{ padding: '8px 12px', background: '#e0f7f6', borderRadius: 12 }}>
-                <span style={{fontWeight:600}}>改进建议：</span>
-                {reviewResult.report.suggestions.map((s, i) => (
-                  <div key={i} style={{ fontSize: 13, marginTop: 4 }}>• {s}</div>
-                ))}
-              </div>
-            )}
+                  {r.error && <div style={{ fontSize: 12, color: '#e8453c', marginTop: 4 }}>{r.error}</div>}
+                  {r.summary && <div style={{ fontSize: 12, color: '#4e5969', marginTop: 6 }}>{r.summary}</div>}
+                  {(r.findings || []).filter(f => f.severity !== 'minor').map((f, j) => (
+                    <div key={j} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.6 }}>
+                      <Tag color={f.severity === 'blocker' ? 'error' : 'warning'}
+                        style={{ fontSize: 10, margin: '0 6px 0 0' }}>
+                        {f.severity === 'blocker' ? '致命' : '重要'}</Tag>
+                      <span style={{ color: '#86909c' }}>{f.where}</span>：{f.problem}
+                      {f.fix && <span style={{ color: '#0ea5a0' }}> → {f.fix}</span>}
+                    </div>
+                  ))}
+                  {(r.coverageGaps || []).length > 0 && (
+                    <div style={{ fontSize: 12, marginTop: 6, color: '#4e5969' }}>
+                      可能漏的场景：{r.coverageGaps.join('；')}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {!reviewLoading && !reviewResult && (
-          <div style={{ textAlign: 'center', padding: 40, color: '#86909c' }}>
-            评审结果加载中或解析失败，请重试
-          </div>
+          <div style={{ textAlign: 'center', padding: 40, color: '#86909c' }}>没有结果</div>
         )}
       </Modal>
 

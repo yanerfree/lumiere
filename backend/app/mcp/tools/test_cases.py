@@ -25,6 +25,44 @@ def _case_to_dict(c) -> dict:
     }
 
 
+async def _check_module(session: AsyncSession, branch_id, module: str | None,
+                        submodule: str | None) -> tuple[list[str], list[str]]:
+    """模块/子模块名过一遍规范。同级已有的名字要查出来给门禁 ——
+    「是不是同一个模块换了写法」只能跟同级比，跟全库比会把别的模块下的同名子模块算进来。
+    """
+    from sqlalchemy import select
+
+    from app.models.case import CaseFolder
+    from app.services import intake_gate
+
+    errors: list[str] = []
+    warns: list[str] = []
+    bid = branch_id if not isinstance(branch_id, str) else uuid.UUID(branch_id)
+    if module:
+        tops = [r[0] for r in (await session.execute(
+            select(CaseFolder.name).where(CaseFolder.branch_id == bid,
+                                          CaseFolder.parent_id.is_(None))
+        )).all()]
+        e, w = intake_gate.check_module_name(module, tops, is_top_level=True)
+        errors += e
+        warns += w
+    if submodule and module and not errors:
+        parent = (await session.execute(
+            select(CaseFolder).where(CaseFolder.branch_id == bid,
+                                     CaseFolder.path == module.upper())
+        )).scalars().first()
+        sibs = [r[0] for r in (await session.execute(
+            select(CaseFolder.name).where(CaseFolder.branch_id == bid,
+                                          CaseFolder.parent_id == parent.id)
+        )).all()] if parent else []
+        # 子模块里带分隔符是允许的（「审批-二级」这种确实是一个名字），
+        # 只查重名写法 —— 三级目录很少，硬拆反而添乱。
+        e, w = intake_gate.check_module_name(submodule, sibs, is_top_level=False)
+        errors += e
+        warns += w
+    return errors, warns
+
+
 async def list_cases(
     session: AsyncSession,
     branch_id: str,
@@ -40,12 +78,22 @@ async def list_cases(
     api_status: str | None = None,
     manual_status: str | None = None,
     pending_only: bool = False,
+    bug_state: str | None = None,
 ) -> dict:
     """列出分支下的测试用例，支持分页和筛选。
 
     **断点续跑就靠这个**（C2）：传 pending_only=true 只返回"还欠着的" ——
     target_level 说要做到哪一步，三个维度状态说已经做到哪一步，差集就是待办。
     中断之后重跑不用从头来，也不会把做完的又捡回来重做一遍。
+
+    `bug_state`：
+      · `blocked` —— 有 open 的 bug，**还没验回来**。这就是你的待办来源：
+        从 git 拉已关闭的 issue，跟这批用例的 `bugRefs` 取交集，回来把它们调通，
+        调通了把那条关联标成 `fixed`。没关闭的别动（批量回归也会跳过）。
+      · `fixed` —— **痕迹**：曾经抓到过 bug、已经验回来了。不是待办，
+        用来回答"哪些用例真抓到过问题"。
+      · `none` —— 从没关联过 bug。
+    每条用例的 `bugRefs` / `blockedByBug` / `hasFixedBug` / `bugFoundCount` 一起返回。
     """
     from sqlalchemy import and_, cast, or_, select
     from sqlalchemy.dialects.postgresql import JSONB
@@ -75,6 +123,20 @@ async def list_cases(
         stmt = stmt.where(Case.api_status == api_status)
     if manual_status:
         stmt = stmt.where(Case.manual_status == manual_status)
+    # 关联 bug 两态。**在 SQL 里筛** —— 拿当前页在内存里过滤，翻到第 3 页只剩一条。
+    if bug_state in ("blocked", "fixed", "none"):
+        # NOT 写在 text 里 —— 对 text() 取 `~` 会 AssertionError（实测 500）
+        from sqlalchemy import text as sa_text
+        OPEN = "cases.bug_refs @> '[{\"status\": \"open\"}]'::jsonb"
+        FIXED = "cases.bug_refs @> '[{\"status\": \"fixed\"}]'::jsonb"
+        if bug_state == "blocked":
+            stmt = stmt.where(sa_text(OPEN))
+        elif bug_state == "fixed":
+            stmt = stmt.where(sa_text(f"{FIXED} AND NOT ({OPEN})"))
+        else:
+            stmt = stmt.where(sa_text("(cases.bug_refs IS NULL OR jsonb_typeof(cases.bug_refs) <> 'array'"
+                                " OR jsonb_array_length(cases.bug_refs) = 0)"))
+
     if pending_only:
         # 「还欠着」= **CC 还有活要干**，不是"人审没审过"。
         #
@@ -101,12 +163,21 @@ async def list_cases(
 
     return {
         "cases": [{**_case_to_dict(c), "targetLevel": c.target_level,
-                   "owes": _owes(c)} for c in rows],
+                   "owes": _owes(c),
+                   # 关联 bug 的三样一起给：清单、还卡着吗、该不该重跑
+                   "bugRefs": [f"{r.get('ref')}({r.get('status')})"
+                               for r in (c.bug_refs or [])] or None,
+                   "blockedByBug": c.blocked_by_bug or None,
+                   "hasFixedBug": c.has_fixed_bug or None,
+                   "bugFoundCount": c.bug_found_count or None,
+                   "tags": c.tags or None} for c in rows],
         "total": total,
         "page": page,
         "pageSize": page_size,
         "usage": "owes 列出这条还欠哪几维。断点续跑：pending_only=true 只拿还欠着的，"
-                 "做完一维就回推一维，对应维度状态会自己往前走。",
+                 "做完一维就回推一维，对应维度状态会自己往前走。"
+                 "bug_state='blocked' 拿「关联的 bug 还没验回来」那批（跟 git 上已关闭的 "
+                 "issue 取交集就是你该回来调的）；'fixed' 是抓到过 bug 已验回来的痕迹。",
     }
 
 
@@ -170,6 +241,13 @@ async def create_case(
 
     if target_level not in ("spec", "spec_api", "full"):
         return {"error": "target_level 只能是 spec / spec_api / full"}
+
+    # 模块名规范先过 —— 目录一旦建歪（二级拼成一级、同一个模块拼成好几个），
+    # 后面每条用例都跟着落错地方，收拾起来比拦一次贵得多。
+    mod_errors, mod_warns = await _check_module(session, branch_id, module, submodule)
+    if mod_errors:
+        return {"error": "模块名不规范，改好再传：", "problems": mod_errors}
+    warnings = list(warnings) + list(mod_warns)
 
     gate_errors, gate_warns = await intake_gate.check_one(
         session, uuid.UUID(branch_id), title, module, priority
@@ -263,6 +341,8 @@ async def update_case(
     blocked_external: str | None = None,
     bug_refs: list | None = None,
     tags: list | None = None,
+    module: str | None = None,
+    submodule: str | None = None,
 ) -> dict:
     """改一条已有用例的内容。只传要改的字段，没传的原样不动。
 
@@ -283,13 +363,24 @@ async def update_case(
 
     `bug_refs`：这条**跑出来是红的、但红的原因不在用例**（产品 bug）就关联上去。
     每条 `{"ref": "UAG-123 或一句话", "url": "可选", "status": "open|fixed", "note": "可选"}`。
-    整份覆盖，传 `[]` 清空。**平台不判 bug 死活**：你标 `fixed` 只是"据说修好了"，
-    列表随即显示「待重跑」；重跑绿了平台自动把 fixed 的关联摘掉，红着就留着 ——
-    这就是"这条什么时候能继续"的唯一信号，别再靠 remark 里写一句自然语言。
-    还卡着（有 open）的用例，`tb_run_ui_scripts_batch` 默认跳过：重跑除了刷红没有信息量。
+    整份覆盖。**关联是永久痕迹，不要清掉** —— 清了就看不出这条用例曾经抓到过 bug，
+    而"哪些用例真抓到过问题"是评估用例价值的唯一依据。传 `[]` 只用于关联错了。
+
+    两个状态的含义分清：
+      · `open`  —— 发现了、还没验回来。`tb_run_ui_scripts_batch` 会跳过这条用例
+        （重跑除了刷红没有信息量），也不计入通过率。
+      · `fixed` —— **你回来调通了**才标。不是"据说修好了"：issue 关了但你还没调，
+        它就该留在 open。标完这条关联作为历史记录留着，不再跳过。
 
     `tags`：自由分拣词（`冒烟`、`需要真数据`、`等三方联调`），最多 20 个、每个 32 字内。
     别拿它表达状态或审核结论 —— 那两样有确定语义、驱动门禁，标签只用来筛。
+
+    `module` / `submodule`：**放错目录自己搬**，目录不存在会自动建。
+    只传 module 就搬到模块根下；两个都传就搬进子目录。
+    以前这两个参数没有，于是"这条该放二级目录、那条漏传了 submodule"只能人去界面上
+    一条条拖 —— 而漏传本来就是常见笔误（实测一个模块 21 条里 3 条漏在了根目录）。
+    **用例编号不跟着变**：TC-DYGL-00013 搬进「跨租户订阅」之后编号还是 TC-DYGL-00013 ——
+    编号是你回推、脚本、报告共用的锚点，跟着目录改等于把已发出的引用全断掉。
 
     改步骤/预期会清掉「预期已确认」。`reconfirm=True` 用于**措辞润色**：
     实质没变（补一句措辞、改错别字），依据沿用原落款，只重盖时间。
@@ -301,18 +392,21 @@ async def update_case(
     from app.schemas.case import UpdateCaseRequest
     from app.services import case_service, intake_gate
 
+    module_arg = module          # module 下面会被"当前目录"兜底覆盖，原始入参单独留一份
     cid = uuid.UUID(case_id)
     case = await case_service.get_case(session, cid)
     if not case:
         return {"error": f"用例 {case_id} 不存在"}
 
-    # module 用来做同名检查，取用例当前所在目录 —— 改标题不改目录是常态
-    module = None
+    # 同名检查按**搬过去之后**的模块判：同名只在同一模块内算重复，
+    # 拿旧目录判会在"搬家顺带改标题"时判错（旧模块里不重名、新模块里重名）。
+    cur_module = None
     if case.folder_id:
         from app.models.case import CaseFolder
-        module = (await session.execute(
+        cur_module = (await session.execute(
             select(CaseFolder.name).where(CaseFolder.id == case.folder_id)
         )).scalar_one_or_none()
+    module = module if module is not None else cur_module
 
     new_title = title if title is not None else case.title
     new_priority = priority if priority is not None else case.priority
@@ -322,6 +416,13 @@ async def update_case(
         steps if steps is not None else case.steps,
         expected_result if expected_result is not None else case.expected_result,
     )
+
+    if module_arg is not None or submodule is not None:
+        mod_errors, mod_warns = await _check_module(session, case.branch_id,
+                                                   module_arg or cur_module, submodule)
+        if mod_errors:
+            return {"error": "模块名不规范，改好再传：", "problems": mod_errors}
+        warnings = list(warnings) + list(mod_warns)
 
     if title is not None and module:
         gate_errors, gate_warns = await intake_gate.check_one(
@@ -349,11 +450,14 @@ async def update_case(
     changed = [k for k, v in (("title", title), ("priority", priority),
                               ("preconditions", preconditions), ("steps", steps),
                               ("expectedResult", expected_result),
-                              ("bugRefs", bug_refs), ("tags", tags)) if v is not None]
+                              ("bugRefs", bug_refs), ("tags", tags),
+                              ("module", module_arg), ("submodule", submodule)) if v is not None]
     data = UpdateCaseRequest(
         title=title, priority=priority, preconditions=preconditions,
         steps=steps, expected_result=expected_result,
         bug_refs=bug_refs, tags=tags,
+        module=module if (module is not None or submodule is not None) else None,
+        submodule=submodule,
     )
     case = await case_service.update_case(session, cid, data)
     if target_level_reason is not None:
@@ -385,9 +489,16 @@ async def update_case(
     if case.bug_refs or bug_refs is not None:
         result["bugRefs"] = case.bug_refs or []
         result["blockedByBug"] = case.blocked_by_bug
-        result["retestPending"] = case.retest_pending
+        result["hasFixedBug"] = case.has_fixed_bug
     if case.tags or tags is not None:
         result["tags"] = case.tags or []
+    if module_arg is not None or submodule is not None:
+        # 搬完把落点回给它 —— 只回 folderId 的话它没法确认搬对了没有
+        from app.models.case import CaseFolder
+        result["folderPath"] = (await session.execute(
+            select(CaseFolder.path).where(CaseFolder.id == case.folder_id)
+        )).scalar_one_or_none() if case.folder_id else None
+        result["caseCodeUnchanged"] = case.case_code
     if reconfirmed:
         result["reconfirmed"] = case.expected_confirmed_actor
     elif reconfirm and not prev_conf[0]:

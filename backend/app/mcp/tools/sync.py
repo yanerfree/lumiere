@@ -225,7 +225,12 @@ def _unevaluatable_assertions(seq: int, st: dict) -> list[dict]:
 
 
 def _typo_assertions(seq: int, st: dict) -> list[dict]:
-    """断言的期望值被写成字符串，而响应里是布尔 —— **必然假红**。
+    """断言的期望值被写成字符串 `"true"`，而响应里多半是布尔 —— 大概率假红。
+
+    **这条从硬拦降成了警告**（判据规范 ① + 附则）：反例是"有些老接口真的返回
+    `"enabled": "true"`"，那时写字符串才是对的，硬拦等于逼人写错。
+    平台在回推那一刻并不知道这个接口返回什么类型 —— 没跑过就没有证据。
+    有证据的时候（历史执行记录里那个字段确实是布尔）才配硬拦，那个判定放在评审侧做。
 
     为什么值得硬拦而不是软警告：这类错误只有跑起来才暴露，报错还长得像平台
     在说胡话（「期望 data.enabled == true，实际 True」差一个大小写），于是人先去
@@ -675,6 +680,35 @@ tenant: tb-dup-xxxx"}}`：message 是英文的（压根没走 i18n）**还拼了
 
 """
 
+_SPEC_SCENARIO_SHAPE = """## 场景怎么切、怎么才算验到了（回推时会逐条提示，但不拦你）
+
+外部 CC 上一批返工全集中在这四条上，都不是写不出来，是**没想到要验那一步**。
+
+**① 一条场景只验一件事。** 跑红了要能一眼看出是哪件坏了。
+   「配下去 → 真生效」是一件事的两个阶段，那是对的；
+   「租户内订阅」和「跨租户订阅」是两件事，拆两条。
+
+**② 对照组拆成两条用例，互为对照。** 别在一条里换个身份再跑一遍。
+   挤在一条里有个真实的坑：前半段为了造场景改过的开关（比如把审批关了），
+   会让后半段的结论直接失假 —— 而它长得跟"通过了"一模一样。
+
+**③ 写完必须读回来。** `POST` 回 201 只是接口自己说的；`GET` 读回来才是数据面说的。
+   实测踩过：接口回 200、字段压根没落库。制备类步骤不需要读回，
+   那就在步骤名里写明「制备：…」，提示会自动跳过它。
+
+**④「生效」的判据不是控制面的状态字段。**
+   「转 approved」只是控制面写了个状态。真正的判据是二选一（能都验最好）：
+   - 拿那个凭据**去调需要认证的服务**：审批前必须调不通，审批后才通；
+   - **页面上**那个入口/按钮是不是还灰着、跳不进去。
+   这一步几乎总是要**跨到另一个入口**（数据面/网关/前台），
+   所以"所有请求都打在同一个 ${BASE_URL} 上"基本等于没验生效 —— 回推时会提示你。
+
+   **数据面入口叫什么，平台不猜。** 每个项目不一样，你在测的过程中摸清了
+   （网关基址、集群前缀、租户隔离前缀这些），就自己写进共享数据：
+   `tb_upsert_automation_resource`。之后所有用例 `${资源名}` 直接取，
+   下一轮你自己也不用再摸一遍。"""
+
+
 _SPEC_TIMING = """## 异步下发怎么办：别插假步骤占时间窗，用 wait_ms / retry_timeout_ms
 
 被测系统的配置下发常常是**异步**的（实测某网关从「发布成功」到真能转发要
@@ -709,6 +743,30 @@ _SPEC_TIMING = """## 异步下发怎么办：别插假步骤占时间窗，用 w
 """
 
 
+_SPEC_NAMING = """## 命名规范（**这条最省事**：写规范了，平台就不用猜你的意图）
+
+**标题 = 「对象+动作-预期」两段**，前段 20 字内一眼看完。
+**分隔符用短横 `-`，两边不留空格** —— 标题在列表里就那么点宽度，别浪费在空格上：
+  ✅ `租户管理员跨租户订阅-一级自动跳过、二级批完即生效`
+  ❌ `消费方租户管理员自己申请跨租户订阅时一级节点自动跳过，提供方直接批二级后订阅生效`
+后者得读完整句才知道在测什么，而**列表上只露标题**。细节放预期结果里。
+
+**每个步骤名带角色前缀**（手工步骤、接口步骤、UI 脚本注释都一样）：
+
+| 前缀 | 这步在干什么 |
+|---|---|
+| `前置:` | 造数据、登录、取 id —— 不是被测对象 |
+| `操作:` | 触发被测行为的那一下 |
+| `验证:` | 断言在验什么 |
+| `清理:` | 收尾删数据 |
+
+例：`前置: 建服务 A` / `操作: 发布服务 A` / `验证: 打网关应 200` / `清理: 删服务 A`
+
+**为什么值得你多打四个字**：平台判「写完有没有验效果」「哪步是制备」「这条在验生效吗」
+原来全靠从步骤名里搜关键词猜 —— 你写"取消订阅"会被猜成"取"（制备），
+写"依然可调通"会被漏掉。写了前缀就是读一个字段，判得准，也不会误报烦你。"""
+
+
 _SPEC_CASE = """## 步骤用例（tb_create_case，非本模块，但一并说明口径）
 
 **case_type 看测试对象：**
@@ -726,7 +784,52 @@ steps 每项含 seq/action/expected；多角色加 [管理员]/[租户] 标记�
 
 **写不了就说清等什么**：`tb_update_case(blocked_external='等环境变量 X 加上')`。
 「我没写」和「外面缺东西我写不了」在看板上长得一模一样，不标注就每轮都要人来问你。
-它不免检任何阻塞，只是归责；条件到位了传空串撤掉。"""
+它不免检任何阻塞，只是归责；条件到位了传空串撤掉。
+
+**跑出来红、但红的原因不在用例（产品 bug）→ 关联上去，别只在对话里说一句**：
+`tb_update_case(bug_refs=[{"ref":"UAG-123 或一句话","url":"可选","status":"open"}])`。
+它跟 blocked_external 分工不同：那个是"我还写不了"，这个是"我写完了、跑出来是红的"。
+
+    关联 open ──▶ 批量回归跳过它（跑了只是刷红），也不计入通过率
+        │
+        │  git 上那条 issue 关闭 / 人告知修好了
+        ▼
+    你回来把它调通 ──▶ 把那条关联标成 status:"fixed"
+        │
+        └─ 没调通 → 留在 open，补一句 note 说清现在卡在哪
+
+三件事别搞错：
+1. **`fixed` 是"我回来调通了"，不是"据说修好了"。** issue 关了但你还没调通，
+   它就该留在 open —— open 的含义是"还没验回来"。
+2. **关联是永久痕迹，标完 fixed 就留着，不要清。** 清掉就看不出这条用例曾经抓到过
+   bug —— 而"哪些用例真抓到过问题、抓到过几次"是评估用例价值的唯一依据。
+   `bug_refs=[]` 只用于关联错了（挂到了不相干的 bug 上）。
+3. 平台不会自己动 status：判 bug 死活、判验没验过，都是你和人的事。
+
+**待办从哪来**：`tb_list_cases(bug_state="blocked")` 拿到所有"关联的 bug 还没验回来"
+的用例（返回带每条的 ref），跟你从 git 拉到的**已关闭 issue** 取交集 —— 交集就是
+这一轮该回来调的。`bug_state="fixed"` 是另一回事：抓到过 bug 已验回来的痕迹清单。
+
+`tags=["冒烟","需要真数据"]` 只用来分拣（最多 20 个、每个 32 字内）。
+别拿标签表达状态或审核结论 —— 那两样有确定语义、驱动门禁。
+
+**模块名怎么起**（实测这两种都发生过，现在会被门禁硬拒）：
+- 一级模块 = **被测系统的功能域**（订阅管理、服务管理、监控），不是"你这一轮在测什么"。
+  想不出该放哪就先 `tb_get_folder_tree` 看现有的，别顺手新开一个。
+- **看着是两级就别拼成一级**：`监控-请求日志` 要写成 `module="监控", submodule="请求日志"`。
+  拼成一级之后「监控」下别的用例找不到家，导航栏也会被长名字撑满。
+- **同一个模块只能有一个写法**：已经有「LLM PROVIDERS」就别再传 `LLM Providers` /
+  `llm_providers` / `LLM-PROVIDERS` —— 门禁会告诉你现成的那个名字，用它。
+
+**回推完自己过一遍评审**：`tb_review_case(case_id=...)`。六维打分 + 逐条指到位置，
+判定在平台代码里（有 blocker 一律不过、加权低于 80 不过），不是 AI 说了算。
+`mustFix` 里的 blocker 一条都不许留着交上去；改完再调一次复核。
+断言咬不咬得住静态看不出来 —— 拿不准就 `run_first=true` 先真跑一遍再评。
+
+**放错目录自己搬**：`tb_update_case(module="订阅管理", submodule="跨租户订阅")`，
+目录不存在会自动建；只传 module 就搬到模块根下。建用例时漏传 submodule 是常见笔误
+（实测一个模块 21 条里 3 条落在了根目录），发现了自己搬，不用等人去界面上拖。
+**编号不跟着变**（TC-DYGL-00013 搬完还是这个号）—— 编号是回推、脚本、报告共用的锚点。"""
 
 
 _SPEC_UI_SCRIPT = """## 用例的 UI 脚本（tb_sync_ui_script）
@@ -880,25 +983,11 @@ pytest 跑的文件**（文案、环境变量默认值、被测系统的语种�
 凭据默认不烧，返回里 `exportEnv` 告诉你 export 哪几个；要完全自包含传
 `include_credentials=true`。`textUnresolved` 非空就先登记词条或补上 `|中文原文`。
 
-
-登记通道：`tb_upsert_i18n_terms(project_id, items=[{key, zh, en}])`。没有 en 译文的
-词条注入后在英文环境仍退回中文 —— 登记了不等于能测英文。
-
-**英文环境要在本地先验**，不然"本地跑通再回推"这条纪律在文案上是空的：
-本地 stub `def t(s): return s` 只能跑中文。做法是把词典拉到本地当真表，
-`TEST_LANGUAGE=en` 跑一遍：
-
-```python
-try:
-    from tea_i18n import t                      # 平台沙箱里有
-except ImportError:                             # 本地：读一份词典副本
-    import json, os
-    _T = json.load(open("i18n.local.json", encoding="utf-8"))
-    _L = "en-US" if os.getenv("TEST_LANGUAGE") == "en" else "zh-CN"
-    def t(ref): return (_T.get(ref) or {}).get(_L) or ref
-```
-副本从平台取：`GET {平台地址}/api/projects/{project_id}/i18n-messages` 返回
-`{data: [{keyText, translations}]}`，自己转成 `{keyText: translations}` 存成上面那个文件。
+**英文要在本地先验**（不然"本地跑通再回推"这条纪律在文案上是空的）：
+`tb_render_ui_script(case_id, lang="en")` 渲一份跑。别自己写 `def t(s): return s`
+的 stub —— 那种 stub 永远只能跑中文，等于没验。
+词典缺条目就 `tb_upsert_i18n_terms` 登记；回推时扫到硬编码中文只给**软警告**
+（词典总有不全的时候，不硬拦）。
 
 回推时会扫硬编码中文给**软警告**（不硬拦 —— 词典总有不全的时候）。
 
@@ -912,14 +1001,16 @@ except ImportError:                             # 本地：读一份词典副本
 
 
 async def get_sync_spec(kind: str = "all") -> dict:
-    """获取回推规范。kind: case(步骤用例) / api_scenario(编排接口场景) / ui_script(UI 脚本) / variables(变量纪律) / all。
+    """获取回推规范。kind: case(步骤用例) / api_scenario(编排接口场景) / scenario_shape(场景怎么切、怎么才算验到了) / ui_script(UI 脚本) / variables(变量纪律) / all。
 
     回推前先调它对齐口径：怎么选变量层、步骤/断言/提取物 JSON 形状、禁止写死的正反例。"""
     parts = {
         "variables": _SPEC_VARIABLES,
         "api_scenario": _SPEC_API_SCENARIO,
         "ui_script": _SPEC_UI_SCRIPT,
+        "naming": _SPEC_NAMING,
         "case": _SPEC_CASE,
+        "scenario_shape": _SPEC_SCENARIO_SHAPE,
         "timing": _SPEC_TIMING,
     }
     if kind in parts:
@@ -1134,6 +1225,11 @@ async def sync_orchestrated_scenario(
     warnings.extend(_nondiscriminating(norm))
     # not_exists 没有基准 → 软警告。见 _missing_path_baseline。
     warnings.extend(_missing_path_baseline(norm))
+    # 场景形态（写完没读回 / 只打控制面 / 对照组塞一条 / 一条验两件事）→ **全部软警告**。
+    # 这几条都要从自然语言猜意图，猜错就是滥报，所以一条都不拦；
+    # 价值在时机 —— 回推那一刻 CC 还在上下文里，补一步很便宜。
+    from app.services.scenario_shape import check_shape
+    warnings.extend(check_shape(norm, title or ""))
 
     if dead_asserts:
         return {
@@ -1147,15 +1243,17 @@ async def sync_orchestrated_scenario(
         }
 
     if bad_types:
-        return {
-            "error": "断言的期望值类型写错了，已拒绝入库 —— 这类错误**必然假红**，"
-                     "而且报错长得像平台在说胡话（「期望 true｜实际 True」差一个大小写）。",
-            "badAssertions": bad_types,
-            "hint": "JSON 里 true/false 是布尔、123 是数字，加引号就变成字符串，"
-                    "和响应里的真值严格比较必挂。判定不会替你放松："
-                    "「期望 true、实际 1」如果算相等，那是另一种假绿。"
-                    "把引号去掉即可（expected: true，不是 \"true\"）。",
-        }
+        # **警告不拦**（判据规范附则）：老接口真返回字符串 "true" 的情况存在，
+        # 而平台在回推这一刻没有任何证据说明该字段是什么类型。
+        for b in bad_types:
+            warnings.append({
+                "step": b["step"], "kind": "bool_as_string",
+                "value": f"第 {b['step']} 步「{b['name']}」的 {b['field']} 期望写成了 "
+                         f"{b['wrote']}（字符串）。平台故意不做布尔兜底"
+                         f"（兜了「期望 true、实际 1」就会算相等，那是假绿），"
+                         f"所以响应里若是布尔，这条会必挂 —— 改成 {b['shouldBe']}。"
+                         f"**如果这个接口确实返回字符串**（有些老接口如此），忽略这条。",
+            })
 
     if dangling:
         return {
@@ -1750,6 +1848,14 @@ _CRED_LITERAL_RE = re.compile(
     r"""(password|passwd|pwd|token|secret|api_?key)\s*[:=]\s*["'`]([^"'`\s]{4,})["'`]""",
     re.I,
 )
+# **合法写法：故意用错的凭据。** 「用错密码登录应失败」这条用例里，
+# 那个密码就该是字面量 —— 它不是配置，是本次要验的输入。
+# 原来一律硬拦，等于逼人把"错密码"也搬进环境变量（那才是真的乱）。
+_INVALID_CRED_RE = re.compile(
+    r"wrong|invalid|bad[-_]?|expired|revoked|fake|dummy|nonexist|notexist|"
+    r"xxx+|placeholder|错误|无效|过期",
+    re.I,
+)
 
 
 def _detect_language(content: str, file_name: str | None) -> str:
@@ -1925,6 +2031,8 @@ def _scan_ui_script(content: str, language: str,
                 f'改成从变量取：{_UI_ENV_HINT}，再用 f"{{BASE_URL}}/xxx" 拼。'
             )
         for m in _CRED_LITERAL_RE.finditer(line):
+            if _INVALID_CRED_RE.search(m.group(2)):
+                continue          # 故意用错的凭据，见 _INVALID_CRED_RE
             errors.append(
                 f'写死了凭据 {m.group(1)} —— 凭据只能来自环境变量。'
                 f'改成 {reader}("ADMIN_PASSWORD"{"" if language == "typescript" else ", \'\'"})。'

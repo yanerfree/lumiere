@@ -75,47 +75,12 @@ async def run_case_generate(
     )
 
 
-class RunQualityReviewRequest(BaseSchema):
-    folder_id: str | None = None
-    module: str | None = None
-
-
-@router.post("/tb-quality-review")
-async def run_quality_review(
-    project_id: uuid.UUID,
-    branch_id: uuid.UUID,
-    body: RunQualityReviewRequest,
-    session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
-):
-    ai_config = await resolve_ai_config(project_id, session, capability="tb-quality-review")
-    if not ai_config:
-        raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
-
-    from app.services.ai.skill_executor import execute_quality_review
-
-    async def event_stream():
-        try:
-            async for event in execute_quality_review(
-                project_id=project_id,
-                branch_id=branch_id,
-                folder_id=body.folder_id,
-                module=body.module,
-                ai_config=ai_config,
-                session=session,
-            ):
-                yield f"data: {json.dumps({'type': event.type, **event.data}, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            logger.exception("Quality review failed")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:200]}, ensure_ascii=False)}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
-    )
-
-
+# 「模块级流式评审」端点已下线（2026-08-19）。
+# 它把一屏 `[P1] 标题（N 步）` 塞进一次 prompt —— 出来的结论放到任何项目都成立
+# （「缺少安全测试场景」），还会编统计数字，用户的评价是"不适用"。
+# 改成逐条评：app/api/case_review.py（/cases/{id}/ai-review、/ai-review/batch），
+# 每条都带着自己的断言、脚本、执行记录去评，判定规则在平台代码里。
+# executor 里的 execute_quality_review 先留着不动 —— 它还接着 knowledge 回填那条路。
 # ── 平台侧「AI 失败诊断」已下线（2026-08-08）────────────────────────
 # 原 POST /tb-diagnose 在此摘掉。三个理由：
 #   1. 前端从来没有调用方 —— 能力总览页写着"测试报告 → 失败用例旁「AI 诊断」按钮"，

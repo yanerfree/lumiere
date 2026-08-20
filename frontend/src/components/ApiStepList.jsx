@@ -10,6 +10,7 @@ import {
   FormOutlined,
 } from '@ant-design/icons'
 import { api } from '../utils/request'
+import { copyToClipboard } from '../utils/clipboard'
 
 const methodColors = {
   GET: { color: '#0ea5a0', bg: '#e0f7f6', border: 'rgba(14,165,160,0.3)' },
@@ -1824,6 +1825,7 @@ function genStepsCode(steps, indent = '    ') {
     // 留着会生成 client.get("${BASE_URL}/api/..") 这种双份 base
     let url = resolveVars((s.url || '/').replace(/^\{\{\s*base_url\s*\}\}/gi, '').replace(/^\$\{\s*BASE_URL\s*\}/gi, ''))
     const hasBodySetter = preOps.some(op => op.type === 'bodySetter')
+    const hasHeaderSetter = preOps.some(op => op.type === 'headerSetter')
     const stepHeaders = (s.headers || []).filter(h => h.key && h.enabled !== false)
     if (stepHeaders.length) {
       const obj = stepHeaders.map(h => `"${h.key}": "${h.value || ''}"`).join(', ')
