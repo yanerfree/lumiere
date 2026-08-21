@@ -172,3 +172,45 @@ def test_造数客户端支持多角色():
     assert "def role(" in src and "def login(" in src, "换角色和临时账号都要有"
     assert "status_code == 401" in src, "token 过期要自动重登重试 —— 网关 15 分钟就失效"
     assert "已登记的是" in src, "角色名写错时要告诉它这个环境有哪些角色，别让它猜"
+
+
+def test_路径变量归一不能多斜杠():
+    """`/api/projects/${projId}` 曾被归一成 `/api/projects//{id}`，
+    跟流量侧的 `/api/projects/{id}` 永远对不上 —— 于是**每一条带路径变量的步骤**
+    都被当成"页面不调的幽灵端点"。活体验证时撞出来的。
+    """
+    from app.services.review.traffic_diff import _from_scenario, _from_traffic
+    api = _from_scenario([{"method": "DELETE", "url": "${BASE_URL}/api/projects/${projId}"}])
+    tr = _from_traffic([{"method": "DELETE",
+                         "url": "http://x/api/projects/e278ada5-2812-4a87-813c-a7b0c0bfd5d5"}])
+    assert list(api) == list(tr) == ["DELETE /api/projects/{id}"]
+    assert not any("//" in k for k in api)
+
+
+def test_合并后的结论保留kind():
+    """丢了 kind 之后，前端要按类型筛、CC 要按类型判怎么改，都只能对文本做子串匹配。
+    活体验证时我自己栽在这上面：探针按 kind 过滤永远是空，看起来像"没报"，其实报了。"""
+    from app.services.review.reviewer import merge_findings
+    out = merge_findings([{"kind": "endpoint_not_used_by_page", "severity": "blocker",
+                           "where": "api", "detail": "端点对不上"}], [])
+    assert out[0]["kind"] == "endpoint_not_used_by_page"
+
+
+def test_没给环境不瞎跑():
+    """env_id 为空时跑出来的是 BASE_URL="" 的垃圾运行（脚本导航到 "/login" 直接
+    Protocol error），而审核会把它报成"这条跑挂了" —— 人会以为用例坏了。
+    活体验证第一次就撞在这上面。"""
+    import inspect
+
+    from app.services.review import reviewer
+    src = inspect.getsource(reviewer._run_and_diff)
+    assert "review_run_skipped" in src and "_guess_env" in src
+    assert "空环境跑出来的失败是假的" in src
+
+
+def test_抓到多少条请求要露出来():
+    """trafficSeen 是 0 的话，"没发现端点问题"只说明没得比，不说明端点是对的。"""
+    import inspect
+
+    from app.services.review import reviewer
+    assert '"trafficSeen": ev.get("trafficSeen")' in inspect.getsource(reviewer.review_case)

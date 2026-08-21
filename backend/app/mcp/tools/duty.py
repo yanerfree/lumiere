@@ -59,12 +59,10 @@ async def next_duty(session: AsyncSession, branch_id: str, limit: int = 10) -> d
             row["人确认的原因"] = t.confirmed_cause
             to_rerun.append(row)
 
-    # bug 标 fixed 待重跑的（跟失败单是两条来源：一条来自执行，一条来自产品 bug 关闭）
-    for c in cases.values():
-        if c.retest_pending:
-            to_rerun.append({"caseCode": c.case_code, "caseId": str(c.id),
-                             "来源": "关联 bug 标了 fixed",
-                             "下一步": "跑一遍确认；绿了用 tb_update_case 把关联标 fixed 留痕"})
+    # 这里原来还有一条来源：「关联 bug 标了 fixed → 待重跑」。**去掉了** ——
+    # 关联 bug 的语义后来改过：`fixed` 的含义是"你回来调通了"（终态、留痕），
+    # 不是"据说修好了、等人复跑"。所以那个队列在新语义下压根不存在。
+    # 还卡着的产品 bug 走 `known` 状态的跟进单，不进待办（回归会跳过它们）。
 
     # 审核时反复被提到的模块级缺口
     gaps: dict[str, dict] = {}

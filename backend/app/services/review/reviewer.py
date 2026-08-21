@@ -209,7 +209,10 @@ def merge_findings(machine: list[dict], llm: list[dict]) -> list[dict]:
         seen_detail.add(key)
         out.append({"dimension": _kind_to_dim(f.get("kind")), "severity": f.get("severity", "major"),
                     "where": f.get("where") or "-", "problem": f.get("detail"),
-                    "fix": None, "source": "platform"})
+                    # **kind 要留着**：前端要按类型筛、CC 要按类型判该怎么改，
+                    # 丢了之后只能对着文本做子串匹配（活体验证时我自己就栽在这上面：
+                    # 探针按 kind 过滤永远是空，看起来像"没报"，其实报了）
+                    "kind": f.get("kind"), "fix": None, "source": "platform"})
     for f in (llm or []):
         if not isinstance(f, dict):
             continue
@@ -310,6 +313,30 @@ def _worst_severity(findings: list[dict]) -> str | None:
     return None
 
 
+async def _guess_env(session, case_id) -> str | None:
+    """这条用例最近是在哪个环境跑通的 —— 拿它当审核试跑的环境。
+
+    比让调用方每次都传更实际：审核入口在页面上是一个按钮，
+    人不会先去想"该选哪个环境"。找不到就老实说没跑，不瞎跑。
+    """
+    from sqlalchemy import select
+
+    from app.models.report import TestReport, TestReportScenario
+    from app.models.script import ScriptRun
+    try:
+        row = (await session.execute(
+            select(TestReport.environment_id)
+            .join(TestReportScenario, TestReportScenario.report_id == TestReport.id)
+            .join(ScriptRun, ScriptRun.report_scenario_id == TestReportScenario.id)
+            .where(ScriptRun.case_id == case_id, TestReport.environment_id.isnot(None))
+            .order_by(ScriptRun.created_at.desc()).limit(1))).scalars().first()
+        if row:
+            return str(row)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 async def _run_and_diff(session, case_id, ev: dict, env_id: str | None) -> None:
     """真跑一遍 + 拿这次的真实流量做四方对比，结论并进 machineFindings。
 
@@ -320,6 +347,21 @@ async def _run_and_diff(session, case_id, ev: dict, env_id: str | None) -> None:
 
     from app.models.script import ScriptRun
     from app.services.review.traffic_diff import compare
+
+    # **没有环境就别跑**。env_id 为空时跑出来的是 BASE_URL="" 的垃圾运行
+    # （脚本导航到 "/login" 直接 Protocol error），而审核会把它报成"这条跑挂了" ——
+    # 人会以为用例坏了。活体验证第一次就撞在这上面。
+    if not env_id:
+        env_id = await _guess_env(session, case_id)
+    if not env_id:
+        ev["freshRun"] = {"skipped": "没指定环境（envId），执行式审核跳过 —— "
+                                    "空环境跑出来的失败是假的，不如不跑"}
+        ev["machineFindings"] = list(ev.get("machineFindings") or []) + [{
+            "kind": "review_run_skipped", "severity": "minor", "where": "-",
+            "detail": "这次审核**没有真跑**（没给 envId，这条用例也没有历史执行可参考）。"
+                      "「接口场景用的端点页面到底调不调」这类问题只有真跑才看得出来 —— "
+                      "带上 envId 再审一次。"}]
+        return
 
     ran = {}
     if ev.get("uiScript"):
@@ -353,6 +395,7 @@ async def _run_and_diff(session, case_id, ev: dict, env_id: str | None) -> None:
         .order_by(ScriptRun.created_at.desc()).limit(1))).scalars().first()
     captured = (run.captured_requests or []) if run is not None else []
     ev["trafficSeen"] = len(captured)
+    logger.info("执行式审核：case=%s 抓到 %d 条请求", case_id, len(captured))
     if captured:
         facts = compare(captured,
                         (ev.get("apiScenario") or {}).get("steps") or [],
@@ -404,6 +447,9 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
         "reviewedAt": datetime.now(timezone.utc).isoformat(),
         "model": getattr(ai_config, "model", None),
         "ranBeforeReview": ev.get("freshRun"),
+        # 这次比对看了多少条真实请求。**要露出来** —— 是 0 的话
+        # "没发现端点问题"只说明没得比，不说明端点是对的
+        "trafficSeen": ev.get("trafficSeen"),
     }
 
     if persist:

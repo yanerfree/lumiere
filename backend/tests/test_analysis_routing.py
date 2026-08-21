@@ -96,3 +96,30 @@ def test_工具描述把规则写全了():
     for k in ("liveVerified", "codeRefs", "issue", "requirement_unclear"):
         assert k in d
     assert "不是所有归因都要等人" in d and "甩锅没有收益" in d
+
+
+def test_evidence两种形状都收():
+    """活体撞出来的：自证要传对象（liveVerified/codeRefs/issue），
+    而老校验只收数组（证据指针）—— 于是"自己处置不用等人"这条路压根走不通，
+    每次都被"evidence 必须是非空数组"顶回来。
+    """
+    from types import SimpleNamespace
+
+    from app.services.analysis_service import _validate_evidence
+    run = SimpleNamespace(captured_requests=[1, 2, 3], screenshots=[],
+                          error_summary="x", stdout="y", failure_phenomenon="p")
+    assert _validate_evidence({"liveVerified": "重跑确认页面没这个链接"}, run) == []
+    assert _validate_evidence([{"type": "error_summary", "ref": "x"}], run) == []
+    assert _validate_evidence({}, run), "对象里什么都没有还是要拒"
+    assert _validate_evidence([], run), "空数组还是要拒"
+
+
+def test_对象里的items仍按指针校验():
+    """混合形态：自证字段 + 证据指针。指针那部分不能因为套在对象里就免检。"""
+    from types import SimpleNamespace
+
+    from app.services.analysis_service import _validate_evidence
+    run = SimpleNamespace(captured_requests=[], screenshots=[],
+                          error_summary=None, stdout=None, failure_phenomenon=None)
+    bad = _validate_evidence({"liveVerified": "a", "items": [{"type": "乱写", "ref": "x"}]}, run)
+    assert bad, "items 里的类型写错了该报"

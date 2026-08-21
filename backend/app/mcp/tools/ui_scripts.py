@@ -137,7 +137,7 @@ async def run_ui_script(
     # MCP 无登录上下文：executed_by 由 record_run 内部兜底取一个真实 active 用户，
     # 否则会命中 script_runs.executed_by 外键约束，导致「脚本明明跑通了却存不下结果」。
     from app.services import script_run_service
-    await script_run_service.record_run(
+    run_row = await script_run_service.record_run(
         session,
         case_id=cid, script_id=script.id, script_type="ui",
         result=result, executed_by=None, run_mode=run_mode,
@@ -175,11 +175,33 @@ async def run_ui_script(
         } for i, s in enumerate(steps, 1)],
         "screenshots_count": len(result.get("screenshots") or []),
         "case_status": case.ui_status if case else None,
+        # **runId 必须回**：跑完要归因（tb_submit_analysis 要它）。
+        # 不回的话 CC 得再调一次 tb_get_ui_script_result 去找 —— 活体验证时
+        # 归因那一步就是因为拿不到 run_id 静默跳过的。
+        "runId": str(run_row.id) if run_row is not None else None,
     }
     # 挂了就把失败那几步单独拎出来 —— 十几步里找那一行红的很费眼。
     bad = [s for s in out["steps"] if s.get("status") == "failed"]
     if bad:
         out["failedSteps"] = bad[:5]
+    # 红了就把这次对应的**跟进单**一起给出来：下一步该动哪张单，不用再查一遍
+    if out["status"] != "passed" and run_row is not None:
+        try:
+            from sqlalchemy import select as _sel
+
+            from app.models.failure_ticket import OPEN_STATUSES, FailureTicket
+            t = (await session.execute(
+                _sel(FailureTicket).where(
+                    FailureTicket.case_id == cid,
+                    FailureTicket.status.in_(OPEN_STATUSES),
+                ).order_by(FailureTicket.created_at.desc()).limit(1))).scalars().first()
+            if t is not None:
+                out["ticket"] = {"id": str(t.id), "status": t.status,
+                                 "phenomenon": t.phenomenon, "occurrences": t.occurrences,
+                                 "recurrence": t.recurrence,
+                                 "next": "拿证据判原因 → tb_submit_analysis(run_id=上面那个 runId)"}
+        except Exception:  # noqa: BLE001
+            pass
     if not steps:
         out["stdout_preview"] = (result.get("stdout") or "")[-1500:]
         out["note"] = ("这次没解析到步骤。脚本用普通 Playwright 写法时平台会自动埋点"

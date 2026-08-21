@@ -50,7 +50,10 @@ def _from_scenario(steps: list) -> dict[str, int]:
     out: dict[str, int] = {}
     for st in (steps or []):
         # 场景里的 URL 带 ${BASE_URL} 和 ${变量}，先剥掉变量再归一
-        u = re.sub(r"\$\{[^}]+\}", "/{id}", str(st.get("url") or ""))
+        # `${var}` 换成 `{id}` —— **不要带斜杠**：`/api/projects/${projId}` 会变成
+        # `/api/projects//{id}`，跟流量侧的 `/api/projects/{id}` 永远对不上，
+        # 于是每一条带路径变量的步骤都被当成"页面不调的幽灵端点"（滥报）。
+        u = re.sub(r"\$\{[^}]+\}", "{id}", str(st.get("url") or ""))
         k = norm(u if "/api/" in u else "/api/" + u.lstrip("/"), st.get("method"))
         if k:
             out[k] = out.get(k, 0) + 1

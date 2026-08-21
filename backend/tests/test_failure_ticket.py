@@ -234,3 +234,36 @@ def test_默认只列没了结的():
     from app.api import case_review
     src = inspect.getsource(case_review.list_failure_tickets)
     assert 'only_open: bool = Query(default=True' in src
+
+
+def test_值班入口不再用改过名的属性():
+    """活体撞出来的：duty 里写着 `c.retest_pending`，而那个属性早改名成
+    `has_fixed_bug` 了 —— 调用直接 AttributeError，整个值班入口挂掉。
+    更重要的是语义：`fixed` 现在是"你回来调通了"（终态），
+    所以「bug 标 fixed → 待重跑」这个队列在新语义下压根不存在。
+    """
+    import inspect
+
+    from app.mcp.tools.duty import next_duty
+    src = inspect.getsource(next_duty)
+    assert "retest_pending" not in src, "又用了不存在的属性"
+    assert "关联 bug 标了 fixed" not in src or "去掉了" in src
+
+
+def test_用例模型上没有retest_pending():
+    from app.models.case import Case
+    assert not hasattr(Case, "retest_pending")
+    assert hasattr(Case, "has_fixed_bug") and hasattr(Case, "blocked_by_bug")
+
+
+def test_跑完要把runId回出来():
+    """活体撞出来的：`tb_run_ui_script` 不回 run_id，而 `tb_submit_analysis` 要它 ——
+    CC 跑完想归因得再调一次 tb_get_ui_script_result 去找，归因链第一步就断了。
+    """
+    import inspect
+
+    from app.mcp.tools.ui_scripts import run_ui_script
+    src = inspect.getsource(run_ui_script)
+    assert '"runId": str(run_row.id)' in src
+    assert '"ticket"' in src, "红了要把对应的跟进单一起给出来，别让它再查一遍"
+    assert "tb_submit_analysis(run_id=" in src, "要指路：下一步拿这个 runId 去归因"

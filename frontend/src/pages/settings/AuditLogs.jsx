@@ -25,6 +25,16 @@ const TARGET_TYPE_LABELS = {
   plan: '计划', environment: '环境', channel: '通知渠道',
 }
 
+/** 详情抽屉里的一行「标签 值」。标签定宽，值换行时不会跑到标签下面。 */
+function Field({ label, children }) {
+  return (
+    <div style={{ display: 'flex', gap: 12, padding: '7px 0', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
+      <div style={{ width: 76, flexShrink: 0, fontSize: 12.5, color: '#86909c' }}>{label}</div>
+      <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#1d2129', wordBreak: 'break-word' }}>{children}</div>
+    </div>
+  )
+}
+
 export default function AuditLogs() {
   const { projectId } = useParams()
   const [logs, setLogs] = useState([])
@@ -79,14 +89,14 @@ export default function AuditLogs() {
       </span>,
     },
     {
-      title: '操作人', dataIndex: 'username', width: 165,
+      title: '操作人', dataIndex: 'username', width: 165, align: 'center',
       // 光有 username 分不出是哪台 CC —— 建 Key 的接口只能给自己建，
       // 所有 CC 的 Key 归属人都是同一个（通常是 admin）。actorLabel 是那把 Key 的名字，
       // 它才是「哪个连接」的身份，所以跟人名并列显示，而不是藏进详情。
       // 标签另起一行而不是跟人名并排：并排时这一列得留到 230px 才不截断，
       // 每行还高低不齐；只有小半数行有标签，那些宽度全是白占的。
       render: (v, r) => (
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
           <span style={{ fontWeight: 500 }}>{v || '-'}</span>
           {r.actorType === 'mcp' && (
             <Tooltip title={`外部 Claude Code 通过 MCP 调用${r.actorLabel ? `，连接：${r.actorLabel}` : '（该 Key 未命名）'}`}>
@@ -118,16 +128,20 @@ export default function AuditLogs() {
       </Tag>,
     },
     {
-      title: '对象名称', dataIndex: 'targetName', width: 200,
+      // 「对象名称」和「变更摘要」都不定宽，富余宽度对半分。原来只有摘要那列不定宽，
+      // 宽屏上白占的空间全堆给它（大半行摘要还是「-」），标题反倒被 200px 挤成两行；
+      // 反过来只让名称不定宽也不对 —— 修改类的摘要 JSON 比标题还长。
+      title: '对象名称', dataIndex: 'targetName',
       render: v => <span style={{ fontSize: 13, color: '#4e5969' }}>{v || '-'}</span>,
     },
     {
-      title: '变更摘要', dataIndex: 'changes',
+      // 单行省略交给 CSS 而不是 substring(0, 80) —— 按字符截断跟实际像素宽没关系，
+      // 窄屏还是溢出、宽屏又留白。全文在 title 悬浮和详情里都还在。
+      title: '变更摘要', dataIndex: 'changes', ellipsis: true,
       render: v => {
         if (!v) return <span style={{ color: '#c9cdd4' }}>-</span>
         const text = typeof v === 'string' ? v : JSON.stringify(v)
-        return <span style={{ fontSize: 12, color: '#86909c', cursor: 'default' }}
-          title={text}>{text.length > 80 ? text.substring(0, 80) + '...' : text}</span>
+        return <span style={{ fontSize: 12, color: '#86909c', cursor: 'default' }} title={text}>{text}</span>
       },
     },
     {
@@ -222,44 +236,30 @@ export default function AuditLogs() {
       >
         {detailLog && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', rowGap: 16 }}>
-              <div>
-                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>操作时间</div>
-                <div style={{ fontSize: 13 }}>{detailLog.createdAt ? new Date(detailLog.createdAt).toLocaleString('zh-CN', { hour12: false }) : '-'}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>操作人</div>
-                <div style={{ fontSize: 13, fontWeight: 500 }}>{detailLog.username || '-'}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>操作来源</div>
-                <div style={{ fontSize: 13 }}>
-                  {detailLog.actorType === 'mcp'
-                    ? <>外部 Claude Code<span style={{ color: '#86909c' }}>{detailLog.actorLabel ? ` · ${detailLog.actorLabel}` : ''}</span></>
-                    : <span style={{ color: '#86909c' }}>页面操作</span>}
-                </div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>操作类型</div>
+            {/* 一行一个字段。原来是两行横排挤 7 个字段：加进「操作来源」之后
+                标题被压成两行、值还换行，抽屉加宽也只是把拥挤往后推一格。 */}
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Field label="操作时间">
+                {detailLog.createdAt ? new Date(detailLog.createdAt).toLocaleString('zh-CN', { hour12: false }) : '-'}
+              </Field>
+              <Field label="操作人"><span style={{ fontWeight: 500 }}>{detailLog.username || '-'}</span></Field>
+              <Field label="操作来源">
+                {detailLog.actorType === 'mcp'
+                  ? <>外部 Claude Code<span style={{ color: '#86909c' }}>{detailLog.actorLabel ? ` · ${detailLog.actorLabel}` : ''}</span></>
+                  : <span style={{ color: '#86909c' }}>页面操作</span>}
+              </Field>
+              <Field label="操作类型">
                 <Tag style={{ color: (ACTION_CONFIG[detailLog.action] || {}).color || '#86909c', background: (ACTION_CONFIG[detailLog.action] || {}).bg || 'rgba(0,0,0,0.04)', border: 'none' }}>
                   {(ACTION_CONFIG[detailLog.action] || {}).label || detailLog.action}
                 </Tag>
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', rowGap: 16 }}>
-              <div>
-                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>对象类型</div>
-                <div style={{ fontSize: 13 }}>{TARGET_TYPE_LABELS[detailLog.targetType] || detailLog.targetType || '-'}</div>
-              </div>
-              <div>
-                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>对象名称</div>
-                <div style={{ fontSize: 13, fontWeight: 500 }}>{detailLog.targetName || '-'}</div>
-              </div>
-              {detailLog.projectName && (
-                <div>
-                  <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>所属项目</div>
-                  <div style={{ fontSize: 13 }}>{detailLog.projectName}</div>
-                </div>
+              </Field>
+              <Field label="对象类型">{TARGET_TYPE_LABELS[detailLog.targetType] || detailLog.targetType || '-'}</Field>
+              <Field label="对象名称"><span style={{ fontWeight: 500 }}>{detailLog.targetName || '-'}</span></Field>
+              {detailLog.projectName && <Field label="所属项目">{detailLog.projectName}</Field>}
+              {detailLog.traceId && (
+                <Field label="Trace ID">
+                  <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#86909c' }}>{detailLog.traceId}</span>
+                </Field>
               )}
             </div>
             {detailLog.changes && (
@@ -274,12 +274,6 @@ export default function AuditLogs() {
                 }}>
                   {typeof detailLog.changes === 'string' ? detailLog.changes : JSON.stringify(detailLog.changes, null, 2)}
                 </pre>
-              </div>
-            )}
-            {detailLog.traceId && (
-              <div>
-                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Trace ID</div>
-                <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#86909c' }}>{detailLog.traceId}</div>
               </div>
             )}
           </div>

@@ -115,9 +115,26 @@ def _validate_evidence(evidence, run: ScriptRun) -> list[str]:
     这是把"运动员"锁在"必须出示裁判自己的录像"上 —— 没有这一条，
     归因会退化成一段读着很顺、但和实际证据没关系的文字。
     """
+    # **两种形状都收**（活体撞出来的：自证要传对象，老校验只收数组，
+    # 于是"自己处置不用等人"这条路压根走不通）：
+    #   · 数组     —— 证据指针，形如 [{"type":"request","ref":"POST /x -> 500"}]
+    #   · 对象     —— 自证用的：{liveVerified, codeRefs, issue, items?[指针]}
+    # 对象形态里的 `items` 仍按指针校验；没有 items 时，至少要有一个非空自证字段。
+    if isinstance(evidence, dict):
+        items = evidence.get("items")
+        self_fields = [k for k in ("liveVerified", "codeRefs", "issue", "reasoningRefs")
+                       if str(evidence.get(k) or "").strip()]
+        if not items and not self_fields:
+            return ["evidence 是对象时，至少要有一个：liveVerified（活体怎么复现的）/ "
+                    "codeRefs（文件:行 或需求出处）/ issue（单号）/ items（证据指针数组）"]
+        if not items:
+            return []
+        evidence = items
+
     if not isinstance(evidence, list) or not evidence:
-        return ["evidence 必须是非空数组：每条指向平台侧证据的具体位置，"
-                "形如 {\"type\":\"request\",\"ref\":\"POST /api/projects -> 500\"}"]
+        return ["evidence 要么是非空数组（每条指向平台侧证据的具体位置，形如 "
+                "{\"type\":\"request\",\"ref\":\"POST /api/projects -> 500\"}），"
+                "要么是对象（自证用：liveVerified / codeRefs / issue）"]
 
     valid_types = {"error_summary", "request", "screenshot", "stdout", "phenomenon"}
     problems = []
