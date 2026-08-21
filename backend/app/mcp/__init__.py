@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks, deliverable, review
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty
 
 mcp = FastMCP(
     name="testBench",
@@ -391,6 +391,12 @@ _register(
 )
 
 _register(
+    duty.next_duty,
+    name="tb_next_duty",
+    description="【每轮上来先问这个】这一轮该干什么：一次给四个队列 —— ①待归因（红了还没分析的失败，带现象/红了几次/第几次复发）②待复跑（已确认修好或 bug 标 fixed 的，跑绿了跟进单自动关）③待补场景（审核时被反复提到的模块级缺口，被提到次数越多越该补）④待自证（回推四问没答的）。每条都带「下一步该调哪个工具」。**别自己关跟进单** —— 跑绿平台自动关；要强行放过得人工关闭并写原因。参数: branch_id(分支UUID), limit(每队列条数，默认10)",
+)
+
+_register(
     review.review_case,
     name="tb_review_case",
     description="【回推完自己先过一遍，别等人】按六维评审一条用例并落库审核结论：场景合理性 / 验证点到位 / 接口必要性 / UI 脚本正确性 / 覆盖遗漏 / 可执行与纪律（不适用的维度自动摊掉权重）。**判定不由 AI 说**：有 blocker 一律不过、加权低于 80 不过，规则在平台代码里。blocker = 放进回归就是假绿或根本跑不了（断言恒真、只断控制面状态就当生效、预期照着实现抄、UI 脚本必挂）。返回 mustFix 逐条指到步骤名/断言/脚本位置。run_first=true 会先真跑一遍接口场景再评（debug 模式不进通过率）——断言咬不咬得住静态看不出来。参数: case_id(用例UUID), run_first(可选), env_id(试跑用的环境UUID)",
@@ -542,21 +548,19 @@ _section("失败归因")
 _register(
     analysis.submit_analysis,
     name="tb_submit_analysis",
-    description=(
-        "【失败归因】把你对某次失败的**原因**判断写回平台。先调 tb_get_ui_script_result 拿证据包和 run_id，"
-        "看完截图、流量再来判。"
-        "⚠ 这条**不会改任何状态**：不动用例状态、不进通过率、不改报告结论 —— 它进「待确认」队列，人拍板才算数。"
-        "⚠ evidence 必须**指向平台侧证据的具体位置**（哪条请求 / 哪句 error_summary / 第几张截图），"
-        "只有你自己的推理会被直接拒收；引用的东西这次执行里必须真有，否则也拒。"
-        "⚠ 拿不准就 cause=unknown + confidence=low。低置信配一个具体 cause 会被拒 —— "
-        "一个看起来很有道理的错答案，比一句「我不知道」有害得多。"
-        "参数: run_id(执行记录UUID), "
-        "cause(product_defect被测系统缺陷/test_defect脚本自己写错/case_expired需求变了用例过期/"
-        "env_issue环境依赖问题/data_issue数据问题/flaky不稳定/unknown看不出来), "
-        "confidence(high/medium/low), reasoning(为什么是这个原因而不是别的，写不出因果的归因基本是瞎猜), "
-        "evidence([{type:error_summary|request|screenshot|stdout|phenomenon, ref:具体位置}]), "
-        "proposed_fix_target(script/product/data/case/env/none)"
-    ),
+    description="【失败归因】把你对某次失败的判断写回平台。先 tb_get_ui_script_result 拿证据包和 run_id，"
+                "**看完截图和流量、必要时活体复现一遍、结合代码看过**再来。"
+                "**不是所有归因都要等人**，按证据齐不齐分流："
+                "①脚本自己错(test_defect)/用例过期(case_expired)/环境(env_issue)/数据(data_issue)/不稳定(flaky) "
+                "→ **你自己改**，不用等人；天然闸门是「改完必须复跑跑绿，跟进单才会关」。"
+                "②产品缺陷(product_defect) → 要 evidence 里三样齐全才放行："
+                "liveVerified(活体怎么复现的)、codeRefs(文件:行 或需求出处)、issue(按 skill 规范提的单号/URL)。"
+                "缺一样自动落回「等人确认」并告诉你缺什么。放行之后这条回归不再刷红，"
+                "但**交付门禁照旧算「卡在产品缺陷」——不是通过**，所以甩锅没有收益。"
+                "③需求问题(requirement_unclear)/拿不准(unknown) → 只有人能定，直接进待确认。"
+                "参数: run_id, cause(见上), confidence(high/medium/low；低置信只能配 unknown), "
+                "reasoning(判断依据), evidence(对象：liveVerified/codeRefs/issue 等), "
+                "proposed_fix_target(script/product/data/case/env/none)"
 )
 
 _register(
@@ -728,7 +732,7 @@ _section("回推入库")
 _register(
     sync.get_sync_spec,
     name="tb_get_sync_spec",
-    description="【回推第一步·先调】获取回推规范：变量三层怎么选、步骤/断言/提取物 JSON 形状、禁止写死的正反例，以及**场景怎么切、怎么才算验到了**（一条只验一件事 / 对照组拆两条 / 写完要读回 / 「生效」的判据不是控制面状态字段）。参数: kind(case/api_scenario/scenario_shape/ui_script/variables/timing/all，默认all)",
+    description="【回推第一步·先调】获取回推规范。**先看 kind=order 那一节**：动手顺序错了后面全歪 ——先在页面上走一遍 → tb_proxy_capture 取页面真发的请求 → **先写 UI 脚本** → 照真实流量写接口场景 → 最后判哪些断言必须留 UI。（上一轮就是反着做的：22 条接口场景全用 /subscriptions/provider，而页面真调的是 /provider-unified —— 端点存在、返回 200，用例一直绿，但验的是页面根本不用的接口。）还包括：命名规范（标题两段式、步骤前缀）、变量三层、断言形状、前置清理走 api fixture 别在页面上点、UI 脚本写不写的判据。参数: kind(order/naming/case/api_scenario/scenario_shape/ui_script/variables/timing/all，默认all)",
 )
 
 _register(

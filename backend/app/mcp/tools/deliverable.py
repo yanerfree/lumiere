@@ -149,6 +149,17 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
     # 该做的是照 review_reason 里的 findings 改，不是等人点通过。
     ai_rejected = (case.review_status == "rejected"
                    and (case.quality_score or {}).get("by") == "ai")
+    from app.services.review import reflect as _reflect
+    has_artifact = bool(getattr(case, "api_scenario", None)) or \
+        getattr(case, "api_status", "draft") != "draft" or \
+        getattr(case, "ui_status", "draft") != "draft"
+    if has_artifact and _reflect.pending(case):
+        notes.append({"kind": "reflection_pending",
+                      "detail": "回推时的四个场景级反问还没答（验证点/清晰度/覆盖/预期来源）。"
+                                "规则判不了这四件，只有你答得上。"
+                                "用 tb_sync_orchestrated_scenario(reflections={...}) 补上 —— "
+                                "不答的话评审会按「自证不全」扣分，这条也算不上可交付。"})
+
     if ai_rejected:
         rr = case.review_reason or {}
         must = [f for f in (rr.get("findings") or []) if f.get("severity") in ("blocker", "major")]

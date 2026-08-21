@@ -18,6 +18,18 @@ def write_playwright_conftest(
     ev = env_vars or {}
     pw_locale = _resolve_locale(ev)
     _write_i18n_module(sandbox_dir, pw_locale, i18n)
+    login_url = ev.get("LOGIN_URL", "") or "/api/auth/login"
+    # 多角色造数：环境里凡是成对的 `<X>_USERNAME` + `<X>_PASSWORD` 都算一个角色。
+    # 网关那种「平台管理员建服务 → 租户管理员申请订阅 → 提供方审批」的数据，
+    # 单靠 admin 一个 token 根本造不出来。角色名 = 前缀小写（admin / tenant / app / provider…）
+    roles = {}
+    for k, v in (ev or {}).items():
+        if k.endswith("_USERNAME") and str(v or "").strip():
+            pwd = ev.get(k[: -len("_USERNAME")] + "_PASSWORD")
+            if str(pwd or "").strip():
+                roles[k[: -len("_USERNAME")].lower()] = (str(v), str(pwd))
+    roles_note = "、".join(sorted(roles)) or "（一个都没有 —— 环境里没配账号）"
+    roles_literal = repr(roles)
     admin_user = ev.get("ADMIN_USERNAME", "")
     admin_pass = ev.get("ADMIN_PASSWORD", "")
     tenant_user = ev.get("TENANT_USERNAME", "")
@@ -49,6 +61,10 @@ ADMIN_PASSWORD = "{admin_pass}"
 TENANT_USERNAME = "{tenant_user}"
 TENANT_PASSWORD = "{tenant_pass}"
 BASE_URL = "{base_url}"
+# api fixture 造数要用它登录。环境里配了就用配的，没配退回常见默认值
+LOGIN_URL = "{login_url}" or "/api/auth/login"
+# 环境里发现的所有角色（成对的 <X>_USERNAME/<X>_PASSWORD）
+ROLES = {roles_literal}
 
 @pytest.fixture(scope="session")
 def browser_context_args(browser_context_args):
@@ -88,6 +104,140 @@ def context(context):
 def set_timeout(page: Page):
     page.set_default_timeout(10000)
     yield
+
+class _Api:
+    """给 UI 脚本做**前置和清理**用的接口客户端。**多角色**。
+
+    为什么要有它：UI 脚本里"登录→建服务→发布→等推送"这一串纯造数用页面点，
+    慢、脆、而且跟被测点无关 —— 一个 20 步的脚本里往往 15 步是造数。
+    造数走接口之后，UI 脚本只剩「做被测那一个动作 + 验页面看得见的结果」。
+
+    **多角色怎么用**（网关那种数据靠一个 admin 造不出来）：
+        api.post("/api/v1/services", json=...)          # 默认角色（admin）
+        api.role("tenant").post("/api/v1/subscriptions", json=...)   # 换租户身份
+        api.login("u", "p").post(...)                   # 环境里没登记的账号
+
+    token 过期会**自动重登一次再重试**（网关的 token 15 分钟就失效，
+    造数中途过期的话报出来是一句 401，看不出是过期 —— 那种错最难查）。
+
+    **不要用它验断言**：这是造数工具。断言该看页面的就看页面，
+    该看接口的写在接口场景里 —— 拿它在 UI 脚本里断接口，两边职责就糊了。
+    """
+
+    def __init__(self, base_url: str, roles: dict, role: str = "admin", shared=None):
+        import httpx
+        self._base = base_url.rstrip("/")
+        self._roles = roles or {{}}
+        self._role = role
+        self._shared = shared if shared is not None else {{"client": httpx.Client(
+            timeout=30, follow_redirects=True), "tokens": {{}}}}
+
+    # ── 身份 ──
+    def role(self, name: str):
+        """换个角色。角色名来自环境变量前缀：admin / tenant / app / provider …"""
+        if name not in self._roles:
+            raise AssertionError(
+                f"环境里没有角色 {{name!r}} —— 已登记的是 {{sorted(self._roles)}}。"
+                f"在环境变量里加 {{name.upper()}}_USERNAME / {{name.upper()}}_PASSWORD，"
+                f"或者用 api.login(用户名, 密码)")
+        return _Api(self._base, self._roles, name, self._shared)
+
+    def login(self, username: str, password: str):
+        """用任意账号（环境里没登记的）。"""
+        key = f"__adhoc__{{username}}"
+        self._roles = {{**self._roles, key: (username, password)}}
+        return _Api(self._base, self._roles, key, self._shared)
+
+    def _token(self, force: bool = False) -> str | None:
+        import httpx
+        cache = self._shared["tokens"]
+        if not force and self._role in cache:
+            return cache[self._role]
+        cred = self._roles.get(self._role)
+        if not cred:
+            return None
+        try:
+            r = httpx.post(f"{{self._base}}{{LOGIN_URL}}",
+                           json={{"username": cred[0], "password": cred[1]}}, timeout=30)
+            if r.status_code >= 300:
+                raise AssertionError(f"角色 {{self._role}} 登录失败 → {{r.status_code}} {{r.text[:200]}}")
+            d = r.json().get("data") or {{}}
+            tok = d.get("token") or d.get("access_token")
+            cache[self._role] = tok
+            return tok
+        except AssertionError:
+            raise
+        except Exception as e:      # noqa: BLE001
+            raise AssertionError(f"角色 {{self._role}} 登录异常：{{e}}") from e
+
+    # ── 请求 ──
+    def _headers(self, extra=None, force_login=False):
+        h = {{"Content-Type": "application/json"}}
+        tok = self._token(force=force_login)
+        if tok:
+            h["Authorization"] = f"Bearer {{tok}}"
+        return {{**h, **(extra or {{}})}}
+
+    def request(self, method, path, **kw):
+        url = path if path.startswith("http") else f"{{self._base}}{{path}}"
+        extra = kw.pop("headers", None)
+        kw["headers"] = self._headers(extra)
+        r = self._shared["client"].request(method.upper(), url, **kw)
+        if r.status_code == 401:
+            # token 过期就重登一次再来 —— 不重试的话造数会以一句 401 结束，
+            # 而"过期"和"没权限"在报错里长得一模一样
+            kw["headers"] = self._headers(extra, force_login=True)
+            r = self._shared["client"].request(method.upper(), url, **kw)
+        return r
+
+    def get(self, path, **kw):
+        return self.request("GET", path, **kw)
+
+    def post(self, path, **kw):
+        return self.request("POST", path, **kw)
+
+    def put(self, path, **kw):
+        return self.request("PUT", path, **kw)
+
+    def patch(self, path, **kw):
+        return self.request("PATCH", path, **kw)
+
+    def delete(self, path, **kw):
+        return self.request("DELETE", path, **kw)
+
+    def json(self, method, path, **kw):
+        """要 body 的时候用它：直接回解析好的 dict，非 2xx 立刻抛 ——
+        造数失败要炸在造数那一步，别让它以"页面上找不到元素"的形式在后面爆。"""
+        r = self.request(method, path, **kw)
+        if r.status_code >= 300:
+            raise AssertionError(
+                f"造数失败[{{self._role}}] {{method}} {{path}} → {{r.status_code}} {{r.text[:200]}}")
+        return r.json() if r.content else {{}}
+
+    def close(self):
+        try:
+            self._shared["client"].close()
+        except Exception:      # noqa: BLE001
+            pass
+
+
+@pytest.fixture(scope="session")
+def api():
+    """多角色接口客户端，专门用来**造前置数据和清理**。
+
+        svc = api.json("POST", "/api/v1/services", json={{"name": name}})["data"]
+        api.role("tenant").json("POST", "/api/v1/subscriptions", json={{...}})
+        ...页面上只做被测那一个动作...
+        api.delete(f"/api/v1/services/{{svc['id']}}")
+
+    环境里成对的 `<X>_USERNAME`/`<X>_PASSWORD` 自动成为一个角色（前缀小写）。
+    这个环境登记了：{roles_note}
+    """
+    c = _Api(BASE_URL, ROLES, "admin" if "admin" in ROLES else (
+        sorted(ROLES)[0] if ROLES else "admin"))
+    yield c
+    c.close()
+
 
 @pytest.fixture
 def logged_in_page(page: Page):

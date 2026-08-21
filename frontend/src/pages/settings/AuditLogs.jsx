@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Table, Tag, Input, Select, DatePicker, Space, message, Drawer } from 'antd'
+import { Table, Tag, Input, Select, DatePicker, Space, message, Drawer, Tooltip } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
@@ -35,6 +35,7 @@ export default function AuditLogs() {
   const [keyword, setKeyword] = useState('')
   const [actionFilter, setActionFilter] = useState(null)
   const [targetFilter, setTargetFilter] = useState(null)
+  const [actorFilter, setActorFilter] = useState(null)
   const [dateRange, setDateRange] = useState(null)
   const [detailLog, setDetailLog] = useState(null)
 
@@ -46,6 +47,7 @@ export default function AuditLogs() {
       params.append('pageSize', pageSize)
       if (keyword) params.append('keyword', keyword)
       if (actionFilter) params.append('action', actionFilter)
+      if (actorFilter) params.append('actorType', actorFilter)
       if (targetFilter) params.append('targetType', targetFilter)
       if (dateRange?.[0]) params.append('startTime', dateRange[0].toISOString())
       if (dateRange?.[1]) params.append('endTime', dateRange[1].toISOString())
@@ -65,7 +67,7 @@ export default function AuditLogs() {
     } finally {
       setLoading(false)
     }
-  }, [projectId, page, pageSize, keyword, actionFilter, targetFilter, dateRange])
+  }, [projectId, page, pageSize, keyword, actionFilter, targetFilter, actorFilter, dateRange])
 
   useEffect(() => { fetchLogs() }, [fetchLogs])
 
@@ -77,8 +79,26 @@ export default function AuditLogs() {
       </span>,
     },
     {
-      title: '操作人', dataIndex: 'username', width: 100,
-      render: v => <span style={{ fontWeight: 500 }}>{v || '-'}</span>,
+      title: '操作人', dataIndex: 'username', width: 165,
+      // 光有 username 分不出是哪台 CC —— 建 Key 的接口只能给自己建，
+      // 所有 CC 的 Key 归属人都是同一个（通常是 admin）。actorLabel 是那把 Key 的名字，
+      // 它才是「哪个连接」的身份，所以跟人名并列显示，而不是藏进详情。
+      // 标签另起一行而不是跟人名并排：并排时这一列得留到 230px 才不截断，
+      // 每行还高低不齐；只有小半数行有标签，那些宽度全是白占的。
+      render: (v, r) => (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 3 }}>
+          <span style={{ fontWeight: 500 }}>{v || '-'}</span>
+          {r.actorType === 'mcp' && (
+            <Tooltip title={`外部 Claude Code 通过 MCP 调用${r.actorLabel ? `，连接：${r.actorLabel}` : '（该 Key 未命名）'}`}>
+              <Tag style={{
+                color: '#7c5cbf', background: 'rgba(124,92,191,0.08)', border: 'none',
+                fontSize: 11, margin: 0, maxWidth: 145, overflow: 'hidden',
+                textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>CC · {r.actorLabel || '未命名'}</Tag>
+            </Tooltip>
+          )}
+        </div>
+      ),
     },
     {
       title: '操作', dataIndex: 'action', width: 80, align: 'center',
@@ -146,6 +166,19 @@ export default function AuditLogs() {
           style={{ width: 130 }}
           options={Object.entries(ACTION_CONFIG).map(([k, v]) => ({ value: k, label: v.label }))}
         />
+        <Tooltip title="「页面操作」按 actor_type 为空来筛 —— 2026-08-21 之前没记来源，那批 CC 操作也会落在这里">
+          <Select
+            placeholder="操作来源"
+            value={actorFilter}
+            onChange={v => { setActorFilter(v); setPage(1) }}
+            allowClear
+            style={{ width: 140 }}
+            options={[
+              { value: 'mcp', label: '外部 Claude Code' },
+              { value: 'human', label: '页面操作' },
+            ]}
+          />
+        </Tooltip>
         <Select
           placeholder="对象类型"
           value={targetFilter}
@@ -185,11 +218,11 @@ export default function AuditLogs() {
         title="操作日志详情"
         open={!!detailLog}
         onClose={() => setDetailLog(null)}
-        width={520}
+        width={600}
       >
         {detailLog && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <div style={{ display: 'flex', gap: 24 }}>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', rowGap: 16 }}>
               <div>
                 <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>操作时间</div>
                 <div style={{ fontSize: 13 }}>{detailLog.createdAt ? new Date(detailLog.createdAt).toLocaleString('zh-CN', { hour12: false }) : '-'}</div>
@@ -199,13 +232,21 @@ export default function AuditLogs() {
                 <div style={{ fontSize: 13, fontWeight: 500 }}>{detailLog.username || '-'}</div>
               </div>
               <div>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>操作来源</div>
+                <div style={{ fontSize: 13 }}>
+                  {detailLog.actorType === 'mcp'
+                    ? <>外部 Claude Code<span style={{ color: '#86909c' }}>{detailLog.actorLabel ? ` · ${detailLog.actorLabel}` : ''}</span></>
+                    : <span style={{ color: '#86909c' }}>页面操作</span>}
+                </div>
+              </div>
+              <div>
                 <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>操作类型</div>
                 <Tag style={{ color: (ACTION_CONFIG[detailLog.action] || {}).color || '#86909c', background: (ACTION_CONFIG[detailLog.action] || {}).bg || 'rgba(0,0,0,0.04)', border: 'none' }}>
                   {(ACTION_CONFIG[detailLog.action] || {}).label || detailLog.action}
                 </Tag>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 24 }}>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', rowGap: 16 }}>
               <div>
                 <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>对象类型</div>
                 <div style={{ fontSize: 13 }}>{TARGET_TYPE_LABELS[detailLog.targetType] || detailLog.targetType || '-'}</div>

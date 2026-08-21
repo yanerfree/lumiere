@@ -183,6 +183,15 @@ async def record_run(
         except Exception:  # noqa: BLE001
             logger.exception("流量回收失败（不影响这次执行记账）")
 
+        # 开/并/关失败跟进单。挂在这个唯一写入点上 —— 四条执行路径自动都有。
+        # 红了开单或累计（没修好之前它一直红，是同一件事）；
+        # 绿了关单并记下凭哪一次跑绿关的。**关了又红算复发，新开一张**。
+        try:
+            from app.services import failure_ticket_service
+            await failure_ticket_service.on_run(session, run)
+        except Exception:  # noqa: BLE001
+            logger.exception("失败跟进单处理失败（不影响这次执行记账）")
+
         # 记完账立刻判一次 flaky —— 挂在这个唯一写入点上，任何执行路径
         # （单条调试 / 计划回归 / 批量）都自动过一遍，不用各自记得去调。
         # 判定只看同一脚本版本，见 flaky_service 的说明。

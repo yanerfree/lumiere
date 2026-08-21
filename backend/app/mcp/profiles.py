@@ -100,6 +100,8 @@ _TRIAGE = _LOCATE + _NOTES_READ + [
     "tb_list_plans", "tb_list_reports", "tb_get_report_summary",
     "tb_get_failed_scenarios", "tb_get_ui_script_result", "tb_get_case",
     "tb_submit_analysis", "tb_list_pending_confirm",
+    # 每轮上来先问"该干什么" —— 四个队列一次给全，不用自己拼
+    "tb_next_duty",
 ]
 
 _REGRESSION = _LOCATE + [
@@ -108,6 +110,7 @@ _REGRESSION = _LOCATE + [
     "tb_list_reports", "tb_get_report_summary", "tb_get_failed_scenarios",
     "tb_check_deliverable", "tb_check_branch",
     "tb_run_ui_scripts_batch", "tb_list_api_tests", "tb_run_api_test",
+    "tb_next_duty",
 ]
 
 # 主线那条完整的链。前面四档是它切开的段，单独用得上，但**最常见的用法是从头干到尾** ——

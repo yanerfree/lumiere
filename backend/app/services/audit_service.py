@@ -17,6 +17,7 @@ async def list_logs(
     user_id: uuid.UUID | None = None,
     action: str | None = None,
     target_type: str | None = None,
+    actor_type: str | None = None,
     start_time: datetime | None = None,
     end_time: datetime | None = None,
     keyword: str | None = None,
@@ -53,6 +54,13 @@ async def list_logs(
         base = base.where(AuditLog.action == action)
     if target_type is not None:
         base = base.where(AuditLog.target_type == target_type)
+    if actor_type is not None:
+        # "human" = 人在页面上点的。判据只能是 actor_type IS NULL —— 页面那条路
+        # 从来不写这一列，不存在 actor_type='human' 的行，写成等值比较会一条也筛不出来。
+        # 代价说明白：**2026-08-21 之前的日志也全是 NULL**（那天才开始记来源），
+        # 所以「页面操作」里混着更早的 CC 操作。这批数据补不回来（不知道是哪把 Key）。
+        base = (base.where(AuditLog.actor_type.is_(None)) if actor_type == "human"
+                else base.where(AuditLog.actor_type == actor_type))
     if start_time is not None:
         base = base.where(AuditLog.created_at >= start_time)
     if end_time is not None:
@@ -91,6 +99,8 @@ async def list_logs(
             "target_name": log.target_name,
             "changes": log.changes,
             "trace_id": log.trace_id,
+            "actor_type": log.actor_type,
+            "actor_label": log.actor_label,
             "created_at": log.created_at,
         })
 

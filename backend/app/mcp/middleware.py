@@ -21,13 +21,17 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import Middleware
 
-# key_hash -> (allowed_tools|None, user_id|None, 写入时间)。allowed=None 表示不限制。
+# key_hash -> (allowed_tools|None, user_id|None, key_name|None, 写入时间)。allowed=None 表示不限制。
 # tools/list 每次连接都会调，加个短 TTL 缓存避免频繁打库。
 #
 # user_id 一起缓存：Key 上本来就有它，此前只取 allowed_tools 就把整行扔了，
 # 于是所有人的回推 created_by 全记成同一个 admin —— 多人一起用时，
 # 操作日志失去意义，「CC归因 vs 人确认」也没法按人分桶。**这段历史数据事后补不回来。**
-_CACHE: dict[str, tuple[list[str] | None, str | None, float]] = {}
+#
+# key_name 也一起缓存：建 Key 的接口写死 `user_id=current_user.id`（只能给自己建），
+# 所以所有 CC 的 Key 归属人都是同一个（admin），光靠 user_id 分不出是哪台 CC。
+# Key 名是人写的（"uag-cc使用"、"小李的开发机"），它才是那条连接的身份。
+_CACHE: dict[str, tuple[list[str] | None, str | None, str | None, float]] = {}
 _TTL_SECONDS = 30
 
 
@@ -55,27 +59,28 @@ def invalidate_scope_cache(key_hash: str | None = None) -> None:
         _CACHE.pop(key_hash, None)
 
 
-async def _lookup_key() -> tuple[list[str] | None, str | None]:
-    """返回 (工具白名单, 调用方 user_id)。白名单 None = 不限制。
+async def _lookup_key() -> tuple[list[str] | None, str | None, str | None]:
+    """返回 (工具白名单, 调用方 user_id, Key 名)。白名单 None = 不限制。
 
-    没有 bearer（匿名放行 / 环境变量 key）→ (None, None)，那两条路子不是"某个 Key"，
+    没有 bearer（匿名放行 / 环境变量 key）→ 全 None，那两条路子不是"某个 Key"，
     不做限制，与 MCPAuthMiddleware 的放行口径保持一致。
     """
     headers = get_http_headers(include={"authorization"})
     auth = headers.get("authorization", "")
     if not auth.startswith("Bearer "):
-        return None, None
+        return None, None, None
     token = auth[7:].strip()
     if not token:
-        return None, None
+        return None, None, None
 
     key_hash = hashlib.sha256(token.encode()).hexdigest()
     hit = _CACHE.get(key_hash)
-    if hit and (time.monotonic() - hit[2]) < _TTL_SECONDS:
-        return hit[0], hit[1]
+    if hit and (time.monotonic() - hit[3]) < _TTL_SECONDS:
+        return hit[0], hit[1], hit[2]
 
     allowed: list[str] | None = None
     user_id: str | None = None
+    key_name: str | None = None
     try:
         from sqlalchemy import select
 
@@ -92,6 +97,7 @@ async def _lookup_key() -> tuple[list[str] | None, str | None]:
                     McpApiKey.allowed_tools,
                     McpApiKey.user_id,
                     McpApiKey.project_id,
+                    McpApiKey.name,
                 )
                 .select_from(McpApiKey)
                 .join(Project, Project.id == McpApiKey.project_id, isouter=True)
@@ -103,16 +109,17 @@ async def _lookup_key() -> tuple[list[str] | None, str | None]:
             row = result.first()
             # 查不到（环境变量 key 等）→ 不限制；查到但范围为 NULL → 不限制
             if row:
-                project_scope, legacy_scope, uid, project_id = row
+                project_scope, legacy_scope, uid, project_id, name = row
                 allowed = pick_scope(project_id, project_scope, legacy_scope)
                 if uid:
                     user_id = str(uid)
+                key_name = name or None
     except Exception:
         # 查库失败不能把 MCP 打死，退化为不限制
-        return None, None
+        return None, None, None
 
-    _CACHE[key_hash] = (allowed, user_id, time.monotonic())
-    return allowed, user_id
+    _CACHE[key_hash] = (allowed, user_id, key_name, time.monotonic())
+    return allowed, user_id, key_name
 
 
 async def _lookup_allowed_tools() -> list[str] | None:
@@ -126,6 +133,18 @@ async def current_caller_user_id() -> str | None:
     """
     try:
         return (await _lookup_key())[1]
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def current_caller_key_name() -> str | None:
+    """当前 MCP 调用方那把 Key 的名字。拿不到返回 None。
+
+    审计日志的「操作来源」用它：user_id 说不出是哪台 CC（Key 都是一个人建的），
+    Key 名说得出。日志里存的是**名字快照**，Key 删了也还认得出。
+    """
+    try:
+        return (await _lookup_key())[2]
     except Exception:  # noqa: BLE001
         return None
 
@@ -149,16 +168,22 @@ class ToolScopeMiddleware(Middleware):
         #
         # 身份本来就有（Key 决定，script_runs 的 executed_by 一直在用它），
         # 只是审计那条路从没问过它。挂在 on_call_tool 上 = 所有 tb_* 工具一次性覆盖。
+        #
+        # 一次 _lookup_key 同时供审计和范围校验用（本来就带 30s 缓存，但没必要查两遍）。
+        allowed, uid, key_name = await _lookup_key()
         try:
             from app.core.audit import set_audit_context
-            uid = await current_caller_user_id()
             set_audit_context(user_id=uuid.UUID(uid) if uid else None,
-                              trace_id=f"mcp:{context.message.name}")
+                              trace_id=f"mcp:{context.message.name}",
+                              # 来源固定 mcp；label 是那把 Key 的名字 ——
+                              # 页面上「admin · via uag-cc使用」才分得出哪台 CC。
+                              # user_id 分不出这件事：Key 只能给自己建，全是同一个人。
+                              actor_type="mcp",
+                              actor_label=key_name)
         except Exception:  # noqa: BLE001
             pass  # 记账绝不能把 MCP 调用打死
 
         # 必须单独拦一道：从 tools/list 里藏起来 ≠ 不能直接调
-        allowed = await _lookup_allowed_tools()
         if allowed is not None and context.message.name not in set(allowed):
             raise ToolError(
                 f"工具 {context.message.name} 不在本项目的 MCP 工具范围内。"

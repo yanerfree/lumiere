@@ -143,6 +143,11 @@ class Case(Base):
     # 标签：自由词，CC 和人都能写（`阻塞`、`冒烟`、`P0回归`、`需要真数据`）。
     # 跟审核标签/生命周期状态刻意分开 —— 那两个有确定语义、驱动门禁，标签只是分拣。
     tags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 回推时的**场景级反问答案**。存它不是为了留痕，是为了给评审一个锚 ——
+    # 评审原来只能从标题猜"这条想验什么"，有了作者自己写的"第 8 步验编号不变"，
+    # 就能直接核对：**说的和断言对不上，是最硬的证据**。
+    # 形状：{answeredAt, by, verificationPoints, clarity, coverage, expectationSource}
+    reflections: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     @property
     def blocked_by_bug(self) -> bool:

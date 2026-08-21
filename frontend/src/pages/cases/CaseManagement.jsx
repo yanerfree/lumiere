@@ -426,7 +426,7 @@ export default function CaseManagement() {
       setReviewResult(res.data)
       fetchCases()          // 审核标签和评分会落库，列表要刷新
     } catch (e) {
-      message.error(e?.response?.data?.error?.message || 'AI 评审失败')
+      message.error(e?.response?.data?.error?.message || 'AI 审核失败')
     } finally {
       setReviewLoading(false)
     }
@@ -776,23 +776,24 @@ export default function CaseManagement() {
     { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center', defaultVisible: true, render: (v, row) => {
       // 没提审过要给占位。原来 return null，那一格空着像列坏了
       if (!v) return <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span>
-      // 结论是**谁**下的必须看得见：AI 评审和人工审核长得一样的话，
-      // 人既不知道该不该复核，也不知道凭什么过的。
-      const byAi = row.qualityScore?.by === 'ai'
+      // **列表只显示审核状态，不区分是 AI 审的还是人审的** —— 一列一种语义。
+      // 谁审的、审了几轮、每轮的必改清单，都在详情页的「审核」tab 里。
+      // （原来这里给 AI 的结论标了「AI 过/AI 打回」，同一列混两套语义，看着就是不一致。）
       const why = [row.reviewReason?.text, row.reviewReason?.summary].filter(Boolean).join(' · ')
-      const wrap = (tag) => byAi ? (
+      const wrap = (tag) => (why || row.qualityScore?.total != null) ? (
         <Tooltip title={<div style={{ fontSize: 12, maxWidth: 320 }}>
-          AI 评审 {row.qualityScore?.total} 分{why ? ` —— ${why}` : ''}
+          {row.qualityScore?.total != null && <div>体检分 {row.qualityScore.total}</div>}
+          {why && <div style={{ marginTop: 2 }}>{why}</div>}
           {(row.reviewReason?.findings || []).filter(f => f.severity !== 'minor').slice(0, 4).map((f, i) => (
             <div key={i} style={{ marginTop: 4 }}>· [{f.severity === 'blocker' ? '致命' : '重要'}] {f.where}：{f.problem}</div>
           ))}
+          <div style={{ marginTop: 4, color: '#c9cdd4' }}>明细和历史看详情页「审核」</div>
         </div>}>{tag}</Tooltip>
       ) : tag
       if (v === 'approved') return wrap(
-        <Tag style={{ fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none', margin: 0 }}>
-          {byAi ? 'AI 过' : '已审'}</Tag>)
+        <Tag style={{ fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none', margin: 0 }}>通过</Tag>)
       if (v === 'rejected') return wrap(
-        <Tag color="error" style={{ fontSize: 10, margin: 0 }}>{byAi ? 'AI 打回' : '已拒'}</Tag>)
+        <Tag color="error" style={{ fontSize: 10, margin: 0 }}>打回</Tag>)
       return (
         <Dropdown trigger={['click']} menu={{ items: [
           { key: 'approved', label: '通过' },
@@ -1061,8 +1062,8 @@ export default function CaseManagement() {
                 {/* 批量「AI 生成脚本」已下线：走的是 scripts/generate-stream 那条平台侧生成管道，
                     实测跑不通（详情页的单条入口同批下线）。UI 脚本改由外部 Claude Code 写好跑通后
                     经 tb_sync_ui_script 回推。 */}
-                <Tooltip title="按六维逐条评审（场景合理性/验证点到位/接口必要性/UI脚本/覆盖遗漏/纪律）：勾选了就评勾选的，没勾就评当前模块。结论落库到审核标签和评分">
-                  <Button icon={<SearchOutlined />} onClick={() => handleQualityReview()}>AI 评审</Button>
+                <Tooltip title="按六维逐条审核（场景合理性/验证点到位/接口必要性/UI脚本/覆盖遗漏/纪律）：勾选了就评勾选的，没勾就评当前模块。结论落库到审核标签和评分">
+                  <Button icon={<SearchOutlined />} onClick={() => handleQualityReview()}>AI 审核</Button>
                 </Tooltip>
                 <Button icon={<UploadOutlined />} size="small" onClick={() => setImportOpen(true)}>导入</Button>
                 {/* 「给人看」和「给机器用」是两个动作，各给一个入口。
@@ -1497,7 +1498,7 @@ export default function CaseManagement() {
 
       {/* AI 评审结果：逐条列结论。**过没过、卡在哪一条**要一眼看到 */}
       <Modal
-        title={<Space><SearchOutlined /> AI 评审（六维·逐条）</Space>}
+        title={<Space><SearchOutlined /> AI 审核（六维·逐条）</Space>}
         open={reviewOpen}
         onCancel={() => setReviewOpen(false)}
         width={860}

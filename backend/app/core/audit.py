@@ -33,12 +33,21 @@ def set_audit_context(
     user_id: uuid.UUID | None = None,
     trace_id: str | None = None,
     project_id: uuid.UUID | None = None,
+    actor_type: str | None = None,
+    actor_label: str | None = None,
 ) -> None:
-    """设置当前请求的审计上下文（在 API 层调用）。"""
+    """设置当前请求的审计上下文（在 API 层调用）。
+
+    actor_type/actor_label 是**来源**，跟 user_id（是谁）是两件事：
+    CC 的 Key 全由同一个人建，光看 user_id 所有 CC 长得一样。
+    label 传 Key 的名字，页面上「admin · via uag-cc使用」才分得出哪台机器。
+    """
     _audit_ctx.set({
         "user_id": user_id,
         "trace_id": trace_id,
         "project_id": project_id,
+        "actor_type": actor_type,
+        "actor_label": actor_label,
     })
 
 
@@ -61,6 +70,8 @@ async def write_audit_log(
     user_id: uuid.UUID | None = None,
     project_id: uuid.UUID | None = None,
     trace_id: str | None = None,
+    actor_type: str | None = None,
+    actor_label: str | None = None,
 ) -> None:
     """直接写入一条审计日志。失败不抛异常，仅打日志。"""
     from app.models.audit_log import AuditLog
@@ -76,6 +87,8 @@ async def write_audit_log(
             target_name=target_name,
             changes=changes,
             trace_id=trace_id or ctx.get("trace_id"),
+            actor_type=actor_type or ctx.get("actor_type"),
+            actor_label=actor_label or ctx.get("actor_label"),
         )
         session.add(log)
         await session.flush()

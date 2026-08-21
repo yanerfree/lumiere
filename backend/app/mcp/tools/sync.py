@@ -743,6 +743,57 @@ _SPEC_TIMING = """## 异步下发怎么办：别插假步骤占时间窗，用 w
 """
 
 
+_SPEC_ORDER = """## 动手顺序（**这一条错了，后面全歪**）
+
+外部 CC 上一轮就是顺序反了：读需求 → curl 打接口 → 读前端源码 → 写接口场景 →
+最后挑几条"我认为 UI 有独立价值"的补脚本。后果它自己抓到了：
+**页面打开订阅管理调的是 `/subscriptions/provider-unified`，而 22 条接口场景全用
+`/subscriptions/provider`** —— 后者存在、返回 200，所以用例一直绿，
+但页面根本不用它：那个端点坏掉、少给字段、跨租户条目漏掉，这批用例一条都不会红。
+
+**正确顺序**：
+
+1. **先在页面上把这件事做一遍**（用户能做的事，就得从用户的路径进）。
+2. **`tb_proxy_capture` 取这次页面真发的请求** —— 方法、URL、body 都在里面，
+   不用自己开 devtools 抄（抄错了后面全是错的）。
+3. **先写 UI 脚本**：你刚在页面上走通的那条路，趁手就写下来。
+   顺序反过来（先接口后 UI）必然出现"推断页面怎么调"，而推断错了测试还是绿的。
+4. **照真实流量写接口场景**：端点、方法、body 形状都以流量为准，不以文档为准。
+5. **最后判哪些断言必须留在 UI 层**（见下）。
+
+**手工步骤的按钮名、入口路径、提示文案，只能来自真页面** —— 步骤是给人照着做的，
+路径靠想象的话，这条用例本身就是假的。
+
+**UI 脚本写不写，判据是「这个结论只有页面能证明吗」**，不是「接口能不能测」：
+- 必须写：按钮置灰、入口消失、Toast 文案、列表回显、权限导致的不可见
+- 可以不写：断言对象是数据/协议（转发、状态流转、幂等、限额），或压根没有页面入口
+- **不要用 UI 做造数和清理** —— 见下
+
+**前置和清理走接口，别在页面上点。** 沙箱里有 `api` fixture —— **多角色**的接口客户端，
+自动登录、自动带 token、401 自动重登重试（网关 token 15 分钟就过期）：
+```python
+def test_xxx(logged_in_page, api):
+    # 前置：接口造。多角色的数据（网关那种）就换身份造，一个 admin 造不出来
+    svc = api.json("POST", "/api/v1/services", json={"name": name})["data"]
+    sub = api.role("tenant").json("POST", "/api/v1/subscriptions",
+                                  json={"service_id": svc["id"]})["data"]
+    api.role("provider").json("POST", f"/api/v1/subscriptions/{sub['id']}/approve")
+
+    ...页面上只做被测那一个动作，验页面看得见的结果...
+
+    api.delete(f"/api/v1/services/{svc['id']}")          # 清理：接口删
+```
+角色名来自环境变量前缀：环境里成对的 `<X>_USERNAME`/`<X>_PASSWORD` 自动成为一个角色
+（`admin` / `tenant` / `app` / `provider` …）；没登记的账号用 `api.login(u, p)`。
+调 `api.role("不存在的")` 会直接告诉你这个环境有哪些角色，不用猜。
+
+一个 20 步的 UI 脚本里往往 15 步是造数 —— 那 15 步慢、脆、且跟被测点无关。
+**换角色也别用清 storage 那招**：造数走接口，页面上只保留被测那个身份。
+
+**提单之前先答一句「用户从哪进」。** 在界面上根本没有入口的纯接口路径上报 bug，
+优先级和"用户点了就炸"完全不同；没有入口就写明"这是内部接口，用户碰不到"。"""
+
+
 _SPEC_NAMING = """## 命名规范（**这条最省事**：写规范了，平台就不用猜你的意图）
 
 **标题 = 「对象+动作-预期」两段**，前段 20 字内一眼看完。
@@ -1008,6 +1059,7 @@ async def get_sync_spec(kind: str = "all") -> dict:
         "variables": _SPEC_VARIABLES,
         "api_scenario": _SPEC_API_SCENARIO,
         "ui_script": _SPEC_UI_SCRIPT,
+        "order": _SPEC_ORDER,
         "naming": _SPEC_NAMING,
         "case": _SPEC_CASE,
         "scenario_shape": _SPEC_SCENARIO_SHAPE,
@@ -1093,6 +1145,76 @@ async def _merge_patch(session: AsyncSession, bid: uuid.UUID, scid: uuid.UUID,
     return merged
 
 
+# 提示分档：**平台能证明的**和**靠猜的**不该混在一堆里。
+# 混着给的后果实测过：CC 看到"提示 5 条"不知道哪条必须处理，于是一条都不处理。
+_MUST_LOOK_KINDS = {"tautology_assertion", "vague_expectation", "no_readback",
+                    "missing_baseline", "bool_as_string"}
+
+
+def _tiered(warnings: list) -> dict:
+    must, fyi = [], []
+    for w in warnings:
+        kind = w.get("kind") if isinstance(w, dict) else None
+        text = (w.get("value") if isinstance(w, dict) else str(w))
+        (must if kind in _MUST_LOOK_KINDS else fyi).append(text)
+    out = {}
+    if must:
+        out["mustLook"] = must
+        out["mustLookHint"] = ("这几条平台能证明（不是猜）：要么改，要么回一句"
+                               "「为什么这样写就够」——别默认忽略。")
+    if fyi:
+        out["fyi"] = fyi
+    return out
+
+
+
+async def _reflect_block(session: AsyncSession, scid, norm: list, answers: dict | None) -> dict:
+    """收下反问答案 + 把还没答的问题带回去。**不拦入库**（见 reflect.py 的口径）。"""
+    if not scid:
+        return {}
+    from app.models.case import Case
+    from app.services.review import reflect
+
+    case = await session.get(Case, scid)
+    if case is None:
+        return {}
+    # 被打回之后又回推 = 一次**整改提交**。记下来，详情页那条时间线才连得起来
+    if case.review_status == "rejected":
+        prev = (case.review_reason or {}).get("findings") or []
+        from app.services.review import rounds
+        await rounds.record(session, case.id, "cc_resubmit", actor="cc",
+                            changed={"stepCount": len(norm),
+                                     "pendingFindings": len([f for f in prev
+                                                             if f.get("severity") != "minor"]),
+                                     "note": "打回后重新回推了接口场景"})
+        await session.commit()
+
+    saved = reflect.normalize(answers)
+    if saved:
+        # 补答：只覆盖这次给了的几项，别把上次答过的抹掉
+        merged = {**(case.reflections or {}), **saved}
+        case.reflections = merged
+        await session.commit()
+    if not reflect.pending(case):
+        return {"reflectionAnswered": True}
+
+    neighbors = []
+    if case.folder_id:
+        from sqlalchemy import select as _sel
+        rows = (await session.execute(
+            _sel(Case.case_code, Case.title).where(
+                Case.folder_id == case.folder_id, Case.id != case.id,
+                Case.deleted_at.is_(None)).limit(12))).all()
+        neighbors = [{"caseCode": c, "title": t} for c, t in rows]
+    return {
+        "reflectionPending": True,
+        "reflect": reflect.build(case, {"steps": norm}, neighbors),
+        "reflectHint": "这四问规则判不了，只有你答得上（你手上有需求和代码）。"
+                       "答案用 reflections={...} 传回来 —— 不答不拦入库，"
+                       "但交付门禁不放行、评审会按「自证不全」扣分。",
+    }
+
+
 async def sync_orchestrated_scenario(
     session: AsyncSession,
     project_id: str,
@@ -1104,8 +1226,23 @@ async def sync_orchestrated_scenario(
     priority: str = "P1",
     description: str | None = None,
     mode: str = "replace",
+    reflections: dict | None = None,
 ) -> dict:
     """把活体验证过的接口链显式写入「用例·编排的接口场景」。
+
+    **返回里的提示分三档，按"平台能证明到什么程度"分**：
+      · `blockers`  —— 必然出错且没有合法写法（悬空变量、写死地址、脚本必挂）：**没入库**，改完再传
+      · `mustLook`  —— 能证明的假绿（恒真断言、模糊预期、写完什么都没验）：入库了，但要么改、要么回一句为什么这样够
+      · `fyi`       —— 靠猜的（只断状态码、对照组、命名）：自己判断，不用回
+
+    **`reflect` 是四个场景级反问**（规则判不了、只有你答得上，因为你手上有需求和代码）：
+    验证点合不合理 / 场景清不清晰 / 有没有相关场景没覆盖 / 预期从哪来。
+    每问都带平台数出来的事实（承诺了几件事、几条断言、邻居有哪些、本模块还缺哪几类）。
+    答案用 `reflections={"verificationPoints": "...", "clarity": "...",
+    "coverage": "...", "expectationSource": "..."}` 传回来（可以下一次调用时补）。
+    **不答不拦入库**，但交付门禁不放行、评审按"自证不全"扣分 ——
+    答案的用处是给评审一个锚：你说"第 8 步验编号不变"，评审就去核对第 8 步的断言，
+    **说的和断言对不上是最硬的证据**。
 
     这是接口场景**唯一**的入库路径：你亲手验证过的多步 E2E，绑定 source_case_id、
     共享该用例场景变量。入库前会做悬空引用硬拦截 + 疑似写死软警告。"""
@@ -1402,7 +1539,9 @@ async def sync_orchestrated_scenario(
         **({"keptLastRunEvidence": kept_evidence} if kept_evidence else {}),
         "sourceCaseId": str(scid) if scid else None,
         "scenarioVariablesLinked": scenario_var_names,
-        "hardcodeWarnings": warnings,
+        "hardcodeWarnings": warnings,          # 兼容老调用方，等于 mustLook + fyi
+        **_tiered(warnings),
+        **(await _reflect_block(session, scid, norm, reflections)),
         "replacedExisting": replaced,
         "mode": mode,
         "patchedSteps": patched,

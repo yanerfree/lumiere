@@ -20,6 +20,10 @@ class AuditLogResponse(BaseSchema):
     target_name: str | None
     changes: dict | None
     trace_id: str | None
+    # 操作来源：None = 存量日志（没记过来源）；"mcp" = 外部 Claude Code 调的，
+    # actor_label 是那把 Key 的名字。人在页面上点的照旧只有 username。
+    actor_type: str | None = None
+    actor_label: str | None = None
     created_at: datetime
 
 

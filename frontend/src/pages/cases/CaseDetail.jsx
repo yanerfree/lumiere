@@ -164,6 +164,17 @@ const REVIEW = {
   rejected: { label: '不通过', color: '#e8453c', bg: '#fff2f0' },
 }
 const REVIEW_KEYS = ['pending', 'approved', 'rejected']
+// 维度名两种拼法都要认：库里存的是 snake_case，而响应经过全局 camelize
+// 变成了 scenarioSanity 这种。只写一种的话页面上会出现「纪律 90 / apiNecessity 90」
+// 中英混排（实测就是这样）。
+const DIM_LABEL = {
+  scenario_sanity: '场景合理性', scenarioSanity: '场景合理性',
+  verification_depth: '验证点到位', verificationDepth: '验证点到位',
+  api_necessity: '接口必要性', apiNecessity: '接口必要性',
+  ui_correctness: 'UI 脚本', uiCorrectness: 'UI 脚本',
+  self_coverage: '本条覆盖', selfCoverage: '本条覆盖',
+  discipline: '纪律',
+}
 
 const DIM_STATUS_KEYS = ['draft', 'debugging', 'completed']
 
@@ -2127,6 +2138,8 @@ export default function CaseDetail() {
   const [scriptRefFunc, setScriptRefFunc] = useState('')
   const [remark, setRemark] = useState('')
   const [aiReview, setAiReview] = useState(null)
+  const [reviewRounds, setReviewRounds] = useState(null)
+  const [reviewStatusDerived, setReviewStatusDerived] = useState(null)
   const [aiReviewing, setAiReviewing] = useState(false)
   const [tags, setTags] = useState([])
   const [bugRefs, setBugRefs] = useState([])
@@ -2326,6 +2339,19 @@ export default function CaseDetail() {
   const removeStep = (idx) => setSteps(prev => prev.filter((_, i) => i !== idx).map((s, i) => ({ ...s, seq: i + 1 })))
   const updateStep = (idx, field, value) => setSteps(prev => prev.map((s, i) => i === idx ? { ...s, [field]: value } : s))
 
+  // 审核历史。**审核不是一个当前值，是一条链**：AI 打回 → CC 整改 → 再审 → 通过。
+  // 没有这条链，「跟进到哪了」只能靠人记。
+  const loadReviewRounds = useCallback(async () => {
+    if (!branchId || !caseId) return
+    try {
+      const r = await api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/review-rounds`)
+      setReviewRounds(r.data?.rounds || [])
+      setReviewStatusDerived(r.data?.status || null)
+    } catch { /* request.js 已提示 */ }
+  }, [projectId, branchId, caseId])
+
+  useEffect(() => { loadReviewRounds() }, [loadReviewRounds])
+
   const handleSave = async () => {
     try {
       await api.put(`/projects/${projectId}/branches/${branchId}/cases/${caseId}`, {
@@ -2433,8 +2459,8 @@ export default function CaseDetail() {
           {/* 单条 AI 评审：详情页才是"改完立刻复核"的地方 —— 列表那个批量入口
               适合验收一批，不适合边改边看。 */}
           <InlineProp icon={<SearchOutlined />}
-            value={aiReview ? `AI ${aiReview.verdict === 'approved' ? '过审' : '打回'}·${aiReview.total}`
-              : caseData.qualityScore?.total != null ? `AI 评分 ${caseData.qualityScore.total}` : 'AI 评审'}
+            value={aiReview ? `AI ${aiReview.verdict === 'approved' ? '通过' : '打回'}·${aiReview.total}`
+              : caseData.qualityScore?.total != null ? `AI 评分 ${caseData.qualityScore.total}` : 'AI 审核'}
             color={aiReview ? (aiReview.verdict === 'approved' ? '#0ea5a0' : '#e8453c') : '#86909c'}
             bg={aiReview ? (aiReview.verdict === 'approved' ? '#f6ffed' : '#fff1f0') : 'rgba(0,0,0,0.02)'}>
             <div style={{ minWidth: 380 }}>
@@ -2494,7 +2520,36 @@ export default function CaseDetail() {
               )}
             </div>
           </InlineProp>
-          <InlineProp icon={<BugOutlined />}
+{/* 回推四问的答案。**只读** —— 这是干活那边的自证（它有需求和代码），
+              人要补充意见写备注。没答的话审核会按「自证不全」扣分，所以这里要看得见。 */}
+          <InlineProp icon={<FlagOutlined />}
+            value={caseData.reflectionPending ? '待自证' : '已自证'}
+            color={caseData.reflectionPending ? '#fa8c16' : '#0ea5a0'}
+            bg={caseData.reflectionPending ? '#fff7e6' : '#f6ffed'}>
+            <div style={{ minWidth: 400, fontSize: 12, lineHeight: 1.75 }}>
+              {caseData.reflectionPending && (
+                <div style={{ color: '#fa8c16', marginBottom: 8 }}>
+                  回推时的四个场景级反问还没答完。规则判不了这四件，只有干活的人答得上；
+                  没答的话 AI 审核会按「自证不全」扣分，这条也算不上可交付。
+                </div>
+              )}
+              {[['verificationPoints', '哪几条断言在验标题承诺的事'],
+                ['clarity', '是不是只验一件事'],
+                ['coverage', '和邻居不重复在哪 / 本模块还缺什么'],
+                ['expectationSource', '预期按需求还是按实测写的']].map(([k, label]) => (
+                <div key={k} style={{ marginBottom: 8 }}>
+                  <div style={{ color: '#86909c' }}>{label}</div>
+                  <div>{caseData.reflections?.[k] || <span style={{ color: '#c9cdd4' }}>—— 没答</span>}</div>
+                </div>
+              ))}
+              {caseData.reflections?.answeredAt && (
+                <div style={{ color: '#86909c' }}>
+                  {caseData.reflections.by} · {String(caseData.reflections.answeredAt).slice(0, 16).replace('T', ' ')}
+                </div>
+              )}
+            </div>
+          </InlineProp>
+                    <InlineProp icon={<BugOutlined />}
             value={bugRefs.some(r => (r.status || 'open') === 'open')
               ? `卡 bug·${bugRefs.filter(r => (r.status || 'open') === 'open').length}`
               : bugRefs.length ? `抓到过 bug·${bugRefs.length}` : '无关联bug'}
@@ -2614,9 +2669,13 @@ export default function CaseDetail() {
             </div>
           </InlineProp>
           {/* 审核标签。三维全完成才有意义 —— 没到的时候不显示（NULL=待提审）。 */}
+          {/* AI 判的要标明是 AI —— 列表里已经是「AI 过/AI 打回」，详情还写「已审」的话，
+              同一条用例两处口径不一致，人不知道该不该复核 */}
           {reviewStatus && (
             <InlineProp icon={<CheckCircleOutlined />}
-              value={`审核·${REVIEW[reviewStatus]?.label || reviewStatus}`}
+              value={`审核·${caseData.qualityScore?.by === 'ai'
+                ? {pending: '待审', approved: 'AI 通过', rejected: 'AI 打回'}[reviewStatus] || REVIEW[reviewStatus]?.label
+                : REVIEW[reviewStatus]?.label || reviewStatus}`}
               color={REVIEW[reviewStatus]?.color} bg={REVIEW[reviewStatus]?.bg}>
               <div style={{ padding: '4px 8px', minWidth: 260, lineHeight: 1.8 }}>
                 <div style={{ fontSize: 12, color: '#4e5969' }}>
@@ -2677,9 +2736,8 @@ export default function CaseDetail() {
             </InlineProp>
           )}
           <ReadonlyProp label="来源" value={caseData.source || 'manual'} />
-          {caseData.qualityScore?.total != null && (
-            <ReadonlyProp label="评分" value={caseData.qualityScore.total} />
-          )}
+          {/* 「评分」这一栏删了 —— 上面「AI 评分 N」已经有同一个数，
+              两处显示同一个值，人会以为是两回事 */}
 
           {/* 「场景覆盖指示器」已并进上面那组三维状态 —— 它只说"有没有"，
               而那是"什么状态"的子集，并排显示是把同一件事说两遍。 */}
@@ -2782,6 +2840,101 @@ export default function CaseDetail() {
               />
             )},
 
+            { key: 'review', label: <span><CheckCircleOutlined style={{ marginRight: 4 }} />审核{reviewRounds?.length ? <span style={{ fontSize: 11, color: '#86909c', marginLeft: 4 }}>({reviewRounds.length} 轮)</span> : null}</span>, children: (
+              <Card styles={{ body: { padding: '16px 24px' } }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                  <Tag color={{approved: 'success', rejected: 'error', resubmitted: 'warning', pending: 'processing'}[reviewStatusDerived] || undefined}>
+                    {{approved: '通过', rejected: '打回', resubmitted: '整改待复审',
+                      pending: '待审', not_submitted: '待提审'}[reviewStatusDerived] || '待提审'}
+                  </Tag>
+                  <Button size="small" type="primary" loading={aiReviewing} onClick={async () => {
+                    setAiReviewing(true)
+                    try {
+                      await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/ai-review`)
+                      await loadReviewRounds(); loadData()
+                    } catch (e) { message.error(e?.response?.data?.error?.message || '审核失败') }
+                    finally { setAiReviewing(false) }
+                  }}>AI 审核这一条</Button>
+                  <Button size="small" loading={aiReviewing} onClick={async () => {
+                    setAiReviewing(true)
+                    try {
+                      await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/ai-review?runFirst=true`)
+                      await loadReviewRounds(); loadData()
+                    } catch (e) { message.error(e?.response?.data?.error?.message || '审核失败') }
+                    finally { setAiReviewing(false) }
+                  }}>先跑一遍再审</Button>
+                  <span style={{ flex: 1 }} />
+                  {/* 人工覆盖：记成一轮，不悄悄改状态 —— 人推翻机器的判断本身就是信息 */}
+                  <Button size="small" onClick={async () => {
+                    try {
+                      await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/review-override?verdict=approved&reason=${encodeURIComponent('人工判定通过')}`)
+                      await loadReviewRounds(); loadData()
+                    } catch { /* */ }
+                  }}>人工通过</Button>
+                  <Button size="small" danger onClick={async () => {
+                    try {
+                      await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/review-override?verdict=rejected&reason=${encodeURIComponent('人工打回')}`)
+                      await loadReviewRounds(); loadData()
+                    } catch { /* */ }
+                  }}>人工打回</Button>
+                </div>
+                {!reviewRounds?.length && (
+                  <Empty description="还没审过。点上面「AI 审核这一条」" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+                )}
+                {/* 时间线：最新在上。每轮是什么、谁做的、必改哪几条，一眼看完 */}
+                {(reviewRounds || []).map(r => (
+                  <div key={r.round} style={{ display: 'flex', gap: 12, padding: '12px 0',
+                    borderTop: '1px solid rgba(0,0,0,0.04)' }}>
+                    <div style={{ width: 96, flexShrink: 0, fontSize: 12, color: '#86909c' }}>
+                      第 {r.round} 轮<br />
+                      {r.at ? String(r.at).slice(5, 16).replace('T', ' ') : ''}
+                    </div>
+                    <div style={{ flex: 1, fontSize: 13 }}>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
+                        <Tag style={{ margin: 0 }} color={
+                          r.kind === 'cc_resubmit' ? 'warning'
+                          : r.verdict === 'approved' ? 'success'
+                          : r.verdict === 'rejected' ? 'error' : undefined}>
+                          {r.kind === 'cc_resubmit' ? 'CC 提交整改'
+                            : r.kind === 'human_override' ? '人工判定'
+                            : r.verdict === 'approved' ? 'AI 通过' : 'AI 打回'}
+                        </Tag>
+                        {r.total != null && <b>{r.total} 分</b>}
+                        <span style={{ color: '#86909c', fontSize: 12 }}>
+                          {r.actor}{r.model ? ` · ${r.model}` : ''}
+                        </span>
+                      </div>
+                      {r.dimensions && (
+                        <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>
+                          {Object.entries(r.dimensions).map(([k, v]) => `${DIM_LABEL[k] || k} ${v}`).join(' / ')}
+                        </div>
+                      )}
+                      {r.summary && <div style={{ color: '#4e5969', marginBottom: 4 }}>{r.summary}</div>}
+                      {(r.findings || []).filter(f => f.severity !== 'minor').map((f, i) => (
+                        <div key={i} style={{ fontSize: 12, marginTop: 3, lineHeight: 1.7 }}>
+                          <Tag color={f.severity === 'blocker' ? 'error' : 'warning'}
+                            style={{ fontSize: 10, margin: '0 6px 0 0' }}>
+                            {f.severity === 'blocker' ? '致命' : '重要'}</Tag>
+                          <span style={{ color: '#86909c' }}>{f.where}</span>：{f.problem}
+                          {f.fix && <span style={{ color: '#0ea5a0' }}> → {f.fix}</span>}
+                        </div>
+                      ))}
+                      {r.changed && (
+                        <div style={{ fontSize: 12, color: '#4e5969' }}>
+                          {r.changed.note}（步骤 {r.changed.stepCount} 步
+                          {r.changed.pendingFindings ? `，上轮有 ${r.changed.pendingFindings} 条待改` : ''}）
+                        </div>
+                      )}
+                      {(r.coverageGaps || []).length > 0 && (
+                        <div style={{ fontSize: 12, color: '#86909c', marginTop: 4 }}>
+                          覆盖情报：{r.coverageGaps.join('；')}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </Card>
+            )},
             { key: 'history', label: '执行历史', children: (
               <Card styles={{ body: { padding: '16px 24px' } }}>
                 <Table
@@ -3084,7 +3237,7 @@ function CaseFileTab({ caseId }) {
 
   const EVENT_LABELS = {
     ai_generated: { label: 'AI 生成', color: '#4e8af0', icon: '🔵' },
-    ai_reviewed: { label: 'AI 评审', color: '#7c5cbf', icon: '🟡' },
+    ai_reviewed: { label: 'AI 审核', color: '#7c5cbf', icon: '🟡' },
     executed_pass: { label: '执行通过', color: '#0ea5a0', icon: '🟢' },
     executed_fail: { label: '执行失败', color: '#e8453c', icon: '🔴' },
     ai_diagnosed: { label: 'AI 诊断', color: '#fa8c16', icon: '🟠' },

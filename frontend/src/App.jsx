@@ -6,7 +6,7 @@ import {
   SettingOutlined, UserOutlined, FileSearchOutlined, ApiOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, BellOutlined, RobotOutlined,
   ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
-  NodeIndexOutlined,
+  NodeIndexOutlined, SearchOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
   DeploymentUnitOutlined,
 } from '@ant-design/icons'
@@ -16,6 +16,7 @@ import BranchSelector from './components/BranchSelector'
 import ServiceStatusBadge from './components/ServiceStatusBadge'
 import ProjectList from './pages/projects/ProjectList'
 import CaseManagement from './pages/cases/CaseManagement'
+import ReviewReport from './pages/cases/ReviewReport'
 import CaseDetail from './pages/cases/CaseDetail'
 import PlanList from './pages/plan/PlanList'
 import PlanDetail from './pages/plan/PlanDetail'
@@ -118,6 +119,9 @@ function AppLayout() {
       children: [
         { key: `/projects/${projectId}/plans`, icon: <UnorderedListOutlined />, label: t('menu.plans') },
         { key: `/projects/${projectId}/reports`, icon: <BarChartOutlined />, label: t('menu.reports') },
+        // 审核报告放在「执行与产出」下 —— 它是产出（哪些模块审过了、还缺哪类用例），
+        // 不是设计期的东西。挂在用例导航的铅笔旁边太隐蔽，而它要能被跟进。
+        { key: `/projects/${projectId}/review-report`, icon: <SearchOutlined />, label: t('menu.reviewReport') },
         { key: `/projects/${projectId}/exploratory`, icon: <BugOutlined />, label: t('menu.exploratory') },
         { key: `/projects/${projectId}/documents`, icon: <FileTextOutlined />, label: t('menu.documents') },
       ],
@@ -305,6 +309,7 @@ function AppLayout() {
             <Route path="/" element={<Navigate to="/projects" replace />} />
             <Route path="/projects" element={<ProjectList />} />
             <Route path="/projects/:projectId/cases" element={<CaseManagement />} />
+            <Route path="/projects/:projectId/review-report" element={<ReviewReport />} />
             <Route path="/projects/:projectId/cases/:caseId" element={<CaseDetail />} />
             <Route path="/projects/:projectId/apis" element={<ApiManagement />} />
             <Route path="/projects/:projectId/plans" element={<PlanList />} />

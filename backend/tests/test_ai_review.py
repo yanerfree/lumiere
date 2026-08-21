@@ -214,14 +214,57 @@ def test_模块缺场景不扣单条的分():
     assert DIMENSIONS["self_coverage"]["label"] == "本条覆盖完整性"
 
 
-def test_评审结论要标明是AI下的():
-    """AI 评审和人工审核在列表上长得一样的话，人既不知道该不该复核，
-    也不知道凭什么过的 —— 那这道闸就等于没人负责。"""
+def test_列表不区分谁审的():
+    """用户的口径：列表只显示审核状态，**不区分 AI 审还是人审** —— 一列一种语义，
+    字段干净。谁审的、审了几轮、每轮必改什么，都在详情页的「审核」tab 里。
+    （之前列表给 AI 的结论标「AI 过/AI 打回」，同一列混两套语义，看着就是不一致。）
+    """
     src = (__import__("pathlib").Path("../frontend/src/pages/cases/CaseManagement.jsx")
            .read_text(encoding="utf-8"))
-    assert "qualityScore?.by === 'ai'" in src
-    assert "AI 过" in src and "AI 打回" in src
-    assert "reviewReason?.findings" in src, "过审/打回的依据要能悬浮看到"
+    i = src.index("key: 'reviewStatus'")
+    # 只看**代码**，注释里当然会提到旧写法（说明"这里刻意不区分"）
+    seg = "\n".join(l for l in src[i:i + 2600].splitlines()
+                    if "//" not in l and not l.strip().startswith("*"))
+    assert "AI 过" not in seg and "AI 打回" not in seg, "列表又开始区分谁审的了"
+    assert ">通过<" in seg and ">打回<" in seg
+    assert "详情页「审核」" in seg, "要指路：明细和历史在哪看"
+
+
+def test_审核历史有据可查():
+    """审核以前只有"当前值"，而真实过程是 AI 打回 → CC 整改 → 再审 → 通过。
+    没有轮次表，「跟进到哪了」只能靠人记。"""
+    from app.models.review_round import CaseReviewRound
+    cols = {c.name for c in CaseReviewRound.__table__.columns}
+    assert {"round", "kind", "verdict", "total", "findings", "changed", "actor"} <= cols
+    src = inspect.getsource(reviewer.review_case)
+    assert 'rounds.record(session, case_id, "ai_review"' in src, "AI 审完没记一轮"
+    from app.mcp.tools import sync
+    assert '"cc_resubmit"' in inspect.getsource(sync._reflect_block), \
+        "被打回后重新回推没记成整改提交，时间线就断了"
+
+
+def test_整改待复审是派生的不塞进枚举():
+    """review_status 那个字段被门禁、筛选、批量操作一大片地方读，
+    往里加状态牵连太广 —— 从最后一轮的 kind 派生就够。"""
+    from app.services.review import rounds as rounds
+    src = inspect.getsource(rounds.display_status)
+    assert "cc_resubmit" in src and "resubmitted" in src
+
+
+def test_人工覆盖也记一轮():
+    """人推翻机器的判断，这件事本身就是要留痕的信息。"""
+    from app.api import case_review
+    src = inspect.getsource(case_review.review_override)
+    assert '"human_override"' in src and "rounds.record" in src
+
+
+def test_模块报告把覆盖缺口去重合并():
+    """coverageGaps 原来每条各存一份、散在 review_reason 里没人看得见，
+    而它是唯一指向"该补哪些用例"的东西。合并后"越权被 3 条提到"才是清单。"""
+    from app.api import case_review
+    src = inspect.getsource(case_review.review_report)
+    assert "coverageGaps" in src and "count" in src
+    assert '"整改中"' in src and '"未审"' in src, "模块要有状态，否则跟进不了"
 
 
 def test_落库时记下是谁评的():

@@ -299,6 +299,8 @@ async def collect(session: AsyncSession, case_id: uuid.UUID) -> dict | None:
             "apiStatus": case.api_status,
             "bugRefs": case.bug_refs, "tags": case.tags,
             "blockedExternal": case.blocked_external,
+            # 作者自己声明的验证点 —— 评审拿它核对"说的"和"断言的"对不对得上
+            "reflections": case.reflections,
         },
         "apiScenario": scenario,
         "uiScript": script,

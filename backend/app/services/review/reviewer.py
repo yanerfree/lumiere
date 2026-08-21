@@ -94,7 +94,13 @@ _SYSTEM = """你是这个测试平台的评审员，替代人工那道「待审�
    ⚠ **不要因为这个模块缺别的场景而扣这一条的分**。模块级的缺口（越权、幂等、
    边界、状态切回来、异步收敛、删除残留）写进 `coverageGaps` —— 那是给人看的情报，
    不影响这一条过不过。已经有邻居覆盖的不要重复提。
-6. 只输出一个 JSON 对象，用 ```json 包裹。
+6. **`reflections` 是作者自己写的"这条在验什么"**（回推时四问的答案）。用法：
+   · 它说"第 8 步验编号不变"，你就去看第 8 步的断言 ——
+     **说的和断言对不上，是最硬的证据**，标 blocker + kind=no_real_verification。
+   · 它说某类场景"不适用"，理由站得住就别再当遗漏提。
+   · **`reflections` 为空** = **自证不全**：作者没说这条在验什么。不是零分，
+     但 self_coverage 最高给 70，并列一条 major「没答回推四问，这条在验什么只能靠猜」。
+7. 只输出一个 JSON 对象，用 ```json 包裹。
 
 JSON 形状（dimensions 里只出现适用的维度，分数 0-100 整数）：
 {
@@ -154,6 +160,8 @@ def _prompt(ev: dict, applicable: dict) -> list[dict]:
 {json.dumps(ev.get("uiScript"), ensure_ascii=False, indent=2)}
 
 ## 平台判出来的事实（一律为真，你负责归类和说后果，不要复核）
+（`run_first` 开着时这里会多出**执行式审核**的结论：这次真跑的结果、
+页面真实发的请求 vs 接口场景用的端点。那几条是最硬的证据，别轻描淡写。）
 {json.dumps(ev.get("machineFindings"), ensure_ascii=False, indent=2)}
 
 ## 按承诺还欠哪几维（进度，不是质量问题）
@@ -235,6 +243,10 @@ def _kind_to_dim(kind: str | None) -> str:
         "status_only_assertion": "verification_depth",
         "control_group_in_one": "scenario_sanity",
         "vague_expectation": "scenario_sanity",
+        "endpoint_not_used_by_page": "verification_depth",
+        "traffic_not_covered": "verification_depth",
+        "script_no_action": "ui_correctness",
+        "script_fewer_actions": "ui_correctness",
         "ui_script_hard_error": "ui_correctness",
         "i18n_key_not_in_dict": "ui_correctness",
         "ui_script_warning": "ui_correctness",
@@ -298,6 +310,58 @@ def _worst_severity(findings: list[dict]) -> str | None:
     return None
 
 
+async def _run_and_diff(session, case_id, ev: dict, env_id: str | None) -> None:
+    """真跑一遍 + 拿这次的真实流量做四方对比，结论并进 machineFindings。
+
+    UI 优先：UI 执行才有浏览器流量（`captured_requests`），而"页面到底调了哪个端点"
+    只有它答得上。没有 UI 脚本才退回只跑接口场景。
+    """
+    from sqlalchemy import select
+
+    from app.models.script import ScriptRun
+    from app.services.review.traffic_diff import compare
+
+    ran = {}
+    if ev.get("uiScript"):
+        try:
+            from app.mcp.tools.ui_scripts import run_ui_script
+            r = await run_ui_script(case_id=str(case_id), env_id=env_id, session=session,
+                                    run_mode="debug")     # 审核跑不进通过率口径
+            ran = {"type": "ui", "status": r.get("status"),
+                   "error": (r.get("error_summary") or "")[:200]}
+        except Exception as e:  # noqa: BLE001
+            ran = {"type": "ui", "error": str(e)[:200]}
+    elif ev.get("apiScenario"):
+        try:
+            from app.mcp.tools.api_tests import run_api_test
+            from app.models.api_test import ApiTestScenario
+            sid = (await session.execute(
+                select(ApiTestScenario.id).where(ApiTestScenario.source_case_id == case_id)
+            )).scalars().first()
+            if sid:
+                res = await run_api_test(session, scenario_ids=str(sid), env_id=env_id)
+                ran = {"type": "api", "passed": res.get("passed"), "failed": res.get("failed"),
+                       "failedSteps": [x.get("step") for x in (res.get("results") or [])
+                                       if x.get("status") not in ("pass", "passed", "skipped")][:6]}
+        except Exception as e:  # noqa: BLE001
+            ran = {"type": "api", "error": str(e)[:200]}
+    ev["freshRun"] = ran or {"note": "这条既没有 UI 脚本也没有接口场景，没得跑"}
+
+    # 取这次执行录到的浏览器流量
+    run = (await session.execute(
+        select(ScriptRun).where(ScriptRun.case_id == case_id)
+        .order_by(ScriptRun.created_at.desc()).limit(1))).scalars().first()
+    captured = (run.captured_requests or []) if run is not None else []
+    ev["trafficSeen"] = len(captured)
+    if captured:
+        facts = compare(captured,
+                        (ev.get("apiScenario") or {}).get("steps") or [],
+                        (ev.get("case") or {}).get("steps") or [],
+                        (ev.get("uiScript") or {}).get("content"))
+        if facts:
+            ev["machineFindings"] = list(ev.get("machineFindings") or []) + facts
+
+
 async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=None,
                       persist: bool = True, run_first: bool = False,
                       env_id: str | None = None) -> dict:
@@ -311,25 +375,11 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
     if ev is None:
         return {"error": f"用例 {case_id} 不存在"}
 
-    if run_first and ev.get("apiScenario"):
-        try:
-            # 走 MCP 那条同步执行入口（run_batch 的封装）—— 它已经处理了环境变量注入、
-            # 场景变量、步骤汇总。评审这里再手写一遍执行循环只会分叉。
-            from app.mcp.tools.api_tests import run_api_test
-            from app.models.api_test import ApiTestScenario as _S
-            sid = (await session.execute(
-                select(_S.id).where(_S.source_case_id == case_id)
-            )).scalars().first()
-            if sid:
-                res = await run_api_test(session, scenario_ids=str(sid), env_id=env_id)
-                ev["freshRun"] = {
-                    "passed": res.get("passed"), "failed": res.get("failed"),
-                    "failedSteps": [r.get("step") for r in (res.get("results") or [])
-                                    if r.get("status") not in ("passed", "skipped")][:6],
-                }
-        except Exception as e:  # noqa: BLE001
-            logger.warning("评审前试跑失败（不影响评审）: %s", e)
-            ev["freshRun"] = {"error": str(e)[:200]}
+    if run_first:
+        # **执行式审核**：不真跑就发现不了"接口调错端点""步骤没落实"这两类 ——
+        # 两个端点都合法、都返回 200 时，静态审核只会说"写得挺完整"。
+        # 用户的原话：不能只停留在查看，而不真实执行。
+        await _run_and_diff(session, case_id, ev, env_id)
 
     applicable = _applicable(ev)
     try:
@@ -372,5 +422,13 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
                 "findings": findings[:20],
                 "coverageGaps": result["coverageGaps"],
             }
+            # 记一轮 —— 审核以前只有"当前值"，没有过程。有了它，
+            # 「AI 打回 → CC 整改 → 再审 → 通过」这条链在页面上看得见。
+            from app.services.review import rounds
+            await rounds.record(session, case_id, "ai_review",
+                                verdict=scored["verdict"], total=scored["total"],
+                                dimensions={k: v["score"] for k, v in scored["dimensions"].items()},
+                                findings=findings[:20], coverage_gaps=result["coverageGaps"],
+                                summary=result["summary"], actor="ai", model=result["model"])
             await session.commit()
     return result

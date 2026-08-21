@@ -503,6 +503,13 @@ function ScenarioExpanded({ scenario, projectId, onConfirmed }) {
 }
 
 export default function ReportDetail() {
+
+  // 失败跟进单：这次报告里红的那些，各自跟进到哪了。
+  // **放在报告里而不是单开一页** —— 人看完"这次红了 6 条"下一句话就是"那 6 条现在怎么样了"。
+  const [tickets, setTickets] = useState([])
+  const [closing, setClosing] = useState(null)
+  const [closeReason, setCloseReason] = useState('')
+  const [closeKnown, setCloseKnown] = useState(false)
   const navigate = useNavigate()
   const { projectId, reportId } = useParams()
   const [loading, setLoading] = useState(true)
@@ -532,6 +539,22 @@ export default function ReportDetail() {
       if (resultsRes.data) setScenarios(resultsRes.data.scenarios || [])
     } catch { /* */ } finally { if (!silent) setLoading(false) }
   }, [projectId, reportId])
+
+  // branchId 组件级没有（只挂在每条场景上）。取第一条非空的 ——
+  // 一份报告只属于一个分支，所以哪一条都一样。
+  // 不取的话 loadTickets 里的 branchId 是 undefined，守卫直接 return，**静默不加载**。
+  const branchId = useMemo(
+    () => (scenarios || []).map(s => s.branchId).find(Boolean) || null, [scenarios])
+
+  const loadTickets = useCallback(async () => {
+    if (!projectId || !branchId || !reportId) return
+    try {
+      const r = await api.get(`/projects/${projectId}/branches/${branchId}/failure-tickets?reportId=${reportId}`)
+      setTickets(r.data || [])
+    } catch { /* request.js 已提示 */ }
+  }, [projectId, branchId, reportId])
+
+  useEffect(() => { loadTickets() }, [loadTickets])
 
   useEffect(() => { fetchData() }, [fetchData])
 
@@ -904,6 +927,81 @@ export default function ReportDetail() {
           </Space>
         </div>
       </Card>
+
+      {/* 失败跟进单 —— 这次红的那些现在到哪一步了 */}
+      {tickets.length > 0 && (
+        <Card style={{ marginBottom: 8 }} title={
+          <span>失败跟进 <span style={{ fontSize: 12, color: '#86909c', marginLeft: 8 }}>
+            这次红的 {tickets.length} 条，各自跟进到哪了。**跑绿会自动关单**；
+            人工关必须写原因
+          </span></span>
+        } styles={{ body: { padding: '4px 0' } }}>
+          {tickets.map(t => (
+            <div key={t.id} style={{ display: 'flex', gap: 12, alignItems: 'flex-start',
+              padding: '10px 16px', borderTop: '1px solid rgba(0,0,0,0.04)' }}>
+              <Tag style={{ margin: 0, flexShrink: 0 }} color={{
+                open: 'error', analyzed: 'warning', confirmed: 'processing',
+                fixing: 'processing', verifying: 'warning', known: undefined,
+              }[t.status]}>{{
+                open: '待归因', analyzed: '待你确认', confirmed: '已确认待处置',
+                fixing: '处置中', verifying: '待复跑', known: '已知问题', closed: '已关闭',
+              }[t.status] || t.status}</Tag>
+              <div style={{ flex: 1, fontSize: 13 }}>
+                <div>
+                  <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c' }}>
+                    {t.caseCode}</span>
+                  <span style={{ marginLeft: 8 }}>{t.title}</span>
+                </div>
+                <div style={{ fontSize: 12, color: '#86909c', marginTop: 3 }}>
+                  现象 {t.phenomenon} · 红了 {t.occurrences} 次
+                  {t.recurrence ? ` · 第 ${t.recurrence} 次复发（之前关过又红了）` : ''}
+                  {t.confirmedCause ? ` · 已确认：${t.confirmedCause}` : ''}
+                </div>
+                {t.ccAnalysis?.reason && (
+                  <div style={{ fontSize: 12, color: '#4e5969', marginTop: 3 }}>
+                    CC 归因：{t.ccAnalysis.reason}
+                  </div>
+                )}
+              </div>
+              <Button size="small" onClick={() => { setClosing(t); setCloseReason(''); setCloseKnown(false) }}>
+                人工关闭
+              </Button>
+            </div>
+          ))}
+        </Card>
+      )}
+
+      {/* 人工关单：原因必填 —— 没有原因的关闭等于把红的问题从看板上抹掉 */}
+      <Drawer title={`人工关闭 · ${closing?.caseCode || ''}`} open={!!closing} width={420}
+        onClose={() => setClosing(null)}
+        footer={
+          <Space>
+            <Button type="primary" disabled={closeReason.trim().length < 2}
+              onClick={async () => {
+                try {
+                  await api.post(
+                    `/projects/${projectId}/branches/${branchId}/failure-tickets/${closing.id}/close`,
+                    { reason: closeReason.trim(), knownIssue: closeKnown })
+                  message.success(closeKnown ? '已标为已知问题' : '已关闭')
+                  setClosing(null); loadTickets()
+                } catch (e) {
+                  message.error(e?.response?.data?.error?.message || '关闭失败')
+                }
+              }}>确认关闭</Button>
+            <Button onClick={() => setClosing(null)}>取消</Button>
+          </Space>
+        }>
+        <div style={{ fontSize: 12, color: '#86909c', marginBottom: 10, lineHeight: 1.7 }}>
+          正常的关单方式是**复跑跑绿**（平台自动关，并记下凭哪一次关的）。
+          这里是强行关，所以原因必填 —— 下一轮它再冒出来时，人得看得懂上次为什么放过。
+        </div>
+        <Input.TextArea rows={4} value={closeReason} onChange={e => setCloseReason(e.target.value)}
+          placeholder="为什么现在关掉它（必填）" />
+        <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 12, fontSize: 13 }}>
+          <input type="checkbox" checked={closeKnown} onChange={e => setCloseKnown(e.target.checked)} />
+          标成「已知问题」（知道它红、先不修；之后偶然绿一次也不自动关）
+        </label>
+      </Drawer>
 
       {/* Scenario List */}
       <Card styles={{ body: { padding: 0 } }}>

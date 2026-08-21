@@ -713,7 +713,9 @@ export default function MCPTools() {
         {!newKeyResult ? (
           <div>
             <Text type="secondary" style={{ fontSize: 13, display: 'block', marginBottom: 16 }}>
-              给这个连接取个名字，方便识别是谁的 Claude Code。
+              给这个连接取个名字。这个名字会<b>直接显示在「操作日志」的操作人一列</b>
+              （形如 <code>admin · CC · 小李的开发机</code>）—— Key 只能给自己建，
+              所以归属人永远是你，<b>认得出是哪台 Claude Code 全靠这个名字</b>。
             </Text>
             <Input placeholder="如：小李的开发机、CI 流水线" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} size="large" />
 

@@ -21,8 +21,15 @@ async def list_api_test_scenarios(
     branch_id: str,
     folder_id: str | None = None,
     status: str | None = None,
-) -> list[dict]:
-    """列出接口测试场景"""
+) -> dict:
+    """列出接口测试场景。
+
+    ⚠ 返回类型标注必须跟真实返回一致：这里返回的是 `{scenarios, total, usage}` 对象，
+    标注写成 `list[dict]` 的话 **FastMCP 会照标注生成 outputSchema**，
+    真调时客户端拿数组的 schema 去校验对象，直接
+    `RuntimeError: Invalid structured content returned by tool tb_list_api_tests`。
+    页面侧没事（它不校验 schema），只有 MCP 那条路会炸 —— 活体自测撞出来的。
+    """
     q = select(ApiTestScenario).where(ApiTestScenario.branch_id == uuid.UUID(branch_id))
     if folder_id:
         q = q.where(ApiTestScenario.folder_id == uuid.UUID(folder_id))

@@ -123,6 +123,9 @@ class CaseResponse(BaseSchema):
     # 各算一遍必然分叉。
     bug_refs: list | None = None
     tags: list | None = None
+    # 场景级反问的答案 + 还没答的标记（交付门禁看后者）
+    reflections: dict | None = None
+    reflection_pending: bool = False
     blocked_by_bug: bool = False
     # 痕迹：这条曾经发现过 bug 且已验回来。列表灰着显示，不催任何人
     has_fixed_bug: bool = False

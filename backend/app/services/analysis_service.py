@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -24,6 +25,8 @@ from app.models.script import ScriptRun
 
 # 归因的可选值。注意和「现象」（failure_phenomenon）不是一回事：
 # 现象是"元素找不到"，原因是"产品改了 id，用例过期了"。
+logger = logging.getLogger(__name__)
+
 CAUSES = {
     "product_defect": "被测系统的缺陷 —— 该提单给开发",
     "test_defect": "脚本自己写错了 —— 该改脚本",
@@ -31,8 +34,47 @@ CAUSES = {
     "env_issue": "环境/依赖问题（服务没起、token 过期、共享资源缺失）",
     "data_issue": "测试数据问题（脏数据、前置数据没准备好）",
     "flaky": "不稳定，同样的脚本时好时坏",
+    "requirement_unclear": "需求本身的问题 —— 需求没写清、或需求和实现冲突该以哪个为准。**只有人能定**",
     "unknown": "看不出来 —— 拿不准就选这个，别硬猜",
 }
+
+# ── 自证：哪些归因 CC 可以自己处置，不用等人 ────────────────────────
+#
+# 原来一律等人确认，理由是怕"跑不过就说是产品的锅"。但 CC 有代码、能活体复现，
+# 大部分情况拦它没意义。所以改成**按证据齐不齐分流，不按类型分流**：
+#   · 脚本自己错 / 用例过期 / 环境 / 数据 → 自己改，天然闸门是「改完必须跑绿才关单」
+#   · 产品缺陷 → 要三样齐全（活体复现 + 代码依据 + 单号）才放行；缺一样落回等人确认
+#   · 需求问题 / 拿不准 → 只有人能定
+#
+# 产品缺陷放行之后也拿不到好处：挂了单号只是回归**不再刷红**，
+# 交付门禁照旧算「卡在产品缺陷」——不是通过。所以甩锅没收益。
+SELF_SERVE = {"test_defect", "case_expired", "env_issue", "data_issue", "flaky"}
+NEEDS_HUMAN = {"requirement_unclear", "unknown"}
+# 产品缺陷自证要齐的三样
+DEFECT_EVIDENCE = {
+    "liveVerified": "活体复现记录：你**真的**又调/点了一遍，写清怎么复现、看到什么",
+    "codeRefs": "代码或需求依据：文件:行，或需求文档的出处",
+    "issue": "单号：按 skill 规范提的那张单（编号或 URL）",
+}
+
+
+def route(payload: dict) -> tuple[str, list[str]]:
+    """这条归因该走自证还是等人。返回 (去向, 缺什么)。
+
+    去向：`self_serve`（CC 自己处置）/ `needs_human`（等人确认）
+    """
+    cause = (payload.get("cause") or "").strip()
+    if cause in NEEDS_HUMAN:
+        return "needs_human", []
+    if cause in SELF_SERVE:
+        return "self_serve", []
+    if cause == "product_defect":
+        ev = payload.get("evidence") or {}
+        ev = ev if isinstance(ev, dict) else {}
+        missing = [f"{k}（{desc}）" for k, desc in DEFECT_EVIDENCE.items()
+                   if not str(ev.get(k) or "").strip()]
+        return ("self_serve", []) if not missing else ("needs_human", missing)
+    return "needs_human", []
 
 CONFIDENCE = ("high", "medium", "low")
 FIX_TARGETS = ("script", "product", "data", "case", "env", "none")
@@ -185,13 +227,59 @@ async def submit(session: AsyncSession, run_id: str, payload: dict, author: str 
         # 存下平台当时的现象初判，方便事后比对（分类器准不准 / CC 有没有无视它）
         "phenomenonAtSubmit": run.failure_phenomenon,
     }
+    where, missing = route(payload)
+    run.cc_analysis["route"] = where
+    if missing:
+        run.cc_analysis["missingEvidence"] = missing
+
+    # 同步失败跟进单 —— 不同步的话单子永远停在「待分析」，中间几步是断的
+    ticket_status = None
+    try:
+        from app.models.failure_ticket import OPEN_STATUSES, FailureTicket
+        t = (await session.execute(
+            select(FailureTicket).where(
+                FailureTicket.case_id == run.case_id,
+                FailureTicket.script_type == run.script_type,
+                FailureTicket.status.in_(OPEN_STATUSES),
+            ).order_by(FailureTicket.created_at.desc()))).scalars().first()
+        if t is not None:
+            t.cc_analysis = run.cc_analysis
+            if where == "self_serve":
+                if payload["cause"] == "product_defect":
+                    # 挂了单号的产品缺陷：回归不再刷红，但**交付门禁照旧算卡住**
+                    t.status = "known"
+                    t.disposition = "product_defect"
+                    t.closed_reason = f"产品缺陷已提单：{(payload.get('evidence') or {}).get('issue')}"
+                else:
+                    t.status = "fixing"          # 自己改，改完跑绿才关单
+                    t.disposition = payload["cause"]
+            else:
+                t.status = "analyzed"            # 等人确认
+            ticket_status = t.status
+    except Exception:  # noqa: BLE001
+        logger.exception("同步失败跟进单出错（不影响归因入库）")
+
     await session.commit()
+    if where == "self_serve":
+        msg = ("归因已记录，**你自己处置**，不用等人：" + (
+            "产品缺陷已挂单号，这条回归不再刷红；但交付门禁照旧算「卡在产品缺陷」——"
+            "不是通过。等缺陷修好后复跑，绿了跟进单自动关。"
+            if payload["cause"] == "product_defect" else
+            "改完**必须复跑跑绿**，跟进单才会关 —— 跑不绿它会一直挂在「处置中」。"))
+    else:
+        msg = "归因已记录，进入**待确认**队列 —— 它不改用例状态、不进通过率、不改报告结论。"
+        if missing:
+            msg += "（产品缺陷要自证得三样齐全，你缺：" + "；".join(missing) + "）"
+        elif payload["cause"] in NEEDS_HUMAN:
+            msg += "（这一类只有人能定）"
     return {
         "status": "ok",
         "runId": str(run.id),
         "cause": run.cc_analysis["cause"],
-        "message": "归因已记录，进入**待确认**队列。注意：它不会改用例状态、不进通过率、"
-                   "不改报告结论 —— 人在平台上确认之后才算数。",
+        "route": where,
+        "missingEvidence": missing or None,
+        "ticketStatus": ticket_status,
+        "message": msg,
     }
 
 
@@ -211,6 +299,26 @@ async def confirm(
     run.confirmed_note = note.strip()[:2000]
     run.confirmed_by = user_id
     run.confirmed_at = datetime.now(timezone.utc)
+
+    # 同步跟进单：确认完就该轮到 CC 动手了，单子要从「等你确认」往前走
+    try:
+        from app.models.failure_ticket import OPEN_STATUSES, FailureTicket
+        t = (await session.execute(
+            select(FailureTicket).where(
+                FailureTicket.case_id == run.case_id,
+                FailureTicket.script_type == run.script_type,
+                FailureTicket.status.in_(OPEN_STATUSES),
+            ).order_by(FailureTicket.created_at.desc()))).scalars().first()
+        if t is not None:
+            t.confirmed_cause = cause
+            t.confirmed_note = run.confirmed_note
+            t.confirmed_by = str(user_id)
+            t.disposition = cause
+            # 产品缺陷/需求问题：人拍板之后也不是"CC 去修"，标成已知问题挂着
+            t.status = "known" if cause in ("product_defect", "requirement_unclear") else "confirmed"
+    except Exception:  # noqa: BLE001
+        logger.exception("同步失败跟进单出错（不影响人工确认）")
+
     await session.commit()
     return run
 
