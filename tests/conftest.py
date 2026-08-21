@@ -130,3 +130,19 @@ def make_auth_headers(user) -> tuple[dict, str]:
     from app.core.security import create_access_token
     token = create_access_token(user.id, user.role)
     return {"Authorization": f"Bearer {token}"}, token
+
+
+async def create_test_project(client, headers, name: str) -> str:
+    """建一个项目，返回它的 id。
+
+    环境和全局变量 2026-08-21 起是项目级的（迁移 zzo0envproj / zzp0gvarproj），
+    所以这一族接口全部挂在 /api/projects/{project_id}/ 下面，测试得先有个项目。
+
+    **注意新项目会自带默认数据**：4 个环境（development/testing/staging/production）
+    和 5 个全局变量（API_TIMEOUT/BASE_WAIT/LOG_LEVEL/RETRY_COUNT/TEST_LANGUAGE）。
+    所以测试自己造的 key/环境名别跟这些撞，否则第一次创建就 409。
+    见 app/services/project_defaults.py。
+    """
+    r = await client.post("/api/projects", headers=headers, json={"name": name})
+    assert r.status_code in (200, 201), r.text
+    return r.json()["data"]["id"]

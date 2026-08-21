@@ -12,6 +12,7 @@ UI(process.env.SV_x) 与接口(os.environ['SV_x']) 执行器读同一份，做�
 """
 from __future__ import annotations
 
+import logging
 import secrets
 import uuid
 
@@ -19,6 +20,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.scenario_variable import ScenarioVariable
+
+logger = logging.getLogger(__name__)
 
 
 async def resolve_scenario_variables(
@@ -65,3 +68,76 @@ def add_bare_names(env: dict, resolved: dict) -> dict:
         if k.startswith("SV_") and k != "SV_RUN_ID" and k[3:] not in env:
             env[k[3:]] = val
     return env
+
+
+async def inject_project_resources(session: AsyncSession, case_id, env: dict,
+                                   content: str) -> list[str]:
+    """把**项目级共享资源**（自动化数据）也注进 UI 脚本的执行环境。
+
+    **补的是规范里答不上来的那一问：UI 脚本里的 projectId 该放哪层。**
+    变量分层说"多条用例只读引用的底座 → 项目级共享资源，跑前平台探一次并注入
+    `${资源名}`"，但那句只对**接口场景**成立（api_test_runner 那条路做了）；
+    UI 脚本这边只注环境变量 + 场景变量，共享资源一个都进不来。于是唯一能跑的写法
+    要么是 `kind=literal` + 真实 UUID（规范明令禁止），要么自己在脚本里按名字反查一遍
+    —— 后者是可行的，但规范里没写，等于让人自己发明一条没人保证的路。
+
+    **只在脚本真的引用了才探。** 判据是脚本里 `os.getenv("X")` 的键跟资源名
+    （裸名或 `SV_` 前缀）对得上。对不上就一次 HTTP 都不发 —— 探测是要打被测环境的，
+    给不需要它的脚本白加几百毫秒和几条无谓请求，这类"顺手加上"的成本最后都会回来。
+
+    返回真的注进去的键名（调用方要能说出"这次注了什么"，不然又是一次静默行为）。
+    """
+    from app.models.automation_resource import AutomationResource
+    from app.models.case import Case
+    from app.models.project import Branch
+    from app.services.ui_text_render import _GETENV_RE
+
+    cid = case_id if isinstance(case_id, uuid.UUID) else uuid.UUID(str(case_id))
+    case = await session.get(Case, cid)
+    if case is None:
+        return []
+    branch = await session.get(Branch, case.branch_id)
+    if branch is None:
+        return []
+
+    wanted = {m.group("key") for m in _GETENV_RE.finditer(content or "")}
+    if not wanted:
+        return []
+    resources = (await session.execute(
+        select(AutomationResource).where(AutomationResource.project_id == branch.project_id)
+    )).scalars().all()
+    # 资源的 extract 声明了哪些键 —— 注进来的是那些键，不是资源名本身。
+    names: set[str] = set()
+    for res in resources:
+        names.add(str(res.name))
+        names.update(str(k) for k in ((res.exists_check or {}).get("extract") or {}))
+    if not any(n in wanted or f"SV_{n}" in wanted for n in names):
+        return []
+
+    from types import SimpleNamespace
+
+    from app.services.api_test_runner import TokenCache, _resolve_automation_resources
+    probe_env = dict(env)
+    # 探测要带鉴权。**必须给 TokenCache**：不给的话请求裸发、401，而 _check_one 把
+    # 401 当"没查到"，于是每次都注不进任何东西 —— 而且是静默的（返回空列表，
+    # 跟"这脚本不需要资源"长得一样）。接口场景那条路一直是传 TokenCache 的。
+    if not probe_env.get("AUTH_TOKEN") and env.get("TEST_TOKEN"):
+        probe_env["AUTH_TOKEN"] = env["TEST_TOKEN"]
+    try:
+        resolved, report = await _resolve_automation_resources(
+            session, SimpleNamespace(project_id=branch.project_id), probe_env,
+            token_cache=TokenCache(probe_env))
+    except Exception:      # 探不到不该把整次执行打死 —— 脚本会红在取不到值上，看得见
+        logger.warning("项目级共享资源探测异常，这次不注入", exc_info=True)
+        return []
+    if not resolved:
+        # 脚本明明引用了、却一个都没注进来 —— 这条**必须留痕**，
+        # 否则脚本红在"取到空串"上，而人会去查前端。
+        logger.warning("脚本引用了项目级共享资源但一个都没探到：%s", report)
+    added: list[str] = []
+    for k, v in (resolved or {}).items():
+        for key in (k, f"SV_{k}"):
+            if key in wanted and not env.get(key):
+                env[key] = str(v)
+                added.append(key)
+    return added

@@ -6,21 +6,16 @@ import {
 } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, DatabaseOutlined,
-  KeyOutlined, ReloadOutlined, BulbOutlined,
+  ReloadOutlined, BulbOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 
 const { Text, Paragraph } = Typography
 
-// 凭证类环境变量识别（多角色账号/密码/token）
-const CRED_KEY = /(USER(NAME)?|PASSWORD|PWD|TOKEN|SECRET|ACCOUNT|LOGIN|ROLE)/i
-const SECRET_KEY = /(PASSWORD|PWD|TOKEN|SECRET)/i
-
-function maskSecret(key, value) {
-  if (!value) return value
-  if (SECRET_KEY.test(key)) return value.length <= 2 ? '••' : value[0] + '••••' + value.slice(-1)
-  return value
-}
+// 「凭证概览」那张表 2026-08-21 去掉了：它聚合展示各环境的凭证类变量，
+// 跟「环境配置」页是同一份数据，两处显示只会让人不知道该改哪边。
+// 随之删掉的还有本地的 maskSecret/CRED_KEY/SECRET_KEY —— 共享资源的 createDef
+// 由后端 sync.py 的 _mask_deep 脱敏后才下发，前端不需要自己再脱一遍。
 
 // 安全解析 JSON 文本框；空串按空对象/ null
 function parseJsonField(text, { nullable = false } = {}) {
@@ -144,16 +139,23 @@ export default function AutomationData() {
       },
     },
     {
-      // 平台不执行 create_def，只登记备查。原来这列叫「缺失可自动创建」+「支持」，
-      // 是在承诺代码做不到的事 —— 用户照着理解，跑起来只会拿到「变量未解析」。
+      // **这一列的文案错过两次，方向相反。** 最早叫「缺失可自动创建」+「支持」，
+      // 而当时代码只存不执行 —— 过度承诺。改成「平台不会替你建」之后，
+      // 执行期又真的会建了（api_test_runner._resolve_automation_resources →
+      // _auto_create_resource），于是变成往低了说，同一类 bug 换了个方向。
+      // 现在按**入口**说，不说"平台建不建"这种全局话：
+      //   预检/本页 只探不建（precheck_service 只输出 canCreate）
+      //   跑场景/跑 UI 脚本之前 探到 missing 且有 create_def → 补建 → 复探
+      // 只认 missing（请求成功且明确没匹配上）；401/5xx/超时是 unknown，一律不动 ——
+      // 一次 token 过期就照着建，会在被测环境里造一堆 keep=true 没人清的重复底座。
       title: '缺失时怎么办',
       dataIndex: 'createDef',
       width: 190,
       render: (v) => v
-        ? <Tooltip title="平台不会替你建。Claude Code 调 tb_list_global_data(probe=true) 看到 missing 后，照这份定义自己调接口造出来">
-            <Tag color="blue">CC 按定义自建</Tag>
+        ? <Tooltip title="跑场景或 UI 脚本之前，平台探到「确实没有」会照这份定义补建，然后复探一次（只认 missing；401/超时算没查成，不动）。本页和预检只探不建。">
+            <Tag color="blue">执行前自动补建</Tag>
           </Tooltip>
-        : <Tooltip title="没登记创建方式，缺失时只能人工处理">
+        : <Tooltip title="没登记创建方式。缺失时平台补不了，链子会红在「变量未解析」上 —— 补一份 create_def，或者在场景开头自己建、末尾删">
             <Tag>未登记创建方式</Tag>
           </Tooltip>,
     },
@@ -242,56 +244,16 @@ export default function AutomationData() {
     ) },
   ]
 
-  // ---- 凭证概览（只读，聚合各环境的凭证类变量，多角色） ----
-  const [creds, setCreds] = useState([])
-  const [credLoading, setCredLoading] = useState(false)
-
-  const loadCreds = useCallback(async () => {
-    setCredLoading(true)
-    try {
-      const envRes = await api.get('/environments')
-      const envs = envRes.data || []
-      const rows = []
-      for (const env of envs) {
-        try {
-          const varRes = await api.get(`/environments/${env.id}/variables`)
-          for (const v of (varRes.data || [])) {
-            if (CRED_KEY.test(v.key)) {
-              rows.push({
-                key: `${env.id}:${v.key}`,
-                env: env.name,
-                varKey: v.key,
-                value: maskSecret(v.key, v.value),
-              })
-            }
-          }
-        } catch { /* 跳过单个环境失败 */ }
-      }
-      setCreds(rows)
-    } catch {
-      // 环境接口失败静默
-    } finally {
-      setCredLoading(false)
-    }
-  }, [])
-
-  useEffect(() => { loadCreds() }, [loadCreds])
-
-  const credCols = [
-    { title: '环境', dataIndex: 'env', width: 160, render: (v) => <Tag>{v}</Tag> },
-    { title: '变量名', dataIndex: 'varKey', render: (v) => <Text code>{v}</Text> },
-    { title: '值', dataIndex: 'value', render: (v) => <Text type="secondary">{v}</Text> },
-  ]
-
   return (
     <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
       <Typography.Title level={4} style={{ marginBottom: 4 }}>
         <DatabaseOutlined /> 自动化数据
       </Typography.Title>
       <Paragraph type="secondary" style={{ marginBottom: 20 }}>
-        项目级自动化测试所需的全局数据。<Text strong>共享资源</Text>由 Claude Code 活体验证时自动登记，跑自动化前平台会预检它在当前环境存不存在——
-        <Text strong>探到就注入成变量；探不到只报「变量未解析」，平台不会替你补建</Text>（登记的 createDef 只备查、不执行，由 CC 自己照着造）。长期保留、绝不被用例删除；
-        <Text strong>凭证</Text>沿用各环境的环境变量（多角色账号/密码/Token），此处仅聚合展示。
+        项目级自动化测试所需的全局数据。<Text strong>共享资源</Text>由 Claude Code 活体验证时自动登记，跑自动化前平台会探它在当前环境存不存在——
+        <Text strong>探到就注入成变量（接口场景和 UI 脚本共用同一份）；确实没有、且登记过 createDef 的，平台会照它补建再复探一次</Text>
+        （401 / 超时算「没查成」，一律不动，免得在被测环境里造一堆没人清的重复底座）。<Text strong>本页只探不建</Text>，补建发生在跑场景/跑脚本之前。长期保留、绝不被用例删除；
+        <Text strong>凭证不在这里</Text>——多角色账号/密码/Token 一律是环境变量，去「项目配置 → 环境配置」维护，本页不再重复展示同一份数据。
       </Paragraph>
 
       <Card
@@ -337,27 +299,6 @@ export default function AutomationData() {
         <Table rowKey="id" size="small" loading={noteLoading} columns={noteCols}
           dataSource={notes} pagination={false}
           locale={{ emptyText: <Empty description="还没有项目须知。跑一轮下来「原来这个接口是这样」的那些发现，写进来，下一轮就不用再踩一遍。" /> }} />
-      </Card>
-
-      <Card
-        title={<span><KeyOutlined /> 凭证概览（只读）</span>}
-        extra={<Button icon={<ReloadOutlined />} size="small" onClick={loadCreds}>刷新</Button>}
-      >
-        <Alert
-          type="info"
-          showIcon
-          style={{ marginBottom: 12 }}
-          message="凭证在「环境管理」里以环境变量维护，此处按角色/环境聚合展示。密码/Token 类已脱敏。"
-        />
-        <Table
-          rowKey="key"
-          size="small"
-          loading={credLoading}
-          columns={credCols}
-          dataSource={creds}
-          pagination={false}
-          locale={{ emptyText: <Empty description="未在环境变量中发现凭证类变量（USER/PASSWORD/TOKEN 等）" /> }}
-        />
       </Card>
 
       <Modal

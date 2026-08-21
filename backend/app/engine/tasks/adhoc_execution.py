@@ -134,7 +134,6 @@ async def _run_new_style_script(session: AsyncSession, case, test_type: str, bas
     if isinstance(script, ApiTestScenario):
         return await _run_orchestrated_scenario(session, script, env_id)
 
-    import re as _re
     import shutil
     import tempfile
     from pathlib import Path as _P
@@ -163,13 +162,33 @@ async def _run_new_style_script(session: AsyncSession, case, test_type: str, bas
 
     file_name = script.file_name or ("test_ui.py" if test_type != "api" else "test_api.py")
     content = script.content or ""
-    # Python 脚本把 os.getenv 默认值替换为实际值；TS 脚本靠 process.env 注入(ts_runner 传 env)
-    for vn, vv in env_vars.items():
-        content = _re.sub(
-            rf'({_re.escape(vn)}\s*=\s*os\.getenv\(\s*"{_re.escape(vn)}"\s*,\s*)(["\']).*?\2',
-            lambda m, v=vv: f'{m.group(1)}{m.group(2)}{v}{m.group(2)}',
-            content, count=1,
-        )
+
+    # 项目级共享资源：脚本真的引用了才探（见 inject_project_resources 的说明）。
+    try:
+        from app.services.scenario_variable_service import inject_project_resources
+        await inject_project_resources(session, case.id, env_vars, content)
+    except Exception:
+        pass
+
+    # 环境变量默认值：按 os.getenv 里的**键**替换，不要求左边同名。原来这里自己写了
+    # 一份要求左右同名的正则（`NAME = os.getenv("NAME", …)`），
+    # `PROJECT_ID = os.getenv("SV_projectId", "")` 这种一个都替换不到。
+    # TS 脚本靠 process.env 注入（ts_runner 传 env），不依赖这一步。
+    from app.services.ui_text_render import bake_env_defaults as _bake
+    content, _baked = _bake(content, env_vars)
+
+    # 文案词典：`${键|中文}` 在执行前换成该语种的真文案。**这条路以前压根没渲染** ——
+    # 而它是计划/回归/批量三种执行共用的入口（execution.py 也调这个函数）。
+    # 后果：同一份脚本 tb_run_ui_script 跑绿（MCP 那条路渲染了），进计划直接
+    # status=error / 0ms / 拒绝执行，报错却指向"占位里补上 ${键|中文}"——
+    # 而脚本里写的本来就是 ${键|中文}。渲染和替换默认值必须同一处，别再各写一份。
+    from app.services.i18n_harvest_service import load_locale_table_for_case
+    from app.services.ui_text_render import locale_of, render as render_text
+    try:
+        i18n = await load_locale_table_for_case(session, case.id)
+    except Exception:
+        i18n = {}
+    content, _text_stat = render_text(content, i18n, locale_of(env_vars))
     sandbox = tempfile.mkdtemp(prefix="tb_batch_")
     try:
         sp = _P(sandbox) / file_name
@@ -179,6 +198,8 @@ async def _run_new_style_script(session: AsyncSession, case, test_type: str, bas
             lambda: execute_single_case(
                 sandbox_dir=sandbox, script_ref_file=file_name,
                 script_ref_func=script.func_name, env_vars=env_vars, timeout=180,
+                # 词典也传给 conftest —— 脚本里残留的 t() 走它，跟渲染同一份表。
+                i18n=i18n,
             )
         )
     finally:

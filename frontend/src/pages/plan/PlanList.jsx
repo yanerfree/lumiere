@@ -64,7 +64,7 @@ export default function PlanList() {
     try {
       const [brRes, envRes, chRes] = await Promise.all([
         api.get(`/projects/${projectId}/branches`),
-        api.get('/environments'),
+        api.get(`/projects/${projectId}/environments`),
         api.get('/channels'),
       ])
       setBranches(brRes.data || [])

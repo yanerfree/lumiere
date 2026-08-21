@@ -85,28 +85,56 @@ def test_写日志时带上操作来源():
         "来源没落库 —— 所有 CC 的日志又会长得一模一样"
 
 
-def _prime(mw, monkeypatch, *, uid, key_name):
+def _prime(mw, monkeypatch, *, uid, key_name, project=None):
     """把一把假 Key 塞进中间件缓存，并让它以为当前请求带着这个 bearer。"""
     import time
     token = "tb_faketoken_for_test"
     key_hash = hashlib.sha256(token.encode()).hexdigest()
-    mw._CACHE[key_hash] = (None, uid, key_name, time.monotonic())
+    mw._CACHE[key_hash] = (None, uid, key_name, project, time.monotonic())
     monkeypatch.setattr(mw, "get_http_headers",
                         lambda include=None: {"authorization": f"Bearer {token}"})
 
 
 def test_缓存命中时取到的是Key名不是时间戳(monkeypatch):
-    """缓存元组加了一位（多存了 Key 名），TTL 那一位的下标必须跟着挪。
+    """缓存元组每加一位，TTL 那一位的下标都得跟着挪。已经加过两次
+    （Key 名、归属项目），下一次还会。
 
-    写错了不会报错：`hit[2]` 从时间戳变成了 Key 名，`time.monotonic() - "小李的开发机"`
+    写错了不会报错：`hit[N]` 从时间戳变成了 Key 名，`time.monotonic() - "小李的开发机"`
     抛 TypeError 被外层 except 吞掉 → 退化成每次查库，或者干脆全 None。
     """
     from app.mcp import middleware as mw
     uid = str(uuid.uuid4())
-    _prime(mw, monkeypatch, uid=uid, key_name="小李的开发机")
-    allowed, got_uid, got_name = asyncio.run(mw._lookup_key())
-    assert (got_uid, got_name) == (uid, "小李的开发机"), \
-        f"缓存没读对（拿到 {got_uid!r}/{got_name!r}）—— 多半是 TTL 下标没跟着挪"
+    _prime(mw, monkeypatch, uid=uid, key_name="小李的开发机", project="p-1")
+    allowed, got_uid, got_name, got_proj = asyncio.run(mw._lookup_key())
+    assert (got_uid, got_name, got_proj) == (uid, "小李的开发机", "p-1"), \
+        f"缓存没读对（拿到 {got_uid!r}/{got_name!r}/{got_proj!r}）—— 多半是 TTL 下标没跟着挪"
+
+
+def test_缓存再加一个字段也不会错位(monkeypatch):
+    """★ 模拟"以后又给缓存元组加了一位"：塞一条比现在多一格的记录进去，
+    命中逻辑必须照样读对。
+
+    这是真行为测试，不是 grep 源码 —— 如果 TTL 用的是写死的下标，
+    多出来的那一格会让它去减一个字符串，TypeError 被外层 except 吞掉，
+    退化成每次查库（症状：改完范围要等 30s 才生效的假象消失，但库被打爆）。
+    """
+    import time
+
+    from app.mcp import middleware as mw
+    token = "tb_faketoken_sixfield"
+    key_hash = hashlib.sha256(token.encode()).hexdigest()
+    uid = str(uuid.uuid4())
+    # 比当前多一格：(allowed, uid, key_name, project, 【将来某个新字段】, 时间戳)
+    mw._CACHE[key_hash] = (None, uid, "未来的Key", "proj-x", "将来加的字段", time.monotonic())
+    monkeypatch.setattr(mw, "get_http_headers",
+                        lambda include=None: {"authorization": f"Bearer {token}"})
+
+    def boom():
+        raise AssertionError("缓存该命中，不该去查库")
+    monkeypatch.setattr("app.deps.db.async_session_factory", boom)
+
+    allowed, got_uid, got_name, got_proj = asyncio.run(mw._lookup_key())
+    assert (got_uid, got_name, got_proj) == (uid, "未来的Key", "proj-x")
 
 
 def test_MCP调用把身份和来源都放进了审计上下文(monkeypatch):
@@ -127,7 +155,7 @@ def test_MCP调用把身份和来源都放进了审计上下文(monkeypatch):
         captured.update(audit.get_audit_context())
         return "ok"
 
-    ctx = SimpleNamespace(message=SimpleNamespace(name="tb_update_case"))
+    ctx = SimpleNamespace(message=SimpleNamespace(name="tb_update_case", arguments={}))
     asyncio.run(mw.ToolScopeMiddleware().on_call_tool(ctx, call_next))
 
     assert str(captured.get("user_id")) == uid, "没取 Key 身份 —— 操作人会是「-」"

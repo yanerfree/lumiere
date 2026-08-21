@@ -9,20 +9,42 @@ from app.services.report_service import get_report_dashboard
 from app.services.execution_service import get_report_with_scenarios
 
 
-async def get_report_summary(session: AsyncSession, plan_id: str, report_id: str | None = None) -> dict | None:
-    """获取测试报告摘要（通过/失败/跳过/通过率 + 模块级分布）。"""
+async def _plan_of(session: AsyncSession, plan_id: str | None, report_id: str | None):
+    """两个报告工具都只要「哪次执行」。**给了 report_id 就该够** ——
+    tb_run_plan 返回的是 taskId + reportId，提示也写着"拿 reportId 来查"，
+    而这两个工具此前只认 plan_id：照提示做一定报参数错，
+    错误还指向调用方而不是那句提示。报告本来就挂在计划上，自己查出来。
+    """
+    if plan_id:
+        return uuid.UUID(plan_id)
+    if not report_id:
+        raise ValueError("plan_id 和 report_id 至少给一个（tb_list_plans / tb_list_reports 拿）")
+    from app.models.report import TestReport
+    rep = await session.get(TestReport, uuid.UUID(report_id))
+    if rep is None:
+        raise ValueError(f"报告 {report_id} 不存在")
+    if rep.plan_id is None:
+        raise ValueError(f"报告 {report_id} 不属于任何计划（批量执行的报告），"
+                         "这两个工具只看计划执行")
+    return rep.plan_id
+
+
+async def get_report_summary(session: AsyncSession, plan_id: str | None = None,
+                             report_id: str | None = None) -> dict | None:
+    """获取测试报告摘要（通过/失败/跳过/通过率 + 模块级分布）。plan_id 和 report_id 给一个就行。"""
     return await get_report_dashboard(
         session,
-        plan_id=uuid.UUID(plan_id),
+        plan_id=await _plan_of(session, plan_id, report_id),
         report_id=uuid.UUID(report_id) if report_id else None,
     )
 
 
-async def get_failed_scenarios(session: AsyncSession, plan_id: str, report_id: str | None = None) -> dict:
-    """获取报告中失败的用例场景（含步骤、前置条件、错误信息）。"""
+async def get_failed_scenarios(session: AsyncSession, plan_id: str | None = None,
+                               report_id: str | None = None) -> dict:
+    """获取报告中失败的用例场景（含步骤、前置条件、错误信息）。plan_id 和 report_id 给一个就行。"""
     report = await get_report_with_scenarios(
         session,
-        plan_id=uuid.UUID(plan_id),
+        plan_id=await _plan_of(session, plan_id, report_id),
         report_id=uuid.UUID(report_id) if report_id else None,
     )
     if not report:

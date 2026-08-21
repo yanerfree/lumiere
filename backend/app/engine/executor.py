@@ -75,6 +75,7 @@ def execute_single_case(
     # 实测（CC 活体回推 v4）：同一趟里第 10、12 步两条负例全绿，真相是占位压根没被替换。
     # 放在这里是因为四条执行路径都过这个函数 —— 连"某条路忘了渲染文案"也一起拦住。
     from app.services.ui_text_render import unresolved as _unresolved_text
+    from app.services.ui_text_render import unresolved_hint as _unresolved_hint
     _left = _unresolved_text(script_content)
     if _left:
         try:
@@ -90,8 +91,7 @@ def execute_single_case(
                 + ("…" if len(_left) > 5 else "")
                 + "。不拦的话「不应出现」那类断言会假绿（占位匹配不到任何元素，"
                   "'不该存在'当然成立），跑绿了也证明不了任何事。"
-                  "两条任选：tb_upsert_i18n_terms 登记 key+zh+en，"
-                  "或占位里补上 ${键|中文原文}。"
+                + _unresolved_hint(script_content)
             ),
             "stdout": "",
             "steps": [],

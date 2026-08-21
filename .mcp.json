@@ -4,7 +4,7 @@
       "type": "streamable-http",
       "url": "http://192.168.51.108:18800/mcp/",
       "headers": {
-        "Authorization": "Bearer tb_H0nPuK0jFleQbhKXiz2YaJl0uMpDbtL8NaaF9nU8YeU"
+        "Authorization": "Bearer tb_2VS7KapIcA86VMVK7aK_1qZeEtFCSMPu1EFqbK_Euf0"
       }
     }
   }

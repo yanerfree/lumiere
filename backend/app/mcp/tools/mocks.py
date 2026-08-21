@@ -191,11 +191,21 @@ async def llm_mock_reset(session: AsyncSession, path: str | None = None) -> dict
     return {"deleted": res.rowcount or 0, "path": path or "(全部)"}
 
 
-async def proxy_capture(limit: int = 50) -> dict:
+def _req_line(rec: dict) -> str:
+    """这条记录的请求行（`GET /api/x HTTP/1.1`）—— method 和路径只在这里面。"""
+    return str(rec.get("c2p_request") or "").split("\n", 1)[0].strip()
+
+
+async def proxy_capture(limit: int = 50, url_contains: str | None = None,
+                        method: str | None = None) -> dict:
     """代理观测抓到的真实请求 —— 写接口场景的素材来源。
 
     活体验证时最费劲的一步是"这个页面动作到底发了哪些请求、body 长什么样"。
     自己开 devtools 抄一遍又慢又容易抄错，而平台的代理已经把它们记下来了。
+
+    **必须能过滤。** 前端跑 Vite 时抓到的绝大多数是 `.jsx?t=` 热更新请求 ——
+    实测 156 条里只有 9 条是 `/api/`，limit=50 全被噪声占满，等于抓了也用不了。
+    url_contains / method 在**全量**记录上筛，再取最后 limit 条。
     """
     from app.services import proxy_probe_manager as ppm
 
@@ -208,8 +218,48 @@ async def proxy_capture(limit: int = 50) -> dict:
         }
     # 内部字段名是 _records（不是 events）—— 拿错名字会静默返回空列表，
     # 看起来像"代理开着但一条都没抓到"，而实际是取错了地方。
-    records = list(getattr(probe, "_records", []) or [])[-min(limit, 200):]
-    return {"running": True, "port": getattr(probe, "port", None),
-            "count": len(records), "requests": records,
-            "usage": "拿它当写接口场景的素材：真实的 method/url/headers/body 都在里面，"
-                     "不用自己开 devtools 抄一遍（抄错了后面全是错的）。"}
+    all_recs = list(getattr(probe, "_records", []) or [])
+    port = getattr(probe, "port", None)
+
+    # **代理跑着但一条都没抓到**是最常见的情况（浏览器没走代理），而"把代理指过去"
+    # 这句提示原来只在 running=False 那个分支里 —— 真正需要它的分支反而没有。
+    if not all_recs:
+        return {
+            "running": True, "port": port, "count": 0, "total": 0, "requests": [],
+            "hint": f"代理在 {port} 跑着，但**一条都没抓到** —— 浏览器/被测客户端"
+                    f"没走它。把代理指到 127.0.0.1:{port} 再在页面上重做一遍动作："
+                    f"Playwright 传 launch(proxy={{\"server\": \"http://127.0.0.1:{port}\"}})，"
+                    f"浏览器改系统代理设置。指好了先刷一下页面，再来取。",
+        }
+
+    recs = all_recs
+    if url_contains:
+        needle = str(url_contains).lower()
+        recs = [r for r in recs
+                if needle in str(r.get("target") or "").lower()
+                or needle in _req_line(r).lower()]
+    if method:
+        want = str(method).strip().upper()
+        recs = [r for r in recs if _req_line(r).upper().startswith(want + " ")]
+
+    matched = len(recs)
+    recs = recs[-min(limit, 200):]
+    out = {"running": True, "port": port, "total": len(all_recs),
+           "matched": matched, "count": len(recs), "requests": recs,
+           "usage": "拿它当写接口场景的素材：真实的 method/url/headers/body 都在里面，"
+                    "不用自己开 devtools 抄一遍（抄错了后面全是错的）。"
+                    "前端是 Vite 时先 url_contains='/api/' 滤掉热更新噪声。"}
+    if (url_contains or method) and matched == 0:
+        seen: dict[str, int] = {}
+        for r in all_recs[-200:]:
+            seen[str(r.get("target") or "?")] = seen.get(str(r.get("target") or "?"), 0) + 1
+        top = sorted(seen.items(), key=lambda kv: -kv[1])[:8]
+        out["hint"] = (f"过滤后 0 条（全量 {len(all_recs)} 条）。抓到的目标是："
+                       + "、".join(f"{t}×{n}" for t, n in top)
+                       + "。要么过滤条件写错了，要么这个动作压根没发这个请求 ——"
+                         "后者才是你要报的结论。")
+    elif matched > len(recs):
+        # 截断必须说出来：不说的话"就这几条"和"被砍了"长得一模一样。
+        out["hint"] = (f"命中 {matched} 条，只回了最后 {len(recs)} 条（limit={limit}）。"
+                       f"要全量就加大 limit（上限 200）或收紧 url_contains。")
+    return out

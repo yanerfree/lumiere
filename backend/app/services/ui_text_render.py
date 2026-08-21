@@ -99,6 +99,27 @@ def unresolved(content: str) -> list[str]:
     return out
 
 
+def unresolved_hint(content: str) -> str:
+    """未解析的占位该怎么修 —— 区分「少登记」和「这条路忘了渲染」。
+
+    带了 `|中文原文` 的占位，渲染过就一定会退回中文、不可能还留在正文里。
+    所以它还在 = **这条执行路径压根没调 render()**，是管道漏了渲染。
+    此前一律回「占位里补上 ${键|中文原文}」，而人写的本来就是 ${键|中文} ——
+    建议解决不了问题，还把注意力从真因（漏渲染）上引开。实测：计划执行路径
+    未渲染，报错叫人去补一个已经写着的东西。
+    """
+    with_fallback = [m.group(1) for m in REF_RE.finditer(content)
+                     if text_key(m.group(1)) and (m.group(2) or "").strip()]
+    if with_fallback:
+        return (f"其中 {len(with_fallback)} 处**已经写了 `|中文原文`**"
+                f"（如 ${{{with_fallback[0]}|…}}）—— 渲染过的话它会退回中文、"
+                f"不会留在正文里。所以真因是**这条执行路径没做文案渲染**"
+                f"（没调 ui_text_render.render），不是你少写占位。"
+                f"要改的是那条路，别改脚本。")
+    return ("两条任选：tb_upsert_i18n_terms 登记 key+zh+en，"
+            "或占位里补上 ${键|中文原文}。")
+
+
 def _escape(text: str) -> str:
     """替换进源码字符串字面量里 —— 反斜杠和两种引号都得转。"""
     return (text.replace("\\", "\\\\").replace('"', '\\"')

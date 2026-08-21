@@ -259,7 +259,17 @@ def tenant_page(page: Page):
 
 def _do_login(page: Page, username: str, password: str, role: str = ""):
     """通用登录 — 每个操作都记录 tea_step"""
-    if "/login" not in page.url:
+    # **别用 page.url 判「已登录」**：SPA 是先把壳渲染出来、再由路由守卫跳 /login，
+    # 而 networkidle 常常在跳转之前就满足了。那一瞬间 url 还是 BASE_URL，
+    # 于是这里判成"已登录"直接跳过 —— 脚本在未登录状态下往下跑，
+    # 挂在十几步之后的某个元素上，报出来是 element_not_found，看不出是没登录。
+    # 实测踩到：logged_in_page 打印「已登录，跳过登录步骤」，失败截图却是登录页。
+    # 用「页面上还有没有密码框」判，它跟渲染同步，不跟 URL 赛跑。
+    try:
+        page.wait_for_selector("input[type=password]", timeout=3000)
+    except Exception:
+        pass
+    if page.locator("input[type=password]").count() == 0:
         with tea_step("已登录，跳过登录步骤", phase="setup"):
             pass
         return

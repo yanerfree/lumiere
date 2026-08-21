@@ -2171,7 +2171,7 @@ export default function CaseDetail() {
     if (!runEnv) return
     const env = environments.find(e => e.id === runEnv)
     if (env && !env.variables) {
-      api.get(`/environments/${runEnv}/variables`).then(res => {
+      api.get(`/projects/${projectId}/environments/${runEnv}/variables`).then(res => {
         env.variables = res.data || []
         setEnvironments([...environments])
       }).catch(() => {})
@@ -2184,7 +2184,7 @@ export default function CaseDetail() {
     try {
       const [caseRes, envRes, folderRes] = await Promise.all([
         api.get(`/projects/${projectId}/branches/${branchId}/cases/${caseId}`),
-        api.get('/environments'),
+        api.get(`/projects/${projectId}/environments`),
         api.get(`/projects/${projectId}/branches/${branchId}/folders`),
       ])
       const c = caseRes.data
@@ -2269,7 +2269,7 @@ export default function CaseDetail() {
         const env = envs.find(e => e.id === activeEnvId)
         if (env) {
           try {
-            const varRes = await api.get(`/environments/${activeEnvId}/variables`)
+            const varRes = await api.get(`/projects/${projectId}/environments/${activeEnvId}/variables`)
             env.variables = varRes.data || []
             setEnvironments([...envs])
           } catch {}
@@ -2491,8 +2491,21 @@ export default function CaseDetail() {
               {aiReview ? (
                 <div style={{ fontSize: 12, lineHeight: 1.7 }}>
                   <div style={{ marginBottom: 6 }}>
+                    {/* **这次是真跑过还是静态看的，必须露出来。** 两者结论强度差一个量级：
+                        同一条实测静态 84 分通过、真跑 56 分打回（接口场景用的端点页面
+                        一次都没调）。此前「先跑一遍再评」跑不成时只留一条 minor finding，
+                        页面上两种审核长得一模一样。 */}
+                    <Tag color={aiReview.reviewMode === 'run_first' ? 'cyan' : 'default'}
+                      style={{ marginRight: 6 }}>
+                      {aiReview.reviewMode === 'run_first'
+                        ? `执行式审核 · 对了 ${aiReview.trafficSeen ?? 0} 条真实流量`
+                        : '静态审核 · 没有真跑'}
+                    </Tag>
                     <b>{aiReview.verdictReason}</b>
                     {aiReview.summary ? <span style={{ color: '#4e5969' }}> · {aiReview.summary}</span> : null}
+                    {aiReview.reviewModeNote ? (
+                      <div style={{ color: '#faad14', marginTop: 4 }}>{aiReview.reviewModeNote}</div>
+                    ) : null}
                   </div>
                   {Object.entries(aiReview.dimensions || {}).map(([k, d]) => (
                     <div key={k} style={{ display: 'flex', justifyContent: 'space-between' }}>
@@ -2900,6 +2913,22 @@ export default function CaseDetail() {
                             : r.verdict === 'approved' ? 'AI 通过' : 'AI 打回'}
                         </Tag>
                         {r.total != null && <b>{r.total} 分</b>}
+                        {/* **这轮是真跑过还是静态看的。** 两者结论强度差一个量级：
+                            同一条实测静态 84 分通过、真跑 56 分打回（接口场景用的端点
+                            页面一次都没调过，判据是 URL 集合比对、不靠模型）。
+                            此前两种在这条时间线上长得一模一样，"凭什么过的"看不出来。
+                            老轮次没有这个字段，不编造，不显示。 */}
+                        {r.kind === 'ai_review' && r.reviewMode ? (
+                          <Tooltip title={r.reviewMode === 'run_first'
+                            ? `审之前真跑了一遍，拿这次的 ${r.trafficSeen ?? 0} 条真实流量和接口场景对了账`
+                            : '只看了定义没有真跑 —— 「接口场景用的端点页面到底调不调」这类问题静态看不出来'}>
+                            <Tag style={{ margin: 0 }}
+                              color={r.reviewMode === 'run_first' ? 'cyan' : undefined}>
+                              {r.reviewMode === 'run_first'
+                                ? `执行式 · 流量 ${r.trafficSeen ?? 0}` : '静态'}
+                            </Tag>
+                          </Tooltip>
+                        ) : null}
                         <span style={{ color: '#86909c', fontSize: 12 }}>
                           {r.actor}{r.model ? ` · ${r.model}` : ''}
                         </span>

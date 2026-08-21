@@ -81,6 +81,12 @@ async def run_ui_script(
     file_name = script.file_name or "test_ui.py"
     content = script.content
 
+    # 项目级共享资源（自动化数据）：脚本真的引用了才探。规范说"跑前平台探一次并注入
+    # ${资源名}"，但那句原来只对接口场景成立 —— UI 脚本这边共享资源一个都进不来，
+    # 于是「UI 脚本里的 projectId 放哪层」在规范里无解。见 inject_project_resources。
+    from app.services.scenario_variable_service import inject_project_resources
+    injected_res = await inject_project_resources(session, cid, env_vars, content or "")
+
     # 环境变量默认值：按 os.getenv 里的**键**替换，不要求左边同名 ——
     # `PROJECT_ID = os.getenv("SV_projectId", "")` 这种写法原来一个都替换不到
     # （平台跑时真环境变量在进程里，运行时照样取得到，所以一直没暴露）。
@@ -158,6 +164,9 @@ async def run_ui_script(
         "duration_ms": result.get("duration_ms"),
         "error_summary": result.get("error_summary"),
         "stepCount": len(steps),
+        # 探到并注进来的项目级共享资源。**注了什么要说出来** —— 不说的话
+        # "脚本里 os.getenv 拿到了值"这件事没有出处，下次换环境挂了也看不出是它。
+        **({"resourcesInjected": injected_res} if injected_res else {}),
         # 文案占位有没有全部换掉 —— 没换掉的会以字面量 ${...} 进选择器，
         # 必然"找不到元素"。不说出来，人会去查前端。
         **({"textPlaceholdersUnresolved": text_stat["missing"]} if text_stat["missing"] else {}),

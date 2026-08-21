@@ -14,9 +14,14 @@ _SECRET_RE = re.compile(
 )
 
 
-async def list_environments(session: AsyncSession) -> list[dict]:
-    """列出所有测试环境。"""
-    envs = await environment_service.list_environments(session)
+async def list_environments(session: AsyncSession, project_id: str) -> list[dict]:
+    """列出某个项目的测试环境。
+
+    `project_id` 是 2026-08-21 环境项目化时加的（此前这个工具返回全库所有环境，
+    等于把别的项目的被测地址一并露出来）。它同时也是 ToolScopeMiddleware
+    做数据范围校验的抓手 —— 没有入参的工具那套反查管不到。
+    """
+    envs = await environment_service.list_environments(session, uuid.UUID(project_id))
     return [{"id": str(e.id), "name": e.name, "description": e.description} for e in envs]
 
 

@@ -109,11 +109,14 @@ async def generate_api_test(
 
     yield GenEvent(type="step_start", data={"step": 1, "title": "读取接口定义和环境变量"})
 
-    # 如果前端没传环境变量，从项目第一个环境自动读取
+    # 如果前端没传环境变量，从**本项目**第一个环境自动读取。
+    # 注释一直写着"从项目第一个环境"，而在环境项目化之前它读的是全库第一个 ——
+    # 于是可能拿别的项目的 BASE_URL 去生成场景。
     if not env_variables:
         try:
             from app.mcp.tools import environments
-            envs = await environments.list_environments(session=session)
+            envs = await environments.list_environments(session=session,
+                                                        project_id=str(project_id))
             if envs and len(envs) > 0:
                 first_env = envs[0]
                 merged = await environments.get_merged_variables(session=session, env_id=str(first_env["id"]))

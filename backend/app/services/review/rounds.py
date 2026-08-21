@@ -38,6 +38,9 @@ async def list_rounds(session: AsyncSession, case_id) -> list[dict]:
         "dimensions": r.dimensions, "findings": r.findings or [],
         "coverageGaps": r.coverage_gaps or [], "summary": r.summary,
         "changed": r.changed, "actor": r.actor, "model": r.model,
+        # 静态审核和执行式审核在列表里长得一模一样，是这一页最要紧的一条缺口 ——
+        # 结论强度差一个量级，而"凭什么过的"原来看不出来。老轮次是 None，显示成未知。
+        "reviewMode": r.review_mode, "trafficSeen": r.traffic_seen,
         "at": r.created_at.isoformat() if r.created_at else None,
     } for r in rows]
 

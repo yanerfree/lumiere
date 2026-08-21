@@ -31,7 +31,8 @@ ROUTES = [
     ("Skill 管理", f"/projects/{PROJ}/settings/skills"),
     ("MCP 工具", f"/projects/{PROJ}/settings/mcp-tools"),
     ("项目 AI 配置", f"/projects/{PROJ}/settings/ai"),
-    ("环境配置", "/settings/env"),
+    # 环境配置 2026-08-21 搬进项目壳（环境从全局改成项目级，迁移 zzo0envproj）
+    ("环境配置", f"/projects/{PROJ}/settings/env"),
     ("AI 服务配置", "/settings/ai-providers"),
     ("通知渠道", "/settings/channels"),
     ("用户管理", "/settings/users"),

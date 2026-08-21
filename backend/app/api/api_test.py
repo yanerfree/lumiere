@@ -166,8 +166,12 @@ async def run_batch_scenarios(
     # 选择环境时合并 全局变量+环境变量 作为基础 env（优先级低于场景自身 env_variables）
     base_env: dict = {}
     env_name: str | None = None
+    # body 里的 env_id 不在路径上，require_project_role / verify_path_scope 都管不到它。
+    # import 必须在校验之前 —— 这个函数里原本是在 `if body.env_id:` 之内才 import 的，
+    # 校验插在它前面就成了 UnboundLocalError（真跑才暴露，结构测试只看得到字符串在不在）。
+    from app.services import environment_service
+    await environment_service.assert_env_in_project(session, body.env_id, project_id)
     if body.env_id:
-        from app.services import environment_service
         try:
             merged = await environment_service.get_merged_variables(session, uuid.UUID(body.env_id))
             base_env = {item["key"]: item["value"] for item in merged}
@@ -450,8 +454,12 @@ async def generate_api_tests(
 
     # 合并环境变量：选择环境 + 手动传入
     env_vars = {}
+    # body 里的 env_id 不在路径上，require_project_role / verify_path_scope 都管不到它。
+    # import 必须在校验之前 —— 这个函数里原本是在 `if body.env_id:` 之内才 import 的，
+    # 校验插在它前面就成了 UnboundLocalError（真跑才暴露，结构测试只看得到字符串在不在）。
+    from app.services import environment_service
+    await environment_service.assert_env_in_project(session, body.env_id, project_id)
     if body.env_id:
-        from app.services import environment_service
         try:
             merged = await environment_service.get_merged_variables(session, uuid.UUID(body.env_id))
             env_vars = {item["key"]: item["value"] for item in merged}

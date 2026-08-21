@@ -46,6 +46,8 @@ BUILTIN_VARS = {
     "BASE_URL", "LOGIN_URL", "AUTH_TOKEN", "TEST_TOKEN", "TOKEN",
 }
 _KINDS = ("literal", "random", "global_ref", "template")
+# 场景变量一项只收这几个键 —— 多出来的一律报错，不静默丢。
+_SV_KEYS = {"name", "kind", "value_template", "var_type", "description"}
 
 _REF_RE = re.compile(r"\$\{(\w+)\}")             # 步骤插值语法 ${name}
 _UUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.I)
@@ -544,6 +546,17 @@ _SPEC_VARIABLES = """## 变量分层（回推纪律的基准，务必分清）
    抽哪个字段当 id）和 **`create_def`（当初是怎么造的）**。之后每次跑，平台在第一个
    步骤之前探一次并注入 `${资源名}`；**探到"确实没有"就照 create_def 自动补建**，
    补了会在运行结论里明说。所以 create_def 不是备查，是兜底 —— 别省。
+
+**UI 脚本里怎么取这些资源。** 和接口场景同一份，写 `os.getenv("SV_<键>")` 或
+`os.getenv("<键>")`（键就是 `exists_check.extract` 里声明的名字，比如 `projectId`），
+平台在跑前探到之后两种拼法都注。**只在脚本真的引用了才去探**，所以不引用的脚本
+不会白付探测开销。回出来的 `resourcesInjected` 会列出这次真注了哪几个键 ——
+拿不到值时先看它是不是空的。
+
+⚠ 所以 UI 脚本里的 `projectId` 这类"环境里长期存在的底座 id"，
+**既不要 `kind=literal` + 真实 UUID**（换环境即挂），**也不用自己在脚本里按名字
+反查一遍**（能跑，但那是你自己发明的路，没人保证）—— 登记成项目级共享资源，
+`os.getenv("SV_projectId")` 取。
 
 ⚠ 只在探测**明确没匹配上**时补建；401/5xx/超时算"没查成"，一律不动
 （一次 token 过期就照着建，会在被测环境里造一堆重复底座）。
@@ -1096,6 +1109,18 @@ _STEP_FIELDS = ("name", "method", "url", "headers", "body", "assertions",
                 "variables_extract", "enabled", "group_name",
                 "wait_ms", "retry_timeout_ms", "retry_interval_ms")
 
+# tb_get_api_test 读回来是驼峰，写回去要下划线 —— 两边互认，见入库处的注释。
+_STEP_ALIASES = {"variablesExtract": "variables_extract", "groupName": "group_name",
+                 "waitMs": "wait_ms", "retryTimeoutMs": "retry_timeout_ms",
+                 "retryIntervalMs": "retry_interval_ms"}
+# 读回来带着、写回去用不上的只读字段：丢掉是对的，不用报给调用方。
+# 名单要跟 api_tests._last_run_facts 的输出对齐 —— 漏一个，读改写就会
+# 收到一条"忽略了 lastStatusCode"的假警报，真丢东西时反而被噪声盖住。
+_STEP_READONLY = {"id", "sort_order", "sortOrder", "lastStatus", "last_status",
+                  "lastResponse", "last_response", "statusCode", "error",
+                  "extracted", "durationMs", "duration",
+                  "lastError", "lastStatusCode", "failedAssertions", "failedExtracts"}
+
 
 async def _merge_patch(session: AsyncSession, bid: uuid.UUID, scid: uuid.UUID,
                        incoming: list[dict], patched: list[str]) -> list[dict] | dict:
@@ -1172,6 +1197,21 @@ def _tiered(warnings: list) -> dict:
 
 
 
+async def _latest_ui_script(session: AsyncSession, scid) -> dict | None:
+    """这条用例现在有没有 UI 脚本 —— 给反问的 facts 用，别让它恒为 false。"""
+    from sqlalchemy import select as _sel
+
+    from app.models.script import Script
+    row = (await session.execute(
+        _sel(Script).where(Script.case_id == scid, Script.script_type == "ui",
+                           Script.status != "archived")
+        .order_by(Script.version.desc()).limit(1))).scalar_one_or_none()
+    if row is None:
+        return None
+    return {"version": row.version, "fileName": row.file_name,
+            "language": row.language, "chars": len(row.content or "")}
+
+
 async def _reflect_block(session: AsyncSession, scid, norm: list, answers: dict | None) -> dict:
     """收下反问答案 + 把还没答的问题带回去。**不拦入库**（见 reflect.py 的口径）。"""
     if not scid:
@@ -1212,7 +1252,11 @@ async def _reflect_block(session: AsyncSession, scid, norm: list, answers: dict 
         neighbors = [{"caseCode": c, "title": t} for c, t in rows]
     return {
         "reflectionPending": True,
-        "reflect": reflect.build(case, {"steps": norm}, neighbors),
+        # 第四个参数（UI 脚本）**必须查**：不传的话 facts 里的「UI 脚本」恒为 false，
+        # 明明先回推过 UI 脚本，反问却当它不存在 —— 平台数出来的事实里掺了一条假的，
+        # 而这四问值钱就值钱在"事实是平台数的、不是模型猜的"。
+        "reflect": reflect.build(case, {"steps": norm}, neighbors,
+                                 await _latest_ui_script(session, scid)),
         "reflectHint": "这四问规则判不了，只有你答得上（你手上有需求和代码）。"
                        "答案用 reflections={...} 传回来 —— 不答不拦入库，"
                        "但交付门禁不放行、评审会按「自证不全」扣分。",
@@ -1268,11 +1312,26 @@ async def sync_orchestrated_scenario(
 
     # 归一化每个 step 的 JSON 字段（防止客户端把对象序列化成字符串）
     norm: list[dict] = []
+    aliased: set[str] = set()
+    dropped: set[str] = set()
     for i, raw in enumerate(steps):
         st = _loads(raw)
         if not isinstance(st, dict):
             return {"error": f"第 {i + 1} 个 step 不是对象"}
         st = dict(st)
+        # **读回来的键名要能原样写回去。** tb_get_api_test 吐驼峰
+        # （variablesExtract/groupName/waitMs…），这里此前只认下划线 —— 于是
+        # "读回来 → 改一个 URL → 存回去"这条最自然的路，会把所有提取和分组**静默丢掉**，
+        # 然后报「存在悬空变量引用」：错误指向的是后果（后面 ${id} 没人提供），
+        # 不是原因（提取被丢了）。别让调用方去记两套拼法。
+        for camel, snake in _STEP_ALIASES.items():
+            if camel in st and snake not in st:
+                st[snake] = st.pop(camel)
+                aliased.add(snake)
+        # 读回来还带着 id/sortOrder/lastStatus 这些只读字段，写回时用不上（下面按
+        # _STEP_FIELDS 取值，它们本来就会被丢）。**丢了要说一声** —— 静默丢弃
+        # 和"我压根没打算存它"在调用方眼里一样，真丢了要紧的东西时看不出来。
+        dropped.update(k for k in st if k not in _STEP_FIELDS and k not in _STEP_READONLY)
         for f in ("headers", "body", "assertions", "variables_extract"):
             if f in st:
                 st[f] = _loads(st[f])
@@ -1549,6 +1608,12 @@ async def sync_orchestrated_scenario(
         "replacedExisting": replaced,
         "mode": mode,
         "patchedSteps": patched,
+        # 键名做过什么手脚，明说。静默改写和静默丢弃是同一类坑的两半。
+        **({"keysAliasedFromCamel": sorted(aliased)} if aliased else {}),
+        **({"keysIgnored": sorted(dropped),
+            "keysIgnoredNote": "这些字段不入库（写回时用不上）。要是里面有你指望存住的，"
+                               "说明拼法不对 —— 步骤只认："
+                               + "、".join(_STEP_FIELDS)} if dropped else {}),
         "message": (f"已按 name 改了 {len(patched)} 步（{'、'.join(patched)}），"
                     f"其余 {len(norm) - len(patched)} 步原样保留"
                     if mode == "patch" else
@@ -1584,7 +1649,7 @@ async def upsert_scenario_variables(
         return {"error": "variables 必须是数组"}
     antipatterns: list[dict] = []
 
-    created, updated, errors = [], [], []
+    created, updated, errors, renamed = [], [], [], []
     for item in variables:
         item = _loads(item)
         if not isinstance(item, dict) or not item.get("name"):
@@ -1596,9 +1661,34 @@ async def upsert_scenario_variables(
             continue
         kind = item.get("kind") or "literal"
         if kind not in _KINDS:
-            kind = "literal"
+            # **别静默改成 literal。** 写错 kind 的人以为存进去的是自己那个语义
+            # （比如把 random 拼成 rand），拿到的却是"整段固定"，然后在执行期
+            # 才以另一副面孔炸出来。键名对不上就报错，不要替人猜。
+            errors.append({"name": name, "reason": f"kind「{kind}」不认识，只能是 {'/'.join(_KINDS)}"})
+            continue
+
+        # **收口「键名对不上就静默假绿」。** value_template 写成 value 是最常踩的一个：
+        # 此前 item.get("value_template") 取不到 → 存成空串 → 回「新增 N、更新 M」、
+        # errors 空，看上去全绿；直到执行期整条链挂在「变量未解析：${x}」上，
+        # 而错误指向的是后果不是原因。收了别名，但**必须回显**说明改了什么。
+        if "value_template" not in item and "value" in item:
+            renamed.append(name)
+            item = {k: v for k, v in item.items() if k != "value"} | \
+                   {"value_template": item.get("value")}
+        unknown = sorted(set(item) - _SV_KEYS)
+        if unknown:
+            errors.append({"name": name, "reason": f"不认识的字段 {unknown}，"
+                                                   f"只收 {sorted(_SV_KEYS)}"})
+            continue
 
         val = str(item.get("value_template") or "")
+        # 空值直接拒（random 除外 —— 它的 value_template 只是前缀，空前缀仍能解析出值）。
+        # literal/global_ref/template 存成空串等于**保证**执行期 ${x} 解析不出来；
+        # 入库时不喊、执行时才炸，是这个项目里最贵的一类 bug。
+        if kind != "random" and not val.strip():
+            errors.append({"name": name,
+                           "reason": f"kind={kind} 的 value_template 不能为空"})
+            continue
         # 反模式①：literal + 真实 UUID —— 那是"环境里已存在的资源 id"，换环境/资源被删就全挂
         #
         # 但**摆明是编出来的 UUID 不算**：全零、全 f、nil UUID —— 那是负向测试的
@@ -1648,9 +1738,13 @@ async def upsert_scenario_variables(
         "created": created,
         "updated": updated,
         "errors": errors,
+        "renamedFromValue": renamed,
         "antipatterns": antipatterns,
         "message": f"新增 {len(created)}、更新 {len(updated)} 个场景变量"
                    + (f"，{len(errors)} 个失败" if errors else "")
+                   + (f"。⚠ {len(renamed)} 个传的是 `value`，已按 `value_template` 存"
+                      f"（{'、'.join(renamed[:5])}）—— 正确键名是 value_template"
+                      if renamed else "")
                    + (f"。⚠ {len(antipatterns)} 处反模式（见 antipatterns，已入库但建议改）"
                       if antipatterns else ""),
     }
@@ -1812,11 +1906,17 @@ async def list_global_data(
         "value": _mask(v.key, v.value),
         "description": v.description,
     } for v in (await session.execute(
-        select(GlobalVariable).order_by(GlobalVariable.sort_order, GlobalVariable.key)
+        select(GlobalVariable).where(GlobalVariable.project_id == pid)
+        .order_by(GlobalVariable.sort_order, GlobalVariable.key)
     )).scalars().all()]
 
-    # 环境变量（Environment 是全局的，非项目隔离）——列出键名，凭证值脱敏
-    envs = (await session.execute(select(Environment).order_by(Environment.name))).scalars().all()
+    # 环境变量 —— 列出键名，凭证值脱敏。
+    # 环境和全局变量 2026-08-21 起都是项目级的（迁移 zzo0envproj / zzp0gvarproj）：
+    # 这里必须按 pid 过滤，否则这份"可引用的全局数据"清单会把别的项目的
+    # 被测地址和账号键名一起端给 CC。
+    envs = (await session.execute(
+        select(Environment).where(Environment.project_id == pid).order_by(Environment.name)
+    )).scalars().all()
     env_data = []
     for e in envs:
         evs = (await session.execute(
