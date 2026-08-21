@@ -397,6 +397,35 @@ export default function CaseManagement() {
     } catch (e) { message.error(e.message || '操作失败') }
   }
 
+  // 废弃审核的人工那一路。**确认要二次弹窗** —— 误废一条用例，那块功能就
+  // 再没人测了，而且永远不报错（没有任何信号会说"这里本来该有覆盖"）。
+  // 驳回不弹：驳回的语义是「这是要改，不是要废」，用例回到要改堆，什么都没丢。
+  const decideDeprecate = async (caseId, approve) => {
+    const doIt = async () => {
+      try {
+        await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/${caseId}/deprecate-decide?approve=${approve}`)
+        message.success(approve ? '已确认废弃' : '已驳回 —— 这条回到「要改」')
+        fetchCases()
+      } catch (e) { message.error(e.message || '操作失败') }
+    }
+    if (!approve) return doIt()
+    Modal.confirm({
+      title: '确认废弃这条用例？',
+      content: (
+        <div style={{ fontSize: 13 }}>
+          废弃之后它不进待办、不进批量回归、不算进通过率分母。
+          <div style={{ marginTop: 8, color: '#d48806' }}>
+            先看一眼证据够不够：<b>入口挪到二级菜单、改名、拆成两个页面，在 UI 上都长得像「没了」</b>。
+            拿不准就驳回 —— 驳回只是说「这是要改，不是要废」，什么都不会丢。
+          </div>
+          <div style={{ marginTop: 8, color: '#8c8c8c' }}>废弃可撤销（详情页），会留痕。</div>
+        </div>
+      ),
+      okText: '确认废弃', okButtonProps: { danger: true }, cancelText: '先不废',
+      onOk: doIt,
+    })
+  }
+
   const rejectCase = async () => {
     try {
       await api.put(`/projects/${projectId}/branches/${globalBranchId}/cases/${rejectFor}`, {
@@ -795,6 +824,53 @@ export default function CaseManagement() {
           </Tooltip>
         )
       } },
+    // 「待废审」。**单独一列，不塞进审核那列** —— 那一列问的是「这条验得对不对」，
+    // 这一列问的是「这个场景还存不存在」，两个问题的证据和判据完全不同。
+    // 挤在一起就没法同时表达「六维通过、但正在申请废弃」。
+    //
+    // **一条一条点，不做批量。** 误废一条用例，那块功能就再没人测了，
+    // 而且永远不报错 —— 批量按钮的存在本身就是在鼓励不看证据就点过去。
+    { key: 'deprecateStatus', title: '废审', dataIndex: 'deprecateStatus', width: 62, align: 'center', defaultVisible: true, render: (v, row) => {
+      if (row.lifecycleStatus === 'deprecated') return (
+        <Tooltip title={<div style={{ fontSize: 12, maxWidth: 340 }}>
+          <div>已废弃 · {(row.deprecateReason?.decidedBy === 'ai' ? 'AI 批准' : '人工批准')}</div>
+          {row.deprecateReason?.reason && <div style={{ marginTop: 2 }}>理由：{row.deprecateReason.reason}</div>}
+          <div style={{ marginTop: 4, color: '#c9cdd4' }}>不进待办、不进回归、不算通过率分母。详情页可撤销</div>
+        </div>}>
+          <Tag style={{ fontSize: 10, background: '#f0f0f0', color: '#8c8c8c', border: 'none', margin: 0 }}>已废</Tag>
+        </Tooltip>
+      )
+      if (v !== 'requested') return <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span>
+      const ev = row.deprecateReason?.evidence || {}
+      return (
+        <Tooltip title={<div style={{ fontSize: 12, maxWidth: 380 }}>
+          <div><b>申请废弃</b>：{row.deprecateReason?.reason || '（没写理由）'}</div>
+          {(ev.apiProbe || []).slice(0, 3).map((p, i) => (
+            <div key={'a' + i} style={{ marginTop: 2 }}>· 打 {p.method} {p.url} → {p.status}</div>
+          ))}
+          {(ev.uiProbe || []).slice(0, 2).map((p, i) => (
+            <div key={'u' + i} style={{ marginTop: 2 }}>· 页面 {p.page} 找「{p['找了什么']}」→ {p['结论']}</div>
+          ))}
+          {(ev.searchedElsewhere || []).slice(0, 3).map((t, i) => (
+            <div key={'s' + i} style={{ marginTop: 2 }}>· 反面：{t}</div>
+          ))}
+          {row.deprecateReason?.note && <div style={{ marginTop: 4, color: '#ffd666' }}>{row.deprecateReason.note}</div>}
+          <div style={{ marginTop: 4, color: '#c9cdd4' }}>
+            改名、挪菜单、拆页面在 UI 上都长得像「没了」—— 拿不准就驳回，驳回=「这是要改，不是要废」
+          </div>
+        </div>}>
+          <Dropdown trigger={['click']} menu={{ items: [
+            { key: 'approve', label: '确认废弃', danger: true },
+            { key: 'reject', label: '驳回（这是要改）' },
+          ], onClick: ({ key, domEvent }) => { domEvent.stopPropagation(); decideDeprecate(row.id, key === 'approve') } }}>
+            <Tag onClick={e => e.stopPropagation()}
+              style={{ fontSize: 10, cursor: 'pointer', background: 'rgba(250,173,20,0.12)', color: '#d48806', border: 'none', margin: 0 }}>
+              待废审 ▾
+            </Tag>
+          </Dropdown>
+        </Tooltip>
+      )
+    }},
     { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center', defaultVisible: true, render: (v, row) => {
       // 没提审过要给占位。原来 return null，那一格空着像列坏了
       if (!v) return <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span>

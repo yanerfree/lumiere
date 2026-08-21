@@ -110,6 +110,11 @@ async def update_case(
     """更新用例。"""
     case = await get_case(session, case_id)
 
+    # 「内容」四件套的旧值先留一份 —— 下面 _diverge 要靠它判断是不是真的变了。
+    # 改标题也算内容变（文档明写「包括标题」）：标题是审核结论的一部分，
+    # 「验的是什么」写错了，六维里那一条就白判了。
+    _before = (case.title, case.priority, case.preconditions, case.steps,
+               case.expected_result)
     if data.title is not None:
         case.title = data.title
     if data.type is not None:
@@ -130,6 +135,21 @@ async def update_case(
         case.expected_confirmed_by = None
         case.expected_confirmed_actor = None
         case.expected_confirmed_note = None
+
+    # 内容一变，「我还是那份拷贝」就不成立了 —— 清掉复制时写下的指纹。
+    # 照抄堆自动过审的条件 2（内容与源分支逐字一致）靠它变成机械判定：
+    # **CC 改了任何一个字（包括标题）就自动降级成必须 AI 审**，不靠自觉。
+    # `source_case_id` 不清 —— 那是永久出处，"从哪儿来"不会因为改过而改变。
+    def _diverge() -> None:
+        case.content_fingerprint = None
+        # **同时撤回自动过审。** 光清指纹只挡住"以后不再给它盖通过"，
+        # 已经盖上的那个还挂着 —— 而它通过的依据（内容与上一版逐字一致）
+        # 现在已经不成立了。顶着「已通过」的错内容，正是最难发现的那种假绿：
+        # 没有任何信号会说"这条的通过失效了"。
+        # （另一道路径无关的防线在 branch_diff_review.revoke_diverged：
+        #   接口场景/UI 脚本回推不走这个函数，只有重算指纹盖得住。）
+        from app.services.branch_diff_review import revoke_auto_approval
+        revoke_auto_approval(case)
 
     if data.steps is not None:
         if data.steps != case.steps:
@@ -199,6 +219,17 @@ async def update_case(
         )
         case.folder_id = folder_id
 
+    # 内容真的变了才 diverge。**判"变了没有"而不是"传了没有"** ——
+    # 详情页保存会把整份表单原样回传（含没动的字段），按"传了就算变"来判，
+    # 点一次保存就把自动过审的资格清了，而人什么都没改。
+    if _before != (case.title, case.priority, case.preconditions, case.steps,
+                   case.expected_result):
+        _diverge()
+        # 指纹清掉之后 copied_unverified 不再成立，「待审」的门就开了 ——
+        # 重算一次，否则这条用例要等到下一次执行才更新审核标签。
+        from app.services.script_run_service import sync_review_status
+        sync_review_status(case)
+
     await session.flush()
     await session.refresh(case)
     return case
@@ -243,6 +274,14 @@ async def list_cases(
         base = base.where(Case.deleted_at.is_not(None))
     else:
         base = base.where(Case.deleted_at.is_(None))
+
+    # **废弃的默认不出现，但显式问就查得到。**
+    # 此前没有任何一处过滤 deprecated：废掉一条用例，它照样进待办队列、
+    # 照样进回归、照样算进通过率分母 —— 废弃审核做出来也没用。
+    # 而反过来一律隐藏也不行：废了就再也找不着，**撤销都撤不了**。
+    # 所以判据是"有没有显式传 lifecycle_status"。
+    if lifecycle_status is None:
+        base = base.where(Case.lifecycle_status != "deprecated")
 
     # 关联 bug 两态。**在 SQL 里筛，不在内存里** —— 列表是分页的，
     # 拿当前页去过滤会得到"第 3 页只剩 1 条"这种结果。
@@ -658,7 +697,13 @@ async def copy_cases_from_branch(
             expected_confirmed_actor=source.expected_confirmed_actor,
             expected_confirmed_note=source.expected_confirmed_note,
         )
+        # 出处 + 强行置回草稿/待提审，跟建分支时那条复制路径同一套纪律：
+        # 只承诺手工步骤的用例一复制过来就显示「完成+待审」是假显示，它在新版本上
+        # 一次都没验过。耐用的那一半在 script_run_service.copied_unverified()。
+        new_case.source_case_id = source.id
         sync_manual_status(new_case)
+        new_case.lifecycle_status = "draft"
+        new_case.review_status = None
         session.add(new_case)
         await session.flush()
 
@@ -668,6 +713,13 @@ async def copy_cases_from_branch(
         # 新分支上还得让 CC 把脚本全部重推一遍 —— 那这个功能等于没用。
         # **执行状态刻意不拷**：在新分支上一次都没跑过，维度状态从头开始。
         await _copy_case_assets(session, source, new_case, target_branch_id)
+        # 指纹在产物拷完之后算 —— 早算就只盖到手工步骤，等于给"接口断言被改过"
+        # 的用例发通行证。算不出来留 NULL（= 走人审，安全方向）。
+        from app.services.branch_diff_service import compute_fingerprint
+        try:
+            new_case.content_fingerprint = await compute_fingerprint(session, new_case.id) or None
+        except Exception:  # noqa: BLE001
+            pass
         copied += 1
 
     await session.flush()

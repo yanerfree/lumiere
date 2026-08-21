@@ -140,6 +140,14 @@ class CaseResponse(BaseSchema):
     review_status: str | None = None
     review_reason: dict | None = None
     quality_score: dict | None = None
+    # 废弃审核。**列表页要有它** —— 不给前端的话「待废审」这件事只有 CC 看得见，
+    # 而废弃审核的三个入口里有一个就是"人在列表页一条条确认"。
+    deprecate_status: str | None = None
+    deprecate_reason: dict | None = None
+    # 版本升级：从哪条复制来的 + 复制那一刻的内容指纹。指纹非空 = 还没被改过
+    # （改动会清掉它），列表页据此显示「与上一版逐字一致」。
+    source_case_id: uuid.UUID | None = None
+    content_fingerprint: str | None = None
     generation_task_id: uuid.UUID | None = None
     requirement_point_ids: list | None = None
     version: int = 1

@@ -42,6 +42,36 @@ async def review_case(
     case = (await session.execute(select(Case).where(Case.id == cid))).scalars().first()
     if case is None:
         return {"error": f"用例 {case_id} 不存在"}
+
+    # ── 三岔路口 ──────────────────────────────────────────
+    # 这个工具是 CC 每轮对每条用例都会调的那一个，所以版本升级新增的两件事
+    # 都合进来，不新开工具（不用让 CC 判断"这次该调哪个"）。
+    from app.services import branch_diff_review
+
+    # ① 有待决废弃请求 → 不审六维，改审「该不该废」。
+    #    审一条正在申请废弃的用例的六维质量本身没有意义。
+    if case.deprecate_status == "requested":
+        return await branch_diff_review.review_deprecate(session, case, env_id=env_id)
+
+    # ② 照抄堆（未被对账清单命中 + 内容与上一版逐字一致 + 上一版已审通过）
+    #    → 四条件结算，不问 AI。清单命中的是「端点变了/字段变了/新增状态值」，
+    #    没被命中就意味着它碰的接口和字段这一版全没动 —— 上一版的审核结论仍然成立，
+    #    再审是拿同一份内容问同一个问题。
+    hits = await branch_diff_review.hit_case_ids_of(session, case.branch_id)
+    if hits is not None and case.review_status not in ("approved", "rejected"):
+        why = await branch_diff_review.auto_approve_reason(session, case, hits)
+        if why is not None and why[0]:
+            await branch_diff_review.approve_as_system(session, case, why[1], why[2])
+            await session.commit()
+            return {
+                "caseCode": case.case_code, "verdict": "approved",
+                "decidedBy": "system", "照抄堆自动过审": True,
+                "理由": why[1],
+                "说明": ("这条没被对账清单命中、内容与上一版逐字一致、上一版已审通过，"
+                         "所以不再走六维审。后续补交 changes 时若新命中，"
+                         "这次自动过审会被撤回待审。"),
+            }
+
     from app.models.project import Branch
     pid = (await session.execute(
         select(Branch.project_id).where(Branch.id == case.branch_id)

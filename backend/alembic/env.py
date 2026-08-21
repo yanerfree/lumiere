@@ -39,6 +39,9 @@ from app.models.ai_provider_config import (  # noqa: F401 — AI 配置 + 能力
 )
 from app.models.i18n_message import ProjectI18nMessage  # noqa: F401 — 项目级 i18n 词典
 from app.models.skill import Skill, SkillVersion  # noqa: F401 — 项目 Skill（客户端侧执行）
+from app.models.endpoint_diff import (  # noqa: F401 — 版本升级·分支对账清单
+    EndpointDiffBatch, EndpointDiffHit,
+)
 
 config = context.config
 if config.config_file_name is not None:

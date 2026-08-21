@@ -71,6 +71,10 @@ _LIVE = _LOCATE + _NOTES_READ + ["tb_add_project_note"] + [
     "tb_check_deliverable", "tb_check_branch",
     # 六维评审，回推完自己先过一遍（blocker 一条都不许留着交上去）
     "tb_review_case",
+    # 版本升级对账：新分支复制完，拿本机 git diff 跟平台的端点表求交集，
+    # 把这批用例分成照抄/要改/该废/待补四堆。**跟主线同一档** ——
+    # 单独开一档的话，干版本升级的人得同时选两档才能干完一件事。
+    "tb_list_branch_endpoints", "tb_apply_endpoint_diff", "tb_request_deprecate",
 ]
 
 # Mock 上游 / 抓真实请求。**单独一档而不是塞进 live**：

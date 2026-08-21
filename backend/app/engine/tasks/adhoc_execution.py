@@ -292,9 +292,17 @@ async def _execute_adhoc(
         select(Branch).where(Branch.id == uuid.UUID(branch_id))
     )).scalar_one()
 
+    # **废弃的不进回归，也不进通过率分母。** 这条路收的是显式 id 列表，
+    # 所以在这里挡一次：调用方（页面/CC）可能是拿一份旧的 id 列表来跑的。
+    # 静默少跑几条不行 —— 记一行日志，不然"报告里怎么少了两条"没人查得出来。
     cases = (await session.execute(
         select(Case).where(Case.id.in_([uuid.UUID(c) for c in case_ids]))
     )).scalars().all()
+    _dropped = [c.case_code for c in cases if c.lifecycle_status == "deprecated"]
+    if _dropped:
+        cases = [c for c in cases if c.lifecycle_status != "deprecated"]
+        logger.warning("批量回归跳过 %d 条已废弃用例（不进通过率分母）：%s",
+                       len(_dropped), "、".join(_dropped))
 
     env_vars = {}
     if env_id:

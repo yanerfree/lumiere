@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import NamedTuple
 
 from sqlalchemy import select
@@ -357,7 +358,30 @@ async def check_assertion_bite(
         except Exception:  # noqa: BLE001
             pass
     names = [n.strip() for n in (skip_steps or "").split(",") if n.strip()]
-    return await _run(session, scenario.id, names, base_env=base_env, env_name=env_name)
+    result = await _run(session, scenario.id, names, base_env=base_env, env_name=env_name)
+
+    # **结论落库。** 此前它只回给 CC，于是"这条用例的断言咬得住"这件事在库里
+    # 查不到 —— 照抄堆自动过审的条件 4 就只能听 CC 自称，而自称正是这条链上
+    # 最不能信的一环（它自己写的断言，自己说有效）。
+    # 带上当时的内容指纹：内容一改，这份结论就过期，条件 4 重新不成立。
+    summary = result.get("summary") if isinstance(result, dict) else None
+    if summary:
+        from app.models.case import Case
+        from app.services.branch_diff_service import compute_fingerprint
+
+        case = (await session.execute(
+            select(Case).where(Case.id == uuid.UUID(case_id))
+        )).scalar_one_or_none()
+        if case is not None:
+            case.bite_result = {
+                "at": datetime.now(timezone.utc).isoformat(),
+                "scenarioId": str(scenario.id),
+                "skipped": names,
+                "summary": summary,
+                "fingerprint": await compute_fingerprint(session, case.id) or None,
+            }
+            await session.commit()
+    return result
 
 
 async def check_env_hygiene(

@@ -43,9 +43,43 @@ async def copy_branch_data(
             api_node_map, case_map,
         )
 
+    # **指纹必须最后算。** 它盖的是三份产物（手工步骤/预期、接口场景正文、
+    # UI 脚本正文），而接口场景是在 _copy_api_tests 里复制的 —— 在 _copy_cases
+    # 里算就只盖到手工步骤那一份，等于给"接口断言被改过"的用例发了通行证。
+    if case_map:
+        await _stamp_fingerprints(session, list(case_map.values()))
+
     await session.commit()
     logger.info("Branch copy done: %s -> %s, stats=%s", source_branch_id, target_branch_id, stats)
     return stats
+
+
+async def _stamp_fingerprints(session: AsyncSession, case_ids: list[uuid.UUID]) -> None:
+    """给刚复制出来的用例盖内容指纹。
+
+    这是照抄堆自动过审条件 2（内容与源分支逐字一致）的**唯一**机械依据：
+    平台自己比内容，不听 CC 声明「我没改」。CC 改了任何一个字（包括标题）
+    指纹就对不上，自动过审立刻降级成必须 AI 审。
+
+    算不出来（比如某条用例中途被删）就留 NULL —— **NULL 的语义是"不知道它跟谁
+    一致" → 条件 2 不成立 → 走人审**。这个方向是安全的（多审一次），
+    反过来（算不出来就当一致）是假绿。
+    """
+    from app.models.case import Case
+    from app.services.branch_diff_service import compute_fingerprint
+
+    for cid in case_ids:
+        try:
+            fp = await compute_fingerprint(session, cid)
+        except Exception:  # noqa: BLE001 — 一条算挂了不该把整次分支复制打死
+            logger.exception("算内容指纹失败，这条留 NULL（会走人审）: case=%s", cid)
+            continue
+        if not fp:
+            continue
+        case = (await session.execute(select(Case).where(Case.id == cid))).scalar_one_or_none()
+        if case is not None:
+            case.content_fingerprint = fp
+    await session.flush()
 
 
 async def _copy_api_nodes(
@@ -109,8 +143,8 @@ async def _copy_cases(
     source_branch_id: uuid.UUID,
     target_branch_id: uuid.UUID,
     user_id: uuid.UUID,
-) -> dict:
-    """复制用例文件夹 + 用例"""
+) -> tuple[dict, dict[uuid.UUID, uuid.UUID]]:
+    """复制用例文件夹 + 用例。返回 (统计, 旧用例id → 新用例id)。"""
     from app.models.case import Case, CaseFolder
 
     folders_result = await session.execute(
@@ -170,12 +204,31 @@ async def _copy_cases(
             expected_confirmed_actor=c.expected_confirmed_actor,
             expected_confirmed_note=c.expected_confirmed_note,
         )
+        # **我是从哪条复制来的。** 跨分支只靠 case_code / tea_id 对同一条不够 ——
+        # 那两个是人给的编号，复制之后源分支那条还会继续改，编号一样内容早就不一样了。
+        new_case.source_case_id = c.id
         session.add(new_case)
         await session.flush()          # 要立刻拿到新 id 去建映射
         # 场景变量 + UI 脚本正文。script_ref_file 上面已经拷了，正文不拷就是个空指针。
         from app.services.case_service import copy_case_side_assets, sync_manual_status
         sync_manual_status(new_case)
         await copy_case_side_assets(session, c.id, new_case.id)
+        # **强行置回草稿 / 待提审。** sync_manual_status 上面把 manual_status 推成
+        # completed（步骤确实有内容），而它顺手调的 sync_review_status 对
+        # target_level=spec 的用例来说 dims 只有 manual 一维 —— all_done 立刻成立，
+        # 于是一条只承诺手工步骤的用例**一复制过来就显示「完成 + 待审」**，
+        # 而它在新版本上一次都没验过。实测三个档位的连锁结果：
+        #     spec     → lifecycle=done  manual=completed review=pending  ← 假显示
+        #     spec_api → lifecycle=draft manual=completed review=None
+        #     full     → lifecycle=draft manual=completed review=None
+        # 纪律是「新版本上没验过就不能算完成」，手工步骤也一样（新版本的页面
+        # 可能根本不那么走了）。
+        #
+        # 光在这里置回是不够的 —— 任何一次后续调用都会重新推回「待审」。
+        # 耐用的那一半在 script_run_service.copied_unverified()：它看
+        # content_fingerprint（下面那一步写），所以这两处必须一起改。
+        new_case.lifecycle_status = "draft"
+        new_case.review_status = None
         case_map[c.id] = new_case.id
         count += 1
 

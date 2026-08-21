@@ -30,6 +30,21 @@ async def create_plan(
     if len(case_ids) > 1000:
         raise ValidationError(code="TOO_MANY_CASES", message="单个计划最多 1000 条用例")
 
+    # **已废弃的不许进计划。** 进了就会算进那份正式回归报告的通过率分母，
+    # 而它是"已经决定不再测"的场景。静默剔掉不行 —— 报错说清是哪几条，
+    # 让人自己去掉（多半是拿一份旧的勾选列表建的计划）。
+    from app.models.case import Case
+    deprecated = (await session.execute(
+        select(Case.case_code).where(Case.id.in_(case_ids),
+                                     Case.lifecycle_status == "deprecated")
+    )).scalars().all()
+    if deprecated:
+        raise ValidationError(
+            code="DEPRECATED_CASES",
+            message=f"这些用例已废弃，不能进计划：{'、'.join(sorted(deprecated))}。"
+                    f"废弃的用例不算进通过率分母 —— 要重新测就先在详情页撤销废弃。",
+        )
+
     plan = Plan(
         project_id=project_id,
         branch_id=branch_id,

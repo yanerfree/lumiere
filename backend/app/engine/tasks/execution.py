@@ -315,6 +315,21 @@ async def _execute(
                     message=f"重试中 ({attempt+1}/{retry_count}): {case.title[:50]}"
                 )
 
+            # **计划跑完必须推维度状态。** 这条路原来只调 record_run（记执行、进
+            # 通过率、出报告），从不调 apply_case_status —— 于是走计划跑哪怕全绿，
+            # api_status / ui_status 一动不动，用例永远进不了「待审」：
+            # 你会看到一份 100% 通过的报告和一批还是草稿的用例。
+            #
+            # 这是漏不是设计：apply_case_status 的 docstring 自己写着「只有
+            # regression（**计划**/批量回归）失败才是真信号」，它就是按"计划会调我"
+            # 写的。同一平台里 adhoc 批量（adhoc_execution.py）调了，计划没调。
+            #
+            # 只用**最终**结果推一次（重试的中间态不算）：重试通过就是通过。
+            script_run_service.apply_case_status(
+                case, "api" if plan.test_type == "api" else "ui",
+                (case_result or {}).get("status"), script_run_service.REGRESSION,
+            )
+
             case_completed = datetime.now(timezone.utc)
 
             # 拼接执行日志（包含重试记录）

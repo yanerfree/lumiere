@@ -242,6 +242,30 @@ def apply_case_status(case, script_type: str, status: str, run_mode: str = DEBUG
     sync_review_status(case)
 
 
+def copied_unverified(case) -> bool:
+    """这条用例是**从别的分支复制来的、内容还逐字一致、而且在这个版本上一维都没跑过**。
+
+    三个条件缺一不可，各自挡的是不同的东西：
+
+    · `content_fingerprint` 非空 —— 它只在分支复制那一刻写下，而**任何一次内容
+      改动都会清掉它**（见 case_service 的 _diverge）。所以非空就等于"我还是那份
+      拷贝，一个字都没动"。用它而不用 `source_case_id` 是因为后者是永久出处，
+      改完内容也还在，拿它当判据会把已经改过的用例也一起锁在草稿里。
+
+    · api/ui 两维都还在 draft —— 跑过一次就说明它在这个版本上被验过了，
+      该按正常规则推进。**照抄堆就是靠这一条解锁的**：内容没变也要在新版本上
+      真跑一遍（"接口签名没变、底层行为变了"只有这一跑抓得到），跑完维度一动，
+      这个守卫就自动让路。
+
+    只承诺手工步骤（target_level=spec）的用例永远跑不到任何一维，所以它一直被
+    锁在草稿 —— 直到分支对账确认它未被清单命中、内容逐字一致、源用例已审通过，
+    自动过审直接给它 approved（那条路走 review_status，上面已经提前 return 了）。
+    """
+    return (getattr(case, "content_fingerprint", None) is not None
+            and getattr(case, "api_status", "draft") == "draft"
+            and getattr(case, "ui_status", "draft") == "draft")
+
+
 def sync_review_status(case) -> None:
     """三维按 target_level 全部完成 → 审核标签自动进「待审」。
 
@@ -254,6 +278,22 @@ def sync_review_status(case) -> None:
     if case is None:
         return
     if case.review_status in ("approved", "rejected"):
+        return
+    if copied_unverified(case):
+        # **复制过来还没在这个版本上验过的，不许自动进「待审/完成」。**
+        #
+        # 不加这条，只承诺手工步骤的用例（target_level=spec）一从旧分支复制过来
+        # 就显示「完成 + 待审」：dims 只有 manual 一维，而 sync_manual_status
+        # 看见步骤有内容就置 completed，于是 all_done 立刻成立。
+        # 它在新版本上一次都没验过 —— 这正是「没跑过也说通过了」，
+        # 只是不从 review_status 那个门进来。
+        #
+        # 复制时把 lifecycle/review 强行置回草稿是不够的：任何一次后续调用
+        # （改一次标题、跑一次别的维度）都会重新走到这里再把它推回「待审」。
+        # 判据必须是**状态无关**的，所以看 content_fingerprint —— 见那个函数。
+        case.review_status = None
+        if getattr(case, "lifecycle_status", None) != "deprecated":
+            case.lifecycle_status = "draft"
         return
     target = getattr(case, "target_level", None) or "spec"
     dims = ["manual"] + (["api"] if target in ("spec_api", "full") else []) \
