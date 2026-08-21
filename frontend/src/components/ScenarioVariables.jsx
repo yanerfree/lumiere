@@ -178,7 +178,7 @@ export default function ScenarioVariables({ projectId, branchId, caseId }) {
           {kind === 'template' && (
             <div style={{ margin: '-8px 0 12px', fontSize: 12, color: '#86909c', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span>预览：</span>
-              <code style={{ color: '#1677ff' }}>{sample || '(输入含 {{$fn}} 的模板后显示样例)'}</code>
+              <code style={{ color: '#4e8af0' }}>{sample || '(输入含 {{$fn}} 的模板后显示样例)'}</code>
               <Button type="text" size="small" icon={<ReloadOutlined />} onClick={() => runPreview()} />
             </div>
           )}

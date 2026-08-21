@@ -22,13 +22,13 @@ const MONO = 'var(--font-mono)'
 
 // 形态用颜色区分：CONNECT 隧道(Node/undici) vs 转发(Go/http.Transport)
 const KIND_COLOR = {
-  CONNECT: { bg: '#f9f0ff', fg: '#722ed1', bd: '#d3adf7' },
-  GET: { bg: '#f6ffed', fg: '#389e0d', bd: '#b7eb8f' },
-  POST: { bg: '#fff7e6', fg: '#d46b08', bd: '#ffd591' },
-  PUT: { bg: '#e6f4ff', fg: '#0958d9', bd: '#91caff' },
-  DELETE: { bg: '#fff1f0', fg: '#cf1322', bd: '#ffccc7' },
+  CONNECT: { bg: 'rgba(124,92,191,0.1)', fg: '#7c5cbf', bd: 'rgba(124,92,191,0.3)' },
+  GET: { bg: 'rgba(14,165,160,0.1)', fg: '#0ea5a0', bd: 'rgba(14,165,160,0.25)' },
+  POST: { bg: 'rgba(255,125,0,0.1)', fg: '#d46b08', bd: 'rgba(255,125,0,0.3)' },
+  PUT: { bg: 'rgba(78,138,240,0.1)', fg: '#0958d9', bd: '#91caff' },
+  DELETE: { bg: 'rgba(232,69,60,0.1)', fg: '#cf1322', bd: '#ffccc7' },
 }
-const kindStyle = (k) => KIND_COLOR[k] || { bg: '#fafafa', fg: '#8c8c8c', bd: '#d9d9d9' }
+const kindStyle = (k) => KIND_COLOR[k] || { bg: 'rgba(0,0,0,0.03)', fg: '#86909c', bd: '#c9cdd4' }
 
 function KindTag({ kind }) {
   const s = kindStyle(kind)
@@ -51,7 +51,7 @@ function Block({ title, sub, content, empty, onCopy }) {
         <span style={{ flex: 1 }} />
         {content && onCopy && (
           <Button size="small" type="text" icon={<CopyOutlined />}
-            style={{ fontSize: 11, color: '#8c8c8c' }} onClick={onCopy}>复制</Button>
+            style={{ fontSize: 11, color: '#86909c' }} onClick={onCopy}>复制</Button>
         )}
       </div>
       {content
@@ -69,7 +69,7 @@ function Counter({ label, value, color, hint }) {
   return (
     <Tooltip title={hint}>
       <div style={{ minWidth: 118 }}>
-        <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 2 }}>{label}</div>
+        <div style={{ fontSize: 12, color: '#86909c', marginBottom: 2 }}>{label}</div>
         <div style={{ fontSize: 34, lineHeight: 1.1, fontWeight: 700, color, fontFamily: MONO }}>
           {value}
         </div>
@@ -211,7 +211,7 @@ function ProxyProbeInner() {
     <div style={{ padding: 20, maxWidth: 1200 }}>
       {/* ---------- 顶部：状态 + 代理地址 ---------- */}
       <div style={{
-        background: '#fff', border: '1px solid #f0f0f0', borderRadius: 14,
+        background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14,
         padding: '16px 20px', marginBottom: 14,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -260,15 +260,15 @@ function ProxyProbeInner() {
 
       {/* ---------- 计数区 + 清零 ---------- */}
       <div style={{
-        background: '#fff', border: '1px solid #f0f0f0', borderRadius: 14,
+        background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14,
         padding: '18px 20px', marginBottom: 14,
         display: 'flex', alignItems: 'center', gap: 40, flexWrap: 'wrap',
       }}>
         <Counter label="总请求数" value={total} color="#141414"
           hint="经过本代理的请求总数。清零后仍是 0，说明请求没走代理" />
-        <Counter label="CONNECT 隧道" value={stats.connectCount || 0} color="#722ed1"
+        <Counter label="CONNECT 隧道" value={stats.connectCount || 0} color="#7c5cbf"
           hint="CONNECT 形态，Node.js / undici 那条链路" />
-        <Counter label="转发 (absolute-URI)" value={stats.httpCount || 0} color="#389e0d"
+        <Counter label="转发 (absolute-URI)" value={stats.httpCount || 0} color="#0ea5a0"
           hint="absolute-URI 形态，Go net/http Transport 那条链路" />
         <Counter label="带认证" value={stats.withAuthCount || 0} color="#0958d9"
           hint="带了 Proxy-Authorization 的请求数" />
@@ -277,8 +277,11 @@ function ProxyProbeInner() {
         <span style={{ flex: 1 }} />
         <Popconfirm title="清零计数并清空记录？" description="用于在一次测试前打基线" onConfirm={doReset}
           okText="清零" cancelText="取消">
-          <Button type="primary" danger size="large" icon={<ClearOutlined />}
-            style={{ height: 48, fontSize: 16, fontWeight: 600, paddingInline: 26 }}>
+          {/* 原来是 48px 高、16px 字的大红实心块，比全站任何按钮都重一档，
+              在这个页面里比「停止 / 刷新」抢眼太多。收回常规尺寸，
+              危险语义靠 danger 的红色表达就够了。 */}
+          <Button type="primary" danger icon={<ClearOutlined />}
+            style={{ fontWeight: 500, paddingInline: 18 }}>
             清零
           </Button>
         </Popconfirm>
@@ -286,11 +289,11 @@ function ProxyProbeInner() {
 
       {/* ---------- 工具区：故障注入 ---------- */}
       <div style={{
-        background: '#fff', border: '1px solid #f0f0f0', borderRadius: 14,
+        background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14,
         padding: '14px 20px', marginBottom: 14,
       }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
-          <ThunderboltOutlined style={{ color: '#fa8c16' }} /> 故障注入
+          <ThunderboltOutlined style={{ color: '#ff7d00' }} /> 故障注入
           <Text type="secondary" style={{ fontSize: 12, fontWeight: 400, marginLeft: 8 }}>
             实时生效，不用重启
           </Text>
@@ -342,13 +345,13 @@ function ProxyProbeInner() {
               value={delay}
               onChange={v => setDelay(v || 0)}
               onBlur={() => pushInject({ delay })} />
-            <span style={{ fontSize: 13, color: '#8c8c8c' }}>秒</span>
+            <span style={{ fontSize: 13, color: '#86909c' }}>秒</span>
           </Space>
         </Space>
       </div>
 
       {/* ---------- 实时请求列表 ---------- */}
-      <div style={{ background: '#fff', border: '1px solid #f0f0f0', borderRadius: 14, overflow: 'hidden' }}>
+      <div style={{ background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14, overflow: 'hidden' }}>
         <div style={{
           padding: '12px 20px', borderBottom: '1px solid #f5f5f5',
           display: 'flex', alignItems: 'center', gap: 10,
@@ -361,8 +364,8 @@ function ProxyProbeInner() {
 
         {records.length === 0 ? (
           <div style={{ padding: '52px 20px', textAlign: 'center' }}>
-            <div style={{ fontSize: 16, color: '#595959', marginBottom: 10 }}>等待请求…</div>
-            <div style={{ fontSize: 13, color: '#8c8c8c', lineHeight: 2 }}>
+            <div style={{ fontSize: 16, color: '#4e5969', marginBottom: 10 }}>等待请求…</div>
+            <div style={{ fontSize: 13, color: '#86909c', lineHeight: 2 }}>
               现在去被测系统页面触发一次请求，这里会实时显示。<br />
               <span style={{ color: '#d4380d', fontWeight: 600 }}>
                 如果操作完这里仍然是空的，说明请求没有走代理。
@@ -373,7 +376,7 @@ function ProxyProbeInner() {
           <div style={{ maxHeight: 520, overflow: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
-                <tr style={{ background: '#fafafa', color: '#8c8c8c', fontSize: 12 }}>
+                <tr style={{ background: 'rgba(0,0,0,0.03)', color: '#86909c', fontSize: 12 }}>
                   <th style={{ textAlign: 'left', padding: '8px 12px', width: 88 }}>时间</th>
                   <th style={{ textAlign: 'left', padding: '8px 12px', width: 96 }}>形态</th>
                   <th style={{ textAlign: 'left', padding: '8px 12px' }}>目标地址</th>
@@ -390,7 +393,7 @@ function ProxyProbeInner() {
                     transition: 'background 1.2s ease',
                     cursor: 'pointer',
                   }}>
-                    <td style={{ padding: '8px 12px', fontFamily: MONO, color: '#595959' }}>{r.time}</td>
+                    <td style={{ padding: '8px 12px', fontFamily: MONO, color: '#4e5969' }}>{r.time}</td>
                     <td style={{ padding: '8px 12px' }}><KindTag kind={r.kind} /></td>
                     <td style={{ padding: '8px 12px', fontFamily: MONO, wordBreak: 'break-all' }}>
                       {r.target}
@@ -405,7 +408,7 @@ function ProxyProbeInner() {
                         : <Tag>no-auth</Tag>}
                     </td>
                     <td style={{ padding: '8px 12px' }}>
-                      {r.ok === true && <Text style={{ color: '#389e0d' }}>成功{r.reason ? ' · ' + r.reason : ''}</Text>}
+                      {r.ok === true && <Text style={{ color: '#0ea5a0' }}>成功{r.reason ? ' · ' + r.reason : ''}</Text>}
                       {r.ok === false && <Text style={{ color: '#cf1322' }}>失败 · {r.reason}</Text>}
                       {r.ok === null && <Text type="secondary">进行中…</Text>}
                     </td>
@@ -441,20 +444,20 @@ function ProxyProbeInner() {
 
             {/* 链路一目了然：谁 -> 代理 -> 谁 */}
             <div style={{
-              background: '#fafafa', border: '1px solid #f0f0f0', borderRadius: 10,
+              background: 'rgba(0,0,0,0.03)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 10,
               padding: '10px 14px', marginBottom: 16, fontSize: 12, fontFamily: MONO,
               display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
             }}>
               <Tag color="geekblue" style={{ fontFamily: MONO }}>客户端 {detail.client || '?'}</Tag>
-              <span style={{ color: '#8c8c8c' }}>──▶</span>
+              <span style={{ color: '#86909c' }}>──▶</span>
               <Tag color="purple" style={{ fontFamily: MONO }}>代理 :{status?.port}</Tag>
-              <span style={{ color: '#8c8c8c' }}>──▶</span>
+              <span style={{ color: '#86909c' }}>──▶</span>
               <Tag color="green" style={{ fontFamily: MONO }}>上游 {detail.target}</Tag>
             </div>
 
             {detail.auth && (
               <div style={{ marginBottom: 16, fontSize: 12, lineHeight: 2 }}>
-                <span style={{ color: '#8c8c8c' }}>凭证解码（base64 肉眼看不出内容，这里解开给你核对）：</span>
+                <span style={{ color: '#86909c' }}>凭证解码（base64 肉眼看不出内容，这里解开给你核对）：</span>
                 <div style={{ fontFamily: MONO, marginTop: 4 }}>
                   用户名 <Tag color="blue">{detail.user ?? '(解析失败)'}</Tag>
                   密码 <Tag color="blue">{detail.password ?? '(解析失败)'}</Tag>
@@ -507,7 +510,7 @@ function ProxyProbeInner() {
                       onCopy={() => copy(detail.p2uRequest, '转发请求')} />
 
                     {detail.kind !== 'CONNECT' && (
-                      <div style={{ marginTop: -10, marginBottom: 16, fontSize: 12, color: '#8c8c8c', lineHeight: 1.9 }}>
+                      <div style={{ marginTop: -10, marginBottom: 16, fontSize: 12, color: '#86909c', lineHeight: 1.9 }}>
                         跟 ① 里的请求对比就能确认两件事：请求行有没有从 <code>absolute-URI</code>
                         改写成 <code>origin-form</code>（不改，规范上游会回 400）；逐跳头有没有剥掉。
                         {detail.stripped?.length
@@ -564,11 +567,11 @@ function ProxyProbeInner() {
         )}
       </Drawer>
 
-      <div style={{ marginTop: 12, fontSize: 12, color: '#8c8c8c', lineHeight: 1.9 }}>
+      <div style={{ marginTop: 12, fontSize: 12, color: '#86909c', lineHeight: 1.9 }}>
         判读方式：<b>列表里有记录 = 走了代理；清零后操作完仍然是空的 = 没走代理。</b>
         点任意一行可看两跳报文：<b>① 客户端 ⇆ 代理</b>（别人给代理的）、<b>② 代理 ⇆ 上游</b>（代理转发出去的），CONNECT 另有 <b>③ 隧道内数据</b>。
-        形态列区分链路 —— <span style={{ color: '#722ed1' }}>CONNECT</span> 是 Node.js / undici 那条，
-        <span style={{ color: '#389e0d' }}>GET/POST</span> 是 Go net/http 那条。
+        形态列区分链路 —— <span style={{ color: '#7c5cbf' }}>CONNECT</span> 是 Node.js / undici 那条，
+        <span style={{ color: '#0ea5a0' }}>GET/POST</span> 是 Go net/http 那条。
         报文原样显示，不做删改；凭证在明细里会解码出用户名和密码，方便核对被测系统送的对不对。
       </div>
     </div>

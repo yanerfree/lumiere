@@ -94,7 +94,7 @@ function TaskCenter({ projectId }) {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
-          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#2e3138' }}>AI 生成手工测试用例</h3>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: '#1d2129' }}>AI 生成手工测试用例</h3>
           <span style={{ fontSize: 12, color: '#8c919e' }}>从需求文档自动生成测试步骤（操作 + 预期结果），生成后进入用例管理待审核</span>
         </div>
         <Space>
@@ -182,7 +182,7 @@ function TaskDetail({ projectId, taskId }) {
   // 后端明明已经把需求点和场景模型都跑出来了，人看到的是白板。
   const fallback = (title, hint) => (
     <div style={{ textAlign: 'center', padding: '60px 20px', color: '#8c919e' }}>
-      <div style={{ fontSize: 15, color: '#2e3138', marginBottom: 8 }}>{title}</div>
+      <div style={{ fontSize: 15, color: '#1d2129', marginBottom: 8 }}>{title}</div>
       <div style={{ fontSize: 13, marginBottom: 16 }}>{hint}</div>
       <Button onClick={() => navigate(`/projects/${projectId}/scenario-gen`)}>返回任务中心</Button>
     </div>
@@ -199,7 +199,7 @@ function TaskDetail({ projectId, taskId }) {
           style={{ color: '#8c919e' }}>
           ← 返回任务中心
         </Button>
-        {task && <span style={{ color: '#2e3138', fontWeight: 500 }}>{task.title}</span>}
+        {task && <span style={{ color: '#1d2129', fontWeight: 500 }}>{task.title}</span>}
         {task && <Tag color={STATUS_MAP[task.status]?.color}>{STATUS_MAP[task.status]?.label}</Tag>}
       </div>
 

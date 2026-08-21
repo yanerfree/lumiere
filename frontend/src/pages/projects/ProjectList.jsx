@@ -12,9 +12,9 @@ const PROJECT_ROLES = [
 ]
 
 const ROLE_TAG = {
-  project_admin: { color: '#e8453c', bg: '#fff2f0' },
-  developer: { color: '#0ea5a0', bg: '#e0f7f6' },
-  tester: { color: '#0ea5a0', bg: '#e0f7f6' },
+  project_admin: { color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
+  developer: { color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  tester: { color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
   guest: { color: '#86909c', bg: 'rgba(0,0,0,0.02)' },
 }
 
@@ -290,13 +290,16 @@ export default function ProjectList() {
         <>
         <Row gutter={[12, 12]}>
           {pagedProjects.map((p, idx) => {
+            // 项目图标不做实色渐变块：淡底 + 细边框 + 彩色图标。
+            // 色值全部取自全站色板（青碧 / 蓝 / 紫 / 橙 / 浅青 / 红），
+            // 原来那套 #f0a0c0 粉、#f5b971 杏、#a78bda 淡紫是这一页自己的颜色。
             const CARD_COLORS = [
-              { bg: 'linear-gradient(135deg, #6ecfcf, #6ecfcfaa)', shadow: 'rgba(129,201,149,0.2)' },
-              { bg: 'linear-gradient(135deg, #7cacf8, #7cacf8aa)', shadow: 'rgba(124,172,248,0.2)' },
-              { bg: 'linear-gradient(135deg, #f0a0c0, #f0a0c0aa)', shadow: 'rgba(240,160,192,0.2)' },
-              { bg: 'linear-gradient(135deg, #f5b971, #f5b971aa)', shadow: 'rgba(245,185,113,0.2)' },
-              { bg: 'linear-gradient(135deg, #a78bda, #a78bdaaa)', shadow: 'rgba(167,139,218,0.2)' },
-              { bg: 'linear-gradient(135deg, #6ecfcf, #6ecfcfaa)', shadow: 'rgba(110,207,207,0.2)' },
+              { fg: '#0ea5a0', bg: 'rgba(14,165,160,0.12)', border: 'rgba(14,165,160,0.28)' },
+              { fg: '#4e8af0', bg: 'rgba(78,138,240,0.12)', border: 'rgba(78,138,240,0.28)' },
+              { fg: '#7c5cbf', bg: 'rgba(124,92,191,0.12)', border: 'rgba(124,92,191,0.28)' },
+              { fg: '#ff7d00', bg: 'rgba(255,125,0,0.12)', border: 'rgba(255,125,0,0.28)' },
+              { fg: '#2ec4b6', bg: 'rgba(46,196,182,0.12)', border: 'rgba(46,196,182,0.28)' },
+              { fg: '#e8453c', bg: 'rgba(232,69,60,0.12)', border: 'rgba(232,69,60,0.28)' },
             ]
             const cc = CARD_COLORS[idx % CARD_COLORS.length]
             return (
@@ -310,11 +313,11 @@ export default function ProjectList() {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                   <div style={{
                     width: 36, height: 36, borderRadius: 18,
-                    background: cc.bg,
+                    background: cc.bg, border: `1px solid ${cc.border}`,
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 16, boxShadow: `0 2px 6px ${cc.shadow}`,
+                    fontSize: 16,
                   }}>
-                    <FolderOpenOutlined style={{ color: '#fff' }} />
+                    <FolderOpenOutlined style={{ color: cc.fg }} />
                   </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ fontWeight: 600, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</div>
@@ -408,7 +411,7 @@ export default function ProjectList() {
             <Input prefix={<FolderOpenOutlined style={{ color: '#c9cdd4' }} />} placeholder="/workspace/repos/project-name（不填则不支持脚本同步）" />
           </Form.Item>
           {!editingProject && (
-            <div style={{ padding: '8px 12px', background: '#e0f7f6', borderRadius: 12, fontSize: 12, color: '#0ea5a0' }}>
+            <div style={{ padding: '8px 12px', background: 'var(--green-bg)', borderRadius: 12, fontSize: 12, color: '#0ea5a0' }}>
               创建后系统将自动生成默认分支配置（名称: default，分支: main）
             </div>
           )}

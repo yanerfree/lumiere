@@ -8,7 +8,7 @@
  * 外部长驻服务要跑 shell 脚本，未启动时把命令摆出来给人复制。
  *
  * 配色一律走 styles/global.css 的 CSS 变量（teal 主色 #0ea5a0 + 玻璃拟态面板），
- * 别再引入 antd 默认的 #52c41a / #1677ff 那套，会和全站的清新空灵风打架。
+ * 别再引入 antd 默认的 #0ea5a0 / #4e8af0 那套，会和全站的清新空灵风打架。
  */
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -239,11 +239,11 @@ function SystemServicesInner() {
                             <span style={{ color: 'var(--orange)', marginRight: 5 }}>启动方式</span>
                             <span className="svc-hint" onClick={() => copy(item.startHint)}
                               style={{
-                                fontFamily: 'var(--font-mono)', fontSize: 11.5, cursor: 'pointer',
+                                fontFamily: 'var(--font-mono)', fontSize: 12, cursor: 'pointer',
                                 background: 'var(--orange-bg)', borderRadius: 8,
                                 padding: '2px 8px', color: '#c25e00',
                               }}>
-                              {item.startHint} <CopyOutlined style={{ fontSize: 10, opacity: 0.6 }} />
+                              {item.startHint} <CopyOutlined style={{ fontSize: 11, opacity: 0.6 }} />
                             </span>
                           </div>
                         )}
@@ -253,7 +253,7 @@ function SystemServicesInner() {
                         {item.manageUrl && (
                           <Button type="link" size="small" style={{ fontSize: 12, padding: 0 }}
                             onClick={() => navigate(item.manageUrl)}>
-                            去管理 <ArrowRightOutlined style={{ fontSize: 10 }} />
+                            去管理 <ArrowRightOutlined style={{ fontSize: 11 }} />
                           </Button>
                         )}
                       </td>

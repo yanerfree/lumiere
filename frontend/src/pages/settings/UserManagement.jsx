@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
+import { timeColumn } from '../../utils/timeCol'
 import { Table, Button, Tag, Modal, Form, Input, Select, Switch, message, Popconfirm, Space, Avatar, Spin } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, UserOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api } from '../../utils/request'
 
 const ROLE_CONFIG = {
-  admin: { label: '系统管理员', color: '#e8453c', bg: '#fef2f0' },
-  user: { label: '普通用户', color: '#7c5cbf', bg: '#f5f0ff' },
+  admin: { label: '系统管理员', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
+  user: { label: '普通用户', color: '#7c5cbf', bg: 'rgba(124,92,191,0.1)' },
 }
 
 export default function UserManagement() {
@@ -86,7 +87,10 @@ export default function UserManagement() {
 
   const columns = [
     {
-      title: '用户', dataIndex: 'username', width: 200,
+      // 「用户」这一列不写宽度：其余列都写死时 antd 会把富余宽度按比例摊给每一列，
+      // 结果「创建时间」被撑到 231px 装 112px 的内容，整张表全是空白。
+      // 留一列不定宽来吸收余量，其他列就能保持声明的宽度。
+      title: '用户', dataIndex: 'username',
       render: (v) => (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <Avatar size={28} style={{ background: 'rgba(124,92,191,0.12)', color: '#7c5cbf', fontSize: 12, border: '1.5px solid rgba(124,92,191,0.25)' }}>{v[0].toUpperCase()}</Avatar>
@@ -113,10 +117,7 @@ export default function UserManagement() {
         />
       ),
     },
-    {
-      title: '创建时间', dataIndex: 'createdAt', width: 180, align: 'center',
-      render: v => <span style={{ fontSize: 13, color: '#86909c' }}>{v ? new Date(v).toLocaleString('zh-CN') : '-'}</span>,
-    },
+    timeColumn({ key: 'createdAt', title: '创建时间', align: 'center' }),
     {
       title: '操作', width: 120, align: 'center',
       render: (_, record) => (

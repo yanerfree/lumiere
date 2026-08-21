@@ -123,7 +123,7 @@ export default function AICapabilities() {
                   <Text code style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{r.key}</Text>
                 </div>
               ) },
-              { dataIndex: 'deprecatedNote', render: v => <span style={{ fontSize: 12.5, color: '#86909c' }}>{v || '已下线'}</span> },
+              { dataIndex: 'deprecatedNote', render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v || '已下线'}</span> },
             ]}
             dataSource={gone}
           />

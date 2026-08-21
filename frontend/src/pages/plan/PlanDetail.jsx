@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { TimeCell } from '../../utils/timeCol'
 import { Card, Tag, Button, Descriptions, Space, Spin, Empty, message, Input, Select, InputNumber } from 'antd'
 import { ClockCircleOutlined, EditOutlined, PlayCircleOutlined, CheckOutlined, ArrowLeftOutlined, SaveOutlined, SyncOutlined, BarChartOutlined, CloseOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -8,9 +9,9 @@ import CasePicker from '../../components/CasePicker'
 
 const planStatusMap = {
   draft: { label: '草稿', color: '#c9cdd4', bg: 'rgba(0,0,0,0.03)' },
-  executing: { label: '执行中', color: '#0ea5a0', bg: '#e0f7f6' },
-  completed: { label: '已完成', color: '#0ea5a0', bg: '#e0f7f6' },
-  paused: { label: '已暂停', color: '#faad14', bg: '#fffbe6' },
+  executing: { label: '执行中', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  completed: { label: '已完成', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  paused: { label: '已暂停', color: '#faad14', bg: 'rgba(250,173,20,0.12)' },
   pending_manual: { label: '待手动录入', color: '#7c5cbf', bg: 'rgba(124,92,191,0.06)' },
   archived: { label: '已归档', color: '#86909c', bg: 'rgba(0,0,0,0.03)' },
 }
@@ -157,7 +158,8 @@ export default function PlanDetail() {
               ) : (
                 <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>{plan.name}</h2>
               )}
-              <Tag style={{ background: ps.color, color: '#fff', border: 'none' }}>{ps.label}</Tag>
+              {/* 实色底白字 → 淡底 + 细边框 + 彩色字，跟列表页的状态胶囊一致 */}
+              <Tag style={{ background: ps.bg, color: ps.color, border: '1px solid rgba(0,0,0,0.06)' }}>{ps.label}</Tag>
               {executing && <Tag icon={<SyncOutlined spin />} color="processing">{execMessage}</Tag>}
               <Tag style={{ background: 'rgba(0,0,0,0.02)', color: '#86909c', border: 'none' }}>{plan.planType === 'automated' ? '自动化' : '手动'}</Tag>
               <Tag style={{ background: 'rgba(0,0,0,0.02)', color: '#86909c', border: 'none' }}>{plan.testType?.toUpperCase()}</Tag>
@@ -286,13 +288,13 @@ export default function PlanDetail() {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
             {/* Table Header */}
-            <div style={{ display: 'flex', padding: '8px 16px', background: 'rgba(0,0,0,0.02)', borderRadius: '8px 8px 0 0', fontSize: 12, color: '#86909c', fontWeight: 500 }}>
+            <div style={{ display: 'flex', padding: '8px 16px', background: 'var(--table-header-bg)', borderRadius: '8px 8px 0 0', fontSize: 12, color: '#86909c', fontWeight: 500 }}>
               <div style={{ width: 50 }}>#</div>
-              <div style={{ flex: 3 }}>执行时间</div>
               <div style={{ flex: 2, textAlign: 'center' }}>状态</div>
-              <div style={{ flex: 3 }}>结果</div>
+              <div style={{ flex: 3 }}>结果 <span style={{ color: '#c9cdd4', fontWeight: 400 }}>通过/失败/总</span></div>
               <div style={{ flex: 2, textAlign: 'center' }}>通过率</div>
               <div style={{ flex: 2, textAlign: 'right' }}>耗时</div>
+              <div style={{ width: 112, textAlign: 'center' }}>执行时间</div>
               <div style={{ flex: 2, textAlign: 'center' }}>操作</div>
             </div>
             {executions.map((exec, i) => {
@@ -305,14 +307,15 @@ export default function PlanDetail() {
                   borderBottom: '1px solid rgba(0,0,0,0.04)', fontSize: 13,
                 }}>
                   <div style={{ width: 50, color: '#86909c', fontWeight: 600 }}>#{num}</div>
-                  <div style={{ flex: 3, color: '#4e5969' }}>
-                    {exec.executedAt ? new Date(exec.executedAt).toLocaleString('zh-CN') : '-'}
-                  </div>
                   <div style={{ flex: 2, textAlign: 'center' }}>
                     {isRunning ? (
                       <Tag icon={<SyncOutlined spin />} color="processing">执行中</Tag>
                     ) : (
-                      <Tag style={{ background: isCompleted ? '#0ea5a0' : '#faad14', color: '#fff', border: 'none' }}>
+                      <Tag style={{
+                        background: isCompleted ? 'rgba(14,165,160,0.12)' : 'rgba(250,173,20,0.14)',
+                        color: isCompleted ? '#0ea5a0' : '#d48806',
+                        border: `1px solid ${isCompleted ? 'rgba(14,165,160,0.28)' : 'rgba(250,173,20,0.3)'}`,
+                      }}>
                         {isCompleted ? '已完成' : '进行中'}
                       </Tag>
                     )}
@@ -323,7 +326,6 @@ export default function PlanDetail() {
                     <span style={{ color: '#e8453c', fontWeight: 500 }}>{exec.failed + exec.error}</span>
                     <span style={{ color: '#86909c' }}> / </span>
                     <span>{exec.totalScenarios}</span>
-                    <span style={{ color: '#c9cdd4', marginLeft: 4, fontSize: 11 }}>(通过/失败/总计)</span>
                   </div>
                   <div style={{ flex: 2, textAlign: 'center' }}>
                     {exec.passRate != null ? (
@@ -334,6 +336,9 @@ export default function PlanDetail() {
                   </div>
                   <div style={{ flex: 2, textAlign: 'right', fontFamily: 'var(--font-mono)', color: '#86909c' }}>
                     {fmt(exec.totalDurationMs)}
+                  </div>
+                  <div style={{ width: 112, textAlign: 'center' }}>
+                    <TimeCell value={exec.executedAt} />
                   </div>
                   <div style={{ flex: 2, textAlign: 'center' }}>
                     <Button type="link" size="small" icon={<BarChartOutlined />}

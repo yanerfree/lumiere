@@ -251,7 +251,7 @@ function AppLayout() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <img src="/favicon.svg" alt="" style={{ width: 26, height: 26 }} />
-          <span style={{ color: '#2e3138', fontSize: 14, fontWeight: 600, letterSpacing: 0.5 }}>{t('header.platformName')}</span>
+          <span style={{ color: '#1d2129', fontSize: 14, fontWeight: 600, letterSpacing: 0.5 }}>{t('header.platformName')}</span>
           {isProjectPage && projectName && (
             <>
               <span style={{ color: '#e0e0e3', margin: '0 4px' }}>/</span>

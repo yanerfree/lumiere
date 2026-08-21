@@ -25,7 +25,7 @@ const fmtHeaders = (h) => {
 
 const STATUS_COLOR = (sc) => {
   if (sc >= 500) return '#e8453c'
-  if (sc >= 400) return '#fa8c16'
+  if (sc >= 400) return '#ff7d00'
   if (sc >= 300) return '#7c5cbf'
   return '#0ea5a0'
 }
@@ -33,11 +33,11 @@ const STATUS_COLOR = (sc) => {
 const METHOD_COLOR = (m) => {
   if (m === 'ANY') return '#d4380d'
   if (m === 'GET') return '#0ea5a0'
-  if (m === 'POST') return '#fa8c16'
+  if (m === 'POST') return '#ff7d00'
   if (m === 'DELETE') return '#e8453c'
   if (m === 'PUT') return '#4e8af0'
   if (m === 'PATCH') return '#7c5cbf'
-  return '#595959'
+  return '#4e5969'
 }
 
 const MODE_LABELS = { default: '默认响应', random: '随机响应', custom: '自定义', echo: '回显请求', echo_body: '回显请求体' }
@@ -80,9 +80,9 @@ const GrpcMockPanel = lazy(() => import('./GrpcMockPanel'))
 
 const PROTOCOLS = [
   { key: 'http', label: 'HTTP', color: '#0ea5a0', icon: <ApiOutlined /> },
-  { key: 'ws', label: 'WebSocket', color: '#52c41a', icon: <WifiOutlined /> },
-  { key: 'tcp', label: 'TCP', color: '#fa8c16', icon: <CloudServerOutlined /> },
-  { key: 'udp', label: 'UDP', color: '#1890ff', icon: <GlobalOutlined /> },
+  { key: 'ws', label: 'WebSocket', color: '#0ea5a0', icon: <WifiOutlined /> },
+  { key: 'tcp', label: 'TCP', color: '#ff7d00', icon: <CloudServerOutlined /> },
+  { key: 'udp', label: 'UDP', color: '#4e8af0', icon: <GlobalOutlined /> },
   { key: 'grpc', label: 'gRPC', color: '#7c5cbf', icon: <CloudOutlined /> },
 ]
 
@@ -105,7 +105,7 @@ export default function ApiMock() {
             style={{
               padding: '8px 18px', cursor: 'pointer', fontSize: 13, fontWeight: 500,
               display: 'flex', alignItems: 'center', gap: 6,
-              color: protocol === p.key ? p.color : '#8c8c8c',
+              color: protocol === p.key ? p.color : '#86909c',
               borderBottom: protocol === p.key ? `2px solid ${p.color}` : '2px solid transparent',
               transition: 'all 0.2s',
             }}
@@ -118,7 +118,7 @@ export default function ApiMock() {
       {/* 面板内容 */}
       <div style={{ flex: 1, overflow: 'hidden' }}>
         {protocol === 'http' && <HttpMockPanel />}
-        <Suspense fallback={<div style={{ padding: 40, textAlign: 'center', color: '#8c8c8c' }}>加载中...</div>}>
+        <Suspense fallback={<div style={{ padding: 40, textAlign: 'center', color: '#86909c' }}>加载中...</div>}>
           {protocol === 'ws' && <WsMockPanel />}
           {protocol === 'tcp' && <TcpMockPanel />}
           {protocol === 'udp' && <UdpMockPanel />}
@@ -465,7 +465,7 @@ function HttpMockPanel() {
     if (!routeForm) {
       return (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-          <Empty description={<span style={{ color: '#bfbfbf' }}>选择左侧路由查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description={<span style={{ color: '#c9cdd4' }}>选择左侧路由查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
         </div>
       )
     }
@@ -564,7 +564,7 @@ function HttpMockPanel() {
           {/* 响应模式 + 快速预设 + 状态码 + Content-Type — 紧凑两行 */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应模式</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>响应模式</div>
               <Radio.Group
                 value={topResponseMode}
                 onChange={e => {
@@ -581,7 +581,7 @@ function HttpMockPanel() {
               </Radio.Group>
             </div>
             <div style={{ minWidth: 80 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>状态码</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>状态码</div>
               <InputNumber
                 value={routeForm.statusCode ?? 200}
                 onChange={v => setRouteForm(f => ({ ...f, statusCode: v }))}
@@ -590,7 +590,7 @@ function HttpMockPanel() {
               />
             </div>
             <div style={{ minWidth: 130 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Content-Type</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Content-Type</div>
               <Select
                 value={routeForm.contentType || 'application/json'}
                 onChange={v => setRouteForm(f => ({ ...f, contentType: v }))}
@@ -600,7 +600,7 @@ function HttpMockPanel() {
               />
             </div>
             <div style={{ flex: 1, minWidth: 180 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>快速预设</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>快速预设</div>
               <Select
                 onChange={handlePresetChange}
                 placeholder="选择预设填充..."
@@ -646,19 +646,19 @@ function HttpMockPanel() {
           {/* 延迟 + 匹配模式 */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={routeForm.delayMs ?? 0} onChange={v => setRouteForm(f => ({ ...f, delayMs: v }))}
                 min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" disabled={locked} />
             </div>
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>匹配模式</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>匹配模式</div>
               <Radio.Group value={routeForm.matchMode || 'exact'} onChange={e => setRouteForm(f => ({ ...f, matchMode: e.target.value }))} size="small" disabled={locked}>
                 <Radio value="exact">精确</Radio>
                 <Radio value="prefix">前缀</Radio>
                 <Radio value="regex">正则</Radio>
               </Radio.Group>
             </div>
-            <div style={{ fontSize: 11, color: '#bfbfbf', alignSelf: 'center', paddingBottom: 2 }}>
+            <div style={{ fontSize: 11, color: '#c9cdd4', alignSelf: 'center', paddingBottom: 2 }}>
               {(routeForm.matchMode || 'exact') === 'exact' && '请求路径完全一致才匹配'}
               {routeForm.matchMode === 'prefix' && '路径前缀匹配（如 /api 匹配 /api/xxx）'}
               {routeForm.matchMode === 'regex' && '路径正则匹配（如 /api/users/\\d+）'}
@@ -678,7 +678,7 @@ function HttpMockPanel() {
           {isEchoMode && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>回显内容</div>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>回显内容</div>
                 <Radio.Group
                   value={responseModeValue}
                   onChange={e => setRouteForm(f => ({ ...f, responseMode: e.target.value }))}
@@ -705,8 +705,8 @@ function HttpMockPanel() {
               {/* 左：响应体编辑 */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 500 }}>响应内容</span>
-                  <span style={{ fontSize: 11, color: '#bfbfbf' }}>
+                  <span style={{ fontSize: 12, color: '#86909c', fontWeight: 500 }}>响应内容</span>
+                  <span style={{ fontSize: 11, color: '#c9cdd4' }}>
                     {'模板: ${method} ${path} ${timestamp} ${uuid}'}
                   </span>
                   <span style={{ flex: 1 }} />
@@ -726,11 +726,11 @@ function HttpMockPanel() {
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 500 }}>响应预览</span>
-                    <Tag color={(routeForm.statusCode ?? 200) < 400 ? 'cyan' : 'red'} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>
+                    <span style={{ fontSize: 12, color: '#86909c', fontWeight: 500 }}>响应预览</span>
+                    <Tag color={(routeForm.statusCode ?? 200) < 400 ? 'cyan' : 'red'} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px' }}>
                       {routeForm.statusCode ?? 200}
                     </Tag>
-                    <Tag color={CT_COLOR(routeForm.contentType)} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>
+                    <Tag color={CT_COLOR(routeForm.contentType)} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px' }}>
                       {CT_SHORT(routeForm.contentType)}
                     </Tag>
                   </div>
@@ -738,7 +738,7 @@ function HttpMockPanel() {
                     size="small" type="text"
                     icon={copyText === '复制' ? <CopyOutlined /> : <CheckOutlined />}
                     onClick={handleCopyPreview}
-                    style={{ color: copyText === '复制' ? '#8c8c8c' : '#0ea5a0', fontSize: 12 }}
+                    style={{ color: copyText === '复制' ? '#86909c' : '#0ea5a0', fontSize: 12 }}
                   >
                     {copyText}
                   </Button>
@@ -785,7 +785,7 @@ function HttpMockPanel() {
   const renderTestTab = () => {
     if (!routeForm) {
       return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <Empty description={<span style={{ color: '#bfbfbf' }}>选择左侧路由进行测试</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        <Empty description={<span style={{ color: '#c9cdd4' }}>选择左侧路由进行测试</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
       </div>
     }
     const baseUrl = `http://${window.location.hostname}:${serviceStatus.port}`
@@ -795,7 +795,7 @@ function HttpMockPanel() {
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
           {/* URL display */}
           <div style={{ marginBottom: 16, padding: '10px 14px', borderRadius: 12, background: 'rgba(124,92,191,0.04)', border: '1px solid rgba(124,92,191,0.12)' }}>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 6 }}>请求 URL</div>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 6 }}>请求 URL</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <code style={{ fontFamily: MONO, fontSize: 13, color: '#7c5cbf', fontWeight: 500 }}>{fullUrl}</code>
               <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => { copyToClipboard(fullUrl); message.success('已复制') }} />
@@ -805,7 +805,7 @@ function HttpMockPanel() {
           {/* Method + Path */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
             <div style={{ width: 100 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Method</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Method</div>
               <Select value={testMethod} onChange={v => setTestMethod(v)} size="small" style={{ width: '100%' }}>
                 {['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].map(m => (
                   <Select.Option key={m} value={m}><span style={{ color: METHOD_COLOR(m), fontWeight: 600 }}>{m}</span></Select.Option>
@@ -813,7 +813,7 @@ function HttpMockPanel() {
               </Select>
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Path</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Path</div>
               <Input spellCheck={false} value={testPath} onChange={e => setTestPath(e.target.value)}
                 style={{ fontFamily: MONO, fontSize: 12 }} placeholder="/api/users" size="small" />
             </div>
@@ -821,7 +821,7 @@ function HttpMockPanel() {
 
           {/* Headers */}
           <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Headers (JSON, 可选)</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Headers (JSON, 可选)</div>
             <TextArea spellCheck={false}
               value={testHeaders}
               onChange={e => setTestHeaders(e.target.value)}
@@ -834,7 +834,7 @@ function HttpMockPanel() {
           {/* Body */}
           {!['GET', 'HEAD', 'OPTIONS'].includes(testMethod) && (
             <div style={{ marginBottom: 12 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Request Body</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Request Body</div>
               <TextArea spellCheck={false}
                 value={testBody}
                 onChange={e => setTestBody(e.target.value)}
@@ -855,14 +855,14 @@ function HttpMockPanel() {
               {serviceStatus.running ? '发送请求' : '服务未启动'}
             </Button>
             {!serviceStatus.running && (
-              <span style={{ marginLeft: 8, fontSize: 12, color: '#fa8c16' }}>请先启动 HTTP Mock 服务</span>
+              <span style={{ marginLeft: 8, fontSize: 12, color: '#ff7d00' }}>请先启动 HTTP Mock 服务</span>
             )}
           </div>
 
           {/* curl hint */}
           <div style={{ marginBottom: 16, padding: '8px 12px', borderRadius: 10, background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.04)' }}>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>命令行测试 (curl)</div>
-            <code style={{ fontSize: 11, fontFamily: MONO, color: '#595959', wordBreak: 'break-all' }}>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>命令行测试 (curl)</div>
+            <code style={{ fontSize: 11, fontFamily: MONO, color: '#4e5969', wordBreak: 'break-all' }}>
               curl {testMethod !== 'GET' ? `-X ${testMethod} ` : ''}{fullUrl}{testBody ? ` -H "Content-Type: application/json" -d '${testBody}'` : ''}
             </code>
             <Button size="small" type="text" icon={<CopyOutlined />} style={{ marginLeft: 4 }}
@@ -879,9 +879,9 @@ function HttpMockPanel() {
             <div>
               {testResult.error ? (
                 <div>
-                  <div style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 500, marginBottom: 6 }}>错误</div>
+                  <div style={{ fontSize: 12, color: '#86909c', fontWeight: 500, marginBottom: 6 }}>错误</div>
                   <pre style={{
-                    background: '#fff2f0', color: '#e8453c', padding: 12, borderRadius: 12,
+                    background: 'var(--red-bg)', color: '#e8453c', padding: 12, borderRadius: 12,
                     overflow: 'auto', fontSize: 11, lineHeight: 1.5, maxHeight: 200,
                     fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                     border: '1px solid #ffccc7',
@@ -896,14 +896,14 @@ function HttpMockPanel() {
                     borderBottom: '1px solid rgba(0,0,0,0.04)',
                   }}>
                     <Space size={8}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>请求 / 响应详情</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#1d2129' }}>请求 / 响应详情</span>
                       {testResult.response?.status_code != null && (
-                        <Tag color={testResult.response.status_code < 400 ? 'green' : 'red'} style={{ margin: 0, fontSize: 10, borderRadius: 8 }}>
+                        <Tag color={testResult.response.status_code < 400 ? 'green' : 'red'} style={{ margin: 0, fontSize: 11, borderRadius: 8 }}>
                           {testResult.response.status_code}
                         </Tag>
                       )}
                       {testResult.duration_ms != null && (
-                        <span style={{ fontSize: 11, color: '#8c8c8c' }}>{testResult.duration_ms}ms</span>
+                        <span style={{ fontSize: 11, color: '#86909c' }}>{testResult.duration_ms}ms</span>
                       )}
                     </Space>
                     <Button size="small" icon={<CopyOutlined />} onClick={() => {
@@ -930,20 +930,20 @@ function HttpMockPanel() {
                   {/* Request section */}
                   <div style={{ padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: '#7c5cbf', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Request</div>
-                    <div style={{ fontFamily: MONO, fontSize: 12, color: '#262626', marginBottom: 6 }}>
+                    <div style={{ fontFamily: MONO, fontSize: 12, color: '#1d2129', marginBottom: 6 }}>
                       <span style={{ color: METHOD_COLOR(testResult.request?.method), fontWeight: 600 }}>{testResult.request?.method}</span>
                       {' '}<span>{testResult.request?.url}</span>
                     </div>
                     {testResult.request?.headers && (
                       <pre style={{
-                        background: 'rgba(0,0,0,0.02)', color: '#595959', padding: 8, borderRadius: 8,
+                        background: 'rgba(0,0,0,0.02)', color: '#4e5969', padding: 8, borderRadius: 8,
                         fontSize: 11, fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                         border: '1px solid rgba(0,0,0,0.04)', maxHeight: 100, overflow: 'auto', margin: '0 0 6px 0',
                       }}>{Object.entries(testResult.request.headers).map(([k, v]) => `${k}: ${v}`).join('\n')}</pre>
                     )}
                     {testResult.request?.body && (
                       <pre style={{
-                        background: 'rgba(0,0,0,0.02)', color: '#595959', padding: 8, borderRadius: 8,
+                        background: 'rgba(0,0,0,0.02)', color: '#4e5969', padding: 8, borderRadius: 8,
                         fontSize: 11, fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                         border: '1px solid rgba(0,0,0,0.04)', maxHeight: 120, overflow: 'auto', margin: 0,
                       }}>{testResult.request.body}</pre>
@@ -955,7 +955,7 @@ function HttpMockPanel() {
                     <div style={{ fontSize: 11, fontWeight: 600, color: '#0ea5a0', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Response</div>
                     {testResult.response?.headers && (
                       <pre style={{
-                        background: 'rgba(0,0,0,0.02)', color: '#595959', padding: 8, borderRadius: 8,
+                        background: 'rgba(0,0,0,0.02)', color: '#4e5969', padding: 8, borderRadius: 8,
                         fontSize: 11, fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                         border: '1px solid rgba(0,0,0,0.04)', maxHeight: 100, overflow: 'auto', margin: '0 0 6px 0',
                       }}>{Object.entries(testResult.response.headers).map(([k, v]) => `${k}: ${v}`).join('\n')}</pre>
@@ -982,7 +982,7 @@ function HttpMockPanel() {
         padding: '8px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
       }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: '#262626' }}>共 {logsTotal} 条</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>共 {logsTotal} 条</span>
         <Space size={4}>
           <Radio.Group value={logFilter} onChange={e => setLogFilter(e.target.value)} size="small">
             <Radio.Button value="all">全部</Radio.Button>
@@ -1004,7 +1004,7 @@ function HttpMockPanel() {
               {['时间', '状态', '方法', '路径', '类型', '耗时', ''].map((h, i) => (
                 <th key={h || 'op'} style={{
                   padding: '6px 10px', textAlign: i >= 5 ? 'right' : 'left',
-                  fontWeight: 500, fontSize: 11, color: '#8c8c8c', borderBottom: '1px solid rgba(0,0,0,0.04)',
+                  fontWeight: 500, fontSize: 11, color: '#86909c', borderBottom: '1px solid rgba(0,0,0,0.04)',
                   whiteSpace: 'nowrap',
                 }}>{h}</th>
               ))}
@@ -1017,7 +1017,7 @@ function HttpMockPanel() {
                   cursor: 'pointer', borderBottom: '1px solid rgba(0,0,0,0.03)', background: 'rgba(255,255,255,0.25)',
                   background: expandedLogId === l.id ? 'rgba(124,92,191,0.06)' : 'transparent',
                 }}>
-                  <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#8c8c8c' }}>
+                  <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#86909c' }}>
                     {new Date(l.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
                   </td>
                   <td style={{ padding: '5px 10px' }}>
@@ -1026,9 +1026,9 @@ function HttpMockPanel() {
                   <td style={{ padding: '5px 10px' }}>
                     <span style={{ fontSize: 11, fontWeight: 600, color: METHOD_COLOR(l.method) }}>{l.method}</span>
                   </td>
-                  <td style={{ padding: '5px 10px', fontFamily: MONO, fontSize: 11, color: '#595959', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.path}</td>
-                  <td style={{ padding: '5px 10px', fontSize: 11, color: '#8c8c8c' }}>{CT_SHORT(l.contentType)}</td>
-                  <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#8c8c8c', whiteSpace: 'nowrap' }}>{Math.round(l.totalMs ?? 0)}ms</td>
+                  <td style={{ padding: '5px 10px', fontFamily: MONO, fontSize: 11, color: '#4e5969', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.path}</td>
+                  <td style={{ padding: '5px 10px', fontSize: 11, color: '#86909c' }}>{CT_SHORT(l.contentType)}</td>
+                  <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#86909c', whiteSpace: 'nowrap' }}>{Math.round(l.totalMs ?? 0)}ms</td>
                   <td style={{ padding: '5px 10px', textAlign: 'right' }}>
                     <Button size="small" type="text" icon={<SendOutlined />} onClick={e => { e.stopPropagation(); handleReplay(l.id) }} />
                   </td>
@@ -1036,7 +1036,7 @@ function HttpMockPanel() {
               </Fragment>
             ))}
             {logs.length === 0 && (
-              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: '#bfbfbf', fontSize: 12 }}>暂无请求日志</td></tr>
+              <tr><td colSpan={7} style={{ textAlign: 'center', padding: 40, color: '#c9cdd4', fontSize: 12 }}>暂无请求日志</td></tr>
             )}
           </tbody>
         </table>
@@ -1079,7 +1079,7 @@ function HttpMockPanel() {
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}
             </span>
           </div>
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+          <span style={{ fontSize: 12, color: '#86909c' }}>
             {serviceStatus.routesEnabled}/{serviceStatus.routesCount} 路由 · {serviceStatus.totalRequests} 请求
           </span>
         </div>
@@ -1113,7 +1113,7 @@ function HttpMockPanel() {
             padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: '#262626' }}>路由</span>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>路由</span>
             <Tooltip title="新建路由">
               <Button type="primary" ghost icon={<PlusOutlined />} size="small" onClick={handleCreateRoute} />
             </Tooltip>
@@ -1145,36 +1145,36 @@ function HttpMockPanel() {
                     <Tooltip title="拖动调整顺序">
                       <HolderOutlined style={{ fontSize: 11, color: '#c8c8c8', cursor: 'grab', flexShrink: 0 }} />
                     </Tooltip>
-                    {isDef && <LockOutlined style={{ fontSize: 10, color: '#bfbfbf' }} />}
+                    {isDef && <LockOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />}
                     {r.locked && (
                       <Tooltip title="已锁定，不可编辑">
-                        <LockFilled style={{ fontSize: 11, color: '#fa8c16', flexShrink: 0 }} />
+                        <LockFilled style={{ fontSize: 11, color: '#ff7d00', flexShrink: 0 }} />
                       </Tooltip>
                     )}
                     <Tag style={{
-                      margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', borderRadius: 8,
+                      margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 8,
                       fontWeight: 600, color: METHOD_COLOR(r.method), borderColor: METHOD_COLOR(r.method),
                       background: 'transparent',
                     }}>{r.method}</Tag>
                     <span style={{
                       flex: 1, fontSize: 11, fontFamily: MONO,
-                      color: '#595959', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>{r.path}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-                    <span style={{ fontSize: 12, color: sel ? '#262626' : '#8c8c8c', fontWeight: sel ? 500 : 400 }}>{r.name}</span>
+                    <span style={{ fontSize: 12, color: sel ? '#1d2129' : '#86909c', fontWeight: sel ? 500 : 400 }}>{r.name}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       <Tag style={{
-                        margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px',
+                        margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px',
                         color: STATUS_COLOR(r.statusCode), borderColor: STATUS_COLOR(r.statusCode),
                         background: 'transparent', borderRadius: 8,
                       }}>{r.statusCode}</Tag>
-                      <Tag color={CT_COLOR(r.contentType)} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', borderRadius: 6 }}>
+                      <Tag color={CT_COLOR(r.contentType)} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 6 }}>
                         {CT_SHORT(r.contentType)}
                       </Tag>
                       {r.authType && r.authType !== 'none' && (
                         <Tooltip title={`认证: ${r.authType}`}>
-                          <LockOutlined style={{ fontSize: 10, color: '#fa8c16' }} />
+                          <LockOutlined style={{ fontSize: 11, color: '#ff7d00' }} />
                         </Tooltip>
                       )}
                     </div>
@@ -1199,9 +1199,9 @@ function HttpMockPanel() {
               ].map(t => (
                 <div key={t.key} onClick={() => setActiveTab(t.key)} style={{
                   padding: '10px 16px', cursor: 'pointer', fontSize: 14, position: 'relative',
-                  color: activeTab === t.key ? '#7c5cbf' : '#595959',
+                  color: activeTab === t.key ? 'var(--primary)' : '#4e5969',
                   fontWeight: activeTab === t.key ? 500 : 400,
-                  borderBottom: activeTab === t.key ? '2px solid #7c5cbf' : '2px solid transparent',
+                  borderBottom: activeTab === t.key ? '2px solid var(--primary)' : '2px solid transparent',
                   marginBottom: -1,
                 }}>
                   {t.label}
@@ -1228,7 +1228,7 @@ function HttpMockPanel() {
         }
         footer={
           <div>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 8, lineHeight: 1.6 }}>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 8, lineHeight: 1.6 }}>
               保存会提交这条路由的全部改动（含主界面上未保存的部分）。直接关闭窗口不会丢改动，回主界面还能保存。
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -1243,8 +1243,8 @@ function HttpMockPanel() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             {/* 认证配置 */}
             <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#262626', marginBottom: 8 }}>请求认证</div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>认证方式</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#1d2129', marginBottom: 8 }}>请求认证</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6 }}>认证方式</div>
               <Select value={routeForm.authType || 'none'} onChange={v => setRouteForm(f => ({ ...f, authType: v, authConfig: v === 'none' ? null : (f.authConfig || {}) }))}
                 size="small" style={{ width: '100%' }}
                 options={[
@@ -1257,7 +1257,7 @@ function HttpMockPanel() {
                 ]} />
               {routeForm.authType === 'bearer' && (
                 <div style={{ marginTop: 8 }}>
-                  <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Token</div>
+                  <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Token</div>
                   <Input spellCheck={false} value={routeForm.authConfig?.token || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, token: e.target.value } }))}
                     placeholder="输入 Bearer Token" style={{ fontFamily: MONO, fontSize: 12 }} />
                 </div>
@@ -1265,12 +1265,12 @@ function HttpMockPanel() {
               {routeForm.authType === 'basic' && (
                 <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>用户名</div>
+                    <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>用户名</div>
                     <Input value={routeForm.authConfig?.username || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, username: e.target.value } }))}
                       placeholder="username" />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>密码</div>
+                    <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>密码</div>
                     <Input.Password value={routeForm.authConfig?.password || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, password: e.target.value } }))}
                       placeholder="password" />
                   </div>
@@ -1279,12 +1279,12 @@ function HttpMockPanel() {
               {routeForm.authType === 'apikey' && (
                 <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Header 名称</div>
+                    <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Header 名称</div>
                     <Input value={routeForm.authConfig?.headerName || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, headerName: e.target.value } }))}
                       placeholder="X-API-Key" />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Key 值</div>
+                    <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Key 值</div>
                     <Input spellCheck={false} value={routeForm.authConfig?.key || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, key: e.target.value } }))}
                       placeholder="your-api-key" style={{ fontFamily: MONO, fontSize: 12 }} />
                   </div>
@@ -1292,21 +1292,21 @@ function HttpMockPanel() {
               )}
               {routeForm.authType === 'jwt' && (
                 <div style={{ marginTop: 8 }}>
-                  <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Secret（HS256 签名验证，留空则只检查格式和过期时间）</div>
+                  <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Secret（HS256 签名验证，留空则只检查格式和过期时间）</div>
                   <Input spellCheck={false} value={routeForm.authConfig?.secret || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, secret: e.target.value } }))}
                     placeholder="your-jwt-secret（可选）" style={{ fontFamily: MONO, fontSize: 12 }} />
-                  <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 6 }}>验证逻辑：JWT 格式 → exp 过期检查 → 签名校验（如填了 secret）</div>
+                  <div style={{ fontSize: 11, color: '#86909c', marginTop: 6 }}>验证逻辑：JWT 格式 → exp 过期检查 → 签名校验（如填了 secret）</div>
                 </div>
               )}
               {routeForm.authType === 'custom_header' && (
                 <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Header 名称</div>
+                    <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Header 名称</div>
                     <Input value={routeForm.authConfig?.headerName || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, headerName: e.target.value } }))}
                       placeholder="X-Custom-Auth" />
                   </div>
                   <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Header 值</div>
+                    <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Header 值</div>
                     <Input spellCheck={false} value={routeForm.authConfig?.headerValue || ''} onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, headerValue: e.target.value } }))}
                       placeholder="expected-value" style={{ fontFamily: MONO, fontSize: 12 }} />
                   </div>
@@ -1319,12 +1319,12 @@ function HttpMockPanel() {
 
             {/* 代理转发 */}
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>代理转发 URL</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6 }}>代理转发 URL</div>
               <Input spellCheck={false} value={routeForm.proxyUrl || ''} onChange={e => setRouteForm(f => ({ ...f, proxyUrl: e.target.value || null }))}
                 placeholder="https://api.example.com/real-endpoint"
-                prefix={<SendOutlined style={{ color: '#bfbfbf' }} />}
+                prefix={<SendOutlined style={{ color: '#c9cdd4' }} />}
                 style={{ fontFamily: MONO, fontSize: 12 }} />
-              <div style={{ fontSize: 11, color: '#bfbfbf', marginTop: 4 }}>填写后请求将被转发到该地址，可用于接口代理调试</div>
+              <div style={{ fontSize: 11, color: '#c9cdd4', marginTop: 4 }}>填写后请求将被转发到该地址，可用于接口代理调试</div>
             </div>
             {routeForm.proxyUrl && (
               <div>
@@ -1332,11 +1332,11 @@ function HttpMockPanel() {
                   checked={routeForm.proxyModifyResponse || false}
                   onChange={v => setRouteForm(f => ({ ...f, proxyModifyResponse: v }))}
                 />
-                <span style={{ marginLeft: 8, fontSize: 12, color: '#595959' }}>转发后用本地配置覆盖响应</span>
+                <span style={{ marginLeft: 8, fontSize: 12, color: '#4e5969' }}>转发后用本地配置覆盖响应</span>
               </div>
             )}
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>自定义响应头 (JSON)</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6 }}>自定义响应头 (JSON)</div>
               <TextArea spellCheck={false}
                 value={routeForm.responseHeaders ? JSON.stringify(routeForm.responseHeaders, null, 2) : ''}
                 onChange={e => { try { setRouteForm(f => ({ ...f, responseHeaders: e.target.value ? JSON.parse(e.target.value) : null })) } catch {} }}
@@ -1360,7 +1360,7 @@ function HttpMockPanel() {
               <>
                 <span style={{ fontSize: 12, fontWeight: 700, color: METHOD_COLOR(expandedLogDetail.method) }}>{expandedLogDetail.method}</span>
                 <span style={{ fontSize: 12, fontWeight: 700, color: STATUS_COLOR(expandedLogDetail.statusCode) }}>{expandedLogDetail.statusCode}</span>
-                <span style={{ fontFamily: MONO, fontSize: 12, color: '#595959', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{expandedLogDetail.path}</span>
+                <span style={{ fontFamily: MONO, fontSize: 12, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{expandedLogDetail.path}</span>
               </>
             )}
           </div>
@@ -1384,8 +1384,8 @@ function HttpMockPanel() {
                 ['匹配耗时', `${(expandedLogDetail.matchMs ?? 0).toFixed(1)} ms`],
               ].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', gap: 8, minWidth: 0 }}>
-                  <span style={{ color: '#8c8c8c', flexShrink: 0 }}>{k}</span>
-                  <span style={{ color: '#262626', fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span>
+                  <span style={{ color: '#86909c', flexShrink: 0 }}>{k}</span>
+                  <span style={{ color: '#1d2129', fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span>
                 </div>
               ))}
             </div>
@@ -1406,7 +1406,7 @@ function HttpMockPanel() {
       <Modal title="保存为自定义预设" open={savePresetOpen}
         onOk={handleSaveCustomPreset} onCancel={() => setSavePresetOpen(false)}
         okText="保存" cancelText="取消" okButtonProps={{ disabled: !savePresetName.trim() }}>
-        <div style={{ marginBottom: 8, fontSize: 13, color: '#8c8c8c' }}>
+        <div style={{ marginBottom: 8, fontSize: 13, color: '#86909c' }}>
           将当前响应配置（状态码、Content-Type、响应内容等）保存为预设，方便下次快速选用。
         </div>
         <Input placeholder="输入预设名称" value={savePresetName}

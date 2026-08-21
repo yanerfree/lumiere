@@ -13,14 +13,19 @@ const { TextArea } = Input
 const FONT = "'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif"
 const MONO = 'var(--font-mono)'
 
+// 每个工具一个色，但**全部取自全站色板**（青碧 / 蓝 / 橙 / 紫 / 浅青 / 红 / 琥珀）。
+// 原来这里用的是 Material 那一套（#43a047 绿、#00897b、#d81b60 玫红…），
+// 跟全站的青碧主色不搭 —— 走查里工具箱是唯一还带自己一套绿的页面。
+// light/bg/pale 一律取 primary 的 rgba，透明度按 0.1 / 0.1 / 0.05 三档，
+// 跟别处的语义色底保持同一档。
 const THEMES = {
-  json:      { primary: '#43a047', light: '#e8f5e9', bg: 'rgba(232,245,233,0.5)', pale: 'rgba(232,245,233,0.25)', border: 'rgba(67,160,71,0.25)' },
-  codec:     { primary: '#00897b', light: '#e0f7fa', bg: 'rgba(224,242,241,0.5)', pale: 'rgba(224,242,241,0.25)', border: 'rgba(0,137,123,0.25)' },
-  timestamp: { primary: '#ef6c00', light: '#fff3e0', bg: 'rgba(255,243,224,0.5)', pale: 'rgba(255,243,224,0.25)', border: 'rgba(239,108,0,0.25)' },
-  regex:     { primary: '#8e24aa', light: '#f3e5f5', bg: 'rgba(243,229,245,0.5)', pale: 'rgba(243,229,245,0.25)', border: 'rgba(142,36,170,0.25)' },
-  datagen:   { primary: '#1e88e5', light: '#e3f2fd', bg: 'rgba(227,242,253,0.5)', pale: 'rgba(227,242,253,0.25)', border: 'rgba(30,136,229,0.25)' },
-  diff:      { primary: '#d81b60', light: '#fce4ec', bg: 'rgba(252,228,236,0.5)', pale: 'rgba(252,228,236,0.25)', border: 'rgba(216,27,96,0.25)' },
-  jwt:       { primary: '#f9a825', light: '#fffde7', bg: 'rgba(255,253,231,0.5)', pale: 'rgba(255,253,231,0.25)', border: 'rgba(249,168,37,0.25)' },
+  json:      { primary: '#0ea5a0', light: 'rgba(14,165,160,0.1)',  bg: 'rgba(14,165,160,0.1)',  pale: 'rgba(14,165,160,0.05)',  border: 'rgba(14,165,160,0.25)' },
+  codec:     { primary: '#4e8af0', light: 'rgba(78,138,240,0.1)',  bg: 'rgba(78,138,240,0.1)',  pale: 'rgba(78,138,240,0.05)',  border: 'rgba(78,138,240,0.25)' },
+  timestamp: { primary: '#ff7d00', light: 'rgba(255,125,0,0.1)',   bg: 'rgba(255,125,0,0.1)',   pale: 'rgba(255,125,0,0.05)',   border: 'rgba(255,125,0,0.25)' },
+  regex:     { primary: '#7c5cbf', light: 'rgba(124,92,191,0.1)',  bg: 'rgba(124,92,191,0.1)',  pale: 'rgba(124,92,191,0.05)',  border: 'rgba(124,92,191,0.25)' },
+  datagen:   { primary: '#2ec4b6', light: 'rgba(46,196,182,0.1)',  bg: 'rgba(46,196,182,0.1)',  pale: 'rgba(46,196,182,0.05)',  border: 'rgba(46,196,182,0.25)' },
+  diff:      { primary: '#e8453c', light: 'rgba(232,69,60,0.1)',   bg: 'rgba(232,69,60,0.1)',   pale: 'rgba(232,69,60,0.05)',   border: 'rgba(232,69,60,0.25)' },
+  jwt:       { primary: '#faad14', light: 'rgba(250,173,20,0.12)', bg: 'rgba(250,173,20,0.12)', pale: 'rgba(250,173,20,0.06)',  border: 'rgba(250,173,20,0.25)' },
 }
 
 const TOOLS = [
@@ -173,17 +178,17 @@ function JsonTool({ theme }) {
           <Button size="small" onClick={handleCompress}>压缩</Button>
           <Button size="small" onClick={handleEscape}>转义</Button>
           <Button size="small" onClick={handleUnescape}>去转义</Button>
-          <span style={{ fontSize: 11.5, color: theme.primary, opacity: 0.8, fontFamily: FONT, letterSpacing: 0.5 }}>
+          <span style={{ fontSize: 12, color: theme.primary, opacity: 0.8, fontFamily: FONT, letterSpacing: 0.5 }}>
             <Switch size="small" checked={autoFormat} onChange={setAutoFormat} style={{ marginRight: 4 }} />实时格式化
           </span>
         </Space>
-        {stats && <span style={{ fontSize: 10.5, color: theme.primary, opacity: 0.6, fontFamily: FONT, letterSpacing: 0.5 }}>{stats.chars} 字符 · {stats.lines} 行 · {stats.bytes} B</span>}
+        {stats && <span style={{ fontSize: 12, color: theme.primary, opacity: 0.6, fontFamily: FONT, letterSpacing: 0.5 }}>{stats.chars} 字符 · {stats.lines} 行 · {stats.bytes} B</span>}
       </div>
-      {error && <div style={{ color: '#e53935', fontSize: 12, marginBottom: 10, padding: '6px 12px', background: '#fff5f5', borderRadius: 12, border: '1px solid #ffcdd2' }}>{error}</div>}
+      {error && <div style={{ color: '#e8453c', fontSize: 12, marginBottom: 10, padding: '6px 12px', background: 'rgba(232,69,60,0.1)', borderRadius: 12, border: '1px solid rgba(232,69,60,0.25)' }}>{error}</div>}
       <div style={{ flex: 1, display: 'flex', gap: 14, minHeight: 0 }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-            <span style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, fontFamily: FONT, letterSpacing: 0.8 }}>
+            <span style={{ fontSize: 12, color: theme.primary, fontWeight: 600, fontFamily: FONT, letterSpacing: 0.8 }}>
               <Dot color={theme.primary} />输入
             </span>
             <Button type="link" size="small" style={{ padding: 0, fontSize: 11, height: 'auto', color: theme.primary }}
@@ -195,7 +200,7 @@ function JsonTool({ theme }) {
         </div>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-            <span style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, fontFamily: FONT, letterSpacing: 0.8 }}>
+            <span style={{ fontSize: 12, color: theme.primary, fontWeight: 600, fontFamily: FONT, letterSpacing: 0.8 }}>
               <Dot color={theme.primary} />输出
             </span>
             <Button type="link" size="small" icon={<CopyOutlined />} style={{ padding: 0, fontSize: 11, height: 'auto', color: theme.primary }}
@@ -265,7 +270,7 @@ function CodecTool({ theme }) {
       </div>
       <div style={{ flex: 1, display: 'flex', gap: 14, minHeight: 0 }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
+          <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
             <Dot color={theme.primary} />输入
           </div>
           <TextArea spellCheck={false} value={input} onChange={e => setInput(e.target.value)}
@@ -273,7 +278,7 @@ function CodecTool({ theme }) {
             placeholder="输入要处理的内容 ~" />
         </div>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
+          <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
             <Dot color={theme.primary} />输出
           </div>
           <TextArea spellCheck={false} value={output} readOnly
@@ -330,16 +335,16 @@ function TimestampTool({ theme }) {
         padding: '14px 18px', background: theme.bg, borderRadius: 16,
         border: `1.5px solid ${theme.border}`,
       }}>
-        <span style={{ fontSize: 12.5, color: theme.primary, fontWeight: 600, fontFamily: FONT, letterSpacing: 1 }}>⏱ 当前</span>
-        <span style={{ fontFamily: MONO, fontSize: 17, fontWeight: 700, color: '#262626', minWidth: 110, letterSpacing: 0.5 }}>{now}</span>
-        <span style={{ fontSize: 11.5, color: '#4e5969', fontFamily: FONT }}>{new Date(now * 1000).toLocaleString('zh-CN', { hour12: false })}</span>
+        <span style={{ fontSize: 12, color: theme.primary, fontWeight: 600, fontFamily: FONT, letterSpacing: 1 }}>⏱ 当前</span>
+        <span style={{ fontFamily: MONO, fontSize: 17, fontWeight: 700, color: '#1d2129', minWidth: 110, letterSpacing: 0.5 }}>{now}</span>
+        <span style={{ fontSize: 12, color: '#4e5969', fontFamily: FONT }}>{new Date(now * 1000).toLocaleString('zh-CN', { hour12: false })}</span>
         <Button size="small" icon={<CopyOutlined />} onClick={() => copy(String(now))}>复制</Button>
         <Button size="small" icon={<CopyOutlined />} onClick={() => copy(String(now * 1000))}>复制毫秒</Button>
       </div>
 
       <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end', marginBottom: 20 }}>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
+          <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
             <Dot color={theme.primary} />时间戳（秒/毫秒）
           </div>
           <Input spellCheck={false} value={ts} onChange={e => setTs(e.target.value)} placeholder="1719820800"
@@ -348,7 +353,7 @@ function TimestampTool({ theme }) {
         <Button type="primary" onClick={tsToDate}>→ 转日期</Button>
         <Button onClick={dateToTs}>← 转时间戳</Button>
         <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
+          <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
             <Dot color={theme.primary} />日期时间
           </div>
           <Input value={dt} onChange={e => setDt(e.target.value)} placeholder="2024-07-01 12:00:00"
@@ -357,7 +362,7 @@ function TimestampTool({ theme }) {
       </div>
 
       <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 10, fontFamily: FONT, letterSpacing: 0.8 }}>
+        <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 10, fontFamily: FONT, letterSpacing: 0.8 }}>
           <Dot color={theme.primary} />快捷选择
         </div>
         <Space size={8} wrap>
@@ -376,7 +381,7 @@ function TimestampTool({ theme }) {
         </Space>
       </div>
 
-      <div style={{ fontSize: 10.5, color: theme.primary, opacity: 0.5, fontFamily: FONT, letterSpacing: 0.5 }}>
+      <div style={{ fontSize: 12, color: theme.primary, opacity: 0.5, fontFamily: FONT, letterSpacing: 0.5 }}>
         支持 10 位（秒）和 13 位（毫秒）时间戳
       </div>
     </div>
@@ -460,7 +465,7 @@ function RegexTool({ theme }) {
         {regexError && <Tag color="red" style={{ borderRadius: 12 }}>语法错误</Tag>}
       </div>
       {regexError && (
-        <div style={{ color: '#e53935', fontSize: 12, marginBottom: 10, padding: '6px 12px', background: '#fff5f5', borderRadius: 12, border: '1px solid #ffcdd2' }}>{regexError}</div>
+        <div style={{ color: '#e8453c', fontSize: 12, marginBottom: 10, padding: '6px 12px', background: 'rgba(232,69,60,0.1)', borderRadius: 12, border: '1px solid rgba(232,69,60,0.25)' }}>{regexError}</div>
       )}
 
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
@@ -474,8 +479,8 @@ function RegexTool({ theme }) {
               onClick={handleAiGenerate} style={{ margin: '-4px -7px' }} />
           }
         />
-        <span style={{ fontSize: 11, color: '#d9d9d9' }}>|</span>
-        <span style={{ fontSize: 10.5, color: theme.primary, opacity: 0.6, fontFamily: FONT, letterSpacing: 0.5 }}>常用:</span>
+        <span style={{ fontSize: 11, color: '#c9cdd4' }}>|</span>
+        <span style={{ fontSize: 12, color: theme.primary, opacity: 0.6, fontFamily: FONT, letterSpacing: 0.5 }}>常用:</span>
         {COMMON.map(c => (
           <Tag key={c.label} style={{ cursor: 'pointer', fontSize: 11, borderRadius: 12, color: theme.primary, borderColor: theme.border }}
             onClick={() => setPattern(c.re)}>{c.label}</Tag>
@@ -489,7 +494,7 @@ function RegexTool({ theme }) {
 
       <div style={{ flex: 1, display: 'flex', gap: 14, minHeight: 0 }}>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
+          <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
             <Dot color={theme.primary} />测试文本
           </div>
           <TextArea spellCheck={false} value={text} onChange={e => setText(e.target.value)}
@@ -497,7 +502,7 @@ function RegexTool({ theme }) {
             placeholder="输入要匹配的文本 ~" />
         </div>
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
+          <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
             <Dot color={theme.primary} />匹配结果
           </div>
           <div style={{
@@ -516,7 +521,7 @@ function RegexTool({ theme }) {
               {groups.map((g, i) => (
                 <div key={i} style={{ fontSize: 11, fontFamily: MONO, padding: '2px 0' }}>
                   <span style={{ color: theme.primary, opacity: 0.6 }}>#{g.index + 1}</span> {g.groups.map((v, j) => (
-                    <Tag key={j} style={{ fontSize: 10, margin: '0 2px', borderRadius: 10, color: theme.primary, borderColor: theme.border }}>${j + 1}: {v}</Tag>
+                    <Tag key={j} style={{ fontSize: 11, margin: '0 2px', borderRadius: 10, color: theme.primary, borderColor: theme.border }}>${j + 1}: {v}</Tag>
                   ))}
                 </div>
               ))}
@@ -588,7 +593,7 @@ function DataGenTool({ theme }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: 20 }}>
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 14, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, fontFamily: FONT, letterSpacing: 0.8 }}>
+        <span style={{ fontSize: 12, color: theme.primary, fontWeight: 600, fontFamily: FONT, letterSpacing: 0.8 }}>
           <Dot color={theme.primary} />数量
         </span>
         <InputNumber value={count} onChange={v => v != null && setCount(Math.max(1, Math.min(200, v)))}
@@ -616,14 +621,14 @@ function DataGenTool({ theme }) {
                 padding: '7px 14px', background: i % 2 === 0 ? theme.pale : 'rgba(255,255,255,0.6)',
                 borderRadius: 10,
               }}>
-                <span style={{ fontFamily: MONO, fontSize: 12, color: '#262626', whiteSpace: 'pre' }}>{r}</span>
+                <span style={{ fontFamily: MONO, fontSize: 12, color: '#1d2129', whiteSpace: 'pre' }}>{r}</span>
                 <Button type="text" size="small" icon={<CopyOutlined />} onClick={() => copy(r)}
                   style={{ flexShrink: 0, color: theme.primary, opacity: 0.6 }} />
               </div>
             ))}
           </div>
         ) : (
-          <div style={{ textAlign: 'center', padding: 50, color: theme.primary, opacity: 0.4, fontSize: 12.5, fontFamily: FONT, letterSpacing: 1 }}>
+          <div style={{ textAlign: 'center', padding: 50, color: theme.primary, opacity: 0.4, fontSize: 12, fontFamily: FONT, letterSpacing: 1 }}>
             选择数据类型开始生成 ✨
           </div>
         )}
@@ -663,18 +668,18 @@ function DiffTool({ theme }) {
         {diffResult && <Button size="small" onClick={() => setDiffResult(null)}>返回编辑</Button>}
         <Button size="small" onClick={() => { setLeft(''); setRight(''); setDiffResult(null) }}>清空</Button>
         {diffResult && (
-          <span style={{ fontSize: 11.5, color: theme.primary, opacity: 0.7, fontFamily: FONT }}>
+          <span style={{ fontSize: 12, color: theme.primary, opacity: 0.7, fontFamily: FONT }}>
             {diffResult.length} 行，
             {diffCount > 0
-              ? <span style={{ color: '#e53935' }}>{diffCount} 处差异</span>
-              : <span style={{ color: '#43a047' }}>完全一致 ✓</span>}
+              ? <span style={{ color: '#e8453c' }}>{diffCount} 处差异</span>
+              : <span style={{ color: '#0ea5a0' }}>完全一致 ✓</span>}
           </span>
         )}
       </div>
       {!diffResult ? (
         <div style={{ flex: 1, display: 'flex', gap: 14, minHeight: 0 }}>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
+            <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
               <Dot color={theme.primary} />文本 A
             </div>
             <TextArea spellCheck={false} value={left} onChange={e => setLeft(e.target.value)}
@@ -682,7 +687,7 @@ function DiffTool({ theme }) {
               placeholder="粘贴文本 A ~" />
           </div>
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-            <div style={{ fontSize: 11.5, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
+            <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6, fontFamily: FONT, letterSpacing: 0.8 }}>
               <Dot color={theme.primary} />文本 B
             </div>
             <TextArea spellCheck={false} value={right} onChange={e => setRight(e.target.value)}
@@ -695,14 +700,14 @@ function DiffTool({ theme }) {
           {diffResult.map((r, i) => {
             const bg = r.type === 'removed' ? 'rgba(255,205,210,0.4)' : r.type === 'added' ? 'rgba(200,230,201,0.5)' : 'transparent'
             const sign = r.type === 'removed' ? '−' : r.type === 'added' ? '+' : ' '
-            const signColor = r.type === 'removed' ? '#e53935' : r.type === 'added' ? '#43a047' : '#d9d9d9'
+            const signColor = r.type === 'removed' ? '#e8453c' : r.type === 'added' ? '#0ea5a0' : '#c9cdd4'
             const content = r.type === 'removed' ? r.left : r.type === 'added' ? r.right : r.left
             return (
               <div key={i} style={{
                 display: 'flex', fontFamily: MONO, fontSize: 12, lineHeight: 1.7,
                 background: bg, borderBottom: '1px solid rgba(0,0,0,0.03)', minHeight: 22,
               }}>
-                <span style={{ width: 35, textAlign: 'right', padding: '0 6px', color: '#c9cdd4', fontSize: 10, flexShrink: 0, lineHeight: '22px' }}>{i + 1}</span>
+                <span style={{ width: 35, textAlign: 'right', padding: '0 6px', color: '#c9cdd4', fontSize: 11, flexShrink: 0, lineHeight: '22px' }}>{i + 1}</span>
                 <span style={{ width: 18, textAlign: 'center', color: signColor, fontWeight: 600, flexShrink: 0, lineHeight: '22px' }}>{sign}</span>
                 <span style={{ padding: '0 8px', flex: 1, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{content}</span>
               </div>
@@ -959,8 +964,8 @@ function JwtPanel({ theme }) {
               <div style={{ fontSize: 13, fontWeight: 600, color: theme.primary, marginBottom: 10 }}>生成结果</div>
 
               <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>JWT Token</div>
-                <div style={{ padding: 10, background: '#fff', borderRadius: 8, fontFamily: MONO, fontSize: 11, wordBreak: 'break-all', border: '1px solid #f0f0f0', position: 'relative' }}>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>JWT Token</div>
+                <div style={{ padding: 10, background: '#fff', borderRadius: 8, fontFamily: MONO, fontSize: 11, wordBreak: 'break-all', border: '1px solid rgba(0,0,0,0.06)', position: 'relative' }}>
                   {result.token}
                   <Button type="link" size="small" icon={<CopyOutlined />} style={{ position: 'absolute', top: 4, right: 4, fontSize: 11 }}
                     onClick={() => copy(result.token)}>复制</Button>
@@ -968,7 +973,7 @@ function JwtPanel({ theme }) {
               </div>
 
               <div style={{ marginBottom: 12 }}>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>请求时这样用</div>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>请求时这样用</div>
                 <div style={{ padding: 10, background: '#1e1e2e', color: '#cdd6f4', borderRadius: 8, fontFamily: MONO, fontSize: 12, lineHeight: 1.8 }}>
                   <div>Authorization: <span style={{ color: '#a6e3a1' }}>Bearer {result.token.substring(0, 20)}...{result.token.substring(result.token.length - 10)}</span></div>
                 </div>
@@ -978,7 +983,7 @@ function JwtPanel({ theme }) {
 
               <div style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>cURL 示例</div>
+                  <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>cURL 示例</div>
                   <div style={{ padding: 8, background: '#1e1e2e', color: '#cdd6f4', borderRadius: 8, fontFamily: MONO, fontSize: 11, lineHeight: 1.6 }}>
                     curl -H "Authorization: Bearer {result.token.substring(0, 15)}..." \<br/>
                     {'  '}https://api.example.com/endpoint
@@ -987,7 +992,7 @@ function JwtPanel({ theme }) {
                     onClick={() => copy(`curl -H "Authorization: Bearer ${result.token}" https://api.example.com/endpoint`)}>复制 cURL</Button>
                 </div>
                 <div>
-                  <div style={{ fontSize: 11, color: '#8c8c8c', lineHeight: 2 }}>
+                  <div style={{ fontSize: 11, color: '#86909c', lineHeight: 2 }}>
                     <div>签发时间: {new Date().toLocaleString('zh-CN')}</div>
                     <div>过期时间: {result.expAt.toLocaleString('zh-CN')}</div>
                     <div>算法: HS256</div>
@@ -1017,17 +1022,17 @@ function JwtPanel({ theme }) {
           </div>
           <div style={{ flex: 1, overflow: 'auto' }}>
             {decoded ? (decoded.error ? (
-              <div style={{ color: '#e53935', padding: 12, background: '#fff5f5', borderRadius: 12, fontSize: 12 }}>{decoded.error}</div>
+              <div style={{ color: '#e8453c', padding: 12, background: 'rgba(232,69,60,0.1)', borderRadius: 12, fontSize: 12 }}>{decoded.error}</div>
             ) : (<>
               {decoded.isExpired && <Tag color="red" style={{ marginBottom: 8 }}>已过期</Tag>}
               {decoded.exp && !decoded.isExpired && <Tag color="cyan" style={{ marginBottom: 8 }}>有效至 {decoded.exp.toLocaleString('zh-CN')}</Tag>}
               <div style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Header</div>
+                <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Header</div>
                 <pre style={{ margin: 0, padding: 8, background: theme.pale, borderRadius: 8, fontSize: 11, fontFamily: MONO, border: `1px solid ${theme.border}` }}>
                   {JSON.stringify(decoded.header, null, 2)}</pre>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Payload</div>
+                <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Payload</div>
                 <pre style={{ margin: 0, padding: 8, background: theme.pale, borderRadius: 8, fontSize: 11, fontFamily: MONO, border: `1px solid ${theme.border}` }}>
                   {JSON.stringify(decoded.payload, null, 2)}</pre>
               </div>
@@ -1162,18 +1167,18 @@ function HmacPanel({ theme }) {
       {result ? (<>
         <div style={{ display: 'flex', gap: 14, marginBottom: 12 }}>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Hex</div>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Hex</div>
             <div style={{ padding: 10, background: theme.pale, borderRadius: 10, fontFamily: MONO, fontSize: 11, border: `1px solid ${theme.border}`, wordBreak: 'break-all' }}>
               {result.hex}
-              <Button type="link" size="small" icon={<CopyOutlined />} style={{ float: 'right', padding: 0, fontSize: 10 }}
+              <Button type="link" size="small" icon={<CopyOutlined />} style={{ float: 'right', padding: 0, fontSize: 11 }}
                 onClick={() => copy(result.hex)}>复制</Button>
             </div>
           </div>
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Base64</div>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Base64</div>
             <div style={{ padding: 10, background: theme.pale, borderRadius: 10, fontFamily: MONO, fontSize: 11, border: `1px solid ${theme.border}`, wordBreak: 'break-all' }}>
               {result.base64}
-              <Button type="link" size="small" icon={<CopyOutlined />} style={{ float: 'right', padding: 0, fontSize: 10 }}
+              <Button type="link" size="small" icon={<CopyOutlined />} style={{ float: 'right', padding: 0, fontSize: 11 }}
                 onClick={() => copy(result.base64)}>复制</Button>
             </div>
           </div>
@@ -1288,26 +1293,26 @@ function AkSkPanel({ theme }) {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', gap: 12 }}>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>签名字符串</div>
+              <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>签名字符串</div>
               <pre style={{ margin: 0, padding: 10, background: theme.pale, borderRadius: 10, fontFamily: MONO, fontSize: 11, border: `1px solid ${theme.border}`, whiteSpace: 'pre-wrap' }}>{result.stringToSign}</pre>
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Signature (Base64)</div>
+              <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Signature (Base64)</div>
               <div style={{ padding: 10, background: theme.pale, borderRadius: 10, fontFamily: MONO, fontSize: 11, border: `1px solid ${theme.border}`, wordBreak: 'break-all' }}>
                 {result.signature}
-                <Button type="link" size="small" icon={<CopyOutlined />} style={{ float: 'right', padding: 0, fontSize: 10 }}
+                <Button type="link" size="small" icon={<CopyOutlined />} style={{ float: 'right', padding: 0, fontSize: 11 }}
                   onClick={() => copy(result.signature)}>复制</Button>
               </div>
             </div>
           </div>
           <div>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>请求头（可直接复制使用）</div>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>请求头（可直接复制使用）</div>
             <div style={{ padding: 10, background: theme.pale, borderRadius: 10, fontFamily: MONO, fontSize: 12, border: `1px solid ${theme.border}`, lineHeight: 1.8 }}>
               <div>Authorization: <strong>{result.auth}</strong>
-                <Button type="link" size="small" icon={<CopyOutlined />} style={{ padding: 0, fontSize: 10, marginLeft: 8 }}
+                <Button type="link" size="small" icon={<CopyOutlined />} style={{ padding: 0, fontSize: 11, marginLeft: 8 }}
                   onClick={() => copy(result.auth)}>复制</Button></div>
               <div>X-Timestamp: <strong>{result.ts}</strong>
-                <Button type="link" size="small" icon={<CopyOutlined />} style={{ padding: 0, fontSize: 10, marginLeft: 8 }}
+                <Button type="link" size="small" icon={<CopyOutlined />} style={{ padding: 0, fontSize: 11, marginLeft: 8 }}
                   onClick={() => copy(result.ts)}>复制</Button></div>
             </div>
           </div>
@@ -1414,7 +1419,7 @@ function OAuth2Panel({ theme }) {
 
       {/* 结果区 */}
       {tokenResult ? (tokenResult.error ? (
-        <div style={{ color: '#e53935', padding: 14, background: '#fff5f5', borderRadius: 12, fontSize: 12, border: '1px solid #ffcdd2' }}>{tokenResult.error}</div>
+        <div style={{ color: '#e8453c', padding: 14, background: 'rgba(232,69,60,0.1)', borderRadius: 12, fontSize: 12, border: '1px solid rgba(232,69,60,0.25)' }}>{tokenResult.error}</div>
       ) : (
         <div style={{ padding: 16, border: `1px solid ${theme.border}`, borderRadius: 14, background: '#fff' }}>
           {tokenResult.parsed?.access_token && (<>
@@ -1422,7 +1427,7 @@ function OAuth2Panel({ theme }) {
               <div style={{ fontSize: 12, color: theme.primary, fontWeight: 600, marginBottom: 6 }}>Access Token</div>
               <div style={{ padding: 10, background: theme.pale, borderRadius: 10, fontFamily: MONO, fontSize: 11, border: `1px solid ${theme.border}`, wordBreak: 'break-all', position: 'relative' }}>
                 {tokenResult.parsed.access_token}
-                <Button type="link" size="small" icon={<CopyOutlined />} style={{ position: 'absolute', top: 4, right: 4, fontSize: 10 }}
+                <Button type="link" size="small" icon={<CopyOutlined />} style={{ position: 'absolute', top: 4, right: 4, fontSize: 11 }}
                   onClick={() => copy(tokenResult.parsed.access_token)}>复制</Button>
               </div>
             </div>
@@ -1434,7 +1439,7 @@ function OAuth2Panel({ theme }) {
               <Button size="small" icon={<CopyOutlined />} style={{ marginTop: 6 }}
                 onClick={() => copy(`Bearer ${tokenResult.parsed.access_token}`)}>复制完整 Header 值</Button>
             </div>
-            <div style={{ display: 'flex', gap: 16, fontSize: 11, color: '#8c8c8c', marginBottom: 14 }}>
+            <div style={{ display: 'flex', gap: 16, fontSize: 11, color: '#86909c', marginBottom: 14 }}>
               {tokenResult.parsed.expires_in && <span>有效期: {tokenResult.parsed.expires_in}秒</span>}
               {tokenResult.parsed.token_type && <span>类型: {tokenResult.parsed.token_type}</span>}
               {tokenResult.parsed.scope && <span>Scope: {tokenResult.parsed.scope}</span>}
@@ -1494,14 +1499,15 @@ export default function Toolbox() {
         borderBottom: '1px solid rgba(0,0,0,0.04)',
         display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
       }}>
+        {/* 图标块不做实色：淡底 + 细边框 + 彩色图标（全站其他头像/图标都是这个做法） */}
         <div style={{
           width: 34, height: 34, borderRadius: 11,
-          background: `linear-gradient(135deg, ${theme.primary}, ${theme.primary}bb)`,
+          background: theme.light,
+          border: `1px solid ${theme.border}`,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: `0 3px 10px ${theme.primary}33`,
           transition: 'all 0.3s ease',
         }}>
-          <ToolOutlined style={{ fontSize: 17, color: '#fff' }} />
+          <ToolOutlined style={{ fontSize: 17, color: theme.primary }} />
         </div>
         <div>
           <div style={{ fontWeight: 700, fontSize: 16, color: '#1d2129', lineHeight: 1.3, fontFamily: FONT, letterSpacing: 1 }}>工具箱</div>
@@ -1542,7 +1548,7 @@ export default function Toolbox() {
                       fontFamily: FONT, letterSpacing: 0.5,
                     }}>{t.label}</div>
                     <div style={{
-                      fontSize: 10, color: active ? `${tt.primary}99` : '#c9cdd4',
+                      fontSize: 11, color: active ? `${tt.primary}99` : '#c9cdd4',
                       transition: 'color 0.25s', lineHeight: 1.4,
                       whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                       fontFamily: FONT, letterSpacing: 0.3,
@@ -1552,7 +1558,7 @@ export default function Toolbox() {
               )
             })}
           </div>
-          <div style={{ textAlign: 'center', fontSize: 10.5, color: '#c9cdd4', padding: '10px 0', letterSpacing: 4, fontFamily: FONT }}>
+          <div style={{ textAlign: 'center', fontSize: 12, color: '#c9cdd4', padding: '10px 0', letterSpacing: 4, fontFamily: FONT }}>
             ✿ 宁静致远
           </div>
         </div>

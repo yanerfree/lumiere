@@ -165,7 +165,7 @@ export default function BranchSelector({ projectId }) {
               </Form.Item>
             ) : null}
           </Form.Item>
-          <div style={{ fontSize: 12, color: '#8c8c8c' }}>
+          <div style={{ fontSize: 12, color: '#86909c' }}>
             复制后所有数据独立（新 ID），场景状态重置为草稿，执行历史不带入。测试报告和测试计划不复制。
           </div>
         </Form>

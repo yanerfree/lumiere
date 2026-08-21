@@ -258,7 +258,7 @@ export default function Documents() {
           <div style={{ marginTop: 4, color: '#c9cdd4', fontSize: 12 }}>点击上方「生成文档」按钮，填写系统信息即可自动生成</div>
         </Card>
       ) : (
-        <Table rowKey="id" columns={columns} dataSource={docs} loading={loading} pagination={false} size="middle" />
+        <Table rowKey="id" columns={columns} dataSource={docs} loading={loading} pagination={false} size="small" />
       )}
 
       {/* 生成弹窗 */}
@@ -303,7 +303,7 @@ export default function Documents() {
             <div style={{
               margin: '-8px 0 16px', padding: '8px 12px', borderRadius: 10, lineHeight: 1.8,
               background: 'rgba(250,140,22,0.06)', border: '1px solid rgba(250,140,22,0.2)',
-              fontSize: 12.5, color: '#4e5969',
+              fontSize: 12, color: '#4e5969',
             }}>
               「平台直接生成」会用这组账号<b>真登录这个系统</b>：点侧栏各模块截图，
               并点主内容区的「新增/创建」按钮把弹窗截下来（截完即取消，<b>不填表、不提交</b>）。
@@ -358,7 +358,7 @@ export default function Documents() {
             {/* platContent 一直在攒流式正文，但从来没显示过 —— 一篇文档要写好几分钟，
                 进度只有几行 step，人看不出到底在不在动。至少把字数报出来。 */}
             {platContent.length > 0 && (
-              <div style={{ textAlign: 'center', fontSize: 12.5, color: '#4e5969', marginBottom: 8 }}>
+              <div style={{ textAlign: 'center', fontSize: 12, color: '#4e5969', marginBottom: 8 }}>
                 已生成 {platContent.length} 字
               </div>
             )}
@@ -385,7 +385,7 @@ export default function Documents() {
         <div style={{
           margin: '4px 0 14px', padding: '8px 12px', borderRadius: 10, lineHeight: 1.8,
           background: 'rgba(14,165,160,0.06)', border: '1px solid rgba(14,165,160,0.2)',
-          fontSize: 12.5, color: '#4e5969',
+          fontSize: 12, color: '#4e5969',
         }}>
           <b>不会碰被测系统</b>：沿用文档里现有的 {countImages(optDoc?.content)} 张截图，只重写文字，也不用再填账号。
           <br />
@@ -401,7 +401,7 @@ export default function Documents() {
           placeholder={'哪儿不对就直接说，例如：\n第 3 节步骤太笼统，把每个字段填什么写出来\n开头加一段这个系统是干什么的\n不填则按格式模板做通用润色'}
         />
         {optRunning && (
-          <div style={{ marginTop: 12, fontSize: 12.5, color: '#4e5969' }}>
+          <div style={{ marginTop: 12, fontSize: 12, color: '#4e5969' }}>
             <LoadingOutlined /> 正在重写…… 已生成 {optChars} 字（写完才会覆盖原文，中途关掉不影响原文档）
           </div>
         )}
@@ -504,7 +504,7 @@ export default function Documents() {
           /* Blockquote */
           .markdown-body blockquote {
             border-left: 4px solid #0ea5a0; padding: 12px 20px;
-            margin: 16px 0; background: #e0f7f6;
+            margin: 16px 0; background: var(--green-bg);
             color: #1f2328; border-radius: 0 6px 6px 0;
           }
           .markdown-body blockquote p { margin: 4px 0; }

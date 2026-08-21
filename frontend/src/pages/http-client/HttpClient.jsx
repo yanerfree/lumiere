@@ -15,7 +15,7 @@ import { useTextSearch, TextSearchBar, highlightText, scrollMatchIntoView } from
 
 const { TextArea } = Input
 const MONO = 'var(--font-mono)'
-const MC = { GET: '#0ea5a0', POST: '#fa8c16', PUT: '#4e8af0', DELETE: '#e8453c', PATCH: '#7c5cbf', HEAD: '#8c8c8c', OPTIONS: '#8c8c8c' }
+const MC = { GET: '#0ea5a0', POST: '#ff7d00', PUT: '#4e8af0', DELETE: '#e8453c', PATCH: '#7c5cbf', HEAD: '#86909c', OPTIONS: '#86909c' }
 
 // ── cURL 工具 ──
 function parseCurl(curl) {
@@ -383,22 +383,22 @@ export default function HttpClient() {
             background: showInside ? 'rgba(250,173,20,0.06)' : isActive ? 'rgba(14,165,160,0.06)' : 'transparent',
             borderLeft: isActive ? '3px solid #0ea5a0' : '3px solid transparent',
             borderTop: showAbove ? '2px solid #0ea5a0' : '2px solid transparent',
-            borderBottom: showBelow ? '2px solid #0ea5a0' : showInside ? '1px dashed #fa8c16' : '2px solid transparent',
-            borderRight: showInside ? '1px dashed #fa8c16' : 'none',
+            borderBottom: showBelow ? '2px solid #0ea5a0' : showInside ? '1px dashed #ff7d00' : '2px solid transparent',
+            borderRight: showInside ? '1px dashed #ff7d00' : 'none',
             borderRadius: showInside ? 4 : 0, opacity: dragId === item.id ? 0.4 : 1,
             marginTop: showAbove ? -2 : 0, marginBottom: showBelow ? -2 : 0,
           }}>
-          {isFolder && <span style={{ fontSize: 10, color: '#bfbfbf', width: 12, textAlign: 'center' }}>{isExpanded ? '▾' : '▸'}</span>}
-          {isFolder && <FolderOutlined style={{ color: '#fa8c16', fontSize: 12 }} />}
-          {!isFolder && <Tag color={MC[item.method]} style={{ margin: 0, fontSize: 9, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{item.method}</Tag>}
+          {isFolder && <span style={{ fontSize: 11, color: '#c9cdd4', width: 12, textAlign: 'center' }}>{isExpanded ? '▾' : '▸'}</span>}
+          {isFolder && <FolderOutlined style={{ color: '#ff7d00', fontSize: 12 }} />}
+          {!isFolder && <Tag color={MC[item.method]} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{item.method}</Tag>}
           {isEditing ? (
             <Input size="small" autoFocus value={editingNameValue} onChange={e => setEditingNameValue(e.target.value)}
               onBlur={() => handleRename(item.id, editingNameValue)} onPressEnter={() => handleRename(item.id, editingNameValue)}
               style={{ flex: 1, fontSize: 12, height: 22 }} onClick={e => e.stopPropagation()} />
-          ) : <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isFolder ? '#262626' : '#595959', fontWeight: isFolder ? 500 : 400 }}>{item.name}</span>}
+          ) : <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isFolder ? '#1d2129' : '#4e5969', fontWeight: isFolder ? 500 : 400 }}>{item.name}</span>}
           {isHover && !isEditing && (
             <span style={{ display: 'flex', gap: 2, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-              {isFolder && <Tooltip title="新建请求"><PlusOutlined style={{ fontSize: 11, color: '#8c8c8c', padding: 2 }} onClick={() => { handleCreate('request', item.id); setExpandedFolders(s => ({ ...s, [item.id]: true })) }} /></Tooltip>}
+              {isFolder && <Tooltip title="新建请求"><PlusOutlined style={{ fontSize: 11, color: '#86909c', padding: 2 }} onClick={() => { handleCreate('request', item.id); setExpandedFolders(s => ({ ...s, [item.id]: true })) }} /></Tooltip>}
               {!isFolder && folders.length > 0 && (
                 <Dropdown
                   onOpenChange={open => { if (open) setPopupItemId(item.id); else { setPopupItemId(null); setHoverItemId(null) } }}
@@ -408,24 +408,24 @@ export default function HttpClient() {
                   ] }}
                   trigger={['click']}
                 >
-                  <Tooltip title="移动"><FolderOutlined style={{ fontSize: 11, color: '#8c8c8c', padding: 2 }} /></Tooltip>
+                  <Tooltip title="移动"><FolderOutlined style={{ fontSize: 11, color: '#86909c', padding: 2 }} /></Tooltip>
                 </Dropdown>
               )}
-              <Tooltip title="复制"><CopyOutlined style={{ fontSize: 11, color: '#8c8c8c', padding: 2 }} onClick={() => handleDuplicateItem(item)} /></Tooltip>
-              <Tooltip title="重命名"><EditOutlined style={{ fontSize: 11, color: '#8c8c8c', padding: 2 }} onClick={() => { setEditingNameId(item.id); setEditingNameValue(item.name) }} /></Tooltip>
+              <Tooltip title="复制"><CopyOutlined style={{ fontSize: 11, color: '#86909c', padding: 2 }} onClick={() => handleDuplicateItem(item)} /></Tooltip>
+              <Tooltip title="重命名"><EditOutlined style={{ fontSize: 11, color: '#86909c', padding: 2 }} onClick={() => { setEditingNameId(item.id); setEditingNameValue(item.name) }} /></Tooltip>
               <Popconfirm
                 title="删除？"
                 onConfirm={() => handleDelete(item.id)}
                 onOpenChange={open => { if (open) setPopupItemId(item.id); else { setPopupItemId(null); setHoverItemId(null) } }}
                 placement="right"
               >
-                <DeleteOutlined style={{ fontSize: 11, color: '#bfbfbf', padding: 2 }} />
+                <DeleteOutlined style={{ fontSize: 11, color: '#c9cdd4', padding: 2 }} />
               </Popconfirm>
             </span>
           )}
         </div>
         {isFolder && isExpanded && children.map(c => renderTreeItem(c, depth + 1))}
-        {isFolder && isExpanded && children.length === 0 && <div style={{ padding: `3px 8px 3px ${26 + depth * 16}px`, fontSize: 11, color: '#d9d9d9', cursor: 'pointer' }} onClick={() => handleCreate('request', item.id)}>+ 新建请求</div>}
+        {isFolder && isExpanded && children.length === 0 && <div style={{ padding: `3px 8px 3px ${26 + depth * 16}px`, fontSize: 11, color: '#c9cdd4', cursor: 'pointer' }} onClick={() => handleCreate('request', item.id)}>+ 新建请求</div>}
       </div>
     )
   }
@@ -446,7 +446,7 @@ export default function HttpClient() {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <SendOutlined style={{ fontSize: 18, color: '#0ea5a0' }} />
           <span style={{ fontWeight: 600, fontSize: 16 }}>HTTP 请求</span>
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>{requests.length} 个请求</span>
+          <span style={{ fontSize: 12, color: '#86909c' }}>{requests.length} 个请求</span>
         </div>
         <Space size={8}>
           <Button size="small" icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入 cURL</Button>
@@ -484,7 +484,7 @@ export default function HttpClient() {
               onDrop={async e => { e.preventDefault(); if (dragId) { await handleMove(dragId, null); setDragId(null); setDragOverId(null); setDragPos(null) } }}>
               {folders.map(f => renderTreeItem(f))}
               {rootRequests.map(r => renderTreeItem(r))}
-              {items.length === 0 && <div style={{ textAlign: 'center', padding: 30, color: '#bfbfbf', fontSize: 12 }}>点击上方新建</div>}
+              {items.length === 0 && <div style={{ textAlign: 'center', padding: 30, color: '#c9cdd4', fontSize: 12 }}>点击上方新建</div>}
             </div>
           </div>
         )}
@@ -498,13 +498,13 @@ export default function HttpClient() {
                 <div key={t.id} onClick={() => setActiveTabId(t.id)} style={{
                   padding: '6px 10px', cursor: 'pointer', fontSize: 12, display: 'flex', alignItems: 'center', gap: 5,
                   borderBottom: activeTabId === t.id ? '2px solid #0ea5a0' : '2px solid transparent',
-                  color: activeTabId === t.id ? '#0ea5a0' : '#595959', fontWeight: activeTabId === t.id ? 600 : 400,
+                  color: activeTabId === t.id ? '#0ea5a0' : '#4e5969', fontWeight: activeTabId === t.id ? 600 : 400,
                   whiteSpace: 'nowrap', background: activeTabId === t.id ? 'rgba(230,81,0,0.05)' : 'transparent',
                 }}>
-                  <Tag color={MC[t.method]} style={{ margin: 0, fontSize: 9, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{t.method}</Tag>
+                  <Tag color={MC[t.method]} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{t.method}</Tag>
                   <span style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</span>
-                  {t._dirty && <span style={{ color: '#fa8c16', fontSize: 8 }}>●</span>}
-                  <span onClick={e => { e.stopPropagation(); closeTab(t.id) }} style={{ marginLeft: 2, color: '#bfbfbf', fontSize: 10, cursor: 'pointer' }}>×</span>
+                  {t._dirty && <span style={{ color: '#ff7d00', fontSize: 11 }}>●</span>}
+                  <span onClick={e => { e.stopPropagation(); closeTab(t.id) }} style={{ marginLeft: 2, color: '#c9cdd4', fontSize: 11, cursor: 'pointer' }}>×</span>
                 </div>
               ))}
             </div>
@@ -515,7 +515,7 @@ export default function HttpClient() {
               {/* 请求名 + URL */}
               <div style={{ padding: '8px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
                 <Input value={activeItem.name} onChange={e => updateTabField(activeItem.id, 'name', e.target.value)}
-                  variant="borderless" style={{ fontSize: 14, fontWeight: 600, padding: '0 0 4px 0', color: '#262626' }} />
+                  variant="borderless" style={{ fontSize: 14, fontWeight: 600, padding: '0 0 4px 0', color: '#1d2129' }} />
                 <div style={{ display: 'flex', gap: 8 }}>
                   <Select value={activeItem.method} onChange={v => updateTabField(activeItem.id, 'method', v)} style={{ width: 110 }} size="small"
                     options={['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS'].map(m => ({ value: m, label: <span style={{ color: MC[m], fontWeight: 600, fontFamily: MONO }}>{m}</span> }))} />
@@ -545,7 +545,7 @@ export default function HttpClient() {
                   ].map(t => (
                     <div key={t.key} onClick={() => setReqTab(t.key)} style={{
                       padding: '6px 12px', cursor: 'pointer', fontSize: 12,
-                      color: reqTab === t.key ? '#0ea5a0' : '#8c8c8c', fontWeight: reqTab === t.key ? 600 : 400,
+                      color: reqTab === t.key ? '#0ea5a0' : '#86909c', fontWeight: reqTab === t.key ? 600 : 400,
                       borderBottom: reqTab === t.key ? '2px solid #0ea5a0' : '2px solid transparent',
                     }}>{t.label}</div>
                   ))}
@@ -558,8 +558,8 @@ export default function HttpClient() {
                   {reqTab === 'params' && (
                     urlParams.length > 0 ? (
                       <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-                        <thead><tr style={{ background: 'rgba(0,0,0,0.02)' }}><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#8c8c8c' }}>参数名</th><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#8c8c8c' }}>参数值</th></tr></thead>
-                        <tbody>{urlParams.map((p, i) => <tr key={i} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)' }}><td style={{ padding: '4px 8px', fontFamily: MONO, fontSize: 11 }}>{p.key}</td><td style={{ padding: '4px 8px', fontFamily: MONO, fontSize: 11, color: '#595959' }}>{p.value}</td></tr>)}</tbody>
+                        <thead><tr style={{ background: 'rgba(0,0,0,0.02)' }}><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c' }}>参数名</th><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c' }}>参数值</th></tr></thead>
+                        <tbody>{urlParams.map((p, i) => <tr key={i} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)' }}><td style={{ padding: '4px 8px', fontFamily: MONO, fontSize: 11 }}>{p.key}</td><td style={{ padding: '4px 8px', fontFamily: MONO, fontSize: 11, color: '#4e5969' }}>{p.value}</td></tr>)}</tbody>
                       </table>
                     ) : <div style={{ color: '#c9cdd4', fontSize: 12, padding: 8 }}>URL 中没有 Query 参数</div>
                   )}
@@ -567,27 +567,27 @@ export default function HttpClient() {
                     <div style={{ display: 'flex', gap: 4, marginBottom: 6, alignItems: 'center' }}>
                       <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={() => updateTabField(activeItem.id, 'headers', [...(activeItem.headers || []), { key: '', value: '', enabled: true }])}>添加</Button>
                       {[{ k: 'Content-Type', v: 'application/json' }, { k: 'Authorization', v: 'Bearer ' }, { k: 'Accept', v: 'application/json' }].map(p =>
-                        <Tag key={p.k} style={{ cursor: 'pointer', fontSize: 10 }} onClick={() => updateTabField(activeItem.id, 'headers', [...(activeItem.headers || []), { key: p.k, value: p.v, enabled: true }])}>{p.k}</Tag>
+                        <Tag key={p.k} style={{ cursor: 'pointer', fontSize: 11 }} onClick={() => updateTabField(activeItem.id, 'headers', [...(activeItem.headers || []), { key: p.k, value: p.v, enabled: true }])}>{p.k}</Tag>
                       )}
                     </div>
                     <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                       <thead><tr style={{ background: 'rgba(0,0,0,0.02)' }}>
                         <th style={{ width: 30 }}></th>
-                        <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#8c8c8c', width: '35%' }}>参数名</th>
-                        <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#8c8c8c' }}>参数值</th>
+                        <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c', width: '35%' }}>参数名</th>
+                        <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c' }}>参数值</th>
                         <th style={{ width: 30 }}></th>
                       </tr></thead>
                       <tbody>{(activeItem.headers || []).map((h, i) => (
                         <tr key={i} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)', opacity: h.enabled === false ? 0.4 : 1 }}>
                           <td style={{ padding: '2px 4px', textAlign: 'center' }}>
-                            <CheckOutlined style={{ fontSize: 10, color: h.enabled !== false ? '#0ea5a0' : '#d9d9d9', cursor: 'pointer' }}
+                            <CheckOutlined style={{ fontSize: 11, color: h.enabled !== false ? '#0ea5a0' : '#c9cdd4', cursor: 'pointer' }}
                               onClick={() => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], enabled: !hs[i].enabled }; updateTabField(activeItem.id, 'headers', hs) }} />
                           </td>
                           <td style={{ padding: '2px 4px' }}><Input spellCheck={false} size="small" variant="borderless" value={h.key} placeholder="Header name" style={{ fontFamily: MONO, fontSize: 11 }}
                             onChange={e => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], key: e.target.value }; updateTabField(activeItem.id, 'headers', hs) }} /></td>
                           <td style={{ padding: '2px 4px' }}><Input spellCheck={false} size="small" variant="borderless" value={h.value} placeholder="Value" style={{ fontFamily: MONO, fontSize: 11 }}
                             onChange={e => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], value: e.target.value }; updateTabField(activeItem.id, 'headers', hs) }} /></td>
-                          <td><Button size="small" type="text" danger style={{ padding: '0 4px', fontSize: 10 }} onClick={() => updateTabField(activeItem.id, 'headers', activeItem.headers.filter((_, idx) => idx !== i))}>×</Button></td>
+                          <td><Button size="small" type="text" danger style={{ padding: '0 4px', fontSize: 11 }} onClick={() => updateTabField(activeItem.id, 'headers', activeItem.headers.filter((_, idx) => idx !== i))}>×</Button></td>
                         </tr>
                       ))}</tbody>
                     </table>
@@ -622,7 +622,7 @@ export default function HttpClient() {
                   ].map(t => (
                     <div key={t.key} onClick={() => setRespTab(t.key)} style={{
                       padding: '6px 12px', cursor: 'pointer', fontSize: 12,
-                      color: respTab === t.key ? '#0ea5a0' : '#8c8c8c', fontWeight: respTab === t.key ? 600 : 400,
+                      color: respTab === t.key ? '#0ea5a0' : '#86909c', fontWeight: respTab === t.key ? 600 : 400,
                       borderBottom: respTab === t.key ? '2px solid #0ea5a0' : '2px solid transparent',
                     }}>{t.label}</div>
                   ))}
@@ -632,8 +632,8 @@ export default function HttpClient() {
                   )}
                   {resp && !resp.error && (<>
                     <Tag color={resp.statusCode < 300 ? 'cyan' : resp.statusCode < 400 ? 'blue' : 'red'} style={{ margin: 0, borderRadius: 8, fontFamily: MONO }}>{resp.statusCode}</Tag>
-                    <span style={{ fontSize: 11, color: '#8c8c8c', marginLeft: 6 }}>{resp.elapsed}ms</span>
-                    <span style={{ fontSize: 11, color: '#8c8c8c', marginLeft: 6 }}>{resp.size > 1024 ? `${(resp.size/1024).toFixed(1)}KB` : `${resp.size}B`}</span>
+                    <span style={{ fontSize: 11, color: '#86909c', marginLeft: 6 }}>{resp.elapsed}ms</span>
+                    <span style={{ fontSize: 11, color: '#86909c', marginLeft: 6 }}>{resp.size > 1024 ? `${(resp.size/1024).toFixed(1)}KB` : `${resp.size}B`}</span>
                     <Button type="link" size="small" icon={<CopyOutlined />} style={{ fontSize: 11, padding: '0 0 0 8px' }}
                       onClick={() => copyToClipboard(resp.body).then(() => message.success('已复制'))}>复制</Button>
                   </>)}
@@ -645,8 +645,8 @@ export default function HttpClient() {
                     {respTab === 'body' && <pre style={{ margin: 0, fontFamily: MONO, fontSize: 12, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{highlightText(respBodyText, respSearch.matches, respSearch.index, respMarkRef)}</pre>}
                     {respTab === 'respHeaders' && (
                       <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-                        <thead><tr style={{ background: 'rgba(0,0,0,0.02)' }}><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#8c8c8c' }}>名称</th><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#8c8c8c' }}>值</th></tr></thead>
-                        <tbody>{Object.entries(resp.headers || {}).map(([k, v]) => <tr key={k} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)' }}><td style={{ padding: '4px 8px', fontFamily: MONO, fontSize: 11, fontWeight: 500 }}>{k}</td><td style={{ padding: '4px 8px', fontFamily: MONO, fontSize: 11, color: '#595959', wordBreak: 'break-all' }}>{v}</td></tr>)}</tbody>
+                        <thead><tr style={{ background: 'rgba(0,0,0,0.02)' }}><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c' }}>名称</th><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c' }}>值</th></tr></thead>
+                        <tbody>{Object.entries(resp.headers || {}).map(([k, v]) => <tr key={k} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)' }}><td style={{ padding: '4px 8px', fontFamily: MONO, fontSize: 11, fontWeight: 500 }}>{k}</td><td style={{ padding: '4px 8px', fontFamily: MONO, fontSize: 11, color: '#4e5969', wordBreak: 'break-all' }}>{v}</td></tr>)}</tbody>
                       </table>
                     )}
                     {respTab === 'actual' && resp.actualRequest && (
@@ -660,8 +660,8 @@ export default function HttpClient() {
                         <div style={{ marginBottom: 12 }}>
                           <div style={{ fontWeight: 600, marginBottom: 6 }}>Header</div>
                           <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
-                            <thead><tr style={{ background: 'rgba(0,0,0,0.02)' }}><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#8c8c8c' }}>名称</th><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#8c8c8c' }}>值</th></tr></thead>
-                            <tbody>{Object.entries(resp.actualRequest.headers || {}).map(([k, v]) => <tr key={k} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)' }}><td style={{ padding: '3px 8px', fontFamily: MONO, fontSize: 11, fontWeight: 500 }}>{k}</td><td style={{ padding: '3px 8px', fontFamily: MONO, fontSize: 11, color: '#595959', wordBreak: 'break-all' }}>{v}</td></tr>)}</tbody>
+                            <thead><tr style={{ background: 'rgba(0,0,0,0.02)' }}><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c' }}>名称</th><th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c' }}>值</th></tr></thead>
+                            <tbody>{Object.entries(resp.actualRequest.headers || {}).map(([k, v]) => <tr key={k} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)' }}><td style={{ padding: '3px 8px', fontFamily: MONO, fontSize: 11, fontWeight: 500 }}>{k}</td><td style={{ padding: '3px 8px', fontFamily: MONO, fontSize: 11, color: '#4e5969', wordBreak: 'break-all' }}>{v}</td></tr>)}</tbody>
                           </table>
                         </div>
                         {resp.actualRequest.body && <div><div style={{ fontWeight: 600, marginBottom: 6 }}>Body</div><pre style={{ margin: 0, padding: 8, background: 'rgba(0,0,0,0.02)', borderRadius: 6, fontFamily: MONO, fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{(() => { try { return JSON.stringify(JSON.parse(resp.actualRequest.body), null, 2) } catch { return resp.actualRequest.body } })()}</pre></div>}
@@ -681,13 +681,13 @@ export default function HttpClient() {
                       </div>
                     )}
                   </>)) : (
-                    <div style={{ textAlign: 'center', padding: 40, color: '#bfbfbf', fontSize: 12 }}>{isSending ? '请求发送中...' : '点击「发送」查看响应'}</div>
+                    <div style={{ textAlign: 'center', padding: 40, color: '#c9cdd4', fontSize: 12 }}>{isSending ? '请求发送中...' : '点击「发送」查看响应'}</div>
                   )}
                 </div>
               </div>
             </div>
           ) : (
-            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#bfbfbf' }}>
+            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#c9cdd4' }}>
               <div style={{ textAlign: 'center' }}>
                 <SendOutlined style={{ fontSize: 36, marginBottom: 12, opacity: 0.2 }} />
                 <div style={{ fontSize: 13 }}>新建或选择一个请求</div>
@@ -710,14 +710,14 @@ export default function HttpClient() {
               {history.map(h => (
                 <div key={h.id} style={{ padding: '6px 10px', borderBottom: '1px solid rgba(0,0,0,0.03)', fontSize: 11 }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span><Tag color={MC[h.method]} style={{ margin: 0, fontSize: 9, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{h.method}</Tag>{' '}<Tag color={h.statusCode < 400 ? 'cyan' : 'red'} style={{ margin: 0, fontSize: 9, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{h.statusCode}</Tag></span>
-                    <span style={{ color: '#bfbfbf', fontSize: 10 }}>{h.elapsed}ms</span>
+                    <span><Tag color={MC[h.method]} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{h.method}</Tag>{' '}<Tag color={h.statusCode < 400 ? 'cyan' : 'red'} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{h.statusCode}</Tag></span>
+                    <span style={{ color: '#c9cdd4', fontSize: 11 }}>{h.elapsed}ms</span>
                   </div>
-                  <div style={{ fontFamily: MONO, fontSize: 10, color: '#595959', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.url}</div>
-                  <div style={{ fontSize: 10, color: '#bfbfbf' }}>{new Date(h.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}</div>
+                  <div style={{ fontFamily: MONO, fontSize: 11, color: '#4e5969', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.url}</div>
+                  <div style={{ fontSize: 11, color: '#c9cdd4' }}>{new Date(h.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}</div>
                 </div>
               ))}
-              {history.length === 0 && <div style={{ textAlign: 'center', padding: 20, color: '#bfbfbf', fontSize: 12 }}>暂无历史</div>}
+              {history.length === 0 && <div style={{ textAlign: 'center', padding: 20, color: '#c9cdd4', fontSize: 12 }}>暂无历史</div>}
             </div>
           </div>
         )}
@@ -725,7 +725,7 @@ export default function HttpClient() {
 
       {/* 导入 cURL */}
       <Modal title="导入 cURL" open={importOpen} onCancel={() => setImportOpen(false)} onOk={handleImportCurl} okText="导入" cancelText="取消" width={600} okButtonProps={{ disabled: !importCurl.trim() }}>
-        <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 8 }}>粘贴 cURL 命令，自动解析为请求</div>
+        <div style={{ fontSize: 12, color: '#86909c', marginBottom: 8 }}>粘贴 cURL 命令，自动解析为请求</div>
         <TextArea spellCheck={false} value={importCurl} onChange={e => setImportCurl(e.target.value)} rows={8} style={{ fontFamily: MONO, fontSize: 12 }}
           placeholder={`curl -X POST 'https://api.example.com/users' \\\n  -H 'Content-Type: application/json' \\\n  -H 'Authorization: Bearer token123' \\\n  -d '{"name":"test"}'`} />
       </Modal>

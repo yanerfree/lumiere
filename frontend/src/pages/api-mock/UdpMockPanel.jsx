@@ -15,7 +15,7 @@ import { CODE_BLOCK_STYLE } from '../../components/MockCodeBlock'
 
 const { TextArea } = Input
 const MONO = 'var(--font-mono)'
-const ACCENT = '#1890ff'
+const ACCENT = '#4e8af0'
 
 export default function UdpMockPanel() {
   const [handlers, setHandlers] = useState([])
@@ -220,7 +220,7 @@ export default function UdpMockPanel() {
     if (!form) {
       return (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-          <Empty description={<span style={{ color: '#bfbfbf' }}>选择左侧 Handler 查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description={<span style={{ color: '#c9cdd4' }}>选择左侧 Handler 查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
         </div>
       )
     }
@@ -281,7 +281,7 @@ export default function UdpMockPanel() {
           {/* Match mode */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>匹配模式</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>匹配模式</div>
               <Radio.Group
                 value={form.matchMode || 'exact'}
                 onChange={e => setForm(f => ({ ...f, matchMode: e.target.value }))}
@@ -294,7 +294,7 @@ export default function UdpMockPanel() {
               </Radio.Group>
             </div>
             <div style={{ minWidth: 80 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={form.delayMs ?? 0} onChange={v => setForm(f => ({ ...f, delayMs: v }))}
                 min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" disabled={locked} />
             </div>
@@ -302,7 +302,7 @@ export default function UdpMockPanel() {
 
           {/* Match pattern */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>匹配规则</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>匹配规则</div>
             <TextArea spellCheck={false}
               value={form.matchPattern}
               onChange={e => setForm(f => ({ ...f, matchPattern: e.target.value }))}
@@ -315,7 +315,7 @@ export default function UdpMockPanel() {
 
           {/* Response mode */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应模式</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>响应模式</div>
             <Radio.Group
               value={form.responseMode || 'echo'}
               onChange={e => setForm(f => ({ ...f, responseMode: e.target.value }))}
@@ -332,7 +332,7 @@ export default function UdpMockPanel() {
           {form.responseMode !== 'echo' && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 12, color: '#8c8c8c' }}>响应数据</span>
+                <span style={{ fontSize: 12, color: '#86909c' }}>响应数据</span>
                 <Switch
                   checked={form.responseHex || false}
                   onChange={v => setForm(f => ({ ...f, responseHex: v }))}
@@ -379,7 +379,7 @@ export default function UdpMockPanel() {
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
           {/* Target info */}
           <div style={{ marginBottom: 16, padding: '10px 14px', borderRadius: 12, background: 'rgba(24,144,255,0.04)', border: '1px solid rgba(24,144,255,0.12)' }}>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 6 }}>UDP 端点</div>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 6 }}>UDP 端点</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <code style={{ fontFamily: MONO, fontSize: 13, color: ACCENT, fontWeight: 500 }}>{target}</code>
               <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => { copyToClipboard(target); message.success('已复制') }} />
@@ -389,7 +389,7 @@ export default function UdpMockPanel() {
           {/* Message input */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span style={{ fontSize: 12, color: '#8c8c8c' }}>发送数据</span>
+              <span style={{ fontSize: 12, color: '#86909c' }}>发送数据</span>
               <Radio.Group value={testHex} onChange={e => setTestHex(e.target.value)} size="small">
                 <Radio.Button value={false}>文本</Radio.Button>
                 <Radio.Button value={true}>Hex</Radio.Button>
@@ -414,14 +414,14 @@ export default function UdpMockPanel() {
               {serviceStatus.running ? '发送数据' : '服务未启动'}
             </Button>
             {!serviceStatus.running && (
-              <span style={{ marginLeft: 8, fontSize: 12, color: '#fa8c16' }}>请先启动 UDP Mock 服务</span>
+              <span style={{ marginLeft: 8, fontSize: 12, color: '#ff7d00' }}>请先启动 UDP Mock 服务</span>
             )}
           </div>
 
           {/* nc hint */}
           <div style={{ marginBottom: 16, padding: '8px 12px', borderRadius: 10, background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.04)' }}>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>命令行测试 (nc/netcat)</div>
-            <code style={{ fontSize: 11, fontFamily: MONO, color: '#595959', wordBreak: 'break-all' }}>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>命令行测试 (nc/netcat)</div>
+            <code style={{ fontSize: 11, fontFamily: MONO, color: '#4e5969', wordBreak: 'break-all' }}>
               echo -n "{testMessage}" | nc -u -w1 {window.location.hostname} {serviceStatus.port}
             </code>
             <Button size="small" type="text" icon={<CopyOutlined />} style={{ marginLeft: 4 }}
@@ -434,7 +434,7 @@ export default function UdpMockPanel() {
             <div>
               {testResult.error ? (
                 <pre style={{
-                  background: '#fff2f0', color: '#e8453c', padding: 12, borderRadius: 12,
+                  background: 'var(--red-bg)', color: '#e8453c', padding: 12, borderRadius: 12,
                   overflow: 'auto', fontSize: 11, lineHeight: 1.5, maxHeight: 200,
                   fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                   border: '1px solid #ffccc7',
@@ -448,12 +448,12 @@ export default function UdpMockPanel() {
                     borderBottom: '1px solid rgba(0,0,0,0.04)',
                   }}>
                     <Space size={8}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>请求 / 响应详情</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#1d2129' }}>请求 / 响应详情</span>
                       {testResult.received_bytes != null && (
-                        <Tag style={{ margin: 0, fontSize: 10, borderRadius: 8 }}>{testResult.received_bytes} bytes</Tag>
+                        <Tag style={{ margin: 0, fontSize: 11, borderRadius: 8 }}>{testResult.received_bytes} bytes</Tag>
                       )}
                       {testResult.duration_ms != null && (
-                        <span style={{ fontSize: 11, color: '#8c8c8c' }}>{testResult.duration_ms}ms</span>
+                        <span style={{ fontSize: 11, color: '#86909c' }}>{testResult.duration_ms}ms</span>
                       )}
                     </Space>
                     <Button size="small" icon={<CopyOutlined />} onClick={() => {
@@ -476,22 +476,22 @@ export default function UdpMockPanel() {
                   {/* Request section */}
                   <div style={{ padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: ACCENT, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Request</div>
-                    <div style={{ fontSize: 12, fontFamily: MONO, color: '#262626', marginBottom: 6 }}>
-                      <span style={{ color: '#8c8c8c' }}>Target: </span>{testResult.target}
+                    <div style={{ fontSize: 12, fontFamily: MONO, color: '#1d2129', marginBottom: 6 }}>
+                      <span style={{ color: '#86909c' }}>Target: </span>{testResult.target}
                     </div>
                     <div style={{ display: 'flex', gap: 12 }}>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Text</div>
+                        <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Text</div>
                         <pre style={{
-                          background: 'rgba(0,0,0,0.02)', color: '#595959', padding: 8, borderRadius: 8,
+                          background: 'rgba(0,0,0,0.02)', color: '#4e5969', padding: 8, borderRadius: 8,
                           fontSize: 11, fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                           border: '1px solid rgba(0,0,0,0.04)', maxHeight: 80, overflow: 'auto', margin: 0,
                         }}>{testResult.sent || ''}</pre>
                       </div>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Hex</div>
+                        <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Hex</div>
                         <pre style={{
-                          background: 'rgba(0,0,0,0.02)', color: '#595959', padding: 8, borderRadius: 8,
+                          background: 'rgba(0,0,0,0.02)', color: '#4e5969', padding: 8, borderRadius: 8,
                           fontSize: 11, fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                           border: '1px solid rgba(0,0,0,0.04)', maxHeight: 80, overflow: 'auto', margin: 0,
                         }}>{testResult.sent_hex || ''}</pre>
@@ -509,9 +509,9 @@ export default function UdpMockPanel() {
                     }}>{testResult.received ?? '(无响应 - UDP 无匹配 handler 时不回复)'}</pre>
                     {testResult.received_hex && (
                       <div>
-                        <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>Hex</div>
+                        <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Hex</div>
                         <pre style={{
-                          background: 'rgba(0,0,0,0.02)', color: '#595959', padding: 8, borderRadius: 8,
+                          background: 'rgba(0,0,0,0.02)', color: '#4e5969', padding: 8, borderRadius: 8,
                           fontSize: 11, fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                           border: '1px solid rgba(0,0,0,0.04)', maxHeight: 80, overflow: 'auto', margin: 0,
                         }}>{testResult.received_hex}</pre>
@@ -534,7 +534,7 @@ export default function UdpMockPanel() {
         padding: '8px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
       }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: '#262626' }}>共 {logsTotal} 条</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>共 {logsTotal} 条</span>
         <Space size={4}>
           <Button icon={<ReloadOutlined />} size="small" type="text" onClick={() => fetchLogs()} />
           <Popconfirm title="确认清空所有日志？" onConfirm={handleClearLogs}>
@@ -550,7 +550,7 @@ export default function UdpMockPanel() {
               {['时间', '方向', '客户端 IP:Port', '数据大小'].map((h, i) => (
                 <th key={h} style={{
                   padding: '6px 10px', textAlign: i >= 3 ? 'right' : 'left',
-                  fontWeight: 500, fontSize: 11, color: '#8c8c8c', borderBottom: '1px solid rgba(0,0,0,0.04)',
+                  fontWeight: 500, fontSize: 11, color: '#86909c', borderBottom: '1px solid rgba(0,0,0,0.04)',
                   whiteSpace: 'nowrap',
                 }}>{h}</th>
               ))}
@@ -563,25 +563,25 @@ export default function UdpMockPanel() {
                   cursor: 'pointer', borderBottom: '1px solid rgba(0,0,0,0.03)',
                   background: expandedLogId === l.id ? `rgba(24,144,255,0.06)` : 'transparent',
                 }}>
-                  <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#8c8c8c' }}>
+                  <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#86909c' }}>
                     {new Date(l.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
                   </td>
                   <td style={{ padding: '5px 10px' }}>
-                    <Tag color={l.direction === 'in' ? 'blue' : 'green'} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 6px', borderRadius: 8 }}>
+                    <Tag color={l.direction === 'in' ? 'blue' : 'green'} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 6px', borderRadius: 8 }}>
                       {l.direction === 'in' ? 'IN' : 'OUT'}
                     </Tag>
                   </td>
-                  <td style={{ padding: '5px 10px', fontFamily: MONO, fontSize: 11, color: '#595959' }}>
+                  <td style={{ padding: '5px 10px', fontFamily: MONO, fontSize: 11, color: '#4e5969' }}>
                     {l.clientIp || '-'}:{l.clientPort || '-'}
                   </td>
-                  <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#8c8c8c', whiteSpace: 'nowrap' }}>
+                  <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#86909c', whiteSpace: 'nowrap' }}>
                     {l.dataSize || 0} B
                   </td>
                 </tr>
                 {expandedLogId === l.id && (
                   <tr>
                     <td colSpan={4} style={{ padding: '10px 16px', background: 'transparent', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-                      <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4, fontWeight: 500 }}>数据内容</div>
+                      <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4, fontWeight: 500 }}>数据内容</div>
                       <pre style={{
                         maxHeight: 120, overflow: 'auto', margin: 0, padding: 8, borderRadius: 12,
                         background: 'transparent', border: '1px solid rgba(0,0,0,0.04)', fontSize: 11, fontFamily: MONO,
@@ -593,7 +593,7 @@ export default function UdpMockPanel() {
               </Fragment>
             ))}
             {logs.length === 0 && (
-              <tr><td colSpan={4} style={{ textAlign: 'center', padding: 40, color: '#bfbfbf', fontSize: 12 }}>暂无通信日志</td></tr>
+              <tr><td colSpan={4} style={{ textAlign: 'center', padding: 40, color: '#c9cdd4', fontSize: 12 }}>暂无通信日志</td></tr>
             )}
           </tbody>
         </table>
@@ -636,7 +636,7 @@ export default function UdpMockPanel() {
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}
             </span>
           </div>
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+          <span style={{ fontSize: 12, color: '#86909c' }}>
             {serviceStatus.handlersEnabled ?? 0}/{serviceStatus.handlersCount ?? 0} handlers · {serviceStatus.totalLogs ?? 0} 日志
           </span>
         </div>
@@ -670,7 +670,7 @@ export default function UdpMockPanel() {
             padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: '#262626' }}>Handlers</span>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>Handlers</span>
             <Space size={4}>
               <Tooltip title="从预设创建">
                 <Button icon={<AppstoreOutlined />} size="small" onClick={() => setPresetOpen(true)} disabled={presets.length === 0} />
@@ -701,34 +701,34 @@ export default function UdpMockPanel() {
                   }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Tooltip title="拖动调整顺序">
-                      <HolderOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 12, color: '#bfbfbf', cursor: 'grab' }} />
+                      <HolderOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 12, color: '#c9cdd4', cursor: 'grab' }} />
                     </Tooltip>
-                    <Tag color="blue" style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 6px', borderRadius: 8 }}>
+                    <Tag color="blue" style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 6px', borderRadius: 8 }}>
                       {(h.matchMode || 'exact').toUpperCase()}
                     </Tag>
                     <span style={{
-                      flex: 1, fontSize: 12, color: sel ? '#262626' : '#8c8c8c',
+                      flex: 1, fontSize: 12, color: sel ? '#1d2129' : '#86909c',
                       fontWeight: sel ? 500 : 400,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>{h.name}</span>
-                    {h.locked && <Tooltip title="已锁定，不可编辑"><LockFilled style={{ fontSize: 11, color: '#fa8c16' }} /></Tooltip>}
+                    {h.locked && <Tooltip title="已锁定，不可编辑"><LockFilled style={{ fontSize: 11, color: '#ff7d00' }} /></Tooltip>}
                     {h.locked ? (
                       <Tooltip title="锁定状态不可删除"><DeleteOutlined style={{ fontSize: 11, color: '#e8e8e8', cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} /></Tooltip>
                     ) : (
                       <Popconfirm title="确认删除？" onConfirm={(e) => { e?.stopPropagation?.(); handleDelete(h.id) }}>
-                        <DeleteOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: '#bfbfbf', cursor: 'pointer' }} />
+                        <DeleteOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: '#c9cdd4', cursor: 'pointer' }} />
                       </Popconfirm>
                     )}
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
                     <span style={{
-                      fontSize: 11, fontFamily: MONO, color: '#595959',
+                      fontSize: 11, fontFamily: MONO, color: '#4e5969',
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 160,
                     }}>{h.matchPattern || '(empty)'}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {!h.enabled && <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', borderRadius: 6, color: '#bfbfbf', borderColor: '#d9d9d9', background: 'transparent' }}>禁用</Tag>}
+                      {!h.enabled && <Tag style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 6, color: '#c9cdd4', borderColor: '#c9cdd4', background: 'transparent' }}>禁用</Tag>}
                       <Tag color={h.responseMode === 'echo' ? 'cyan' : h.responseMode === 'fixed' ? 'blue' : 'purple'} style={{
-                        margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', borderRadius: 8,
+                        margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px', borderRadius: 8,
                       }}>{h.responseMode || 'echo'}</Tag>
                     </div>
                   </div>
@@ -752,7 +752,7 @@ export default function UdpMockPanel() {
               ].map(t => (
                 <div key={t.key} onClick={() => setActiveTab(t.key)} style={{
                   padding: '10px 16px', cursor: 'pointer', fontSize: 14, position: 'relative',
-                  color: activeTab === t.key ? ACCENT : '#595959',
+                  color: activeTab === t.key ? ACCENT : '#4e5969',
                   fontWeight: activeTab === t.key ? 500 : 400,
                   borderBottom: activeTab === t.key ? `2px solid ${ACCENT}` : '2px solid transparent',
                   marginBottom: -1,
@@ -772,7 +772,7 @@ export default function UdpMockPanel() {
       <Modal title="从预设创建" open={presetOpen} onCancel={() => setPresetOpen(false)} footer={null} width={560}>
         {Object.entries(groupedPresets).map(([group, items]) => (
           <div key={group} style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: '#8c8c8c', marginBottom: 8 }}>{group}</div>
+            <div style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>{group}</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {items.map(p => (
                 <div
@@ -787,7 +787,7 @@ export default function UdpMockPanel() {
                   onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(0,0,0,0.08)'}
                 >
                   <div style={{ fontWeight: 500 }}>{p.label || p.name}</div>
-                  {p.description && <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>{p.description}</div>}
+                  {p.description && <div style={{ fontSize: 11, color: '#86909c', marginTop: 2 }}>{p.description}</div>}
                 </div>
               ))}
             </div>

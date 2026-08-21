@@ -15,17 +15,17 @@ import { CODE_BLOCK_STYLE } from '../../components/MockCodeBlock'
 
 const { TextArea } = Input
 const MONO = 'var(--font-mono)'
-const ACCENT = '#52c41a'
+const ACCENT = '#0ea5a0'
 
 const MODE_COLOR = { echo: 'green', fixed: 'blue', custom: 'cyan', error: 'red' }
 const MODE_LABEL = { echo: 'Echo', fixed: 'Fixed', custom: 'Custom', error: 'Error' }
 
 const EVENT_COLOR = (e) => {
-  if (e === 'connect') return '#52c41a'
-  if (e === 'disconnect') return '#8c8c8c'
+  if (e === 'connect') return '#0ea5a0'
+  if (e === 'disconnect') return '#86909c'
   if (e === 'message_in') return '#4e8af0'
-  if (e === 'message_out') return '#fa8c16'
-  return '#595959'
+  if (e === 'message_out') return '#ff7d00'
+  return '#4e5969'
 }
 
 export default function WsMockPanel() {
@@ -234,7 +234,7 @@ export default function WsMockPanel() {
     if (!form) {
       return (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-          <Empty description={<span style={{ color: '#bfbfbf' }}>选择左侧端点查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description={<span style={{ color: '#c9cdd4' }}>选择左侧端点查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
         </div>
       )
     }
@@ -294,7 +294,7 @@ export default function WsMockPanel() {
           )}
           {/* Path */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>路径</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>路径</div>
             <Input spellCheck={false}
               value={form.path}
               onChange={e => setForm(f => ({ ...f, path: e.target.value }))}
@@ -307,7 +307,7 @@ export default function WsMockPanel() {
           {/* Response mode */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应模式</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>响应模式</div>
               <Radio.Group
                 value={responseModeValue}
                 onChange={e => setForm(f => ({ ...f, responseMode: e.target.value }))}
@@ -321,26 +321,26 @@ export default function WsMockPanel() {
               </Radio.Group>
             </div>
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={form.delayMs ?? 0} onChange={v => setForm(f => ({ ...f, delayMs: v }))}
                 min={0} step={100} size="small" style={{ width: 90 }} placeholder="0" disabled={locked} />
             </div>
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>支持二进制</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>支持二进制</div>
               <Switch checked={form.supportBinary || false} onChange={v => setForm(f => ({ ...f, supportBinary: v }))} size="small" disabled={locked} />
             </div>
           </div>
 
           {/* Mode-specific config */}
           {responseModeValue === 'echo' && (
-            <div style={{ padding: 14, background: 'rgba(82,196,26,0.06)', borderRadius: 12, fontSize: 12, color: '#595959', marginBottom: 16 }}>
+            <div style={{ padding: 14, background: 'rgba(82,196,26,0.06)', borderRadius: 12, fontSize: 12, color: '#4e5969', marginBottom: 16 }}>
               Echo 模式：将收到的消息原样返回给客户端
             </div>
           )}
 
           {responseModeValue === 'fixed' && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>固定响应内容</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>固定响应内容</div>
               <TextArea spellCheck={false}
                 value={form.fixedResponse || ''}
                 onChange={e => setForm(f => ({ ...f, fixedResponse: e.target.value }))}
@@ -354,8 +354,8 @@ export default function WsMockPanel() {
           {responseModeValue === 'custom' && (
             <div style={{ marginBottom: 16 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 12, color: '#8c8c8c' }}>自定义规则 (JSON)</span>
-                <span style={{ fontSize: 11, color: '#bfbfbf' }}>patterns: [{'{'} match, response {'}'}]</span>
+                <span style={{ fontSize: 12, color: '#86909c' }}>自定义规则 (JSON)</span>
+                <span style={{ fontSize: 11, color: '#c9cdd4' }}>patterns: [{'{'} match, response {'}'}]</span>
               </div>
               <TextArea spellCheck={false}
                 value={form.customConfig || ''}
@@ -370,12 +370,12 @@ export default function WsMockPanel() {
           {responseModeValue === 'error' && (
             <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
               <div>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>错误码</div>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>错误码</div>
                 <InputNumber value={form.errorCode ?? 1000} onChange={v => setForm(f => ({ ...f, errorCode: v }))}
                   min={1000} max={4999} size="small" style={{ width: 100 }} disabled={locked} />
               </div>
               <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>错误原因</div>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>错误原因</div>
                 <Input value={form.errorReason || ''} onChange={e => setForm(f => ({ ...f, errorReason: e.target.value }))}
                   placeholder="Connection closed" style={{ fontSize: 13 }} disabled={locked} />
               </div>
@@ -406,7 +406,7 @@ export default function WsMockPanel() {
   const renderTestTab = () => {
     if (!form) {
       return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <Empty description={<span style={{ color: '#bfbfbf' }}>选择左侧端点进行测试</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        <Empty description={<span style={{ color: '#c9cdd4' }}>选择左侧端点进行测试</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
       </div>
     }
     const wsUrl = `ws://${window.location.hostname}:${serviceStatus.port}${form.path || '/'}`
@@ -415,7 +415,7 @@ export default function WsMockPanel() {
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
           {/* Target info */}
           <div style={{ marginBottom: 16, padding: '10px 14px', borderRadius: 12, background: 'rgba(82,196,26,0.04)', border: '1px solid rgba(82,196,26,0.12)' }}>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 6 }}>WebSocket URL</div>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 6 }}>WebSocket URL</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <code style={{ fontFamily: MONO, fontSize: 13, color: ACCENT, fontWeight: 500 }}>{wsUrl}</code>
               <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => { copyToClipboard(wsUrl); message.success('已复制') }} />
@@ -424,7 +424,7 @@ export default function WsMockPanel() {
 
           {/* Message input */}
           <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>发送消息</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>发送消息</div>
             <TextArea spellCheck={false}
               value={testMessage}
               onChange={e => setTestMessage(e.target.value)}
@@ -444,14 +444,14 @@ export default function WsMockPanel() {
               {serviceStatus.running ? '发送消息' : '服务未启动'}
             </Button>
             {!serviceStatus.running && (
-              <span style={{ marginLeft: 8, fontSize: 12, color: '#fa8c16' }}>请先启动 WebSocket Mock 服务</span>
+              <span style={{ marginLeft: 8, fontSize: 12, color: '#ff7d00' }}>请先启动 WebSocket Mock 服务</span>
             )}
           </div>
 
           {/* wscat hint */}
           <div style={{ marginBottom: 16, padding: '8px 12px', borderRadius: 10, background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.04)' }}>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>命令行测试 (wscat)</div>
-            <code style={{ fontSize: 11, fontFamily: MONO, color: '#595959', wordBreak: 'break-all' }}>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>命令行测试 (wscat)</div>
+            <code style={{ fontSize: 11, fontFamily: MONO, color: '#4e5969', wordBreak: 'break-all' }}>
               wscat -c {wsUrl}
             </code>
             <Button size="small" type="text" icon={<CopyOutlined />} style={{ marginLeft: 4 }}
@@ -464,7 +464,7 @@ export default function WsMockPanel() {
             <div>
               {testResult.error ? (
                 <pre style={{
-                  background: '#fff2f0', color: '#e8453c', padding: 12, borderRadius: 12,
+                  background: 'var(--red-bg)', color: '#e8453c', padding: 12, borderRadius: 12,
                   overflow: 'auto', fontSize: 11, lineHeight: 1.5, maxHeight: 200,
                   fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                   border: '1px solid #ffccc7',
@@ -478,9 +478,9 @@ export default function WsMockPanel() {
                     borderBottom: '1px solid rgba(0,0,0,0.04)',
                   }}>
                     <Space size={8}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>请求 / 响应详情</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#1d2129' }}>请求 / 响应详情</span>
                       {testResult.duration_ms != null && (
-                        <span style={{ fontSize: 11, color: '#8c8c8c' }}>{testResult.duration_ms}ms</span>
+                        <span style={{ fontSize: 11, color: '#86909c' }}>{testResult.duration_ms}ms</span>
                       )}
                     </Space>
                     <Button size="small" icon={<CopyOutlined />} onClick={() => {
@@ -501,11 +501,11 @@ export default function WsMockPanel() {
                   {/* Request section */}
                   <div style={{ padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: ACCENT, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Request</div>
-                    <div style={{ fontSize: 12, fontFamily: MONO, color: '#262626', marginBottom: 6 }}>
-                      <span style={{ color: '#8c8c8c' }}>URL: </span>{testResult.url}
+                    <div style={{ fontSize: 12, fontFamily: MONO, color: '#1d2129', marginBottom: 6 }}>
+                      <span style={{ color: '#86909c' }}>URL: </span>{testResult.url}
                     </div>
                     <pre style={{
-                      background: 'rgba(0,0,0,0.02)', color: '#595959', padding: 8, borderRadius: 8,
+                      background: 'rgba(0,0,0,0.02)', color: '#4e5969', padding: 8, borderRadius: 8,
                       fontSize: 11, fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                       border: '1px solid rgba(0,0,0,0.04)', maxHeight: 120, overflow: 'auto', margin: 0,
                     }}>{testResult.sent || ''}</pre>
@@ -536,7 +536,7 @@ export default function WsMockPanel() {
         padding: '8px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
       }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: '#262626' }}>共 {logsTotal} 条</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>共 {logsTotal} 条</span>
         <Space size={4}>
           <Select
             value={logEventFilter}
@@ -566,7 +566,7 @@ export default function WsMockPanel() {
               {['时间', '事件', '路径', '客户端 IP', '方向', '大小'].map((h, i) => (
                 <th key={h} style={{
                   padding: '6px 10px', textAlign: i >= 5 ? 'right' : 'left',
-                  fontWeight: 500, fontSize: 11, color: '#8c8c8c', borderBottom: '1px solid rgba(0,0,0,0.04)',
+                  fontWeight: 500, fontSize: 11, color: '#86909c', borderBottom: '1px solid rgba(0,0,0,0.04)',
                   whiteSpace: 'nowrap',
                 }}>{h}</th>
               ))}
@@ -579,23 +579,23 @@ export default function WsMockPanel() {
                   cursor: 'pointer', borderBottom: '1px solid rgba(0,0,0,0.03)',
                   background: expandedLogId === l.id ? 'rgba(82,196,26,0.06)' : 'transparent',
                 }}>
-                  <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#8c8c8c' }}>
+                  <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#86909c' }}>
                     {new Date(l.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
                   </td>
                   <td style={{ padding: '5px 10px' }}>
-                    <Tag color={EVENT_COLOR(l.eventType)} style={{ margin: 0, fontSize: 10, borderRadius: 6, lineHeight: '16px', padding: '0 5px' }}>
+                    <Tag color={EVENT_COLOR(l.eventType)} style={{ margin: 0, fontSize: 11, borderRadius: 6, lineHeight: '16px', padding: '0 5px' }}>
                       {l.eventType}
                     </Tag>
                   </td>
-                  <td style={{ padding: '5px 10px', fontFamily: MONO, fontSize: 11, color: '#595959', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.path}</td>
-                  <td style={{ padding: '5px 10px', fontSize: 11, color: '#8c8c8c', fontFamily: MONO }}>{l.clientIp || '-'}</td>
-                  <td style={{ padding: '5px 10px', fontSize: 11, color: '#8c8c8c' }}>{l.direction || '-'}</td>
-                  <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#8c8c8c', whiteSpace: 'nowrap' }}>{l.size != null ? `${l.size}B` : '-'}</td>
+                  <td style={{ padding: '5px 10px', fontFamily: MONO, fontSize: 11, color: '#4e5969', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.path}</td>
+                  <td style={{ padding: '5px 10px', fontSize: 11, color: '#86909c', fontFamily: MONO }}>{l.clientIp || '-'}</td>
+                  <td style={{ padding: '5px 10px', fontSize: 11, color: '#86909c' }}>{l.direction || '-'}</td>
+                  <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#86909c', whiteSpace: 'nowrap' }}>{l.size != null ? `${l.size}B` : '-'}</td>
                 </tr>
                 {expandedLogId === l.id && (
                   <tr>
                     <td colSpan={6} style={{ padding: '10px 16px', background: 'transparent', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-                      <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4, fontWeight: 500 }}>消息预览</div>
+                      <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4, fontWeight: 500 }}>消息预览</div>
                       <pre style={{
                         maxHeight: 140, overflow: 'auto', margin: 0, padding: 8, borderRadius: 12,
                         background: 'transparent', border: '1px solid rgba(0,0,0,0.04)', fontSize: 11, fontFamily: MONO,
@@ -607,7 +607,7 @@ export default function WsMockPanel() {
               </Fragment>
             ))}
             {logs.length === 0 && (
-              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#bfbfbf', fontSize: 12 }}>暂无日志</td></tr>
+              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#c9cdd4', fontSize: 12 }}>暂无日志</td></tr>
             )}
           </tbody>
         </table>
@@ -650,7 +650,7 @@ export default function WsMockPanel() {
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}
             </span>
           </div>
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+          <span style={{ fontSize: 12, color: '#86909c' }}>
             {serviceStatus.endpointsEnabled}/{serviceStatus.endpointsCount} 端点 · {serviceStatus.totalLogs} 日志
           </span>
         </div>
@@ -684,7 +684,7 @@ export default function WsMockPanel() {
             padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: '#262626' }}>端点</span>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>端点</span>
             <Space size={4}>
               <Tooltip title="从预设创建">
                 <Button icon={<AppstoreOutlined />} size="small" onClick={() => setPresetOpen(true)} disabled={presets.length === 0} />
@@ -702,7 +702,7 @@ export default function WsMockPanel() {
                 <div key={ep.id} onClick={() => selectEndpoint(ep)}
                   draggable
                   onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; setDragIdx(i) }}
-                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid #52c41a' }}
+                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid #0ea5a0' }}
                   onDragLeave={e => { e.currentTarget.style.borderTop = '2px solid transparent' }}
                   onDrop={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid transparent'; handleDropEndpoint(i) }}
                   onDragEnd={() => setDragIdx(null)}
@@ -715,26 +715,26 @@ export default function WsMockPanel() {
                   }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Tooltip title="拖动调整顺序">
-                      <HolderOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 12, color: '#bfbfbf', cursor: 'grab' }} />
+                      <HolderOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 12, color: '#c9cdd4', cursor: 'grab' }} />
                     </Tooltip>
                     <span style={{
                       flex: 1, fontSize: 11, fontFamily: MONO,
-                      color: '#595959', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>{ep.path}</span>
-                    {ep.locked && <Tooltip title="已锁定，不可编辑"><LockFilled style={{ fontSize: 11, color: '#fa8c16' }} /></Tooltip>}
-                    <Tag color={MODE_COLOR[ep.responseMode] || 'default'} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', borderRadius: 6 }}>
+                    {ep.locked && <Tooltip title="已锁定，不可编辑"><LockFilled style={{ fontSize: 11, color: '#ff7d00' }} /></Tooltip>}
+                    <Tag color={MODE_COLOR[ep.responseMode] || 'default'} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px', borderRadius: 6 }}>
                       {MODE_LABEL[ep.responseMode] || ep.responseMode}
                     </Tag>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-                    <span style={{ fontSize: 12, color: sel ? '#262626' : '#8c8c8c', fontWeight: sel ? 500 : 400 }}>{ep.name}</span>
+                    <span style={{ fontSize: 12, color: sel ? '#1d2129' : '#86909c', fontWeight: sel ? 500 : 400 }}>{ep.name}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      {!ep.enabled && <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', borderRadius: 6, color: '#bfbfbf', borderColor: '#d9d9d9', background: 'transparent' }}>禁用</Tag>}
+                      {!ep.enabled && <Tag style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 6, color: '#c9cdd4', borderColor: '#c9cdd4', background: 'transparent' }}>禁用</Tag>}
                       {ep.locked ? (
                         <Tooltip title="锁定状态不可删除"><DeleteOutlined style={{ fontSize: 11, color: '#e8e8e8', cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} /></Tooltip>
                       ) : (
                         <Popconfirm title="确认删除？" onConfirm={(e) => { e?.stopPropagation?.(); handleDelete(ep.id) }}>
-                          <DeleteOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: '#bfbfbf', cursor: 'pointer' }} />
+                          <DeleteOutlined onClick={e => e.stopPropagation()} style={{ fontSize: 11, color: '#c9cdd4', cursor: 'pointer' }} />
                         </Popconfirm>
                       )}
                     </div>
@@ -759,7 +759,7 @@ export default function WsMockPanel() {
               ].map(t => (
                 <div key={t.key} onClick={() => setActiveTab(t.key)} style={{
                   padding: '10px 16px', cursor: 'pointer', fontSize: 14, position: 'relative',
-                  color: activeTab === t.key ? ACCENT : '#595959',
+                  color: activeTab === t.key ? ACCENT : '#4e5969',
                   fontWeight: activeTab === t.key ? 500 : 400,
                   borderBottom: activeTab === t.key ? `2px solid ${ACCENT}` : '2px solid transparent',
                   marginBottom: -1,
@@ -779,7 +779,7 @@ export default function WsMockPanel() {
       <Modal title="从预设创建" open={presetOpen} onCancel={() => setPresetOpen(false)} footer={null} width={560}>
         {Object.entries(groupedPresets).map(([group, items]) => (
           <div key={group} style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: '#8c8c8c', marginBottom: 8 }}>{group}</div>
+            <div style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>{group}</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {items.map(p => (
                 <div
@@ -794,7 +794,7 @@ export default function WsMockPanel() {
                   onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(0,0,0,0.08)'}
                 >
                   <div style={{ fontWeight: 500 }}>{p.label || p.name}</div>
-                  {p.description && <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>{p.description}</div>}
+                  {p.description && <div style={{ fontSize: 11, color: '#86909c', marginTop: 2 }}>{p.description}</div>}
                 </div>
               ))}
             </div>

@@ -76,7 +76,7 @@ export default function AIProjectOverview({ overview, loading, onReload }) {
         icon={<InfoCircleOutlined />}
         style={{ marginBottom: 12 }}
         message={
-          <span style={{ fontSize: 12.5 }}>
+          <span style={{ fontSize: 12 }}>
             每一行都是后端<b>真实解析</b>出来的结果（与实际调用同一套逻辑）。
             注意：项目自选/自建时，<b>文本模型尊重项目自己选的连接</b>。
             {categories.some(c => c.key === 'ui_script') && (

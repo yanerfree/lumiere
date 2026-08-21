@@ -9,7 +9,7 @@ const MONO = 'var(--font-mono)'
  * 展示请求/响应报文用这一套；代码编辑器（ScriptEditor、k6 脚本）保持深色，不走这里。
  */
 export const CODE_BLOCK_STYLE = {
-  background: '#f7f8fa',
+  background: 'rgba(0,0,0,0.04)',
   color: '#1d2129',
   border: '1px solid rgba(0,0,0,0.06)',
   fontFamily: MONO,
@@ -20,11 +20,11 @@ export function LogBlock({ title, content, onCopy, maxHeight = 280 }) {
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
-        <span style={{ fontSize: 12, fontWeight: 600, color: '#595959' }}>{title}</span>
+        <span style={{ fontSize: 12, fontWeight: 600, color: '#4e5969' }}>{title}</span>
         <span style={{ flex: 1 }} />
         {onCopy && content && content !== '-' && (
           <Button size="small" type="text" icon={<CopyOutlined />}
-            style={{ fontSize: 11, color: '#8c8c8c' }} onClick={onCopy}>复制</Button>
+            style={{ fontSize: 11, color: '#86909c' }} onClick={onCopy}>复制</Button>
         )}
       </div>
       <pre style={{

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { timeColumn } from '../../utils/timeCol'
 import { Button, Input, Table, Modal, Form, message, Popconfirm, Tag, Space, Empty, Spin, Tooltip } from 'antd'
 import { PlusOutlined, DeleteOutlined, EditOutlined, BellOutlined, EyeOutlined, EyeInvisibleOutlined } from '@ant-design/icons'
 import { api } from '../../utils/request'
@@ -96,10 +97,7 @@ export default function ChannelConfig() {
         </div>
       ),
     },
-    {
-      title: '创建时间', dataIndex: 'createdAt', width: 160,
-      render: v => <span style={{ fontSize: 13, color: '#86909c' }}>{v ? new Date(v).toLocaleString('zh-CN') : '-'}</span>,
-    },
+    timeColumn({ key: 'createdAt', title: '创建时间' }),
     {
       title: '操作', width: 120, align: 'center',
       render: (_, record) => (

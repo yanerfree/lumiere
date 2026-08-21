@@ -259,7 +259,7 @@ export default function GrpcMockPanel() {
     if (!form) {
       return (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-          <Empty description={<span style={{ color: '#bfbfbf' }}>选择左侧 Service 查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Empty description={<span style={{ color: '#c9cdd4' }}>选择左侧 Service 查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
         </div>
       )
     }
@@ -314,12 +314,12 @@ export default function GrpcMockPanel() {
           {/* Service name + Method name */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Service 名称</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Service 名称</div>
               <Input spellCheck={false} value={form.serviceName} onChange={e => setForm(f => ({ ...f, serviceName: e.target.value }))}
                 placeholder="helloworld.Greeter" disabled={locked} style={{ fontFamily: MONO, fontSize: 12 }} />
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Method 名称</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Method 名称</div>
               <Input spellCheck={false} value={form.methodName} onChange={e => setForm(f => ({ ...f, methodName: e.target.value }))}
                 placeholder="SayHello" disabled={locked} style={{ fontFamily: MONO, fontSize: 12 }} />
             </div>
@@ -328,7 +328,7 @@ export default function GrpcMockPanel() {
           {/* Method type + Delay + Status code */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Method 类型</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Method 类型</div>
               <Radio.Group
                 value={form.methodType || 'unary'}
                 onChange={e => setForm(f => ({ ...f, methodType: e.target.value }))}
@@ -340,12 +340,12 @@ export default function GrpcMockPanel() {
               </Radio.Group>
             </div>
             <div style={{ minWidth: 80 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={form.delayMs ?? 0} onChange={v => setForm(f => ({ ...f, delayMs: v }))}
                 min={0} step={100} size="small" disabled={locked} style={{ width: 80 }} placeholder="0" />
             </div>
             <div style={{ minWidth: 180 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Status Code</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Status Code</div>
               <Select value={form.statusCode ?? 0} onChange={v => setForm(f => ({ ...f, statusCode: v }))}
                 size="small" disabled={locked} style={{ width: 180 }} options={GRPC_CODES} />
             </div>
@@ -354,7 +354,7 @@ export default function GrpcMockPanel() {
           {/* Status message (when statusCode != 0) */}
           {(form.statusCode !== 0 && form.statusCode != null) && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Status Message</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Status Message</div>
               <Input value={form.statusMessage} onChange={e => setForm(f => ({ ...f, statusMessage: e.target.value }))}
                 placeholder="错误描述信息" disabled={locked} />
             </div>
@@ -362,7 +362,7 @@ export default function GrpcMockPanel() {
 
           {/* Request sample */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Request Sample (JSON, 仅文档参考)</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Request Sample (JSON, 仅文档参考)</div>
             <TextArea spellCheck={false}
               value={form.requestSample}
               onChange={e => setForm(f => ({ ...f, requestSample: e.target.value }))}
@@ -375,7 +375,7 @@ export default function GrpcMockPanel() {
 
           {/* Response body */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Response Body (JSON)</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Response Body (JSON)</div>
             <TextArea spellCheck={false}
               value={form.responseBody}
               onChange={e => setForm(f => ({ ...f, responseBody: e.target.value }))}
@@ -389,7 +389,7 @@ export default function GrpcMockPanel() {
           {/* Stream items (only for server_stream) */}
           {form.methodType === 'server_stream' && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Stream Items (JSON Array)</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Stream Items (JSON Array)</div>
               <TextArea spellCheck={false}
                 value={form.streamItems}
                 onChange={e => setForm(f => ({ ...f, streamItems: e.target.value }))}
@@ -426,7 +426,7 @@ export default function GrpcMockPanel() {
   const renderTestTab = () => {
     if (!form) {
       return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <Empty description={<span style={{ color: '#bfbfbf' }}>选择左侧 Service 进行测试</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        <Empty description={<span style={{ color: '#c9cdd4' }}>选择左侧 Service 进行测试</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
       </div>
     }
     const target = `${window.location.hostname}:${serviceStatus.port}`
@@ -436,21 +436,21 @@ export default function GrpcMockPanel() {
         <div style={{ flex: 1, overflow: 'auto', padding: '14px 16px' }}>
           {/* Target info */}
           <div style={{ marginBottom: 16, padding: '10px 14px', borderRadius: 12, background: 'rgba(124,92,191,0.04)', border: '1px solid rgba(124,92,191,0.12)' }}>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 6 }}>gRPC 端点</div>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 6 }}>gRPC 端点</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <code style={{ fontFamily: MONO, fontSize: 13, color: ACCENT, fontWeight: 500 }}>{target}</code>
               <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => { copyToClipboard(target); message.success('已复制') }} />
             </div>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 6 }}>Method</div>
+            <div style={{ fontSize: 11, color: '#86909c', marginTop: 6 }}>Method</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <code style={{ fontFamily: MONO, fontSize: 12, color: '#595959' }}>{method}</code>
+              <code style={{ fontFamily: MONO, fontSize: 12, color: '#4e5969' }}>{method}</code>
               <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => { copyToClipboard(method); message.success('已复制') }} />
             </div>
           </div>
 
           {/* Request body */}
           <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Request Body (JSON)</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Request Body (JSON)</div>
             <TextArea spellCheck={false}
               value={testBody}
               onChange={e => setTestBody(e.target.value)}
@@ -470,16 +470,16 @@ export default function GrpcMockPanel() {
               {serviceStatus.running ? '发送请求' : '服务未启动'}
             </Button>
             {!serviceStatus.running && (
-              <span style={{ marginLeft: 8, fontSize: 12, color: '#fa8c16' }}>请先启动 gRPC Mock 服务</span>
+              <span style={{ marginLeft: 8, fontSize: 12, color: '#ff7d00' }}>请先启动 gRPC Mock 服务</span>
             )}
           </div>
 
           {/* grpcurl hint */}
           <div style={{ marginBottom: 16, padding: '8px 12px', borderRadius: 10, background: 'rgba(0,0,0,0.02)', border: '1px solid rgba(0,0,0,0.04)' }}>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4 }}>命令行测试</div>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>命令行测试</div>
             <div style={{ marginBottom: 6 }}>
-              <span style={{ fontSize: 10, color: '#aaa', marginRight: 6 }}>查看服务列表</span>
-              <code style={{ fontSize: 11, fontFamily: MONO, color: '#595959', wordBreak: 'break-all' }}>
+              <span style={{ fontSize: 11, color: '#aaa', marginRight: 6 }}>查看服务列表</span>
+              <code style={{ fontSize: 11, fontFamily: MONO, color: '#4e5969', wordBreak: 'break-all' }}>
                 grpcurl -plaintext {target} list
               </code>
               <Button size="small" type="text" icon={<CopyOutlined />} style={{ marginLeft: 4 }}
@@ -487,8 +487,8 @@ export default function GrpcMockPanel() {
               />
             </div>
             <div>
-              <span style={{ fontSize: 10, color: '#aaa', marginRight: 6 }}>调用方法</span>
-              <code style={{ fontSize: 11, fontFamily: MONO, color: '#595959', wordBreak: 'break-all' }}>
+              <span style={{ fontSize: 11, color: '#aaa', marginRight: 6 }}>调用方法</span>
+              <code style={{ fontSize: 11, fontFamily: MONO, color: '#4e5969', wordBreak: 'break-all' }}>
                 grpcurl -plaintext -d '{testBody || '{}'}' {target} {form.serviceName}/{form.methodName}
               </code>
               <Button size="small" type="text" icon={<CopyOutlined />} style={{ marginLeft: 4 }}
@@ -498,7 +498,7 @@ export default function GrpcMockPanel() {
                 }}
               />
             </div>
-            <div style={{ fontSize: 10, color: '#bbb', marginTop: 4 }}>
+            <div style={{ fontSize: 11, color: '#bbb', marginTop: 4 }}>
               JSON Mode: 请求/响应为 JSON raw bytes，grpcurl 的 -d 参数中的字段不会做 protobuf 编码
             </div>
           </div>
@@ -508,7 +508,7 @@ export default function GrpcMockPanel() {
             <div>
               {testResult.error && !testResult.target ? (
                 <pre style={{
-                  background: '#fff2f0', color: '#e8453c', padding: 12, borderRadius: 12,
+                  background: 'var(--red-bg)', color: '#e8453c', padding: 12, borderRadius: 12,
                   overflow: 'auto', fontSize: 11, lineHeight: 1.5, maxHeight: 200,
                   fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                   border: '1px solid #ffccc7',
@@ -522,14 +522,14 @@ export default function GrpcMockPanel() {
                     borderBottom: '1px solid rgba(0,0,0,0.04)',
                   }}>
                     <Space size={8}>
-                      <span style={{ fontSize: 12, fontWeight: 600, color: '#262626' }}>请求 / 响应详情</span>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: '#1d2129' }}>请求 / 响应详情</span>
                       {testResult.status_code != null && (
-                        <Tag color={testResult.status_code === 0 ? 'green' : 'red'} style={{ margin: 0, fontSize: 10, borderRadius: 8 }}>
+                        <Tag color={testResult.status_code === 0 ? 'green' : 'red'} style={{ margin: 0, fontSize: 11, borderRadius: 8 }}>
                           {testResult.status_message || (testResult.status_code === 0 ? 'OK' : `Code ${testResult.status_code}`)}
                         </Tag>
                       )}
                       {testResult.duration_ms != null && (
-                        <span style={{ fontSize: 11, color: '#8c8c8c' }}>{testResult.duration_ms}ms</span>
+                        <span style={{ fontSize: 11, color: '#86909c' }}>{testResult.duration_ms}ms</span>
                       )}
                     </Space>
                     <Button size="small" icon={<CopyOutlined />} onClick={() => {
@@ -554,12 +554,12 @@ export default function GrpcMockPanel() {
                   <div style={{ padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
                     <div style={{ fontSize: 11, fontWeight: 600, color: ACCENT, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1 }}>Request</div>
                     <div style={{ display: 'flex', gap: 16, marginBottom: 6, fontSize: 12, fontFamily: MONO }}>
-                      <div><span style={{ color: '#8c8c8c' }}>Target: </span><span style={{ color: '#262626' }}>{testResult.target}</span></div>
-                      <div><span style={{ color: '#8c8c8c' }}>Method: </span><span style={{ color: '#262626' }}>{testResult.method}</span></div>
+                      <div><span style={{ color: '#86909c' }}>Target: </span><span style={{ color: '#1d2129' }}>{testResult.target}</span></div>
+                      <div><span style={{ color: '#86909c' }}>Method: </span><span style={{ color: '#1d2129' }}>{testResult.method}</span></div>
                     </div>
                     {testResult.sent && (
                       <pre style={{
-                        background: 'rgba(0,0,0,0.02)', color: '#595959', padding: 8, borderRadius: 8,
+                        background: 'rgba(0,0,0,0.02)', color: '#4e5969', padding: 8, borderRadius: 8,
                         fontSize: 11, fontFamily: MONO, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                         border: '1px solid rgba(0,0,0,0.04)', maxHeight: 120, overflow: 'auto', margin: 0,
                       }}>{formatJson(testResult.sent)}</pre>
@@ -591,7 +591,7 @@ export default function GrpcMockPanel() {
         padding: '8px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
       }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: '#262626' }}>共 {logsTotal} 条</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>共 {logsTotal} 条</span>
         <Space size={4}>
           <Select
             value={logServiceFilter}
@@ -617,7 +617,7 @@ export default function GrpcMockPanel() {
               {['时间', 'Service/Method', '类型', '客户端 IP', 'Status Code', '耗时'].map((h, i) => (
                 <th key={h} style={{
                   padding: '6px 10px', textAlign: i >= 4 ? 'right' : 'left',
-                  fontWeight: 500, fontSize: 11, color: '#8c8c8c', borderBottom: '1px solid rgba(0,0,0,0.04)',
+                  fontWeight: 500, fontSize: 11, color: '#86909c', borderBottom: '1px solid rgba(0,0,0,0.04)',
                   whiteSpace: 'nowrap',
                 }}>{h}</th>
               ))}
@@ -630,24 +630,24 @@ export default function GrpcMockPanel() {
                   cursor: 'pointer', borderBottom: '1px solid rgba(0,0,0,0.03)',
                   background: expandedLogId === l.id ? 'rgba(124,92,191,0.06)' : 'transparent',
                 }}>
-                  <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#8c8c8c' }}>
+                  <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#86909c' }}>
                     {new Date(l.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
                   </td>
-                  <td style={{ padding: '5px 10px', fontFamily: MONO, fontSize: 11, color: '#595959', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <td style={{ padding: '5px 10px', fontFamily: MONO, fontSize: 11, color: '#4e5969', maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {l.serviceName || '-'}/{l.methodName || '-'}
                   </td>
                   <td style={{ padding: '5px 10px' }}>
-                    <Tag color={METHOD_TYPE_COLOR[l.methodType] || 'default'} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 6px', borderRadius: 8 }}>
+                    <Tag color={METHOD_TYPE_COLOR[l.methodType] || 'default'} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 6px', borderRadius: 8 }}>
                       {METHOD_TYPE_LABEL[l.methodType] || l.methodType || '-'}
                     </Tag>
                   </td>
-                  <td style={{ padding: '5px 10px', fontSize: 11, color: '#8c8c8c' }}>{l.clientIp || '-'}</td>
+                  <td style={{ padding: '5px 10px', fontSize: 11, color: '#86909c' }}>{l.clientIp || '-'}</td>
                   <td style={{ padding: '5px 10px', textAlign: 'right' }}>
-                    <Tag color={(l.statusCode ?? 0) === 0 ? 'green' : 'red'} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 6px', borderRadius: 8 }}>
+                    <Tag color={(l.statusCode ?? 0) === 0 ? 'green' : 'red'} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 6px', borderRadius: 8 }}>
                       {GRPC_CODE_LABELS[l.statusCode ?? 0] || (l.statusCode ?? 0)}
                     </Tag>
                   </td>
-                  <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#8c8c8c', whiteSpace: 'nowrap' }}>
+                  <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#86909c', whiteSpace: 'nowrap' }}>
                     {Math.round(l.durationMs ?? 0)}ms
                   </td>
                 </tr>
@@ -656,7 +656,7 @@ export default function GrpcMockPanel() {
                     <td colSpan={6} style={{ padding: '10px 16px', background: 'transparent', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
                       <div style={{ display: 'flex', gap: 24, fontSize: 12 }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4, fontWeight: 500 }}>Request Body</div>
+                          <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4, fontWeight: 500 }}>Request Body</div>
                           <pre style={{
                             maxHeight: 120, overflow: 'auto', margin: 0, padding: 8, borderRadius: 12,
                             background: 'transparent', border: '1px solid rgba(0,0,0,0.04)', fontSize: 11, fontFamily: MONO,
@@ -664,7 +664,7 @@ export default function GrpcMockPanel() {
                           }}>{formatJson(l.requestBody) || '-'}</pre>
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4, fontWeight: 500 }}>Response Body</div>
+                          <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4, fontWeight: 500 }}>Response Body</div>
                           <pre style={{
                             maxHeight: 120, overflow: 'auto', margin: 0, padding: 8, borderRadius: 12,
                             background: 'transparent', border: '1px solid rgba(0,0,0,0.04)', fontSize: 11, fontFamily: MONO,
@@ -678,7 +678,7 @@ export default function GrpcMockPanel() {
               </Fragment>
             ))}
             {logs.length === 0 && (
-              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#bfbfbf', fontSize: 12 }}>暂无调用日志</td></tr>
+              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#c9cdd4', fontSize: 12 }}>暂无调用日志</td></tr>
             )}
           </tbody>
         </table>
@@ -706,7 +706,7 @@ export default function GrpcMockPanel() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <CloudServerOutlined style={{ fontSize: 18, color: ACCENT }} />
             <span style={{ fontWeight: 600, fontSize: 16, letterSpacing: 0.5 }}>gRPC Mock</span>
-            <span style={{ fontSize: 11, color: '#8c8c8c', marginLeft: 4 }}>(JSON mode)</span>
+            <span style={{ fontSize: 11, color: '#86909c', marginLeft: 4 }}>(JSON mode)</span>
           </div>
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 6,
@@ -722,15 +722,15 @@ export default function GrpcMockPanel() {
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}
             </span>
           </div>
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+          <span style={{ fontSize: 12, color: '#86909c' }}>
             {serviceStatus.servicesEnabled ?? 0}/{serviceStatus.servicesCount ?? 0} services · {serviceStatus.totalLogs ?? 0} 调用
           </span>
           <Tooltip title="客户端需使用 JSON 编码（如 grpcurl -plaintext）">
-            <Tag color="purple" style={{ margin: 0, fontSize: 10, cursor: 'help' }}>JSON 编码</Tag>
+            <Tag color="purple" style={{ margin: 0, fontSize: 11, cursor: 'help' }}>JSON 编码</Tag>
           </Tooltip>
           <Tooltip title="gRPC 服务器反射协议版本。v1alpha 为旧版（Python grpcio 默认），v1 为新版。选「两者」可同时被两种客户端发现，兼容性最好。">
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 12, color: '#8c8c8c', cursor: 'help' }}>反射</span>
+              <span style={{ fontSize: 12, color: '#86909c', cursor: 'help' }}>反射</span>
               <Radio.Group
                 value={serviceStatus.reflectionVersion || 'both'}
                 onChange={async e => {
@@ -781,7 +781,7 @@ export default function GrpcMockPanel() {
             padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: '#262626' }}>Services</span>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>Services</span>
             <Space size={4}>
               <Tooltip title="从预设创建">
                 <Button icon={<AppstoreOutlined />} size="small" onClick={() => setPresetOpen(true)} disabled={presets.length === 0} />
@@ -817,22 +817,22 @@ export default function GrpcMockPanel() {
                     <Tooltip title="拖动调整顺序">
                       <HolderOutlined
                         onClick={e => e.stopPropagation()}
-                        style={{ color: '#bfbfbf', cursor: 'grab', fontSize: 12 }}
+                        style={{ color: '#c9cdd4', cursor: 'grab', fontSize: 12 }}
                       />
                     </Tooltip>
                     <span style={{
-                      flex: 1, fontSize: 12, color: sel ? '#262626' : '#8c8c8c',
+                      flex: 1, fontSize: 12, color: sel ? '#1d2129' : '#86909c',
                       fontWeight: sel ? 500 : 400,
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>{s.name}</span>
                     {s.locked && <LockFilled style={{ color: '#faad14', fontSize: 12 }} />}
                     <Tag color={METHOD_TYPE_COLOR[s.methodType] || 'default'} style={{
-                      margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', borderRadius: 8,
+                      margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px', borderRadius: 8,
                     }}>{METHOD_TYPE_LABEL[s.methodType] || s.methodType || 'unary'}</Tag>
                   </div>
                   <div style={{ marginTop: 4, paddingLeft: 18 }}>
                     <span style={{
-                      fontSize: 11, fontFamily: MONO, color: '#595959',
+                      fontSize: 11, fontFamily: MONO, color: '#4e5969',
                       overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                       display: 'block',
                     }}>{s.serviceName || '-'}/{s.methodName || '-'}</span>
@@ -857,7 +857,7 @@ export default function GrpcMockPanel() {
               ].map(t => (
                 <div key={t.key} onClick={() => setActiveTab(t.key)} style={{
                   padding: '10px 16px', cursor: 'pointer', fontSize: 14, position: 'relative',
-                  color: activeTab === t.key ? ACCENT : '#595959',
+                  color: activeTab === t.key ? ACCENT : '#4e5969',
                   fontWeight: activeTab === t.key ? 500 : 400,
                   borderBottom: activeTab === t.key ? `2px solid ${ACCENT}` : '2px solid transparent',
                   marginBottom: -1,
@@ -877,7 +877,7 @@ export default function GrpcMockPanel() {
       <Modal title="从预设创建" open={presetOpen} onCancel={() => setPresetOpen(false)} footer={null} width={560}>
         {Object.entries(groupedPresets).map(([group, items]) => (
           <div key={group} style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: '#8c8c8c', marginBottom: 8 }}>{group}</div>
+            <div style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>{group}</div>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
               {items.map(p => (
                 <div
@@ -892,7 +892,7 @@ export default function GrpcMockPanel() {
                   onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(0,0,0,0.08)'}
                 >
                   <div style={{ fontWeight: 500 }}>{p.label || p.name}</div>
-                  {p.description && <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 2 }}>{p.description}</div>}
+                  {p.description && <div style={{ fontSize: 11, color: '#86909c', marginTop: 2 }}>{p.description}</div>}
                 </div>
               ))}
             </div>

@@ -61,7 +61,7 @@ export default function FailureTriagePanel({ projectId, branchId, caseId, run, o
             <span style={{ marginLeft: 6, color: '#86909c' }}>置信 {cc.confidence}</span>
             <span style={{ marginLeft: 6, color: '#c9cdd4' }}>by {cc.author} · {(cc.submittedAt || '').slice(0, 16).replace('T', ' ')}</span>
           </div>
-          <div style={{ fontSize: 12.5, color: '#4e5969', lineHeight: 1.6 }}>{cc.reasoning}</div>
+          <div style={{ fontSize: 12, color: '#4e5969', lineHeight: 1.6 }}>{cc.reasoning}</div>
           <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
             {(cc.evidence || []).map((e, i) => (
               <Tag key={i} style={{ fontSize: 11, margin: 0 }}>{e.type}: {String(e.ref).slice(0, 46)}</Tag>
@@ -89,7 +89,7 @@ export default function FailureTriagePanel({ projectId, branchId, caseId, run, o
       {confirmed && (
         <div style={{ fontSize: 11, color: '#86909c', marginTop: 4 }}>
           确认于 {(data.confirmedAt || '').slice(0, 16).replace('T', ' ')}
-          {cc && cc.cause !== data.confirmedCause && <span style={{ color: '#fa8c16', marginLeft: 8 }}>（推翻了 CC 的判断）</span>}
+          {cc && cc.cause !== data.confirmedCause && <span style={{ color: '#ff7d00', marginLeft: 8 }}>（推翻了 CC 的判断）</span>}
         </div>
       )}
     </div>

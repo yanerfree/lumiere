@@ -253,7 +253,7 @@ function EnvironmentPanel() {
                 <div style={{ fontSize: 12, color: '#86909c', marginTop: 4, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
                   onClick={startEditDesc}>
                   {selectedEnv.description || '点击添加描述'}
-                  <EditOutlined style={{ fontSize: 10, color: '#c9cdd4' }} />
+                  <EditOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />
                 </div>
               )}
             </div>
@@ -445,7 +445,7 @@ function CommonVarHint() {
             <code style={{ background: 'rgba(14,165,160,0.1)', padding: '2px 8px', borderRadius: 8, color: '#0ea5a0', fontWeight: 500, fontSize: 11 }}>{v.key}</code>
             <span style={{ color: '#86909c' }}>{v.desc}</span>
             <span style={{ color: '#c9cdd4' }}>如 {v.example}</span>
-            {v.required && <Tag color="orange" style={{ fontSize: 10, lineHeight: '16px', padding: '0 4px', border: 'none' }}>必填</Tag>}
+            {v.required && <Tag color="orange" style={{ fontSize: 11, lineHeight: '16px', padding: '0 4px', border: 'none' }}>必填</Tag>}
           </div>
         ))}
       </div>

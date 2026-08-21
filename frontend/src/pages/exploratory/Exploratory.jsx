@@ -15,7 +15,7 @@ const { Text, Paragraph } = Typography
 const { TextArea } = Input
 
 const FINDING_TYPES = { bug: { label: 'Bug', color: 'error', icon: <BugOutlined /> }, risk: { label: '风险', color: 'warning', icon: <ExclamationCircleOutlined /> }, suggestion: { label: '建议', color: 'blue', icon: <BulbOutlined /> } }
-const SEVERITY_COLORS = { critical: '#e8453c', high: '#fa8c16', medium: '#4e8af0', low: '#8c8c8c' }
+const SEVERITY_COLORS = { critical: '#e8453c', high: '#ff7d00', medium: '#4e8af0', low: '#86909c' }
 
 export default function Exploratory() {
   const { projectId } = useParams()
@@ -249,7 +249,7 @@ export default function Exploratory() {
                   <div style={{ marginBottom: 12 }}>
                     <b style={{ fontSize: 13 }}>关键发现</b>
                     {activeSession.summary.keyFindings.map((f, i) => (
-                      <div key={i} style={{ fontSize: 12.5, color: '#4e5969', marginTop: 4 }}>
+                      <div key={i} style={{ fontSize: 12, color: '#4e5969', marginTop: 4 }}>
                         • <b>{f.title}</b> —— {f.impact}
                       </div>
                     ))}
@@ -264,7 +264,7 @@ export default function Exploratory() {
                   <div>
                     <b style={{ fontSize: 13 }}>下一步</b>
                     {activeSession.summary.nextSteps.map((s, i) => (
-                      <div key={i} style={{ fontSize: 12.5, color: '#4e5969', marginTop: 4 }}>• {s}</div>
+                      <div key={i} style={{ fontSize: 12, color: '#4e5969', marginTop: 4 }}>• {s}</div>
                     ))}
                   </div>
                 )}

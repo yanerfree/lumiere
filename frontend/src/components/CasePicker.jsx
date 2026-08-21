@@ -197,7 +197,7 @@ export default function CasePicker({ open, projectId, selectedIds = [], onOk, on
                   { label: 'E2E', value: 'e2e' },
                 ]}
               />
-              <Tag style={{ background: '#e0f7f6', color: '#0ea5a0', border: 'none', fontWeight: 600 }}>
+              <Tag style={{ background: 'var(--green-bg)', color: '#0ea5a0', border: 'none', fontWeight: 600 }}>
                 已选 {picked.length} 条
               </Tag>
             </Space>

@@ -13,11 +13,11 @@ import { api } from '../utils/request'
 import { copyToClipboard } from '../utils/clipboard'
 
 const methodColors = {
-  GET: { color: '#0ea5a0', bg: '#e0f7f6', border: 'rgba(14,165,160,0.3)' },
-  POST: { color: '#fa8c16', bg: '#fff7e6', border: '#ffd591' },
-  PUT: { color: '#faad14', bg: '#fffbe6', border: '#ffe58f' },
-  PATCH: { color: '#7c5cbf', bg: '#f9f0ff', border: '#d3adf7' },
-  DELETE: { color: '#e8453c', bg: '#fff2f0', border: '#ffa39e' },
+  GET: { color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)', border: 'rgba(14,165,160,0.3)' },
+  POST: { color: '#ff7d00', bg: 'rgba(255,125,0,0.1)', border: 'rgba(255,125,0,0.3)' },
+  PUT: { color: '#faad14', bg: 'rgba(250,173,20,0.12)', border: 'rgba(250,173,20,0.3)' },
+  PATCH: { color: '#7c5cbf', bg: 'rgba(124,92,191,0.1)', border: 'rgba(124,92,191,0.3)' },
+  DELETE: { color: '#e8453c', bg: 'rgba(232,69,60,0.1)', border: 'rgba(232,69,60,0.3)' },
 }
 
 // ---- 动态变量 ----
@@ -98,7 +98,7 @@ function SnippetPicker({ snippets, onInsert }) {
         <div style={{ width: 340, maxHeight: 400, overflow: 'auto' }}>
           <div style={{ fontSize: 11, color: '#86909c', padding: '4px 8px 6px', fontWeight: 600 }}>点击插入代码片段</div>
           {grouped.map((item, idx) => item.type === 'header' ? (
-            <div key={`g-${idx}`} style={{ padding: '6px 10px 2px', fontSize: 10, color: '#0ea5a0', fontWeight: 600, borderTop: idx > 0 ? '1px solid rgba(0,0,0,0.06)' : 'none', marginTop: idx > 0 ? 4 : 0 }}>
+            <div key={`g-${idx}`} style={{ padding: '6px 10px 2px', fontSize: 11, color: '#0ea5a0', fontWeight: 600, borderTop: idx > 0 ? '1px solid rgba(0,0,0,0.06)' : 'none', marginTop: idx > 0 ? 4 : 0 }}>
               {item.label}
             </div>
           ) : (
@@ -109,9 +109,9 @@ function SnippetPicker({ snippets, onInsert }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
                 <CodeOutlined style={{ fontSize: 11, color: '#0ea5a0' }} />
                 <span style={{ fontSize: 12, fontWeight: 600, color: '#1d2129' }}>{item.label}</span>
-                <span style={{ fontSize: 10, color: '#86909c' }}>{item.desc}</span>
+                <span style={{ fontSize: 11, color: '#86909c' }}>{item.desc}</span>
               </div>
-              <pre style={{ margin: 0, padding: '4px 8px', background: 'rgba(0,0,0,0.02)', borderRadius: 8, fontSize: 10, color: '#4e5969', fontFamily: 'var(--font-mono)', lineHeight: 1.5, whiteSpace: 'pre-wrap', border: '1px solid rgba(0,0,0,0.05)', maxHeight: 80, overflow: 'hidden' }}>{item.code}</pre>
+              <pre style={{ margin: 0, padding: '4px 8px', background: 'rgba(0,0,0,0.02)', borderRadius: 8, fontSize: 11, color: '#4e5969', fontFamily: 'var(--font-mono)', lineHeight: 1.5, whiteSpace: 'pre-wrap', border: '1px solid rgba(0,0,0,0.05)', maxHeight: 80, overflow: 'hidden' }}>{item.code}</pre>
             </div>
           ))}
         </div>
@@ -136,9 +136,9 @@ function VarPicker({ onInsert }) {
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
               <div>
                 <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#0ea5a0' }}>{`{{${v.key}}}`}</div>
-                <div style={{ fontSize: 10, color: '#86909c' }}>{v.desc}</div>
+                <div style={{ fontSize: 11, color: '#86909c' }}>{v.desc}</div>
               </div>
-              <span style={{ fontSize: 10, color: '#8c8c8c', fontFamily: 'var(--font-mono)' }}>{v.example}</span>
+              <span style={{ fontSize: 11, color: '#86909c', fontFamily: 'var(--font-mono)' }}>{v.example}</span>
             </div>
           ))}
         </div>
@@ -163,7 +163,7 @@ const commonHeaders = [
   { value: 'Origin', desc: 'CORS 来源' },
   { value: 'Referer', desc: '来源页面' },
 ]
-const headerOptions = commonHeaders.map(h => ({ value: h.value, label: <span>{h.value} <span style={{ fontSize: 10, color: '#8c8c8c' }}>{h.desc}</span></span> }))
+const headerOptions = commonHeaders.map(h => ({ value: h.value, label: <span>{h.value} <span style={{ fontSize: 11, color: '#86909c' }}>{h.desc}</span></span> }))
 
 // ---- cURL 解析器 ----
 function parseCurl(curlStr) {
@@ -267,7 +267,7 @@ function KvEditor({ items = [], onChange, keyPh = 'Key', valPh = 'Value' }) {
     return (
       <div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-          <span style={{ fontSize: 11, color: '#86909c' }}>每行一个，格式: <code style={{ fontSize: 10, background: '#f5f5f5', padding: '1px 4px', borderRadius: 3 }}>key: value  // 描述</code></span>
+          <span style={{ fontSize: 11, color: '#86909c' }}>每行一个，格式: <code style={{ fontSize: 11, background: 'rgba(0,0,0,0.04)', padding: '1px 4px', borderRadius: 3 }}>key: value  // 描述</code></span>
           <Space size={4}>
             <Button size="small" onClick={() => setBulkMode(false)}>取消</Button>
             <Button size="small" type="primary" onClick={fromBulk}>确定</Button>
@@ -283,19 +283,19 @@ function KvEditor({ items = [], onChange, keyPh = 'Key', valPh = 'Value' }) {
   return (
     <div>
       {items.length > 0 && (
-        <div style={{ display: 'flex', gap: 4, marginBottom: 4, padding: '0 4px', fontSize: 10, color: '#8c8c8c', fontWeight: 600, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 4, marginBottom: 4, padding: '0 4px', fontSize: 11, color: '#86909c', fontWeight: 600, alignItems: 'center' }}>
           <span style={{ width: 20 }}></span>
           <span style={{ flex: 3 }}>{keyPh}</span>
           <span style={{ flex: 4 }}>{valPh}</span>
           <span style={{ flex: 3 }}>描述</span>
           <span style={{ width: 24 }}></span>
           <Tooltip title="批量编辑">
-            <Button type="text" size="small" icon={<EditOutlined />} onClick={toBulk} style={{ width: 20, height: 16, fontSize: 10, color: '#8c8c8c' }} />
+            <Button type="text" size="small" icon={<EditOutlined />} onClick={toBulk} style={{ width: 20, height: 16, fontSize: 11, color: '#86909c' }} />
           </Tooltip>
         </div>
       )}
       {items.length === 0 && (
-        <div style={{ padding: '16px 0', textAlign: 'center', color: '#8c8c8c', fontSize: 12 }}>
+        <div style={{ padding: '16px 0', textAlign: 'center', color: '#86909c', fontSize: 12 }}>
           暂无{typeName}，点击下方按钮添加
         </div>
       )}
@@ -354,23 +354,23 @@ function CompactApiRow({ step, index, isSelected, onClick, onRemove, onCopy, onD
         <Checkbox checked={runChecked} onClick={e => e.stopPropagation()}
           onChange={e => onRunCheck(e.target.checked)} style={{ flexShrink: 0 }} />
       )}
-      <HolderOutlined style={{ color: 'rgba(0,0,0,0.25)', cursor: 'grab', fontSize: 9, flexShrink: 0, opacity: hovered ? 1 : 0, transition: 'opacity 0.1s' }} />
-      <Tag style={{ margin: 0, fontWeight: 700, fontSize: 9, background: mc.bg, color: mc.color, border: 'none', padding: '0 5px', lineHeight: '16px', minWidth: 38, textAlign: 'center' }}>{method}</Tag>
+      <HolderOutlined style={{ color: 'rgba(0,0,0,0.25)', cursor: 'grab', fontSize: 11, flexShrink: 0, opacity: hovered ? 1 : 0, transition: 'opacity 0.1s' }} />
+      <Tag style={{ margin: 0, fontWeight: 700, fontSize: 11, background: mc.bg, color: mc.color, border: 'none', padding: '0 5px', lineHeight: '16px', minWidth: 38, textAlign: 'center' }}>{method}</Tag>
       <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
         <div style={{ fontSize: 12, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           textDecoration: onRunCheck && !runChecked ? 'line-through' : 'none' }}>{label}</div>
-        {subLabel && <div style={{ fontSize: 10, color: '#8c8c8c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{subLabel}</div>}
+        {subLabel && <div style={{ fontSize: 11, color: '#86909c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{subLabel}</div>}
       </div>
       <div style={{ display: 'flex', gap: 2, flexShrink: 0, alignItems: 'center' }}>
         {/* 光印两个数字（"3 2"），得逐个悬停才知道哪个是断言哪个是提取。
             加一个汉字前缀，不悬停也读得出来。tooltip 保留给要看全称的人。 */}
-        {assertCount > 0 && <span title={`${assertCount} 个断言`} style={{ fontSize: 9, background: '#e0f7f6', color: '#0ea5a0', borderRadius: 8, padding: '0 4px', lineHeight: '16px', fontWeight: 600 }}>断{assertCount}</span>}
-        {extractCount > 0 && <span title={`${extractCount} 个提取物`} style={{ fontSize: 9, background: '#f9f0ff', color: '#7c5cbf', borderRadius: 8, padding: '0 4px', lineHeight: '16px', fontWeight: 600 }}>取{extractCount}</span>}
+        {assertCount > 0 && <span title={`${assertCount} 个断言`} style={{ fontSize: 11, background: 'var(--green-bg)', color: '#0ea5a0', borderRadius: 8, padding: '0 4px', lineHeight: '16px', fontWeight: 600 }}>断{assertCount}</span>}
+        {extractCount > 0 && <span title={`${extractCount} 个提取物`} style={{ fontSize: 11, background: 'var(--purple-bg)', color: '#7c5cbf', borderRadius: 8, padding: '0 4px', lineHeight: '16px', fontWeight: 600 }}>取{extractCount}</span>}
       </div>
       {hovered && (
         <div style={{ display: 'flex', gap: 0, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-          <Tooltip title="复制"><Button type="text" size="small" icon={<CopyOutlined />} onClick={onCopy} style={{ width: 20, height: 20, fontSize: 10, color: '#86909c' }} /></Tooltip>
-          <Tooltip title="删除"><Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={onRemove} style={{ width: 20, height: 20, fontSize: 10 }} /></Tooltip>
+          <Tooltip title="复制"><Button type="text" size="small" icon={<CopyOutlined />} onClick={onCopy} style={{ width: 20, height: 20, fontSize: 11, color: '#86909c' }} /></Tooltip>
+          <Tooltip title="删除"><Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={onRemove} style={{ width: 20, height: 20, fontSize: 11 }} /></Tooltip>
         </div>
       )}
     </div>
@@ -382,16 +382,16 @@ function CompactGroupRow({ node, children, onRemove }) {
   return (
     <div>
       <div onClick={() => setCollapsed(!collapsed)} style={{
-        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', cursor: 'pointer', background: '#f9f0ff',
+        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', cursor: 'pointer', background: 'var(--purple-bg)',
       }}
         onMouseEnter={e => e.currentTarget.style.background = '#f0e6ff'}
         onMouseLeave={e => e.currentTarget.style.background = '#f9f0ff'}>
-        {collapsed ? <CaretRightOutlined style={{ fontSize: 9, color: '#7c5cbf' }} /> : <CaretDownOutlined style={{ fontSize: 9, color: '#7c5cbf' }} />}
+        {collapsed ? <CaretRightOutlined style={{ fontSize: 11, color: '#7c5cbf' }} /> : <CaretDownOutlined style={{ fontSize: 11, color: '#7c5cbf' }} />}
         <FolderOutlined style={{ color: '#7c5cbf', fontSize: 11 }} />
         <span style={{ fontSize: 11, color: '#7c5cbf', fontWeight: 500 }}>Group</span>
         <span style={{ fontSize: 12, color: '#7c5cbf', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.label || '分组'}</span>
-        <span style={{ fontSize: 10, color: '#b37feb' }}>({(node.children || []).length})</span>
-        <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ fontSize: 10, width: 20, height: 20 }} />
+        <span style={{ fontSize: 11, color: '#b37feb' }}>({(node.children || []).length})</span>
+        <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ fontSize: 11, width: 20, height: 20 }} />
       </div>
       {!collapsed && <div style={{ paddingLeft: 16 }}>{children}</div>}
     </div>
@@ -403,15 +403,15 @@ function CompactLoopRow({ node, children, onChange, onRemove }) {
   return (
     <div>
       <div onClick={() => setCollapsed(!collapsed)} style={{
-        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', cursor: 'pointer', background: '#e0f7f6',
+        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', cursor: 'pointer', background: 'var(--green-bg)',
       }}
         onMouseEnter={e => e.currentTarget.style.background = '#d6edff'}
         onMouseLeave={e => e.currentTarget.style.background = '#e0f7f6'}>
-        {collapsed ? <CaretRightOutlined style={{ fontSize: 9, color: '#0ea5a0' }} /> : <CaretDownOutlined style={{ fontSize: 9, color: '#0ea5a0' }} />}
+        {collapsed ? <CaretRightOutlined style={{ fontSize: 11, color: '#0ea5a0' }} /> : <CaretDownOutlined style={{ fontSize: 11, color: '#0ea5a0' }} />}
         <RetweetOutlined style={{ color: '#0ea5a0', fontSize: 11 }} />
         <span style={{ fontSize: 11, color: '#0ea5a0', fontWeight: 500 }}>循环 {node.times || 3} 次</span>
         <span style={{ fontSize: 12, color: '#0ea5a0', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.label || ''}</span>
-        <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ fontSize: 10, width: 20, height: 20 }} />
+        <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ fontSize: 11, width: 20, height: 20 }} />
       </div>
       {!collapsed && <div style={{ paddingLeft: 16 }}>{children}</div>}
     </div>
@@ -423,17 +423,17 @@ function CompactForEachRow({ node, children, onRemove }) {
   return (
     <div>
       <div onClick={() => setCollapsed(!collapsed)} style={{
-        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', cursor: 'pointer', background: '#e6fffb',
+        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', cursor: 'pointer', background: 'var(--green-bg)',
       }}
         onMouseEnter={e => e.currentTarget.style.background = '#b5f5ec'}
         onMouseLeave={e => e.currentTarget.style.background = '#e6fffb'}>
-        {collapsed ? <CaretRightOutlined style={{ fontSize: 9, color: '#13c2c2' }} /> : <CaretDownOutlined style={{ fontSize: 9, color: '#13c2c2' }} />}
-        <UnorderedListOutlined style={{ color: '#13c2c2', fontSize: 11 }} />
-        <span style={{ fontSize: 11, color: '#13c2c2', fontWeight: 500 }}>ForEach</span>
-        <span style={{ fontSize: 11, color: '#13c2c2', fontFamily: 'var(--font-mono)' }}>{node.iterVar || 'item'}</span>
-        <span style={{ fontSize: 10, color: '#86909c' }}>in</span>
-        <span style={{ fontSize: 11, color: '#13c2c2', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{node.dataSource || '[]'}</span>
-        <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ fontSize: 10, width: 20, height: 20 }} />
+        {collapsed ? <CaretRightOutlined style={{ fontSize: 11, color: '#0ea5a0' }} /> : <CaretDownOutlined style={{ fontSize: 11, color: '#0ea5a0' }} />}
+        <UnorderedListOutlined style={{ color: '#0ea5a0', fontSize: 11 }} />
+        <span style={{ fontSize: 11, color: '#0ea5a0', fontWeight: 500 }}>ForEach</span>
+        <span style={{ fontSize: 11, color: '#0ea5a0', fontFamily: 'var(--font-mono)' }}>{node.iterVar || 'item'}</span>
+        <span style={{ fontSize: 11, color: '#86909c' }}>in</span>
+        <span style={{ fontSize: 11, color: '#0ea5a0', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{node.dataSource || '[]'}</span>
+        <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ fontSize: 11, width: 20, height: 20 }} />
       </div>
       {!collapsed && <div style={{ paddingLeft: 16 }}>{children}</div>}
     </div>
@@ -445,24 +445,24 @@ function CompactConditionRow({ node, onRemove, thenChildren, elseChildren }) {
   return (
     <div>
       <div onClick={() => setCollapsed(!collapsed)} style={{
-        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', cursor: 'pointer', background: '#fffbe6',
+        display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', cursor: 'pointer', background: 'var(--orange-bg)',
       }}
         onMouseEnter={e => e.currentTarget.style.background = '#fff1b8'}
         onMouseLeave={e => e.currentTarget.style.background = '#fffbe6'}>
-        {collapsed ? <CaretRightOutlined style={{ fontSize: 9, color: '#faad14' }} /> : <CaretDownOutlined style={{ fontSize: 9, color: '#faad14' }} />}
+        {collapsed ? <CaretRightOutlined style={{ fontSize: 11, color: '#faad14' }} /> : <CaretDownOutlined style={{ fontSize: 11, color: '#faad14' }} />}
         <BranchesOutlined style={{ color: '#faad14', fontSize: 11 }} />
         <span style={{ fontSize: 11, color: '#faad14', fontWeight: 500 }}>IF</span>
         <span style={{ fontSize: 11, color: '#faad14', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: 'var(--font-mono)' }}>{node.condition || 'True'}</span>
-        <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ fontSize: 10, width: 20, height: 20 }} />
+        <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ fontSize: 11, width: 20, height: 20 }} />
       </div>
       {!collapsed && (
         <div>
           <div style={{ paddingLeft: 16 }}>
-            <div style={{ fontSize: 10, color: '#0ea5a0', padding: '2px 10px', fontWeight: 600 }}>THEN</div>
+            <div style={{ fontSize: 11, color: '#0ea5a0', padding: '2px 10px', fontWeight: 600 }}>THEN</div>
             {thenChildren}
           </div>
           <div style={{ paddingLeft: 16 }}>
-            <div style={{ fontSize: 10, color: '#e8453c', padding: '2px 10px', fontWeight: 600 }}>ELSE</div>
+            <div style={{ fontSize: 11, color: '#e8453c', padding: '2px 10px', fontWeight: 600 }}>ELSE</div>
             {elseChildren}
           </div>
         </div>
@@ -476,8 +476,8 @@ function CompactWaitRow({ node, onRemove }) {
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', background: 'rgba(0,0,0,0.02)' }}>
       <ClockCircleOutlined style={{ color: '#86909c', fontSize: 11 }} />
       <span style={{ fontSize: 11, color: '#86909c' }}>等待 {node.delay || 1000}ms</span>
-      <span style={{ fontSize: 11, color: '#8c8c8c', flex: 1 }}>{node.label || ''}</span>
-      <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={onRemove} style={{ fontSize: 10, width: 20, height: 20 }} />
+      <span style={{ fontSize: 11, color: '#86909c', flex: 1 }}>{node.label || ''}</span>
+      <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={onRemove} style={{ fontSize: 11, width: 20, height: 20 }} />
     </div>
   )
 }
@@ -566,7 +566,7 @@ function getOps(step, key) {
 const opMeta = {
   assertion: { icon: <CheckCircleOutlined />, color: '#0ea5a0', label: '断言' },
   extractor: { icon: <FieldStringOutlined />, color: '#7c5cbf', label: '提取变量' },
-  headerSetter: { icon: <LockOutlined />, color: '#13c2c2', label: '设置 Header' },
+  headerSetter: { icon: <LockOutlined />, color: '#0ea5a0', label: '设置 Header' },
   bodySetter: { icon: <FormOutlined />, color: '#eb2f96', label: '设置 Body' },
   script: { icon: <CodeOutlined />, color: '#0ea5a0', label: '脚本' },
   wait: { icon: <ClockCircleOutlined />, color: '#86909c', label: '等待' },
@@ -621,14 +621,14 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
       <div onClick={() => setExpanded(!expanded)} style={{
         display: 'flex', alignItems: 'center', gap: 6, padding: '6px 8px', cursor: 'pointer', userSelect: 'none',
       }}>
-        <HolderOutlined style={{ color: 'rgba(0,0,0,0.25)', cursor: 'grab', fontSize: 10, flexShrink: 0 }} />
+        <HolderOutlined style={{ color: 'rgba(0,0,0,0.25)', cursor: 'grab', fontSize: 11, flexShrink: 0 }} />
         <span style={{ color: meta.color, fontSize: 11, flexShrink: 0 }}>{meta.icon}</span>
         <span style={{ fontSize: 11, color: meta.color, fontWeight: 500, flexShrink: 0 }}>{meta.label}</span>
         <span style={{ fontSize: 12, color: '#4e5969', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: op.type === 'script' ? 'var(--font-mono)' : 'inherit' }}>
           {opSummary(op)}
         </span>
         <Button type="text" size="small" icon={<DeleteOutlined />} danger onClick={e => { e.stopPropagation(); onRemove() }} style={{ width: 20, height: 20 }} />
-        {expanded ? <CaretDownOutlined style={{ fontSize: 9, color: '#c9cdd4' }} /> : <CaretRightOutlined style={{ fontSize: 9, color: '#c9cdd4' }} />}
+        {expanded ? <CaretDownOutlined style={{ fontSize: 11, color: '#c9cdd4' }} /> : <CaretRightOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />}
       </div>
 
       {expanded && (
@@ -647,7 +647,7 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
                   <Input spellCheck={false} size="small" value={op.expected || ''} placeholder={op.assertType === 'status' ? '200' : '期望值'} onChange={e => up('expected', e.target.value)} style={{ flex: 1, minWidth: 80, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                 )}
               </div>
-              <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: '#86909c', marginTop: 4 }}>
                 {op.assertType === 'status' && '验证接口返回的 HTTP 状态码，如 200、201、404'}
                 {op.assertType === 'jsonPath' && '用 JSONPath 定位响应 JSON 中的字段，如 $.data.token'}
                 {op.assertType === 'contains' && '检查响应体文本是否包含指定字符串'}
@@ -659,11 +659,11 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
             <div>
               <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
                 <Tooltip title="后续步骤可用 {{变量名}} 引用"><Input spellCheck={false} size="small" value={op.variable || ''} placeholder="如: token" onChange={e => up('variable', e.target.value)} style={{ width: 100, fontFamily: 'var(--font-mono)', fontSize: 11 }} /></Tooltip>
-                <Tag style={{ margin: 0, fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none' }}>临时变量</Tag>
+                <Tag style={{ margin: 0, fontSize: 11, background: 'var(--green-bg)', color: '#0ea5a0', border: 'none' }}>临时变量</Tag>
                 <span style={{ fontSize: 11, color: '#86909c' }}>Response JSON</span>
                 <Tooltip title="JSONPath 示例：$.data.token, $.list[0].id"><Input spellCheck={false} size="small" value={op.path || ''} placeholder="$.data.token" onChange={e => up('path', e.target.value)} style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 11 }} /></Tooltip>
               </div>
-              <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>从响应 JSON 中提取值存为临时变量，后续步骤用 {'{{变量名}}'} 引用</div>
+              <div style={{ fontSize: 11, color: '#86909c', marginTop: 4 }}>从响应 JSON 中提取值存为临时变量，后续步骤用 {'{{变量名}}'} 引用</div>
             </div>
           )}
           {op.type === 'headerSetter' && (
@@ -675,10 +675,10 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
                   options={[{ value: 'literal', label: '直接输入' }, { value: 'context', label: '上下文变量' }]} />
                 <Input spellCheck={false} size="small" value={op.value || ''} onChange={e => up('value', e.target.value)}
                   placeholder={op.sourceType === 'context' ? '变量名，如 token' : '值，如 Bearer xxx'}
-                  prefix={op.sourceType === 'context' ? <span style={{ color: '#0ea5a0', fontSize: 10 }}>{'{{'}...{'}}'}</span> : null}
+                  prefix={op.sourceType === 'context' ? <span style={{ color: '#0ea5a0', fontSize: 11 }}>{'{{'}...{'}}'}</span> : null}
                   style={{ flex: 1, minWidth: 120, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
               </div>
-              <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>设置请求头字段，"上下文变量"模式会自动用前面步骤提取的值</div>
+              <div style={{ fontSize: 11, color: '#86909c', marginTop: 4 }}>设置请求头字段，"上下文变量"模式会自动用前面步骤提取的值</div>
             </div>
           )}
           {op.type === 'bodySetter' && (
@@ -698,14 +698,14 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
                   <span style={{ fontSize: 11, color: '#86909c' }}>=</span>
                   <Input spellCheck={false} size="small" value={op.value || ''} onChange={e => up('value', e.target.value)}
                     placeholder={op.sourceType === 'context' ? '变量名' : '值'}
-                    prefix={op.sourceType === 'context' ? <span style={{ color: '#0ea5a0', fontSize: 10 }}>{'{{'}...{'}}'}</span> : null}
+                    prefix={op.sourceType === 'context' ? <span style={{ color: '#0ea5a0', fontSize: 11 }}>{'{{'}...{'}}'}</span> : null}
                     style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                 </div>
               ) : (
                 <div>
                   {op.sourceType === 'context' ? (
                     <Input spellCheck={false} size="small" value={op.value || ''} onChange={e => up('value', e.target.value)}
-                      placeholder="上下文变量名" prefix={<span style={{ color: '#0ea5a0', fontSize: 10 }}>{'{{'}...{'}}'}</span>}
+                      placeholder="上下文变量名" prefix={<span style={{ color: '#0ea5a0', fontSize: 11 }}>{'{{'}...{'}}'}</span>}
                       style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                   ) : (
                     <Input.TextArea spellCheck={false} value={op.value || ''} onChange={e => up('value', e.target.value)}
@@ -714,7 +714,7 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
                   )}
                 </div>
               )}
-              <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>
+              <div style={{ fontSize: 11, color: '#86909c', marginTop: 4 }}>
                 {(op.mode || 'field') === 'field' ? '修改 Body 中的指定字段（支持嵌套路径，如 data.list.0.id）' : '用新内容替换整个请求体'}
               </div>
             </div>
@@ -739,7 +739,7 @@ function OperationItem({ op, index, onChange, onRemove, onDragStart, onDragOver,
                 <span style={{ fontSize: 11, color: '#86909c' }}>ms</span>
                 <Input size="small" value={op.label || ''} placeholder="描述（可选）" onChange={e => up('label', e.target.value)} style={{ flex: 1, fontSize: 11 }} />
               </div>
-              <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4 }}>在两个操作之间暂停指定毫秒数，1000ms = 1秒</div>
+              <div style={{ fontSize: 11, color: '#86909c', marginTop: 4 }}>在两个操作之间暂停指定毫秒数，1000ms = 1秒</div>
             </div>
           )}
         </div>
@@ -769,12 +769,12 @@ function OperationList({ operations, onChange, addItems, snippets, infoBg, infoB
         <span style={{ fontSize: 13 }}>{infoIcon}</span>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: infoColor, fontWeight: 600 }}>{infoTitle}</div>
-          <div style={{ fontSize: 10, color: '#4e5969', marginTop: 1 }}>{infoDesc}</div>
+          <div style={{ fontSize: 11, color: '#4e5969', marginTop: 1 }}>{infoDesc}</div>
         </div>
       </div>
 
       {operations.length === 0 && (
-        <div style={{ padding: '16px 12px', textAlign: 'center', color: '#8c8c8c', fontSize: 11, border: '1px dashed rgba(0,0,0,0.08)', borderRadius: 6, marginBottom: 8 }}>
+        <div style={{ padding: '16px 12px', textAlign: 'center', color: '#86909c', fontSize: 11, border: '1px dashed rgba(0,0,0,0.08)', borderRadius: 6, marginBottom: 8 }}>
           暂无操作，点击下方按钮添加断言、提取变量或自定义脚本
         </div>
       )}
@@ -837,7 +837,7 @@ function AuthEditor({ auth, onChange }) {
           <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Token</div>
           <Input spellCheck={false} size="small" value={a.token || ''} onChange={e => up('token', e.target.value)}
             placeholder="输入 Token，支持 {{variable}}" style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
-          <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 6 }}>会自动添加 Authorization: Bearer {'<token>'} 请求头</div>
+          <div style={{ fontSize: 11, color: '#86909c', marginTop: 6 }}>会自动添加 Authorization: Bearer {'<token>'} 请求头</div>
         </div>
       )}
       {a.type === 'basic' && (
@@ -850,7 +850,7 @@ function AuthEditor({ auth, onChange }) {
             <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>密码</div>
             <Input.Password size="small" value={a.password || ''} onChange={e => up('password', e.target.value)} placeholder="Password" style={{ fontSize: 11 }} />
           </div>
-          <div style={{ fontSize: 11, color: '#8c8c8c' }}>自动进行 Base64 编码并添加 Authorization: Basic 请求头</div>
+          <div style={{ fontSize: 11, color: '#86909c' }}>自动进行 Base64 编码并添加 Authorization: Basic 请求头</div>
         </div>
       )}
       {a.type === 'apikey' && (
@@ -873,7 +873,7 @@ function AuthEditor({ auth, onChange }) {
         </div>
       )}
       {a.type === 'none' && (
-        <div style={{ padding: '16px 0', textAlign: 'center', color: '#8c8c8c', fontSize: 12 }}>
+        <div style={{ padding: '16px 0', textAlign: 'center', color: '#86909c', fontSize: 12 }}>
           此请求不使用认证
         </div>
       )}
@@ -945,7 +945,7 @@ function ResponsePanel({ response, onAddAssertion }) {
               {onAddAssertion && typeof v !== 'object' && (
                 <Tooltip title={`断言 ${path}.${k}`}>
                   <span onClick={(e) => { e.stopPropagation(); onAddAssertion(path + '.' + k, v) }}
-                    style={{ cursor: 'pointer', marginLeft: 6, fontSize: 9, color: '#c9cdd4', opacity: 0.6, transition: 'opacity 0.1s' }}
+                    style={{ cursor: 'pointer', marginLeft: 6, fontSize: 11, color: '#c9cdd4', opacity: 0.6, transition: 'opacity 0.1s' }}
                     onMouseEnter={e => e.target.style.opacity = 1} onMouseLeave={e => e.target.style.opacity = 0.6}>
                     +断言
                   </span>
@@ -964,7 +964,7 @@ function ResponsePanel({ response, onAddAssertion }) {
     if (!search) return text
     const parts = text.split(new RegExp(`(${search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'))
     return parts.map((p, i) => p.toLowerCase() === search.toLowerCase()
-      ? <mark key={i} style={{ background: '#ffe58f', padding: 0 }}>{p}</mark> : p)
+      ? <mark key={i} style={{ background: 'rgba(250,173,20,0.3)', padding: 0 }}>{p}</mark> : p)
   }
 
   return (
@@ -1004,7 +1004,7 @@ function ResponsePanel({ response, onAddAssertion }) {
             <div style={{ display: 'flex', gap: 0 }}>
               {isJson && ['pretty', 'raw'].map(m => (
                 <div key={m} onClick={() => setBodyMode(m)} style={{
-                  padding: '2px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 6,
+                  padding: '2px 8px', fontSize: 11, cursor: 'pointer', borderRadius: 6,
                   background: bodyMode === m ? '#e0f7f6' : 'transparent',
                   color: bodyMode === m ? '#0ea5a0' : '#86909c', fontWeight: bodyMode === m ? 600 : 400,
                 }}>{m === 'pretty' ? 'Pretty' : 'Raw'}</div>
@@ -1054,7 +1054,7 @@ function ResponsePanel({ response, onAddAssertion }) {
                 <span style={{ fontWeight: 600, color: '#4e5969', fontFamily: 'var(--font-mono)' }}>{c.name}</span>
                 <span style={{ color: '#0ea5a0', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{c.value}</span>
               </div>
-              {c.attrs && <div style={{ fontSize: 10, color: '#8c8c8c', marginTop: 2 }}>{c.attrs}</div>}
+              {c.attrs && <div style={{ fontSize: 11, color: '#86909c', marginTop: 2 }}>{c.attrs}</div>}
             </div>
           ))}
         </div>
@@ -1215,7 +1215,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
     { key: 'params', label: 'Params', count: paramCount },
     { key: 'body', label: 'Body', count: bodyHas },
     { key: 'headers', label: 'Headers', count: headerCount },
-    { key: 'auth', label: 'Auth', count: hasAuth ? 1 : 0, icon: <LockOutlined style={{ fontSize: 10, marginRight: 2 }} /> },
+    { key: 'auth', label: 'Auth', count: hasAuth ? 1 : 0, icon: <LockOutlined style={{ fontSize: 11, marginRight: 2 }} /> },
     { key: 'pre', label: '前置操作', count: preCount },
     { key: 'post', label: '后置操作', count: postCount },
     { key: 'timing', label: '等待/重试', count: (step.retryTimeoutMs > 0 || step.waitMs > 0) ? 1 : 0 },
@@ -1252,7 +1252,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
                   borderRadius: '8px 0 0 8px', padding: '3px 8px', whiteSpace: 'nowrap', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis',
                   display: 'inline-block', lineHeight: '16px', fontFamily: 'var(--font-mono)', flexShrink: 0, cursor: 'default', userSelect: 'none',
                   textDecoration: isAbsolute ? 'line-through' : 'none', opacity: isAbsolute ? 0.45 : 1 }}>
-                  <GlobalOutlined style={{ marginRight: 4, fontSize: 10 }} />{baseUrl}
+                  <GlobalOutlined style={{ marginRight: 4, fontSize: 11 }} />{baseUrl}
                 </span>
               </Tooltip>
             )}
@@ -1287,7 +1287,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
         </div>
         {/* 完整 URL 预览 */}
         {paramCount > 0 && (
-          <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: 4, fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          <div style={{ fontSize: 11, color: '#86909c', marginTop: 4, fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
             title={resolvedUrl}>
             {resolvedUrl}
           </div>
@@ -1329,7 +1329,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
             transition: 'all 0.12s',
           }}>
             {t.icon}{t.label}
-            {t.count > 0 && <span style={{ fontSize: 11, marginLeft: 3, color: activeTab === t.key ? '#0ea5a0' : '#8c8c8c' }}>{t.count}</span>}
+            {t.count > 0 && <span style={{ fontSize: 11, marginLeft: 3, color: activeTab === t.key ? '#0ea5a0' : '#86909c' }}>{t.count}</span>}
           </div>
         ))}
       </div>
@@ -1358,7 +1358,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
               )}
             </div>
             {(step.bodyType || 'json') === 'none' && (
-              <div style={{ padding: '16px 0', textAlign: 'center', color: '#8c8c8c', fontSize: 12 }}>此请求不包含 Body</div>
+              <div style={{ padding: '16px 0', textAlign: 'center', color: '#86909c', fontSize: 12 }}>此请求不包含 Body</div>
             )}
             {((step.bodyType || 'json') === 'json' || step.bodyType === 'raw') && (
               <Input.TextArea spellCheck={false} value={step.body || ''} onChange={e => up('body', e.target.value)}
@@ -1421,7 +1421,7 @@ function StepDetailPanel({ step, onChange, baseUrl }) {
             onChange={ops => onChange({ ...step, postOperations: ops })}
             addItems={postAddItems}
             snippets={postScriptSnippets}
-            infoBg="#fff7e6" infoBorder="#ffd591" infoColor="#fa8c16"
+            infoBg="#fff7e6" infoBorder="rgba(255,125,0,0.3)" infoColor="#ff7d00"
             infoIcon="📋" infoTitle="请求后执行"
             infoDesc="执行顺序按列表排列，可拖拽调整"
           />
@@ -1710,7 +1710,7 @@ export default function ApiStepList({ steps, onChange, environments, runEnv, nod
             {runSel && checkedCount < allApiIds.length && (
               // 少跑了几步必须在列表头写死 —— 否则跑完看到「全通过 6/6 步」，
               // 没人会想起来那是因为自己勾掉了 13 步。
-              <span style={{ fontSize: 11, color: '#fa8c16', fontWeight: 600 }}>
+              <span style={{ fontSize: 11, color: '#ff7d00', fontWeight: 600 }}>
                 已选 {checkedCount}/{allApiIds.length}
               </span>
             )}
@@ -1720,7 +1720,7 @@ export default function ApiStepList({ steps, onChange, environments, runEnv, nod
           </Dropdown>
         </div>
         {brokenVars.length > 0 && (
-          <div style={{ padding: '6px 10px', background: '#fff7e6', borderBottom: '1px solid #ffe58f',
+          <div style={{ padding: '6px 10px', background: 'var(--orange-bg)', borderBottom: '1px solid rgba(250,173,20,0.3)',
             fontSize: 11, color: '#ad6800', lineHeight: 1.5 }}>
             勾掉的步骤负责提取 <b style={{ fontFamily: 'var(--font-mono)' }}>
               {brokenVars.map(v => '${' + v + '}').join('、')}</b>
@@ -1753,7 +1753,7 @@ export default function ApiStepList({ steps, onChange, environments, runEnv, nod
         {selected ? (
           <StepDetailPanel step={selected.step} onChange={handleDetailChange} baseUrl={baseUrl} />
         ) : (
-          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8c8c8c' }}>
+          <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#86909c' }}>
             <div style={{ textAlign: 'center' }}>
               <ApiOutlined style={{ fontSize: 40, marginBottom: 12 }} />
               <div style={{ fontSize: 13 }}>请选择一个 API 步骤查看详情</div>

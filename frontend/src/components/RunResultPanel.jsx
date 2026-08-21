@@ -12,8 +12,8 @@ const MONO = 'var(--font-mono)'
 // 来源徽标配色：一眼区分「环境给的」「上游步骤提取的」「场景变量」
 const SRC_COLOR = {
   env: '#0ea5a0', scenario_env: '#0ea5a0', scenario_var: '#7c5cbf',
-  extract: '#1677ff', resource: '#fa8c16', runtime: '#86909c',
-  auto_token: '#fa8c16', unknown: '#c9cdd4',
+  extract: '#4e8af0', resource: '#ff7d00', runtime: '#86909c',
+  auto_token: '#ff7d00', unknown: '#c9cdd4',
 }
 
 // 断言类型 → 人话。**必须和后端 _ASSERT_LABELS 一致**（api_test_runner.py）——
@@ -145,8 +145,8 @@ function ConsoleLines({ extracted, preScript, postScript }) {
           borderBottom: '1px solid rgba(0,0,0,0.04)',
           background: l.ok ? 'transparent' : 'rgba(232,69,60,0.05)',
         }}>
-          <Tag style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', flexShrink: 0 }}
-            color={l.op === '提取' ? '#1677ff' : '#86909c'}>{l.op}</Tag>
+          <Tag style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px', flexShrink: 0 }}
+            color={l.op === '提取' ? '#4e8af0' : '#86909c'}>{l.op}</Tag>
           <div style={{ flex: 1, wordBreak: 'break-all' }}>
             <div>{l.text}</div>
             <div style={{ color: '#c9cdd4', marginTop: 1 }}>{l.note}</div>
@@ -176,7 +176,7 @@ function Assertions({ items, statusCode }) {
           <span style={{ fontFamily: MONO, wordBreak: 'break-all' }}>
             {desc(a)}
             {/* 断言本身写错时要说是写错了，别混在"没通过"里让人去查被测系统 */}
-            {a.error && <div style={{ color: '#fa8c16', marginTop: 2 }}>{a.error}</div>}
+            {a.error && <div style={{ color: '#ff7d00', marginTop: 2 }}>{a.error}</div>}
           </span>
         </div>
       ))}
@@ -231,7 +231,7 @@ function ActualRequest({ req }) {
         fontFamily: MONO, wordBreak: 'break-all', padding: '6px 8px',
         background: 'rgba(0,0,0,0.03)', borderRadius: 6,
       }}>
-        <Tag color={METHOD_COLORS[req.method]} style={{ fontSize: 10, lineHeight: '16px', padding: '0 5px' }}>{req.method}</Tag>
+        <Tag color={METHOD_COLORS[req.method]} style={{ fontSize: 11, lineHeight: '16px', padding: '0 5px' }}>{req.method}</Tag>
         {req.url}<CopyBtn text={req.url} label="URL" />
       </div>
 
@@ -246,7 +246,7 @@ function ActualRequest({ req }) {
       </>)}
 
       {req.body != null && req.body !== '' && (<>
-        <SectionTitle>请求体 {ctype && <Tag style={{ marginLeft: 6, fontSize: 10, lineHeight: '16px', padding: '0 5px' }}>{String(ctype).split(';')[0]}</Tag>}</SectionTitle>
+        <SectionTitle>请求体 {ctype && <Tag style={{ marginLeft: 6, fontSize: 11, lineHeight: '16px', padding: '0 5px' }}>{String(ctype).split(';')[0]}</Tag>}</SectionTitle>
         <JsonBlock data={req.body} max={220} />
       </>)}
     </div>
@@ -356,7 +356,7 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
                   </Tag>
                 )}
 
-                <Tag color={METHOD_COLORS[r.method]} style={{ fontSize: 10, margin: 0, padding: '0 4px', lineHeight: '18px' }}>
+                <Tag color={METHOD_COLORS[r.method]} style={{ fontSize: 11, margin: 0, padding: '0 4px', lineHeight: '18px' }}>
                   {r.method || 'GET'}
                 </Tag>
 
@@ -366,8 +366,8 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
 
                 <span style={{ fontSize: 11, color: '#c9cdd4', flexShrink: 0 }}>{fmt(r.duration)}</span>
 
-                {isExpanded ? <DownOutlined style={{ fontSize: 10, color: '#c9cdd4' }} /> :
-                              <RightOutlined style={{ fontSize: 10, color: '#c9cdd4' }} />}
+                {isExpanded ? <DownOutlined style={{ fontSize: 11, color: '#c9cdd4' }} /> :
+                              <RightOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />}
               </div>
 
               {failHint && !isExpanded && (
@@ -390,7 +390,7 @@ export default function RunResultPanel({ results, scenario, running, onClose, re
                   </div>
 
                   {detail.error && (
-                    <div style={{ padding: '6px 10px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 6, fontSize: 11, color: '#e8453c', whiteSpace: 'pre-wrap', marginBottom: 8 }}>
+                    <div style={{ padding: '6px 10px', background: 'var(--red-bg)', border: '1px solid #ffccc7', borderRadius: 6, fontSize: 11, color: '#e8453c', whiteSpace: 'pre-wrap', marginBottom: 8 }}>
                       {detail.error}
                     </div>
                   )}

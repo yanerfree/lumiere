@@ -7,7 +7,7 @@ const { Text } = Typography
 
 const DIM_COLORS = {
   positive: '#0ea5a0', negative: '#e8453c', boundary: '#faad14',
-  permission: '#7c5cbf', data: '#13c2c2', state: '#4e8af0',
+  permission: '#7c5cbf', data: '#0ea5a0', state: '#4e8af0',
 }
 const DIM_LABELS = {
   positive: '正向', negative: '异常', boundary: '边界',
@@ -44,7 +44,7 @@ export default function CoverageMatrix({ projectId, branchId, taskId }) {
       render: (code, record) => (
         <Tooltip title={record.title}>
           <Text code style={{ fontSize: 12 }}>{code}</Text>
-          {record.status === 'not_applicable' && <Tag color="default" style={{ marginLeft: 4, fontSize: 10 }}>N/A</Tag>}
+          {record.status === 'not_applicable' && <Tag color="default" style={{ marginLeft: 4, fontSize: 11 }}>N/A</Tag>}
         </Tooltip>
       ),
     },

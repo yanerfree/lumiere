@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { TimeCell } from '../../utils/timeCol'
 import { Tag, Button, Radio, Input, Space, Modal, Form, Select, InputNumber, message, Empty, Spin, Pagination, Tooltip } from 'antd'
 import { PlusOutlined, SearchOutlined, ReloadOutlined, PlayCircleOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -8,12 +9,12 @@ import { useBranch } from '../../utils/branch'
 import CasePicker from '../../components/CasePicker'
 
 const statusMap = {
-  draft:          { label: '草稿',     color: '#86909c', bg: 'rgba(0,0,0,0.03)', dot: '#c9cdd4' },
-  executing:      { label: '执行中',   color: '#0ea5a0', bg: '#e0f7f6', dot: '#0ea5a0' },
-  paused:         { label: '已暂停',   color: '#faad14', bg: '#fffbe6', dot: '#faad14' },
-  pending_manual: { label: '待录入',   color: '#7c5cbf', bg: 'rgba(124,92,191,0.06)', dot: '#7c5cbf' },
-  completed:      { label: '已完成',   color: '#0ea5a0', bg: '#e0f7f6', dot: '#0ea5a0' },
-  archived:       { label: '已归档',   color: '#86909c', bg: 'rgba(0,0,0,0.03)', dot: '#c9cdd4' },
+  draft:          { label: '草稿',     color: '#86909c', bg: 'rgba(0,0,0,0.04)', dot: '#a9b0ba' },
+  executing:      { label: '执行中',   color: '#0ea5a0', bg: 'var(--green-bg)', dot: '#0ea5a0' },
+  paused:         { label: '已暂停',   color: '#faad14', bg: 'rgba(250,173,20,0.12)', dot: '#faad14' },
+  pending_manual: { label: '待录入',   color: '#7c5cbf', bg: 'var(--purple-bg)', dot: '#7c5cbf' },
+  completed:      { label: '已完成',   color: '#0ea5a0', bg: 'var(--green-bg)', dot: '#0ea5a0' },
+  archived:       { label: '已归档',   color: '#86909c', bg: 'rgba(0,0,0,0.04)', dot: '#a9b0ba' },
 }
 
 const th = { fontSize: 12, color: '#86909c', fontWeight: 500, whiteSpace: 'nowrap' }
@@ -212,15 +213,16 @@ export default function PlanList() {
       {loading ? <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div> :
         filteredPlans.length === 0 ? <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Empty description="暂无计划" /></div> : <>
         {/* Table */}
-        <div style={{ background: 'rgba(255,255,255,0.3)', border: 'none', borderRadius: 16, backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--panel-bg)', border: 'none', borderRadius: 16, backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Header */}
-          <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px', height: 36, background: 'rgba(0,0,0,0.02)', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px', height: 36, background: 'var(--table-header-bg)', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
             <div style={{ flex: 4, ...th }}>计划名称</div>
             <div style={{ width: 62, textAlign: 'center', flexShrink: 0, ...th }}>类型</div>
             <div style={{ width: 62, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
             <div style={{ width: 90, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
             <div style={{ width: 60, textAlign: 'center', flexShrink: 0, ...th }}>用例</div>
             <div style={{ width: 80, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
+            <div style={{ width: 112, textAlign: 'center', flexShrink: 0, ...th }}>创建时间</div>
             <div style={{ width: 240, textAlign: 'center', flexShrink: 0, ...th }}>操作</div>
           </div>
           {/* Body */}
@@ -242,9 +244,6 @@ export default function PlanList() {
                     <span style={{ fontWeight: 500, fontSize: 13, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {plan.name}
                     </span>
-                    <span style={{ fontSize: 11, color: '#c9cdd4', flexShrink: 0 }}>
-                      {new Date(plan.createdAt).toLocaleDateString('zh-CN')}
-                    </span>
                   </div>
 
                   {/* Type：自动化/手动 —— 这一列回答的不是"跑的什么" */}
@@ -260,7 +259,7 @@ export default function PlanList() {
                     {plan.testType ? (
                       <span style={{
                         fontSize: 11, padding: '1px 6px', borderRadius: 6,
-                        background: plan.testType === 'e2e' ? '#f5f0ff' : '#e0f7f6',
+                        background: plan.testType === 'e2e' ? 'var(--purple-bg)' : 'var(--green-bg)',
                         color: plan.testType === 'e2e' ? '#7c5cbf' : '#0ea5a0',
                       }}>{plan.testType === 'e2e' ? 'UI' : '接口'}</span>
                     ) : <span style={{ fontSize: 11, color: '#c9cdd4' }}>—</span>}
@@ -285,11 +284,16 @@ export default function PlanList() {
                     <span style={{
                       display: 'inline-flex', alignItems: 'center', gap: 4,
                       fontSize: 11, padding: '2px 8px', borderRadius: 12,
-                      background: s.dot, color: '#fff',
+                      background: s.bg, color: s.color, border: '1px solid rgba(0,0,0,0.06)',
                     }}>
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'transparent' }} />
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: s.dot }} />
                       {s.label}
                     </span>
+                  </div>
+
+                  {/* 创建时间：独立一列，紧挨操作列 */}
+                  <div style={{ width: 112, textAlign: 'center', flexShrink: 0 }}>
+                    <TimeCell value={plan.createdAt} />
                   </div>
 
                   {/* Actions */}

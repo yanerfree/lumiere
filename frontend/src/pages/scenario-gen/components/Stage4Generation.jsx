@@ -122,7 +122,7 @@ export default function Stage4Generation({ projectId, branchId, taskId, onDone }
           </Button>
         )}
         {task?.errorMessage && (
-          <div style={{ marginTop: 8, padding: 8, background: '#fff2f0', borderRadius: 6, fontSize: 12, color: '#e8453c' }}>
+          <div style={{ marginTop: 8, padding: 8, background: 'var(--red-bg)', borderRadius: 6, fontSize: 12, color: '#e8453c' }}>
             {task.errorMessage}
           </div>
         )}

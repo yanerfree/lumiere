@@ -37,7 +37,7 @@ const statusCfg = {
   skipped: { label: '跳过', color: '#c9cdd4', dot: '#c9cdd4' },
   // 重试之后才通过的 —— 一次就过和试了三次才过不是一回事，所以单独一档，
   // 而且它进通过率分母（见 execution_service）
-  flaky: { label: '重试后通过', color: '#fa8c16', dot: '#fa8c16' },
+  flaky: { label: '重试后通过', color: '#ff7d00', dot: '#ff7d00' },
   // pytest 的预期失败：跑了、按预期失败。以前被并进"跳过"，读起来像没跑
   xfail: { label: '预期失败', color: '#7c5cbf', dot: '#7c5cbf' },
   running: { label: '执行中', color: '#0ea5a0', dot: '#0ea5a0' },
@@ -245,7 +245,7 @@ function StepDetailDrawer({ step, open, onClose }) {
         {isFailed && step.errorSummary && (
           <div style={{
             display: 'flex', alignItems: 'flex-start', gap: 8, padding: '10px 14px', marginBottom: 14,
-            background: '#fff2f0', borderRadius: 12, border: '1px solid #ffccc7',
+            background: 'var(--red-bg)', borderRadius: 12, border: '1px solid #ffccc7',
           }}>
             <CloseCircleFilled style={{ color: '#e8453c', fontSize: 14, marginTop: 2, flexShrink: 0 }} />
             <span style={{ fontSize: 12, color: '#4e5969', lineHeight: 1.6 }}>{step.errorSummary}</span>
@@ -447,7 +447,7 @@ function ScenarioExpanded({ scenario, projectId, onConfirmed }) {
                 }}>{step.seq || i + 1}</span>
                 {step.phase && (
                   <span style={{
-                    fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 8, flexShrink: 0, marginTop: 2,
+                    fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 8, flexShrink: 0, marginTop: 2,
                     background: `${phaseColor[step.phase] || '#86909c'}15`,
                     color: phaseColor[step.phase] || '#86909c',
                   }}>{phaseLabel[step.phase] || step.phase}</span>
@@ -481,7 +481,7 @@ function ScenarioExpanded({ scenario, projectId, onConfirmed }) {
       {expectedResult && (
         <div>
           <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4, fontWeight: 600 }}>预期结果</div>
-          <div style={{ fontSize: 13, color: '#4e5969', padding: '8px 14px', background: '#e0f7f6', borderRadius: 12, border: '1px solid rgba(14,165,160,0.2)', lineHeight: 1.5 }}>
+          <div style={{ fontSize: 13, color: '#4e5969', padding: '8px 14px', background: 'var(--green-bg)', borderRadius: 12, border: '1px solid rgba(14,165,160,0.2)', lineHeight: 1.5 }}>
             {expectedResult}
           </div>
         </div>
@@ -674,7 +674,7 @@ export default function ReportDetail() {
             <StatusDot status={s.status} />
             {isAutomatic && (
               <RightOutlined style={{
-                fontSize: 10, color: '#c9cdd4', transition: 'transform 0.2s',
+                fontSize: 11, color: '#c9cdd4', transition: 'transform 0.2s',
                 transform: isExpanded ? 'rotate(90deg)' : 'none',
               }} />
             )}
@@ -750,7 +750,7 @@ export default function ReportDetail() {
                     <StatusDot status={step.status} />
                     {step.stepPhase && (
                       <span style={{
-                        fontSize: 10, fontWeight: 600, padding: '0px 6px', borderRadius: 8, flexShrink: 0,
+                        fontSize: 11, fontWeight: 600, padding: '0px 6px', borderRadius: 8, flexShrink: 0,
                         background: `${phaseColor[step.stepPhase] || '#86909c'}15`,
                         color: phaseColor[step.stepPhase] || '#86909c',
                       }}>{phaseLabel[step.stepPhase] || step.stepPhase}</span>
@@ -762,7 +762,7 @@ export default function ReportDetail() {
                         </span>
                         {step.httpMethod && (
                           <span style={{
-                            fontSize: 10, fontWeight: 700, fontFamily: 'var(--font-mono)', flexShrink: 0,
+                            fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-mono)', flexShrink: 0,
                             padding: '0px 5px', borderRadius: 8,
                             background: `${methodColor[step.httpMethod] || '#86909c'}18`,
                             color: methodColor[step.httpMethod] || '#86909c',
@@ -805,7 +805,7 @@ export default function ReportDetail() {
                     <span style={{ fontSize: 12, color: '#c9cdd4', fontFamily: 'var(--font-mono)', minWidth: 48, textAlign: 'right' }}>
                       {fmt(step.durationMs)}
                     </span>
-                    <RightOutlined style={{ fontSize: 10, color: '#c9cdd4' }} />
+                    <RightOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />
                   </div>
                 </div>
               ))
@@ -881,7 +881,7 @@ export default function ReportDetail() {
             {liveFlaky > 0 && (
               <div>
                 <div style={{ color: '#86909c', fontSize: 13, marginBottom: 4 }}>重试后通过</div>
-                <div style={{ fontSize: 18, fontWeight: 600, color: '#fa8c16' }}>{liveFlaky}</div>
+                <div style={{ fontSize: 18, fontWeight: 600, color: '#ff7d00' }}>{liveFlaky}</div>
               </div>
             )}
             {liveXfail > 0 && (

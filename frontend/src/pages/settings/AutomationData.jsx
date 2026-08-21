@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { timeColumn } from '../../utils/timeCol'
 import { useParams } from 'react-router-dom'
 import {
   Card, Table, Button, Modal, Form, Input, Switch, Tag, Tooltip,
@@ -128,6 +129,8 @@ export default function AutomationData() {
     {
       title: '资源名',
       dataIndex: 'name',
+      // 不给宽度时被别的列挤到 85px，`selfProjectId` 这种驼峰名会折成两行
+      width: 150,
       render: (v) => <Text strong>{v}</Text>,
     },
     {
@@ -231,6 +234,7 @@ export default function AutomationData() {
       render: c => <span style={{ fontSize: 12, color: '#4e5969', whiteSpace: 'pre-wrap' }}>{c}</span> },
     { title: '谁写的', dataIndex: 'source', width: 90,
       render: s => <Tag color={s === 'cc' ? 'cyan' : 'default'}>{s === 'cc' ? 'CC 回写' : '人工'}</Tag> },
+    timeColumn({ key: 'createdAt', title: '写入时间' }),
     { title: '操作', width: 90, render: (_, r) => (
       <Space size={4}>
         <Button type="text" size="small" icon={<EditOutlined />}
@@ -288,7 +292,7 @@ export default function AutomationData() {
         </Space>}
       >
         <Alert type="info" showIcon style={{ marginBottom: 12 }}
-          message={<span style={{ fontSize: 12.5 }}>
+          message={<span style={{ fontSize: 12 }}>
             写用例必须知道、但接口文档里看不出来的那些事 —— 比如「404 有两种，
             上游的 404 和网关无路由的 404 不是一回事，只断状态码会误判成没生效」。
             人和 Claude Code 都能往里写（CC 用 tb_add_project_note），

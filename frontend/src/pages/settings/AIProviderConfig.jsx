@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { timeColumn } from '../../utils/timeCol'
 import {
   Button, Table, Modal, Form, Input, Select, InputNumber, Switch,
   message, Tag, Space, Card, Popconfirm, Tooltip, Spin, Badge, Typography, AutoComplete,
@@ -208,9 +209,10 @@ export default function AIProviderConfig() {
 
   const columns = [
     {
+      // 不写宽度：让它吸收富余宽度，其余列才能保持声明值
+      // （全都写死时 antd 按比例摊，「更新时间」会被撑到 122px 装 84px 的内容）
       title: '配置名称',
       dataIndex: 'name',
-      width: 240,
       render: (name, r) => (
         <Space>
           {r.isSystemDefault ? <StarFilled style={{ color: '#faad14' }} /> : null}
@@ -222,7 +224,8 @@ export default function AIProviderConfig() {
     {
       title: '服务商',
       dataIndex: 'provider',
-      width: 160,
+      // 160px 装不下「公司 AI 网关 / OpenAI 兼容」，实测折成两行、行高参差
+      width: 200,
       render: (p) => PROVIDERS.find(x => x.value === p)?.label || p,
     },
     {
@@ -259,6 +262,7 @@ export default function AIProviderConfig() {
       width: 60,
       render: (v) => v ? <Badge status="success" text="是" /> : <Badge status="default" text="否" />,
     },
+    timeColumn({ key: 'updatedAt', title: '更新时间' }),
     {
       title: '操作',
       width: 200,
@@ -316,7 +320,7 @@ export default function AIProviderConfig() {
         dataSource={configs}
         loading={loading}
         pagination={false}
-        size="middle"
+        size="small"
       />
 
       <AICapabilityBindings overview={overview} onOverviewReload={() => { fetchOverview(); fetchConfigs() }} />

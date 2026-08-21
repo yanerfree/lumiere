@@ -34,7 +34,7 @@ const fmtJson = (v) => {
 
 const STATUS_COLOR = (sc) => {
   if (sc >= 500) return '#e8453c'
-  if (sc >= 400) return '#fa8c16'
+  if (sc >= 400) return '#ff7d00'
   return '#0ea5a0'
 }
 
@@ -485,7 +485,7 @@ export default function LlmMock() {
   const renderConfigTab = () => {
     if (!routeForm) {
       return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <Empty description={<span style={{ color: '#bfbfbf' }}>选择左侧路由查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        <Empty description={<span style={{ color: '#c9cdd4' }}>选择左侧路由查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
       </div>
     }
     return (
@@ -550,7 +550,7 @@ export default function LlmMock() {
               variant="borderless" disabled={locked} style={{ width: 100, flexShrink: 0 }} popupMatchSelectWidth={100}>
               {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => (
                 <Select.Option key={m} value={m}>
-                  <span style={{ fontWeight: 600, color: m === 'GET' ? '#0ea5a0' : m === 'POST' ? '#fa8c16' : m === 'DELETE' ? '#e8453c' : '#4e8af0' }}>{m}</span>
+                  <span style={{ fontWeight: 600, color: m === 'GET' ? '#0ea5a0' : m === 'POST' ? '#ff7d00' : m === 'DELETE' ? '#e8453c' : '#4e8af0' }}>{m}</span>
                 </Select.Option>
               ))}
             </Select>
@@ -563,11 +563,11 @@ export default function LlmMock() {
           {serviceStatus.running && fullUrl && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16,
-              padding: '6px 12px', background: '#e0f7f6', border: '1px solid rgba(14,165,160,0.3)', borderRadius: 12,
+              padding: '6px 12px', background: 'var(--green-bg)', border: '1px solid rgba(14,165,160,0.3)', borderRadius: 12,
             }}>
               <LinkOutlined style={{ color: '#0ea5a0', fontSize: 12 }} />
               {pathPattern.hasWildcard && (
-                <Tag color="cyan" style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>示例</Tag>
+                <Tag color="cyan" style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px' }}>示例</Tag>
               )}
               <span style={{ fontSize: 12, fontFamily: MONO, color: '#0ea5a0', flex: 1, userSelect: 'all' }}>{fullUrl}</span>
               <Button size="small" type="text" icon={<CopyOutlined />} style={{ color: '#0ea5a0' }}
@@ -576,13 +576,13 @@ export default function LlmMock() {
           )}
           {/* 通配 / 带查询串的路径，说明清楚匹配规则，不然只能靠猜 */}
           {(pathPattern.hasWildcard || pathPattern.hasQuery) && (
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginTop: -8, marginBottom: 16, lineHeight: 1.6 }}>
+            <div style={{ fontSize: 11, color: '#86909c', marginTop: -8, marginBottom: 16, lineHeight: 1.6 }}>
               {pathPattern.hasWildcard && <>通配匹配：<code>*</code> 匹配一段（不跨 <code>/</code>），<code>**</code> 跨层级。</>}
               {pathPattern.hasQuery && <>路径里 <code>?</code> 之后的查询串在匹配时忽略，带任意 <code>api-version</code> 都能命中。</>}
             </div>
           )}
           {!serviceStatus.running && (
-            <div style={{ fontSize: 12, color: '#bfbfbf', marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: '#c9cdd4', marginBottom: 16 }}>
               服务未启动，启动后显示完整访问地址
             </div>
           )}
@@ -599,26 +599,26 @@ export default function LlmMock() {
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', padding: '10px 14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <ThunderboltOutlined style={{ fontSize: 14, color: smartOn ? '#4e8af0' : '#bfbfbf' }} />
-                  <span style={{ fontSize: 13, fontWeight: 600, color: smartOn ? '#4e8af0' : '#595959' }}>智能应答</span>
+                  <ThunderboltOutlined style={{ fontSize: 14, color: smartOn ? '#4e8af0' : '#c9cdd4' }} />
+                  <span style={{ fontSize: 13, fontWeight: 600, color: smartOn ? '#4e8af0' : '#4e5969' }}>智能应答</span>
                   <Tooltip title="让这条路由的行为由「请求里写的指令」决定，而不是这个页面上的配置：请求正文里写 MODE:PII 就返回带敏感信息的输出，写 SAY:你好 就回「你好」。为什么要这样：配置在服务端的话，每换一个场景都要改配置、等下发、重来一遍，对照实验做不起来。开启后被它接管的配置会隐藏 —— 显示一堆改了不生效的框只会误导人。">
-                    <span style={{ cursor: 'help', color: '#bfbfbf', fontSize: 12 }}>?</span>
+                    <span style={{ cursor: 'help', color: '#c9cdd4', fontSize: 12 }}>?</span>
                   </Tooltip>
                   <Switch size="small" checked={smartOn} disabled={locked}
                     checkedChildren="开" unCheckedChildren="关"
                     onChange={v => setRouteForm(f => ({ ...f, smartEnabled: v }))} />
                 </div>
                 {!smartOn && (
-                  <span style={{ fontSize: 11, color: '#bfbfbf' }}>
+                  <span style={{ fontSize: 11, color: '#c9cdd4' }}>
                     关着：所有请求都回下面配的那段「响应内容」。开了就按请求里的 MODE: / SAY: 指令分场景回。
                   </span>
                 )}
               {smartOn && (<>
                 <div>
-                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                  <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>
                     这个假模型演谁
                     <Tooltip title="上游模型 = 被测智能体调的那个大模型，演各种 MODE 场景。护栏检查模型 = 网关的「护栏 AI 检查」调的那个模型，它只回判决，并把「本次收到的待检正文有多长、开头是什么」回显出来 —— 网关到底把什么喂给了护栏，这是唯一的观测点。自动判断 = 路径里带 /checker、/guard 就算护栏。">
-                      <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                      <span style={{ marginLeft: 4, cursor: 'help', color: '#c9cdd4' }}>?</span>
                     </Tooltip>
                   </div>
                   <Select size="small" style={{ width: 150 }} disabled={locked}
@@ -629,17 +629,17 @@ export default function LlmMock() {
                     <Select.Option value="checker">护栏检查模型</Select.Option>
                   </Select>
                 </div>
-                <div style={{ fontSize: 11, color: '#8c8c8c', paddingBottom: 4 }}>
+                <div style={{ fontSize: 11, color: '#86909c', paddingBottom: 4 }}>
                   当前判定：<b style={{ color: '#4e8af0' }}>{SMART_ROLE_LABEL[smartRole]}</b>
-                  <span style={{ margin: '0 6px', color: '#d9d9d9' }}>|</span>
+                  <span style={{ margin: '0 6px', color: '#c9cdd4' }}>|</span>
                   协议形状 <b style={{ color: '#4e8af0' }}>{smartShape}</b>
                 </div>
                 {smartRole === 'checker' && (
                   <div>
-                    <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                    <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>
                       待检正文定位标记
                       <Tooltip title={`护栏把正文包在提示模板里发过来，要从信封里把正文抠出来才能回显它的长度。默认认这几种写法：${(smartContract?.bodyMarkers || []).join(' / ')}。模板不一样就填你自己的。抠不到时不会静默返回 0，而是把整个信封当正文并在日志里标 bodyFrom=fallback —— 否则「护栏到底拿没拿到正文」这个证据就被淹了。`}>
-                        <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                        <span style={{ marginLeft: 4, cursor: 'help', color: '#c9cdd4' }}>?</span>
                       </Tooltip>
                     </div>
                     <Input size="small" style={{ width: 180, fontFamily: MONO }} disabled={locked}
@@ -653,7 +653,7 @@ export default function LlmMock() {
               {/* 开着的时候在这一区里就把话说清楚，不用再单起一个 Alert 占地方 */}
               {smartOn && (
                 <div style={{
-                  padding: '8px 14px', fontSize: 11, color: '#595959', lineHeight: 1.8,
+                  padding: '8px 14px', fontSize: 11, color: '#4e5969', lineHeight: 1.8,
                   borderTop: '1px solid rgba(78,138,240,0.2)', background: 'rgba(78,138,240,0.04)',
                 }}>
                   响应内容 / 状态码 / 响应类型 / 结束原因 / 响应模式 / 响应流式 / 延迟 已由<b>请求里的指令</b>决定，
@@ -670,7 +670,7 @@ export default function LlmMock() {
           {!smartOn && (
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应模式</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>响应模式</div>
               <Radio.Group value={responseModeValue} onChange={e => setRouteForm(f => ({ ...f, responseMode: e.target.value }))}
                 buttonStyle="solid" size="small" disabled={locked}>
                 <Radio.Button value="default">默认</Radio.Button>
@@ -679,12 +679,12 @@ export default function LlmMock() {
               </Radio.Group>
             </div>
             <div style={{ minWidth: 80 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>状态码</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>状态码</div>
               <InputNumber value={routeForm.statusCode ?? 200} onChange={v => setRouteForm(f => ({ ...f, statusCode: v }))}
                 min={100} max={599} size="small" style={{ width: 80 }} disabled={locked} />
             </div>
             <div style={{ minWidth: 160 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应类型</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>响应类型</div>
               <Select value={routeForm.responseType || 'text'} onChange={v => setRouteForm(f => ({ ...f, responseType: v }))}
                 size="small" style={{ width: 160 }} disabled={locked}>
                 <Select.Option value="text">文本回复</Select.Option>
@@ -695,7 +695,7 @@ export default function LlmMock() {
             </div>
             {!isEmbedding && (
               <div style={{ minWidth: 110 }}>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>结束原因</div>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>结束原因</div>
                 <Select value={routeForm.finishReason || 'stop'} onChange={v => setRouteForm(f => ({ ...f, finishReason: v }))}
                   size="small" style={{ width: 110 }} disabled={locked}>
                   <Select.Option value="stop">stop</Select.Option>
@@ -706,7 +706,7 @@ export default function LlmMock() {
               </div>
             )}
             <div style={{ flex: 1, minWidth: 170, maxWidth: 250 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>预设模式</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>预设模式</div>
               <Select value={routeForm.presetMode} onChange={handlePresetChange}
                 placeholder="选择预设填充..." size="small" style={{ width: '100%' }} disabled={locked}
                 allowClear onClear={() => setRouteForm(f => ({ ...f, presetMode: null }))}>
@@ -747,18 +747,18 @@ export default function LlmMock() {
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             {!smartOn && (
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>延迟 (ms)</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>延迟 (ms)</div>
               <InputNumber value={routeForm.delayMs ?? 0} onChange={v => setRouteForm(f => ({ ...f, delayMs: v }))}
                 min={0} step={100} size="small" style={{ width: 80 }} placeholder="0" disabled={locked} />
             </div>
             )}
             {!isEmbedding && (
               <div>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>
                   SSE 间隔 (ms)
                   {smartOn && (
                     <Tooltip title="智能应答下这一格照常生效 —— 指令管不着分片计时。例外是 MODE:SLOW，它会把间隔顶成 250ms，好和对接方那份脚本对齐。">
-                      <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                      <span style={{ marginLeft: 4, cursor: 'help', color: '#c9cdd4' }}>?</span>
                     </Tooltip>
                   )}
                 </div>
@@ -768,10 +768,10 @@ export default function LlmMock() {
             )}
             {!isEmbedding && (
               <div>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>
                   几字一片
                   <Tooltip title="流式时正文每多少个字发一片。对接网关时「分片数」本身常常是被验证的指标 —— 比如一段 34 字的正文，填 6 就切成 6 片，加上开头帧/结束帧/[DONE] 正好 9 个 data 分片。默认 1 是逐字发。">
-                    <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                    <span style={{ marginLeft: 4, cursor: 'help', color: '#c9cdd4' }}>?</span>
                   </Tooltip>
                 </div>
                 <InputNumber value={routeForm.sseChunkSize ?? 1} onChange={v => setRouteForm(f => ({ ...f, sseChunkSize: v }))}
@@ -780,10 +780,10 @@ export default function LlmMock() {
             )}
             {!isEmbedding && !smartOn && (
               <div>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>
                   响应流式
                   <Tooltip title="默认「跟随请求」，看请求体里的 stream 字段。选「强制流式」后即使请求写 stream:false 也返回 SSE 事件流，用来验网关的 fail-closed；「强制整包」则相反，请求要流式也只回完整 JSON。">
-                    <span style={{ marginLeft: 4, cursor: 'help', color: '#bfbfbf' }}>?</span>
+                    <span style={{ marginLeft: 4, cursor: 'help', color: '#c9cdd4' }}>?</span>
                   </Tooltip>
                 </div>
                 <Select value={routeForm.streamMode || 'auto'} onChange={v => setRouteForm(f => ({ ...f, streamMode: v }))}
@@ -795,7 +795,7 @@ export default function LlmMock() {
               </div>
             )}
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Token 模式</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Token 模式</div>
               <Radio.Group value={routeForm.tokenMode || 'auto'} onChange={e => setRouteForm(f => ({ ...f, tokenMode: e.target.value }))} size="small" disabled={locked}>
                 <Radio value="auto">自动</Radio>
                 <Radio value="custom">自定义</Radio>
@@ -803,18 +803,18 @@ export default function LlmMock() {
             </div>
             {routeForm.tokenMode === 'custom' && (<>
               <div>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Prompt Tokens</div>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Prompt Tokens</div>
                 <InputNumber value={routeForm.customPromptTokens} onChange={v => setRouteForm(f => ({ ...f, customPromptTokens: v }))} min={0} size="small" style={{ width: 80 }} disabled={locked} />
               </div>
               {!isEmbedding && (
                 <div>
-                  <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>Completion Tokens</div>
+                  <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>Completion Tokens</div>
                   <InputNumber value={routeForm.customCompletionTokens} onChange={v => setRouteForm(f => ({ ...f, customCompletionTokens: v }))} min={0} size="small" style={{ width: 80 }} disabled={locked} />
                 </div>
               )}
             </>)}
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>模型模式</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>模型模式</div>
               <Radio.Group value={routeForm.modelMode || 'follow_request'} onChange={e => setRouteForm(f => ({ ...f, modelMode: e.target.value }))} size="small" disabled={locked}>
                 <Radio value="follow_request">跟随请求</Radio>
                 <Radio value="custom">自定义</Radio>
@@ -822,7 +822,7 @@ export default function LlmMock() {
             </div>
             {routeForm.modelMode === 'custom' && (
               <div>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>自定义模型</div>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>自定义模型</div>
                 <Input value={routeForm.customModel} onChange={e => setRouteForm(f => ({ ...f, customModel: e.target.value }))}
                   placeholder="gpt-4o-mini" size="small" style={{ width: 130 }} disabled={locked} />
               </div>
@@ -859,8 +859,8 @@ export default function LlmMock() {
               {/* 左：响应体编辑 */}
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 500 }}>响应内容</span>
-                  <span style={{ fontSize: 11, color: '#bfbfbf' }}>{bodyHint}</span>
+                  <span style={{ fontSize: 12, color: '#86909c', fontWeight: 500 }}>响应内容</span>
+                  <span style={{ fontSize: 11, color: '#c9cdd4' }}>{bodyHint}</span>
                   <span style={{ flex: 1 }} />
                   {!smartOn && (
                     <Button size="small" icon={<StarOutlined />} disabled={locked}
@@ -890,7 +890,7 @@ export default function LlmMock() {
                         : '输入 AI 回复文本...\n支持: ${request.model}  ${request.messages[-1].content}  ${timestamp}'}
                   />
                 ) : (
-                  <div style={{ padding: '14px', background: 'transparent', borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)', fontSize: 12, color: '#8c8c8c' }}>
+                  <div style={{ padding: '14px', background: 'transparent', borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)', fontSize: 12, color: '#86909c' }}>
                     Tool Calls 函数在右侧「高级设置」中配置
                   </div>
                 )}
@@ -900,8 +900,8 @@ export default function LlmMock() {
               {smartOn ? (
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 500 }}>它认这些指令</span>
-                    <span style={{ fontSize: 11, color: '#bfbfbf' }}>写在请求正文里（最后一条 user 消息）</span>
+                    <span style={{ fontSize: 12, color: '#86909c', fontWeight: 500 }}>它认这些指令</span>
+                    <span style={{ fontSize: 11, color: '#c9cdd4' }}>写在请求正文里（最后一条 user 消息）</span>
                   </div>
                   <div style={{
                     flex: 1, minHeight: 200, maxHeight: 420, overflow: 'auto',
@@ -909,16 +909,16 @@ export default function LlmMock() {
                   }}>
                     {smartRole === 'checker' ? (
                       <div style={{ padding: 14, fontSize: 12, lineHeight: 1.8 }}>
-                        <div style={{ color: '#262626', fontWeight: 500, marginBottom: 6 }}>
+                        <div style={{ color: '#1d2129', fontWeight: 500, marginBottom: 6 }}>
                           护栏检查模型不演场景，只回判决
                         </div>
-                        <div style={{ color: '#8c8c8c', marginBottom: 10 }}>
+                        <div style={{ color: '#86909c', marginBottom: 10 }}>
                           它把「本次收到的待检正文有多长、开头是什么」回显进 reason 里。
-                          <b style={{ color: '#fa8c16' }}>BODY_LEN 和 ENVELOPE_LEN 要分开看</b>：
+                          <b style={{ color: '#ff7d00' }}>BODY_LEN 和 ENVELOPE_LEN 要分开看</b>：
                           提示模板本身几百字，只看信封长度的话，正文为空时它仍是个大数字，
                           「护栏到底拿没拿到正文」这个证据就被淹了。
                         </div>
-                        <div style={{ color: '#8c8c8c', marginBottom: 4 }}>判决规则：</div>
+                        <div style={{ color: '#86909c', marginBottom: 4 }}>判决规则：</div>
                         <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', marginBottom: 10 }}>
                           <tbody>
                             {[
@@ -928,18 +928,18 @@ export default function LlmMock() {
                               ['其余', 'verdict=true'],
                             ].map(([k, v]) => (
                               <tr key={k}>
-                                <td style={{ padding: '3px 8px 3px 0', color: '#595959', whiteSpace: 'nowrap' }}>{k}</td>
-                                <td style={{ padding: '3px 0', color: '#8c8c8c', fontFamily: MONO }}>{v}</td>
+                                <td style={{ padding: '3px 8px 3px 0', color: '#4e5969', whiteSpace: 'nowrap' }}>{k}</td>
+                                <td style={{ padding: '3px 0', color: '#86909c', fontFamily: MONO }}>{v}</td>
                               </tr>
                             ))}
                           </tbody>
                         </table>
-                        <div style={{ color: '#8c8c8c', marginBottom: 4 }}>返回样例：</div>
+                        <div style={{ color: '#86909c', marginBottom: 4 }}>返回样例：</div>
                         <pre style={{
                           ...CODE_BLOCK_STYLE, margin: 0, padding: 10, fontSize: 11, lineHeight: 1.6,
                           whiteSpace: 'pre-wrap', wordBreak: 'break-all', borderRadius: 8,
                         }}>{fmtJson(smartContract?.checkerSample)}</pre>
-                        <div style={{ marginTop: 10, color: '#fa8c16', fontSize: 11 }}>
+                        <div style={{ marginTop: 10, color: '#ff7d00', fontSize: 11 }}>
                           ⚠ 判「是不是脱敏模式」用的是<b>精确行匹配</b> <code>Redact mode: detect_and_redact</code>，
                           不是子串包含 —— 系统提示本身就在解释这条规则，用包含会把每个「仅检测」请求都误判成脱敏，结论全反。
                         </div>
@@ -954,7 +954,7 @@ export default function LlmMock() {
                                   {d.key || '（不带指令）'}
                                 </code>
                               </td>
-                              <td style={{ padding: '7px 10px 7px 0', color: '#595959', lineHeight: 1.6 }}>
+                              <td style={{ padding: '7px 10px 7px 0', color: '#4e5969', lineHeight: 1.6 }}>
                                 {d.effect}
                               </td>
                             </tr>
@@ -963,7 +963,7 @@ export default function LlmMock() {
                       </table>
                     )}
                   </div>
-                  <div style={{ marginTop: 6, fontSize: 11, color: '#8c8c8c', lineHeight: 1.7 }}>
+                  <div style={{ marginTop: 6, fontSize: 11, color: '#86909c', lineHeight: 1.7 }}>
                     协议形状按<b>路径</b>判：<code style={{ fontFamily: MONO }}>{SHAPE_LABEL[smartShape]}</code>。
                     入参三种写法都能读到指令：OpenAI 的字符串 content、Anthropic 的 block 数组、legacy 的 <code>prompt</code>。
                   </div>
@@ -972,18 +972,18 @@ export default function LlmMock() {
               <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 500 }}>响应预览</span>
-                    <Tag color={(routeForm.statusCode ?? 200) < 400 ? 'cyan' : 'red'} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>
+                    <span style={{ fontSize: 12, color: '#86909c', fontWeight: 500 }}>响应预览</span>
+                    <Tag color={(routeForm.statusCode ?? 200) < 400 ? 'cyan' : 'red'} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px' }}>
                       {routeForm.statusCode ?? 200}
                     </Tag>
-                    <Tag color={MODE_COLORS[responseModeValue]} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px' }}>
+                    <Tag color={MODE_COLORS[responseModeValue]} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px' }}>
                       {MODE_LABELS[responseModeValue]}
                     </Tag>
                   </div>
                   <Button size="small" type="text"
                     icon={copyText === '复制' ? <CopyOutlined /> : <CheckOutlined />}
                     onClick={handleCopyPreview}
-                    style={{ color: copyText === '复制' ? '#8c8c8c' : '#0ea5a0', fontSize: 12 }}>
+                    style={{ color: copyText === '复制' ? '#86909c' : '#0ea5a0', fontSize: 12 }}>
                     {copyText}
                   </Button>
                 </div>
@@ -1011,7 +1011,7 @@ export default function LlmMock() {
         padding: '8px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0,
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: '#262626' }}>共 {logsTotal} 条</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>共 {logsTotal} 条</span>
         <Space size={4}>
           <Radio.Group value={logFilter} onChange={e => setLogFilter(e.target.value)} size="small">
             <Radio.Button value="all">全部</Radio.Button>
@@ -1033,7 +1033,7 @@ export default function LlmMock() {
               {['时间', '状态', '方法', '路径', '请求模型', '响应模型', 'Tokens', '耗时', ''].map((h, i) => (
                 <th key={h || 'op'} style={{
                   padding: '6px 10px', textAlign: i >= 6 ? 'right' : 'left',
-                  fontWeight: 500, fontSize: 11, color: '#8c8c8c', borderBottom: '1px solid rgba(0,0,0,0.04)',
+                  fontWeight: 500, fontSize: 11, color: '#86909c', borderBottom: '1px solid rgba(0,0,0,0.04)',
                   whiteSpace: 'nowrap',
                 }}>{h}</th>
               ))}
@@ -1045,29 +1045,29 @@ export default function LlmMock() {
                 cursor: 'pointer', borderBottom: '1px solid rgba(0,0,0,0.03)', background: 'rgba(255,255,255,0.25)',
                 background: expandedLogId === l.id ? 'rgba(14,165,160,0.08)' : 'transparent',
               }}>
-                <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#8c8c8c' }}>
+                <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#86909c' }}>
                   {new Date(l.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
                 </td>
                 <td style={{ padding: '5px 10px' }}>
                   <span style={{ fontSize: 11, fontWeight: 600, color: STATUS_COLOR(l.statusCode) }}>{l.statusCode}</span>
                 </td>
                 <td style={{ padding: '5px 10px', fontSize: 11 }}>{l.method}</td>
-                <td style={{ padding: '5px 10px', fontFamily: MONO, fontSize: 11, color: '#595959', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.path}</td>
-                <td style={{ padding: '5px 10px', fontSize: 11, color: '#8c8c8c' }}>{l.requestModel || '-'}</td>
-                <td style={{ padding: '5px 10px', fontSize: 11, color: '#8c8c8c' }}>{l.responseModel || '-'}</td>
-                <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#8c8c8c', whiteSpace: 'nowrap' }}>
+                <td style={{ padding: '5px 10px', fontFamily: MONO, fontSize: 11, color: '#4e5969', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{l.path}</td>
+                <td style={{ padding: '5px 10px', fontSize: 11, color: '#86909c' }}>{l.requestModel || '-'}</td>
+                <td style={{ padding: '5px 10px', fontSize: 11, color: '#86909c' }}>{l.responseModel || '-'}</td>
+                <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#86909c', whiteSpace: 'nowrap' }}>
                   {(l.promptTokens || 0) + (l.completionTokens || 0) > 0
                     ? `${l.promptTokens || 0}+${l.completionTokens || 0}=${l.totalTokens || 0}`
                     : '-'}
                 </td>
-                <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#8c8c8c', whiteSpace: 'nowrap' }}>{Math.round(l.totalMs ?? 0)}ms</td>
+                <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#86909c', whiteSpace: 'nowrap' }}>{Math.round(l.totalMs ?? 0)}ms</td>
                 <td style={{ padding: '5px 10px', textAlign: 'right' }}>
                   <Button size="small" type="text" icon={<SendOutlined />} onClick={e => { e.stopPropagation(); handleReplay(l.id) }} />
                 </td>
               </tr>
             ))}
             {logs.length === 0 && (
-              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40, color: '#bfbfbf', fontSize: 12 }}>暂无请求日志</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40, color: '#c9cdd4', fontSize: 12 }}>暂无请求日志</td></tr>
             )}
           </tbody>
         </table>
@@ -1107,7 +1107,7 @@ export default function LlmMock() {
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}
             </span>
           </div>
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+          <span style={{ fontSize: 12, color: '#86909c' }}>
             {serviceStatus.routesEnabled}/{serviceStatus.routesCount} 路由 · {serviceStatus.totalRequests} 请求
           </span>
         </div>
@@ -1139,7 +1139,7 @@ export default function LlmMock() {
             padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: '#262626' }}>路由</span>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>路由</span>
             <Tooltip title="新建路由">
               <Button type="primary" ghost icon={<PlusOutlined />} size="small" onClick={handleCreateRoute} />
             </Tooltip>
@@ -1172,30 +1172,30 @@ export default function LlmMock() {
                     <Tooltip title="拖动调整顺序">
                       <HolderOutlined style={{ fontSize: 11, color: '#c8c8c8', cursor: 'grab', flexShrink: 0 }} />
                     </Tooltip>
-                    {isDef && <LockOutlined style={{ fontSize: 10, color: '#bfbfbf' }} />}
+                    {isDef && <LockOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />}
                     {r.locked && (
                       <Tooltip title="已锁定，不可编辑">
-                        <LockFilled style={{ fontSize: 11, color: '#fa8c16', flexShrink: 0 }} />
+                        <LockFilled style={{ fontSize: 11, color: '#ff7d00', flexShrink: 0 }} />
                       </Tooltip>
                     )}
                     <Tag color={r.statusCode >= 400 ? 'red' : 'blue'} style={{
-                      margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', borderRadius: 8,
+                      margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 8,
                     }}>{r.method}</Tag>
                     <span style={{
                       flex: 1, fontSize: 11, fontFamily: MONO,
-                      color: '#595959', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                     }}>{r.path}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-                    <span style={{ fontSize: 12, color: sel ? '#262626' : '#8c8c8c', fontWeight: sel ? 500 : 400 }}>{r.name}</span>
+                    <span style={{ fontSize: 12, color: sel ? '#1d2129' : '#86909c', fontWeight: sel ? 500 : 400 }}>{r.name}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {r.smartEnabled && (
                         <Tooltip title="智能应答：行为由请求里的指令决定">
-                          <Tag color="blue" style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 4px', borderRadius: 8 }}>智能</Tag>
+                          <Tag color="blue" style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 8 }}>智能</Tag>
                         </Tooltip>
                       )}
                       <Tag style={{
-                        margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px',
+                        margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px',
                         color: STATUS_COLOR(r.statusCode), borderColor: STATUS_COLOR(r.statusCode),
                         background: 'transparent', borderRadius: 8,
                       }}>{r.statusCode}</Tag>
@@ -1220,9 +1220,9 @@ export default function LlmMock() {
               ].map(t => (
                 <div key={t.key} onClick={() => setActiveTab(t.key)} style={{
                   padding: '10px 16px', cursor: 'pointer', fontSize: 14, position: 'relative',
-                  color: activeTab === t.key ? '#4e8af0' : '#595959',
+                  color: activeTab === t.key ? 'var(--primary)' : '#4e5969',
                   fontWeight: activeTab === t.key ? 500 : 400,
-                  borderBottom: activeTab === t.key ? '2px solid #4e8af0' : '2px solid transparent',
+                  borderBottom: activeTab === t.key ? '2px solid var(--primary)' : '2px solid transparent',
                   marginBottom: -1,
                 }}>
                   {t.label}
@@ -1249,7 +1249,7 @@ export default function LlmMock() {
         }
         footer={
           <div>
-            <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 8, lineHeight: 1.6 }}>
+            <div style={{ fontSize: 11, color: '#86909c', marginBottom: 8, lineHeight: 1.6 }}>
               保存会提交这条路由的全部改动（含主界面上未保存的部分）。直接关闭窗口不会丢改动，回主界面还能保存。
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -1264,7 +1264,7 @@ export default function LlmMock() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
             {routeForm.responseType === 'tool_calls' && (
               <div>
-                <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>Tool Calls (JSON)</div>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6 }}>Tool Calls (JSON)</div>
                 <TextArea spellCheck={false} value={JSON.stringify(routeForm.toolCalls || [], null, 2)}
                   onChange={e => { try { setRouteForm(f => ({ ...f, toolCalls: JSON.parse(e.target.value) })) } catch {} }}
                   rows={6} style={{ fontFamily: MONO, fontSize: 12 }}
@@ -1272,7 +1272,7 @@ export default function LlmMock() {
               </div>
             )}
             <div>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 6 }}>自定义响应头 (JSON)</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6 }}>自定义响应头 (JSON)</div>
               <TextArea spellCheck={false}
                 value={routeForm.responseHeaders ? JSON.stringify(routeForm.responseHeaders, null, 2) : ''}
                 onChange={e => { try { setRouteForm(f => ({ ...f, responseHeaders: e.target.value ? JSON.parse(e.target.value) : null })) } catch {} }}
@@ -1295,7 +1295,7 @@ export default function LlmMock() {
               <>
                 <span style={{ fontSize: 12, fontWeight: 700, color: '#4e8af0' }}>{expandedLogDetail.method}</span>
                 <span style={{ fontSize: 12, fontWeight: 700, color: STATUS_COLOR(expandedLogDetail.statusCode) }}>{expandedLogDetail.statusCode}</span>
-                <span style={{ fontFamily: MONO, fontSize: 12, color: '#595959', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{expandedLogDetail.path}</span>
+                <span style={{ fontFamily: MONO, fontSize: 12, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{expandedLogDetail.path}</span>
               </>
             )}
           </div>
@@ -1323,8 +1323,8 @@ export default function LlmMock() {
                 ['总耗时', `${Math.round(expandedLogDetail.totalMs ?? 0)} ms`],
               ].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', gap: 8, minWidth: 0 }}>
-                  <span style={{ color: '#8c8c8c', flexShrink: 0 }}>{k}</span>
-                  <span style={{ color: '#262626', fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span>
+                  <span style={{ color: '#86909c', flexShrink: 0 }}>{k}</span>
+                  <span style={{ color: '#1d2129', fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span>
                 </div>
               ))}
             </div>
@@ -1333,7 +1333,7 @@ export default function LlmMock() {
                 流式降级到底有没有真发生，只能看这一格 */}
             {expandedLogDetail.smartMeta && (
               <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#595959', marginBottom: 6 }}>智能应答判定</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#4e5969', marginBottom: 6 }}>智能应答判定</div>
                 <div style={{
                   display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 24px', fontSize: 12,
                   padding: '10px 12px', borderRadius: 12,
@@ -1362,9 +1362,9 @@ export default function LlmMock() {
                     }
                     return rows.map(([k, v]) => (
                       <div key={k} style={{ display: 'flex', gap: 8, minWidth: 0 }}>
-                        <span style={{ color: '#8c8c8c', flexShrink: 0 }}>{k}</span>
+                        <span style={{ color: '#86909c', flexShrink: 0 }}>{k}</span>
                         <span style={{
-                          color: k === '待检正文长度' && m.bodyFrom === 'fallback' ? '#fa8c16' : '#262626',
+                          color: k === '待检正文长度' && m.bodyFrom === 'fallback' ? '#ff7d00' : '#1d2129',
                           fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                         }}>{v}</span>
                       </div>
@@ -1377,7 +1377,7 @@ export default function LlmMock() {
             {/* LLM 专属：按 role 上色的对话气泡，比裸 JSON 好读，所以单独留一块 */}
             {expandedLogDetail.requestBody?.messages && (
               <div>
-                <div style={{ fontSize: 12, fontWeight: 600, color: '#595959', marginBottom: 6 }}>请求消息</div>
+                <div style={{ fontSize: 12, fontWeight: 600, color: '#4e5969', marginBottom: 6 }}>请求消息</div>
                 <div style={{ maxHeight: 220, overflow: 'auto' }}>
                   {expandedLogDetail.requestBody.messages.map((m, i) => (
                     <div key={i} style={{
@@ -1385,7 +1385,7 @@ export default function LlmMock() {
                       background: m.role === 'user' ? '#fff7e6' : m.role === 'system' ? 'rgba(0,0,0,0.03)' : '#e0f7f6',
                       whiteSpace: 'pre-wrap', wordBreak: 'break-all',
                     }}>
-                      <span style={{ color: '#8c8c8c', fontSize: 10, marginRight: 6 }}>{m.role}</span>
+                      <span style={{ color: '#86909c', fontSize: 11, marginRight: 6 }}>{m.role}</span>
                       {typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}
                     </div>
                   ))}
@@ -1410,7 +1410,7 @@ export default function LlmMock() {
       <Modal title="保存为自定义预设" open={savePresetOpen}
         onOk={handleSaveCustomPreset} onCancel={() => setSavePresetOpen(false)}
         okText="保存" cancelText="取消" okButtonProps={{ disabled: !savePresetName.trim() }}>
-        <div style={{ marginBottom: 8, fontSize: 13, color: '#8c8c8c' }}>
+        <div style={{ marginBottom: 8, fontSize: 13, color: '#86909c' }}>
           将当前响应配置（状态码、响应类型、响应内容等）保存为预设，方便下次快速选用。
         </div>
         <Input placeholder="输入预设名称" value={savePresetName}

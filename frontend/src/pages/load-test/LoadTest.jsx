@@ -12,7 +12,7 @@ import { api, getValidToken } from '../../utils/request'
 
 const MONO = 'var(--font-mono)'
 const ACCENT = '#e8453c'
-const MC = { GET: '#0ea5a0', POST: '#fa8c16', PUT: '#1677ff', DELETE: '#ff4d4f', PATCH: '#722ed1' }
+const MC = { GET: '#0ea5a0', POST: '#ff7d00', PUT: '#4e8af0', DELETE: '#e8453c', PATCH: '#7c5cbf' }
 
 const GLASS = {
   background: 'rgba(255,255,255,0.35)',
@@ -586,7 +586,7 @@ export default function LoadTest() {
                     <Button size="small" icon={<CopyOutlined />} onClick={() => copyText(k6.guide)}>复制</Button>
                     <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadText('k6-deploy-guide.md', k6.guide)}>下载 .md</Button>
                   </Space>
-                  <pre style={{ maxHeight: 460, overflow: 'auto', background: '#fafafa', color: '#333', padding: 12, borderRadius: 8, fontFamily: MONO, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0 }}>{k6.guide}</pre>
+                  <pre style={{ maxHeight: 460, overflow: 'auto', background: 'rgba(0,0,0,0.03)', color: '#333', padding: 12, borderRadius: 8, fontFamily: MONO, fontSize: 12, whiteSpace: 'pre-wrap', margin: 0 }}>{k6.guide}</pre>
                 </div>
               ),
             },
@@ -668,7 +668,7 @@ export default function LoadTest() {
       </div>
 
       {/* Actions */}
-      <div style={{ display: 'flex', gap: 8, paddingTop: 8, borderTop: '1px solid #f0f0f0' }}>
+      <div style={{ display: 'flex', gap: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
         <Button icon={<SaveOutlined />} onClick={saveScenario} disabled={!dirty}>保存</Button>
         <Button type="primary" icon={<PlayCircleOutlined />} onClick={startTest}
           style={{ background: ACCENT, borderColor: ACCENT }}
@@ -751,8 +751,8 @@ export default function LoadTest() {
         {/* Stat cards row 1 */}
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <StatCard label="总请求" value={m.totalRequests?.toLocaleString() ?? 0} color="#333" />
-          <StatCard label="成功率" value={successRate.toFixed(1)} color="#52c41a" suffix="%" />
-          <StatCard label="QPS" value={m.qps?.toLocaleString() ?? 0} color="#1677ff" />
+          <StatCard label="成功率" value={successRate.toFixed(1)} color="#0ea5a0" suffix="%" />
+          <StatCard label="QPS" value={m.qps?.toLocaleString() ?? 0} color="#4e8af0" />
           {errorRate > 0 && <StatCard label="错误率" value={errorRate.toFixed(1)} color={ACCENT} suffix="%" />}
         </div>
 
@@ -760,7 +760,7 @@ export default function LoadTest() {
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
           <StatCard label="Avg" value={m.avgLatency ?? '-'} suffix="ms" />
           <StatCard label="P50" value={m.p50 ?? '-'} suffix="ms" />
-          <StatCard label="P95" value={m.p95 ?? '-'} suffix="ms" color="#fa8c16" />
+          <StatCard label="P95" value={m.p95 ?? '-'} suffix="ms" color="#ff7d00" />
           <StatCard label="P99" value={m.p99 ?? '-'} suffix="ms" color={ACCENT} />
         </div>
 
@@ -782,7 +782,7 @@ export default function LoadTest() {
                     <tr key={i} style={{ borderBottom: '1px solid #f5f5f5' }}>
                       <td style={{ padding: '6px 10px', fontFamily: 'inherit' }}>{s.name || `Step ${i + 1}`}</td>
                       <td style={{ padding: '6px 10px' }}>{s.totalRequests}</td>
-                      <td style={{ padding: '6px 10px', color: '#52c41a' }}>{s.successCount}</td>
+                      <td style={{ padding: '6px 10px', color: '#0ea5a0' }}>{s.successCount}</td>
                       <td style={{ padding: '6px 10px', color: s.errorCount > 0 ? ACCENT : '#ccc' }}>{s.errorCount}</td>
                       <td style={{ padding: '6px 10px' }}>{s.avgLatency}</td>
                       <td style={{ padding: '6px 10px' }}>{s.p50}</td>
@@ -837,8 +837,8 @@ export default function LoadTest() {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <StatCard label="总请求" value={d.totalRequests?.toLocaleString() ?? 0} color="#333" />
-            <StatCard label="成功率" value={successRate} color="#52c41a" suffix="%" />
-            <StatCard label="QPS" value={d.qps ?? '-'} color="#1677ff" />
+            <StatCard label="成功率" value={successRate} color="#0ea5a0" suffix="%" />
+            <StatCard label="QPS" value={d.qps ?? '-'} color="#4e8af0" />
           </div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <StatCard label="Avg" value={d.avgLatency ?? '-'} suffix="ms" />
@@ -869,7 +869,7 @@ export default function LoadTest() {
       {/* ─── Header ─── */}
       <div style={{
         padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 12,
-        borderBottom: '1px solid #f0f0f0', flexShrink: 0,
+        borderBottom: '1px solid rgba(0,0,0,0.06)', flexShrink: 0,
       }}>
         {running ? (
           <>
@@ -898,7 +898,7 @@ export default function LoadTest() {
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         {/* ─── Left Panel: Scenario List ─── */}
         <div style={{
-          width: 280, flexShrink: 0, borderRight: '1px solid #f0f0f0',
+          width: 280, flexShrink: 0, borderRight: '1px solid rgba(0,0,0,0.06)',
           display: 'flex', flexDirection: 'column', overflow: 'hidden',
         }}>
           <div style={{ padding: '12px 12px 8px' }}>
@@ -961,7 +961,7 @@ export default function LoadTest() {
             /* Tab mode */
             <>
               <div style={{
-                display: 'flex', gap: 0, borderBottom: '1px solid #f0f0f0', flexShrink: 0,
+                display: 'flex', gap: 0, borderBottom: '1px solid rgba(0,0,0,0.06)', flexShrink: 0,
                 padding: '0 16px',
               }}>
                 {tabItems.map(t => (

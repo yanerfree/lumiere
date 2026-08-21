@@ -16,11 +16,11 @@ import { useEnv, buildEnvOptions } from '../../utils/env'
 import { copyToClipboard } from '../../utils/clipboard'
 
 const methodColors = {
-  GET: { color: '#0ea5a0', bg: '#e0f7f6' },
-  POST: { color: '#fa8c16', bg: '#fff7e6' },
-  PUT: { color: '#faad14', bg: '#fffbe6' },
+  GET: { color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  POST: { color: '#ff7d00', bg: 'rgba(255,125,0,0.1)' },
+  PUT: { color: '#faad14', bg: 'rgba(250,173,20,0.12)' },
   PATCH: { color: '#7c5cbf', bg: 'rgba(124,92,191,0.06)' },
-  DELETE: { color: '#e8453c', bg: '#fff2f0' },
+  DELETE: { color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
 }
 
 const commonHeaders = [
@@ -31,7 +31,7 @@ const commonHeaders = [
   { value: 'Cache-Control', desc: 'no-cache' },
   { value: 'User-Agent', desc: 'testBench/1.0' },
 ]
-const headerOptions = commonHeaders.map(h => ({ value: h.value, label: <span>{h.value} <span style={{ fontSize: 10, color: '#86909c' }}>{h.desc}</span></span> }))
+const headerOptions = commonHeaders.map(h => ({ value: h.value, label: <span>{h.value} <span style={{ fontSize: 11, color: '#86909c' }}>{h.desc}</span></span> }))
 
 // =========== Body 片段模板 ===========
 const bodySnippets = [
@@ -118,14 +118,14 @@ function VarInsertBtn({ envVars, onInsert }) {
               style={{ padding: '6px 10px', cursor: 'pointer', borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
               onMouseEnter={e => e.currentTarget.style.background = 'rgba(14,165,160,0.06)'}
               onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#fa8c16', fontWeight: 600 }}>{`{{${v.key}}}`}</span>
-              <span style={{ fontSize: 10, color: '#86909c', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.value}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#ff7d00', fontWeight: 600 }}>{`{{${v.key}}}`}</span>
+              <span style={{ fontSize: 11, color: '#86909c', maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.value}</span>
             </div>
           ))}
         </div>
       }>
       <Tooltip title="插入环境变量">
-        <Button type="text" size="small" style={{ color: '#fa8c16', fontSize: 12, padding: '0 4px' }}>
+        <Button type="text" size="small" style={{ color: '#ff7d00', fontSize: 12, padding: '0 4px' }}>
           <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 700 }}>{'{x}'}</span>
         </Button>
       </Tooltip>
@@ -160,7 +160,7 @@ function KvEditor({ items = [], onChange, keyPh = 'Key', valPh = 'Value' }) {
   if (bulkMode) return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-        <span style={{ fontSize: 11, color: '#4e5969' }}>格式: <code style={{ fontSize: 10, background: 'rgba(0,0,0,0.04)', padding: '1px 4px', borderRadius: 4 }}>key: value  // 描述</code></span>
+        <span style={{ fontSize: 11, color: '#4e5969' }}>格式: <code style={{ fontSize: 11, background: 'rgba(0,0,0,0.04)', padding: '1px 4px', borderRadius: 4 }}>key: value  // 描述</code></span>
         <Space size={4}><Button size="small" onClick={() => setBulkMode(false)}>取消</Button><Button size="small" type="primary" onClick={fromBulk}>确定</Button></Space>
       </div>
       <Input.TextArea spellCheck={false} value={bulkText} onChange={e => setBulkText(e.target.value)} autoSize={{ minRows: 5, maxRows: 14 }} style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
@@ -169,13 +169,13 @@ function KvEditor({ items = [], onChange, keyPh = 'Key', valPh = 'Value' }) {
   return (
     <div>
       {items.length > 0 && (
-        <div style={{ display: 'flex', gap: 4, marginBottom: 4, padding: '0 4px', fontSize: 10, color: '#86909c', fontWeight: 600, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 4, marginBottom: 4, padding: '0 4px', fontSize: 11, color: '#86909c', fontWeight: 600, alignItems: 'center' }}>
           <span style={{ width: 20 }}></span>
           <span style={{ flex: 3 }}>{keyPh}</span>
           <span style={{ flex: 4 }}>{valPh}</span>
           <span style={{ flex: 3 }}>描述</span>
           <span style={{ width: 24 }}></span>
-          <Tooltip title="批量编辑"><Button type="text" size="small" icon={<EditOutlined />} onClick={toBulk} style={{ width: 20, height: 16, fontSize: 10, color: '#86909c' }} /></Tooltip>
+          <Tooltip title="批量编辑"><Button type="text" size="small" icon={<EditOutlined />} onClick={toBulk} style={{ width: 20, height: 16, fontSize: 11, color: '#86909c' }} /></Tooltip>
         </div>
       )}
       {items.length === 0 && <div style={{ padding: '12px 0', textAlign: 'center', color: '#86909c', fontSize: 12 }}>暂无，点击添加</div>}
@@ -244,7 +244,7 @@ function ResponsePanel({ response, onUseAsBody }) {
         ))}
       </div>
       {sc === 0 && (
-        <div style={{ marginBottom: 8, padding: '8px 12px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 12, fontSize: 12, color: '#e8453c' }}>
+        <div style={{ marginBottom: 8, padding: '8px 12px', background: 'var(--red-bg)', border: '1px solid #ffccc7', borderRadius: 12, fontSize: 12, color: '#e8453c' }}>
           请求失败，请检查：URL 是否正确、服务是否在运行、环境变量是否配置（如 <code style={{ background: 'transparent', padding: '0 4px', borderRadius: 3 }}>{'{{BASE_URL}}'}</code>）
         </div>
       )}
@@ -253,7 +253,7 @@ function ResponsePanel({ response, onUseAsBody }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <div style={{ display: 'flex', gap: 0 }}>
               {isJson && ['pretty', 'raw'].map(m => (
-                <div key={m} onClick={() => setBodyMode(m)} style={{ padding: '2px 8px', fontSize: 10, cursor: 'pointer', borderRadius: 6, background: bodyMode === m ? '#e0f7f6' : 'transparent', color: bodyMode === m ? '#0ea5a0' : '#666' }}>{m === 'pretty' ? 'Pretty' : 'Raw'}</div>
+                <div key={m} onClick={() => setBodyMode(m)} style={{ padding: '2px 8px', fontSize: 11, cursor: 'pointer', borderRadius: 6, background: bodyMode === m ? '#e0f7f6' : 'transparent', color: bodyMode === m ? '#0ea5a0' : '#666' }}>{m === 'pretty' ? 'Pretty' : 'Raw'}</div>
               ))}
             </div>
             <Space size={4}>
@@ -307,7 +307,7 @@ function TreeNode({ node, children, level, isSelected, onClick, onContextMenu, o
             display: 'flex', alignItems: 'center', gap: 6, padding: '5px 10px', paddingLeft: 10 + level * 16,
             cursor: 'pointer', background: isSelected ? '#e0f7f6' : hovered ? 'rgba(14,165,160,0.06)' : 'transparent',
           }}>
-          {expanded ? <CaretDownOutlined style={{ fontSize: 9, color: '#4e5969' }} /> : <CaretRightOutlined style={{ fontSize: 9, color: '#4e5969' }} />}
+          {expanded ? <CaretDownOutlined style={{ fontSize: 11, color: '#4e5969' }} /> : <CaretRightOutlined style={{ fontSize: 11, color: '#4e5969' }} />}
           {expanded ? <FolderOpenOutlined style={{ fontSize: 12, color: '#faad14' }} /> : <FolderOutlined style={{ fontSize: 12, color: '#faad14' }} />}
           {editing ? (
             <Input size="small" autoFocus value={editName} onChange={e => setEditName(e.target.value)}
@@ -337,7 +337,7 @@ function TreeNode({ node, children, level, isSelected, onClick, onContextMenu, o
         cursor: 'pointer', background: isSelected ? mc.bg : hovered ? 'rgba(14,165,160,0.06)' : 'transparent',
         borderLeft: isSelected ? `3px solid ${mc.color}` : '3px solid transparent',
       }}>
-      <Tag style={{ margin: 0, fontWeight: 700, fontSize: 8, background: mc.bg, color: mc.color, border: 'none', padding: '0 4px', lineHeight: '14px', minWidth: 32, textAlign: 'center' }}>{node.method || 'GET'}</Tag>
+      <Tag style={{ margin: 0, fontWeight: 700, fontSize: 11, background: mc.bg, color: mc.color, border: 'none', padding: '0 4px', lineHeight: '14px', minWidth: 32, textAlign: 'center' }}>{node.method || 'GET'}</Tag>
       {editing ? (
         <Input size="small" autoFocus value={editName} onChange={e => setEditName(e.target.value)}
           onClick={e => e.stopPropagation()} onBlur={commitRename}
@@ -347,7 +347,7 @@ function TreeNode({ node, children, level, isSelected, onClick, onContextMenu, o
         <span style={{ fontSize: 12, color: '#1d2129', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {displayName}
           {showUrlHint && (
-            <span style={{ fontSize: 10, color: '#86909c', marginLeft: 4 }}>{node.url.split('?')[0]}</span>
+            <span style={{ fontSize: 11, color: '#86909c', marginLeft: 4 }}>{node.url.split('?')[0]}</span>
           )}
         </span>
       )}
@@ -603,7 +603,7 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
             color: t.highlight ? '#0ea5a0' : activeTab === t.key ? '#0ea5a0' : t.dim ? '#bbb' : '#666',
             fontWeight: activeTab === t.key ? 600 : 400,
             borderBottom: activeTab === t.key ? `2px solid ${t.highlight ? '#0ea5a0' : '#0ea5a0'}` : '2px solid transparent',
-          }}>{t.label}{t.count > 0 && <span style={{ fontSize: 10, marginLeft: 3, color: '#86909c' }}>{t.count}</span>}</div>
+          }}>{t.label}{t.count > 0 && <span style={{ fontSize: 11, marginLeft: 3, color: '#86909c' }}>{t.count}</span>}</div>
         ))}
       </div>
 
@@ -631,7 +631,7 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
         )}
         {activeTab === 'body' && (
           <div>
-            {isGet && <div style={{ marginBottom: 8, padding: '4px 10px', background: '#fff7e8', border: '1px solid rgba(255,125,0,0.2)', borderRadius: 12, fontSize: 11, color: '#ff7d00' }}>GET 请求通常不携带 Body，如需要请切换 Method</div>}
+            {isGet && <div style={{ marginBottom: 8, padding: '4px 10px', background: 'var(--orange-bg)', border: '1px solid rgba(255,125,0,0.2)', borderRadius: 12, fontSize: 11, color: '#ff7d00' }}>GET 请求通常不携带 Body，如需要请切换 Method</div>}
             <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6 }}>
               <Select size="small" value={data.bodyType || 'json'} onChange={v => up('bodyType', v)} style={{ width: 140 }}
                 options={[{ value: 'json', label: 'JSON' }, { value: 'form', label: 'x-www-form-urlencoded' }, { value: 'form-data', label: 'form-data' }, { value: 'raw', label: 'Raw' }, { value: 'none', label: '无 Body' }]} />
@@ -648,7 +648,7 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
                             onMouseEnter={e => e.currentTarget.style.background = 'rgba(14,165,160,0.06)'}
                             onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
                             <div style={{ fontSize: 12, fontWeight: 600, color: '#1d2129', marginBottom: 2 }}>{s.label}</div>
-                            <pre style={{ margin: 0, fontSize: 10, color: '#4e5969', fontFamily: 'var(--font-mono)', lineHeight: 1.4, maxHeight: 60, overflow: 'hidden', whiteSpace: 'pre-wrap' }}>{s.code}</pre>
+                            <pre style={{ margin: 0, fontSize: 11, color: '#4e5969', fontFamily: 'var(--font-mono)', lineHeight: 1.4, maxHeight: 60, overflow: 'hidden', whiteSpace: 'pre-wrap' }}>{s.code}</pre>
                           </div>
                         ))}
                       </div>
@@ -664,7 +664,7 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
             {((data.bodyType || 'json') === 'json' || data.bodyType === 'raw') && (
               <>
                 <Input.TextArea spellCheck={false} ref={bodyRef} value={data.body || ''} onChange={e => up('body', e.target.value)} placeholder='{"key": "value"}' autoSize={{ minRows: 6, maxRows: 18 }} style={{ fontFamily: 'var(--font-mono)', fontSize: 11 }} />
-                {jsonError && <div style={{ marginTop: 4, fontSize: 11, color: '#e8453c', padding: '2px 8px', background: '#fff2f0', borderRadius: 12 }}>JSON 语法错误: {jsonError}</div>}
+                {jsonError && <div style={{ marginTop: 4, fontSize: 11, color: '#e8453c', padding: '2px 8px', background: 'var(--red-bg)', borderRadius: 12 }}>JSON 语法错误: {jsonError}</div>}
               </>
             )}
             {data.bodyType === 'form' && <KvEditor items={data.formParams || []} onChange={v => up('formParams', v)} keyPh="字段名" valPh="字段值" />}
@@ -949,7 +949,7 @@ export default function ApiManagement() {
                   </div>
                   {envVars.map((v, i) => (
                     <div key={v.key || i} style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#fa8c16', fontWeight: 600, width: 100, flexShrink: 0 }}>{v.key}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#ff7d00', fontWeight: 600, width: 100, flexShrink: 0 }}>{v.key}</span>
                       <Input spellCheck={false} size="small" value={v.value} onChange={e => {
                         const newVars = envVars.map((vv, j) => j === i ? { ...vv, value: e.target.value } : vv)
                         setEnvVars(newVars)
@@ -966,7 +966,7 @@ export default function ApiManagement() {
                   }}>保存变量</Button>
                 </div>
               }>
-              <span style={{ fontSize: 10, color: '#0ea5a0', cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap', flexShrink: 0 }}>{envVars.length} 变量</span>
+              <span style={{ fontSize: 11, color: '#0ea5a0', cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap', flexShrink: 0 }}>{envVars.length} 变量</span>
             </Popover>
           )}
         </div>
@@ -1010,12 +1010,12 @@ export default function ApiManagement() {
                     background: isActive ? 'rgba(255,255,255,0.5)' : 'transparent', whiteSpace: 'nowrap', fontSize: 12,
                     borderRight: '1px solid rgba(0,0,0,0.06)',
                   }}>
-                  <Tag style={{ margin: 0, fontWeight: 700, fontSize: 8, background: mc.bg, color: mc.color, border: 'none', padding: '0 3px', lineHeight: '13px' }}>{tn.method || 'GET'}</Tag>
+                  <Tag style={{ margin: 0, fontWeight: 700, fontSize: 11, background: mc.bg, color: mc.color, border: 'none', padding: '0 3px', lineHeight: '13px' }}>{tn.method || 'GET'}</Tag>
                   <span style={{ color: isActive ? '#1d2129' : '#666', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {dirtyTabs.has(tid) && <span style={{ color: '#fa8c16', marginRight: 2 }}>●</span>}
+                    {dirtyTabs.has(tid) && <span style={{ color: '#ff7d00', marginRight: 2 }}>●</span>}
                     {tn.name || '未命名接口'}
                   </span>
-                  <CloseOutlined onClick={e => closeTab(tid, e)} style={{ fontSize: 9, color: '#c9cdd4', marginLeft: 4 }} />
+                  <CloseOutlined onClick={e => closeTab(tid, e)} style={{ fontSize: 11, color: '#c9cdd4', marginLeft: 4 }} />
                 </div>
               )
             })}

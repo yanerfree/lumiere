@@ -204,7 +204,7 @@ export default function McpMock() {
   const renderConfigTab = () => {
     if (!toolForm) {
       return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <Empty description={<span style={{ color: '#bfbfbf' }}>选择左侧工具查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        <Empty description={<span style={{ color: '#c9cdd4' }}>选择左侧工具查看配置</span>} image={Empty.PRESENTED_IMAGE_SIMPLE} />
       </div>
     }
     return (
@@ -256,7 +256,7 @@ export default function McpMock() {
           )}
           {/* 描述 */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>工具描述</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>工具描述</div>
             <Input value={toolForm.description} onChange={e => setToolForm(f => ({ ...f, description: e.target.value }))}
               placeholder="工具描述..." size="small" disabled={locked} />
           </div>
@@ -265,7 +265,7 @@ export default function McpMock() {
           {mcpUrl && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16,
-              padding: '6px 12px', background: '#e0f7f6', border: '1px solid rgba(14,165,160,0.3)', borderRadius: 12,
+              padding: '6px 12px', background: 'var(--green-bg)', border: '1px solid rgba(14,165,160,0.3)', borderRadius: 12,
             }}>
               <ApiOutlined style={{ color: '#0ea5a0', fontSize: 12 }} />
               <span style={{ fontSize: 12, fontFamily: MONO, color: '#0ea5a0', flex: 1, userSelect: 'all' }}>{mcpUrl}</span>
@@ -274,14 +274,14 @@ export default function McpMock() {
             </div>
           )}
           {!serviceStatus.running && (
-            <div style={{ fontSize: 12, color: '#bfbfbf', marginBottom: 16 }}>
+            <div style={{ fontSize: 12, color: '#c9cdd4', marginBottom: 16 }}>
               服务未启动，启动后显示 MCP 访问地址
             </div>
           )}
 
           {/* 响应模式 */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>响应模式</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>响应模式</div>
             <Radio.Group value={toolForm.mode} onChange={e => handleModeSwitch(e.target.value)}
               buttonStyle="solid" size="small" disabled={locked}>
               <Radio.Button value="success"><span style={{ color: toolForm.mode === 'success' ? '#fff' : '#0ea5a0' }}>成功</span></Radio.Button>
@@ -293,7 +293,7 @@ export default function McpMock() {
           {/* 自定义响应编辑 */}
           {toolForm.mode === 'custom' && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>自定义响应 (JSON)</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>自定义响应 (JSON)</div>
               <TextArea spellCheck={false}
                 rows={8}
                 value={typeof toolForm.customData === 'string' ? toolForm.customData : JSON.stringify(toolForm.customData, null, 2) || ''}
@@ -333,7 +333,7 @@ export default function McpMock() {
           {/* 参数信息 */}
           {toolForm.params && Object.keys(toolForm.params).length > 0 && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>参数定义</div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>参数定义</div>
               <div style={{
                 padding: '8px 12px', background: 'rgba(0,0,0,0.02)', borderRadius: 12,
                 border: '1px solid rgba(0,0,0,0.04)', fontSize: 12, fontFamily: MONO,
@@ -341,7 +341,7 @@ export default function McpMock() {
                 {Object.entries(toolForm.params).map(([k, v]) => (
                   <div key={k} style={{ display: 'flex', gap: 8, padding: '2px 0' }}>
                     <span style={{ color: '#4e8af0' }}>{k}</span>
-                    <span style={{ color: '#8c8c8c' }}>{v}</span>
+                    <span style={{ color: '#86909c' }}>{v}</span>
                   </div>
                 ))}
               </div>
@@ -350,7 +350,7 @@ export default function McpMock() {
 
           {/* 调用测试 */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>调用测试</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>调用测试</div>
             <TextArea spellCheck={false} rows={3} value={callArgs} onChange={e => setCallArgs(e.target.value)}
               style={{ fontFamily: MONO, fontSize: 12, borderRadius: 12, marginBottom: 8 }}
               placeholder='{"branch_id": "xxx"}' />
@@ -362,8 +362,8 @@ export default function McpMock() {
           {callResult && (
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <span style={{ fontSize: 12, color: '#8c8c8c', fontWeight: 500 }}>调用结果</span>
-                {callResult.source && <Tag color={callResult.source === 'mock' ? 'orange' : 'green'} style={{ margin: 0, fontSize: 10 }}>
+                <span style={{ fontSize: 12, color: '#86909c', fontWeight: 500 }}>调用结果</span>
+                {callResult.source && <Tag color={callResult.source === 'mock' ? 'orange' : 'green'} style={{ margin: 0, fontSize: 11 }}>
                   {callResult.source === 'mock' ? 'Mock' : '真实'}</Tag>}
               </div>
               <pre style={{
@@ -385,7 +385,7 @@ export default function McpMock() {
         padding: '8px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0,
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: '#262626' }}>共 {logsTotal} 条</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>共 {logsTotal} 条</span>
         <Space size={4}>
           <Button icon={<ReloadOutlined />} size="small" type="text" onClick={() => fetchLogs()} />
           <Popconfirm title="确认清空？" onConfirm={handleClearLogs}>
@@ -401,7 +401,7 @@ export default function McpMock() {
               {['时间', '工具', '来源', '模式', '状态', '耗时'].map((h, i) => (
                 <th key={h} style={{
                   padding: '6px 10px', textAlign: i >= 5 ? 'right' : 'left',
-                  fontWeight: 500, fontSize: 11, color: '#8c8c8c', borderBottom: '1px solid rgba(0,0,0,0.04)',
+                  fontWeight: 500, fontSize: 11, color: '#86909c', borderBottom: '1px solid rgba(0,0,0,0.04)',
                   whiteSpace: 'nowrap',
                 }}>{h}</th>
               ))}
@@ -414,27 +414,27 @@ export default function McpMock() {
                   cursor: 'pointer', borderBottom: '1px solid rgba(0,0,0,0.03)',
                   background: expandedLogId === l.id ? 'rgba(124,92,191,0.08)' : 'transparent',
                 }}>
-                  <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#8c8c8c' }}>
+                  <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#86909c' }}>
                     {new Date(l.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
                   </td>
                   <td style={{ padding: '5px 10px' }}>
                     <Text code style={{ fontSize: 11 }}>{l.tool}</Text>
                   </td>
                   <td style={{ padding: '5px 10px' }}>
-                    <Tag color={l.source === 'mock' || l.source === 'mock-server' ? 'orange' : 'cyan'} style={{ margin: 0, fontSize: 10 }}>{l.source}</Tag>
+                    <Tag color={l.source === 'mock' || l.source === 'mock-server' ? 'orange' : 'cyan'} style={{ margin: 0, fontSize: 11 }}>{l.source}</Tag>
                   </td>
-                  <td style={{ padding: '5px 10px', fontSize: 11, color: '#8c8c8c' }}>{MODE_LABEL[l.mode] || l.mode}</td>
+                  <td style={{ padding: '5px 10px', fontSize: 11, color: '#86909c' }}>{MODE_LABEL[l.mode] || l.mode}</td>
                   <td style={{ padding: '5px 10px' }}>
-                    <Tag color={l.isError ? 'red' : 'cyan'} style={{ margin: 0, fontSize: 10 }}>{l.isError ? '失败' : '成功'}</Tag>
+                    <Tag color={l.isError ? 'red' : 'cyan'} style={{ margin: 0, fontSize: 11 }}>{l.isError ? '失败' : '成功'}</Tag>
                   </td>
-                  <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#8c8c8c', whiteSpace: 'nowrap' }}>{l.elapsedMs}ms</td>
+                  <td style={{ padding: '5px 10px', textAlign: 'right', fontSize: 11, color: '#86909c', whiteSpace: 'nowrap' }}>{l.elapsedMs}ms</td>
                 </tr>
                 {expandedLogId === l.id && (
                   <tr>
                     <td colSpan={6} style={{ padding: '10px 16px', background: 'transparent', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
                       <div style={{ display: 'flex', gap: 24, fontSize: 12 }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4, fontWeight: 500 }}>请求参数</div>
+                          <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4, fontWeight: 500 }}>请求参数</div>
                           <pre style={{
                             maxHeight: 120, overflow: 'auto', margin: 0, padding: 8, borderRadius: 12,
                             background: 'transparent', border: '1px solid rgba(0,0,0,0.04)', fontSize: 11, fontFamily: MONO,
@@ -442,7 +442,7 @@ export default function McpMock() {
                           }}>{JSON.stringify(l.arguments, null, 2)}</pre>
                         </div>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 11, color: '#8c8c8c', marginBottom: 4, fontWeight: 500 }}>响应结果</div>
+                          <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4, fontWeight: 500 }}>响应结果</div>
                           <pre style={{
                             maxHeight: 120, overflow: 'auto', margin: 0, padding: 8, borderRadius: 12,
                             background: 'transparent', border: '1px solid rgba(0,0,0,0.04)', fontSize: 11, fontFamily: MONO,
@@ -456,7 +456,7 @@ export default function McpMock() {
               </Fragment>
             ))}
             {logs.length === 0 && (
-              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#bfbfbf', fontSize: 12 }}>暂无调用日志</td></tr>
+              <tr><td colSpan={6} style={{ textAlign: 'center', padding: 40, color: '#c9cdd4', fontSize: 12 }}>暂无调用日志</td></tr>
             )}
           </tbody>
         </table>
@@ -491,7 +491,7 @@ export default function McpMock() {
             background: serviceStatus.running ? '#e0f7f6' : 'rgba(0,0,0,0.04)',
             border: `1px solid ${serviceStatus.running ? 'rgba(14,165,160,0.3)' : 'rgba(0,0,0,0.1)'}`,
           }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: serviceStatus.running ? '#0ea5a0' : '#bfbfbf' }} />
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: serviceStatus.running ? '#0ea5a0' : '#c9cdd4' }} />
             <span style={{ fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)', color: serviceStatus.running ? '#0ea5a0' : '#999' }}>
               {serviceStatus.running ? 'LIVE' : 'STOPPED'}
             </span>
@@ -516,7 +516,7 @@ export default function McpMock() {
             <Radio.Button value="streamable-http" style={{ fontSize: 11, padding: '0 8px' }}>Streamable HTTP</Radio.Button>
             <Radio.Button value="sse" style={{ fontSize: 11, padding: '0 8px' }}>SSE</Radio.Button>
           </Radio.Group>
-          <span style={{ fontSize: 12, color: '#8c8c8c' }}>
+          <span style={{ fontSize: 12, color: '#86909c' }}>
             {serviceStatus.toolsEnabled}/{serviceStatus.toolsCount} 个工具
           </span>
         </div>
@@ -543,7 +543,7 @@ export default function McpMock() {
             padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0,
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: '#262626' }}>工具</span>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>工具</span>
             <Button type="primary" ghost size="small" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新增</Button>
           </div>
           <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px' }}>
@@ -560,20 +560,20 @@ export default function McpMock() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
                       {t.locked && (
                         <Tooltip title="已锁定，不可编辑">
-                          <LockFilled style={{ fontSize: 11, color: '#fa8c16', flexShrink: 0 }} />
+                          <LockFilled style={{ fontSize: 11, color: '#ff7d00', flexShrink: 0 }} />
                         </Tooltip>
                       )}
                       <Text code style={{ fontSize: 11, maxWidth: 150 }} ellipsis>{t.name}</Text>
                     </div>
-                    <Tag color={MODE_COLOR[t.mode]} style={{ margin: 0, fontSize: 10, lineHeight: '16px', padding: '0 5px', borderRadius: 8 }}>
+                    <Tag color={MODE_COLOR[t.mode]} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px', borderRadius: 8 }}>
                       {MODE_LABEL[t.mode]}
                     </Tag>
                   </div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span style={{ fontSize: 11, color: '#8c8c8c', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 160 }}>
+                    <span style={{ fontSize: 11, color: '#86909c', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 160 }}>
                       {t.description || '无描述'}
                     </span>
-                    {!t.enabled && <Tag color="default" style={{ margin: 0, fontSize: 9, lineHeight: '14px', padding: '0 4px' }}>禁用</Tag>}
+                    {!t.enabled && <Tag color="default" style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 4px' }}>禁用</Tag>}
                   </div>
                 </div>
               )
@@ -592,7 +592,7 @@ export default function McpMock() {
               ].map(t => (
                 <div key={t.key} onClick={() => setActiveTab(t.key)} style={{
                   padding: '10px 16px', cursor: 'pointer', fontSize: 14, position: 'relative',
-                  color: activeTab === t.key ? '#7c5cbf' : '#595959',
+                  color: activeTab === t.key ? '#7c5cbf' : '#4e5969',
                   fontWeight: activeTab === t.key ? 600 : 400,
                 }}>
                   {t.label}
@@ -616,12 +616,12 @@ export default function McpMock() {
       <Modal title="新建 MCP 工具" open={createOpen} onCancel={() => setCreateOpen(false)}
         onOk={handleCreateTool} okText="创建" cancelText="取消" width={480}>
         <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>工具名称 *</div>
+          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>工具名称 *</div>
           <Input spellCheck={false} value={newToolName} onChange={e => setNewToolName(e.target.value)}
             placeholder="如 tb_search_users" style={{ fontFamily: MONO }} />
         </div>
         <div>
-          <div style={{ fontSize: 12, color: '#8c8c8c', marginBottom: 4 }}>描述</div>
+          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>描述</div>
           <Input value={newToolDesc} onChange={e => setNewToolDesc(e.target.value)}
             placeholder="搜索用户列表" />
         </div>

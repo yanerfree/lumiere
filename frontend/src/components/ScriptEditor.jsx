@@ -201,7 +201,7 @@ const ScriptEditor = forwardRef(function ScriptEditor({
         }}>
           <Tag color={accentColor} style={{ fontSize: 11, margin: 0 }}>{language}</Tag>
           {script?.fileName && <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#aaa' }}>{script.fileName}</span>}
-          {script?.version && <Tag style={{ fontSize: 10, margin: 0, background: '#333', color: '#aaa', border: 'none' }}>v{script.version}</Tag>}
+          {script?.version && <Tag style={{ fontSize: 11, margin: 0, background: '#333', color: '#aaa', border: 'none' }}>v{script.version}</Tag>}
         </div>
         <Editor
           height={400}
@@ -235,8 +235,8 @@ const ScriptEditor = forwardRef(function ScriptEditor({
         <Space size={8}>
           <Tag color={accentColor} style={{ fontSize: 11, margin: 0 }}>{language}</Tag>
           {script?.fileName && <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: '#aaa' }}>{script.fileName}</span>}
-          {dirty && <Tag color="orange" style={{ fontSize: 10, margin: 0 }}>未保存</Tag>}
-          {script?.version && <Tag style={{ fontSize: 10, margin: 0, background: '#333', color: '#aaa', border: 'none' }}>v{script.version}</Tag>}
+          {dirty && <Tag color="orange" style={{ fontSize: 11, margin: 0 }}>未保存</Tag>}
+          {script?.version && <Tag style={{ fontSize: 11, margin: 0, background: '#333', color: '#aaa', border: 'none' }}>v{script.version}</Tag>}
         </Space>
         <Space size={6}>
           {!hideVersions && versions.length > 1 && (

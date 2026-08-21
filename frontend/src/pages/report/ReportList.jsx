@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { TimeCell } from '../../utils/timeCol'
 import { Button, Space, Spin, Empty, Input, Pagination, Modal, Tooltip, message } from 'antd'
 import { SearchOutlined, ReloadOutlined, DownloadOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -126,9 +127,9 @@ export default function ReportList() {
       {loading ? <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div> :
         filtered.length === 0 ? <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Empty description="暂无报告" /></div> : <>
         {/* Table */}
-        <div style={{ background: 'rgba(255,255,255,0.3)', border: 'none', borderRadius: 16, backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <div style={{ background: 'var(--panel-bg)', border: 'none', borderRadius: 16, backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Header */}
-          <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px', height: 36, background: 'rgba(0,0,0,0.02)', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px', height: 36, background: 'var(--table-header-bg)', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
             <div style={{ flex: 4, ...th }}>报告名称</div>
             {/* 「入口」和「跑的什么」是两件事，此前挤在一列叫「类型」——
                 于是报告页清一色「接口测试」，用例页清一色 UI，看着像互相打架。 */}
@@ -136,9 +137,13 @@ export default function ReportList() {
             <div style={{ width: 62, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
             <div style={{ width: 80, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
             <div style={{ width: 80, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
-            <div style={{ width: 130, textAlign: 'center', flexShrink: 0, ...th }}>结果</div>
+            {/* 图例放表头 —— 原来每一行都印一遍「通过/失败/总计」，10px 还折成两行 */}
+            <div style={{ width: 132, textAlign: 'center', flexShrink: 0, ...th }}>
+              结果 <span style={{ color: '#c9cdd4', fontWeight: 400 }}>通过/失败/总</span>
+            </div>
             <div style={{ width: 70, textAlign: 'center', flexShrink: 0, ...th }}>通过率</div>
             <div style={{ width: 60, textAlign: 'right', flexShrink: 0, ...th }}>耗时</div>
+            <div style={{ width: 112, textAlign: 'center', flexShrink: 0, ...th }}>执行时间</div>
             <div style={{ width: 100, textAlign: 'center', flexShrink: 0, ...th }}>操作</div>
           </div>
           {/* Body */}
@@ -155,13 +160,10 @@ export default function ReportList() {
                   onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,0,0,0.02)'}
                   onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                 >
-                  {/* Report name + time */}
+                  {/* Report name */}
                   <div style={{ flex: 4, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontWeight: 500, fontSize: 13, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {r.reportName || r.planName}
-                    </span>
-                    <span style={{ fontSize: 11, color: '#c9cdd4', flexShrink: 0 }}>
-                      {r.executedAt ? new Date(r.executedAt).toLocaleString('zh-CN') : '-'}
                     </span>
                   </div>
 
@@ -171,7 +173,7 @@ export default function ReportList() {
                       <span style={{
                         fontSize: 11, padding: '1px 6px', borderRadius: 6,
                         background: r.reportType === 'adhoc' ? 'rgba(250,173,20,0.08)' : r.reportType === 'scenario_test' ? 'rgba(14,165,160,0.06)' : 'rgba(78,138,240,0.06)',
-                        color: r.reportType === 'adhoc' ? '#fa8c16' : r.reportType === 'scenario_test' ? '#0ea5a0' : '#4e8af0',
+                        color: r.reportType === 'adhoc' ? '#ff7d00' : r.reportType === 'scenario_test' ? '#0ea5a0' : '#4e8af0',
                       }}>
                         {ENTRY_LABELS[r.reportType] || '测试计划'}
                       </span>
@@ -184,7 +186,7 @@ export default function ReportList() {
                       <span style={{
                         fontSize: 11, padding: '1px 6px', borderRadius: 6,
                         background: r.execKind === 'ui' ? '#f5f0ff' : r.execKind === 'mixed' ? 'rgba(250,173,20,0.08)' : '#e0f7f6',
-                        color: r.execKind === 'ui' ? '#7c5cbf' : r.execKind === 'mixed' ? '#fa8c16' : '#0ea5a0',
+                        color: r.execKind === 'ui' ? '#7c5cbf' : r.execKind === 'mixed' ? '#ff7d00' : '#0ea5a0',
                       }}>
                         {EXEC_LABELS[r.execKind]}
                       </span>
@@ -209,22 +211,22 @@ export default function ReportList() {
                     <span style={{
                       display: 'inline-flex', alignItems: 'center', gap: 4,
                       fontSize: 11, padding: '2px 8px', borderRadius: 12,
-                      background: isCompleted ? '#0ea5a0' : '#faad14',
-                      color: '#fff',
+                      background: isCompleted ? 'rgba(14,165,160,0.12)' : 'rgba(250,173,20,0.14)',
+                      border: `1px solid ${isCompleted ? 'rgba(14,165,160,0.28)' : 'rgba(250,173,20,0.3)'}`,
+                      color: isCompleted ? '#0ea5a0' : '#d48806',
                     }}>
-                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#fff' }} />
+                      <span style={{ width: 6, height: 6, borderRadius: '50%', background: isCompleted ? '#0ea5a0' : '#faad14' }} />
                       {isCompleted ? '已完成' : '执行中'}
                     </span>
                   </div>
 
                   {/* Results */}
-                  <div style={{ width: 130, textAlign: 'center', fontSize: 12, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+                  <div style={{ width: 132, textAlign: 'center', fontSize: 12, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
                     <span style={{ color: '#0ea5a0' }}>{r.passed}</span>
                     <span style={{ color: '#c9cdd4' }}> / </span>
                     <span style={{ color: '#e8453c' }}>{r.failed + r.error}</span>
                     <span style={{ color: '#c9cdd4' }}> / </span>
                     <span style={{ color: '#4e5969' }}>{r.totalScenarios}</span>
-                    <span style={{ fontSize: 10, color: '#c9cdd4', marginLeft: 4 }}>通过/失败/总计</span>
                   </div>
 
                   {/* Pass rate */}
@@ -239,6 +241,11 @@ export default function ReportList() {
                   {/* Duration */}
                   <div style={{ width: 60, textAlign: 'right', fontSize: 12, fontFamily: 'var(--font-mono)', color: '#86909c', flexShrink: 0 }}>
                     {fmt(r.totalDurationMs)}
+                  </div>
+
+                  {/* 执行时间：独立一列，紧挨操作列 */}
+                  <div style={{ width: 112, textAlign: 'center', flexShrink: 0 }}>
+                    <TimeCell value={r.executedAt} />
                   </div>
 
                   {/* Actions */}

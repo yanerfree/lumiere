@@ -23,10 +23,13 @@ const enUS = enUSRaw?.default ?? enUSRaw
 const theme = {
   token: {
     colorPrimary: '#0ea5a0',
+    // 基准字号跟 global.css 的 --fs-base 对齐。之前 antd 用 14、CSS 用 13，
+    // 结果"没显式写字号的地方"比邻居大一号，全站字号看着乱。
+    fontSize: 13,
     borderRadius: 12,
     borderRadiusLG: 16,
     borderRadiusSM: 8,
-    colorBgContainer: 'rgba(255,255,255,0.35)',
+    colorBgContainer: 'rgba(255,255,255,0.55)',
     fontFamily: "'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif",
     colorText: '#1d2129',
     colorTextSecondary: '#86909c',
@@ -49,14 +52,14 @@ const theme = {
     },
     Card: {
       borderRadiusLG: 16,
-      colorBgContainer: 'rgba(255,255,255,0.35)',
+      colorBgContainer: 'rgba(255,255,255,0.55)',
       boxShadowTertiary: 'none',
     },
     Table: {
       borderRadiusLG: 16,
       colorBgContainer: 'transparent',
-      headerBg: 'rgba(255,255,255,0.4)',
-      rowHoverBg: 'rgba(255,255,255,0.5)',
+      headerBg: 'rgba(255,255,255,0.45)',
+      rowHoverBg: 'rgba(255,255,255,0.6)',
     },
     Tag: {
       borderRadiusSM: 12,
@@ -76,7 +79,7 @@ const theme = {
     },
     Menu: {
       itemBorderRadius: 12,
-      itemSelectedBg: '#e0f7f6',
+      itemSelectedBg: 'rgba(14,165,160,0.1)',
       itemSelectedColor: '#0ea5a0',
       itemHoverBg: 'rgba(14,165,160,0.05)',
       itemHoverColor: '#0ea5a0',

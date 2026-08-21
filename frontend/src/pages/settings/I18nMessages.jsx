@@ -267,7 +267,7 @@ export default function I18nMessages() {
       width: 330,
       render: (v) => (
         <>
-          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, wordBreak: 'break-all' }}>{v}</Text>
+          <Text style={{ fontFamily: 'var(--font-mono)', fontSize: 12, wordBreak: 'break-all' }}>{v}</Text>
           {/[\u4e00-\u9fff]/.test(v) && (
             <Tag color="orange" style={{ marginLeft: 6, fontSize: 11 }}>键不该用中文</Tag>
           )}
@@ -278,7 +278,7 @@ export default function I18nMessages() {
       title: '模块',
       dataIndex: 'module',
       width: 100,
-      render: (v) => v ? <Text style={{ fontSize: 12.5 }}>{v}</Text> : <Text type="secondary">—</Text>,
+      render: (v) => v ? <Text style={{ fontSize: 12 }}>{v}</Text> : <Text type="secondary">—</Text>,
     },
     {
       // 中文和英文必须挨着 —— 原来中间夹了「分类」列，同一条文案的两种语言
@@ -350,7 +350,7 @@ export default function I18nMessages() {
       <Card style={{ marginBottom: 16 }}>
         <Row gutter={16}>
           <Col span={8}><Statistic title="总词条" value={stats.total} /></Col>
-          <Col span={8}><Statistic title="已翻译 (en)" value={stats.translated} valueStyle={{ color: '#52c41a' }} /></Col>
+          <Col span={8}><Statistic title="已翻译 (en)" value={stats.translated} valueStyle={{ color: '#0ea5a0' }} /></Col>
           <Col span={8}><Statistic title="待补" value={stats.untranslated} valueStyle={{ color: '#faad14' }} /></Col>
         </Row>
       </Card>

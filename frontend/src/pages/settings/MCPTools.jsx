@@ -7,6 +7,7 @@ import {
   RobotOutlined, LinkOutlined, DownOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
+import { formatTime } from '../../utils/timeCol'
 import { copyToClipboard } from '../../utils/clipboard'
 import { useBranch } from '../../utils/branch'
 
@@ -32,14 +33,17 @@ const CAT_COLORS = {
  */
 
 const cardStyle = { borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)', boxShadow: 'none' }
-const sectionTitle = { fontSize: 14, fontWeight: 600, color: '#2e3138', marginBottom: 4 }
+const sectionTitle = { fontSize: 14, fontWeight: 600, color: '#1d2129', marginBottom: 4 }
 
-// 分类色板对应的实色（Tag 的语义色拿不到色值，分组条要用真颜色）
+// 分类色板对应的实色（Tag 的语义色拿不到色值，分组条要用真颜色）。
+// 十几个分类需要十几种能分辨的色，站内色板只有 6 个主色不够用 —— 所以这里
+// 保留同样的色相分布，但把饱和度/明度压到跟站内色板同一档：原来直接用 antd
+// 默认色（#52c41a / #1677ff / #eb2f96…），比全站其他地方艳一截，扎眼。
 const CAT_HEX = {
-  green: '#52c41a', blue: '#1677ff', cyan: '#13c2c2', geekblue: '#2f54eb',
-  orange: '#fa8c16', red: '#f5222d', magenta: '#eb2f96', volcano: '#fa541c',
-  purple: '#722ed1', gold: '#faad14', lime: '#a0d911', error: '#e8453c',
-  default: '#8c919e',
+  green: '#2ec4b6', blue: '#4e8af0', cyan: '#0ea5a0', geekblue: '#5a6fd8',
+  orange: '#ff7d00', red: '#e8453c', magenta: '#d9548f', volcano: '#f2734d',
+  purple: '#7c5cbf', gold: '#faad14', lime: '#8fbf3f', error: '#e8453c',
+  default: '#a9b0ba',
 }
 const catHex = (cat) => CAT_HEX[CAT_COLORS[cat]] || CAT_HEX.default
 
@@ -58,7 +62,7 @@ function ToolRow({ t, checked, disabled, onToggle }) {
         <Tooltip title={<span style={{ fontSize: 12 }}>{t.description}</span>}
           styles={{ root: { maxWidth: 620 } }}>
           <div style={{
-            fontSize: 12.5, color: '#4e5969', lineHeight: 1.65,
+            fontSize: 12, color: '#4e5969', lineHeight: 1.65,
             display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden',
           }}>{t.description}</div>
         </Tooltip>
@@ -78,7 +82,7 @@ function ActivityCard({ p, checked, disabled, recommended, includedBy, total, on
       cursor: disabled ? 'default' : 'pointer', borderRadius: 10, padding: '12px 14px',
       transition: 'all .15s', opacity: disabled ? 0.55 : 1,
       border: checked ? '1.5px solid #0ea5a0' : '1px solid rgba(0,0,0,0.09)',
-      background: checked ? 'rgba(14,165,160,0.05)' : includedBy ? 'rgba(14,165,160,0.02)' : '#fff',
+      background: checked ? 'rgba(14,165,160,0.05)' : includedBy ? 'rgba(14,165,160,0.02)' : 'rgba(255,255,255,0.5)',
       // 被别的活包含的，左边加一条色带 —— 让它在视觉上跟父档聚成一组。
       // 只挂一个小标签的话人扫过去看不见（实测：用户说"没看到已包含标签"）。
       borderLeft: includedBy ? '3px solid rgba(14,165,160,0.45)' : undefined,
@@ -92,7 +96,7 @@ function ActivityCard({ p, checked, disabled, recommended, includedBy, total, on
             onClick={e => { e.stopPropagation(); onCopyPrompt(p.prompt) }}
             style={{
               position: 'absolute', top: 6, right: 6, opacity: hover ? 1 : 0.35,
-              transition: 'opacity .15s', color: checked ? '#0ea5a0' : '#9aa0aa',
+              transition: 'opacity .15s', color: checked ? '#0ea5a0' : '#86909c',
             }} />
         </Tooltip>
       )}
@@ -100,11 +104,11 @@ function ActivityCard({ p, checked, disabled, recommended, includedBy, total, on
         <Checkbox checked={checked} disabled={disabled} style={{ marginTop: 1, pointerEvents: 'none' }} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <span style={{ fontWeight: 600, fontSize: 13.5, color: checked ? '#0ea5a0' : '#2e3138' }}>
+            <span style={{ fontWeight: 600, fontSize: 13, color: checked ? '#0ea5a0' : '#1d2129' }}>
               {p.label}
             </span>
             {recommended && (
-              <Tag color="green" style={{ fontSize: 10, lineHeight: '16px', margin: 0, padding: '0 5px' }}>常用</Tag>
+              <Tag color="green" style={{ fontSize: 11, lineHeight: '16px', margin: 0, padding: '0 5px' }}>常用</Tag>
             )}
             {/* 没勾但工具已被别的活全带进来了。**要说清被谁包含** ——
                 只写「已包含」的话，人还得自己猜是哪一件（实测被问了：
@@ -115,8 +119,8 @@ function ActivityCard({ p, checked, disabled, recommended, includedBy, total, on
               </Tag>
             )}
           </div>
-          <div style={{ fontSize: 12, color: '#6b7280', lineHeight: 1.65, marginTop: 3 }}>{p.task}</div>
-          <div style={{ fontSize: 11.5, color: '#9aa0aa', marginTop: 5 }}>
+          <div style={{ fontSize: 12, color: '#4e5969', lineHeight: 1.65, marginTop: 3 }}>{p.task}</div>
+          <div style={{ fontSize: 12, color: '#86909c', marginTop: 5 }}>
             要用到 {p.tools.length} / {total} 个工具
           </div>
         </div>
@@ -259,13 +263,13 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
             <Checkbox disabled={unlimited} checked={full} indeterminate={n > 0 && !full}
               onChange={e => toggleCat(items, e.target.checked)} />
           </span>
-          <span style={{ fontWeight: 600, fontSize: 13, color: '#2e3138' }}>{cat}</span>
+          <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>{cat}</span>
         </div>
       ),
       extra: (
         <span style={{
-          fontSize: 11.5, fontWeight: 600, padding: '1px 9px', borderRadius: 10,
-          color: full ? '#0ea5a0' : n ? '#fa8c16' : '#9aa0aa',
+          fontSize: 12, fontWeight: 600, padding: '1px 9px', borderRadius: 10,
+          color: full ? '#0ea5a0' : n ? '#fa8c16' : '#86909c',
           background: full ? 'rgba(14,165,160,0.1)' : n ? 'rgba(250,140,22,0.1)' : 'rgba(0,0,0,0.04)',
         }}>{n}/{items.length}</span>
       ),
@@ -285,7 +289,7 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
     <div>
       <div style={{ marginBottom: 14 }}>
         <div style={{ ...sectionTitle, fontSize: 15 }}>这个项目的 Claude Code 能干哪些活？</div>
-        <Text type="secondary" style={{ fontSize: 12.5 }}>
+        <Text type="secondary" style={{ fontSize: 12 }}>
           勾上的活所需要的工具会自动合并；范围外的工具 CC 看不到、也调不动。
           本项目 <b style={{ color: '#4e5969' }}>{keyCount}</b> 把 Key 都按它生效，改完立即生效，不用重新建 Key。
         </Text>
@@ -306,7 +310,7 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
       {staleMissing.length > 0 && (
         <Alert type="warning" showIcon style={{ marginBottom: 12 }}
           message={`平台新增了 ${staleMissing.length} 个工具，本项目的范围还没跟上`}
-          description={<span style={{ fontSize: 12.5 }}>
+          description={<span style={{ fontSize: 12 }}>
             「{staleProfiles.map(p => p.label.split(/[：:]/)[0]).join('」「')}」这{staleProfiles.length > 1 ? '几' : ''}档现在需要
             <b> {staleMissing.join('、')} </b>
             ，但它们不在已保存的名单里 —— <b>CC 现在看不到、也调不动</b>。
@@ -344,7 +348,7 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
                   setSel(v ? allNames : baseline)
                   setChosen(v ? [] : deriveChosen(profiles, baseline))
                 }} />
-              <span style={{ fontSize: 12.5, color: unlimited ? '#0ea5a0' : '#8c919e' }}>不限制</span>
+              <span style={{ fontSize: 12, color: unlimited ? '#0ea5a0' : '#8c919e' }}>不限制</span>
             </span>
           </Tooltip>
           {dirty && (
@@ -361,7 +365,7 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
           )}
         </div>
         {unlimited && (
-          <div style={{ marginTop: 8, fontSize: 11.5, color: '#8c919e' }}>
+          <div style={{ marginTop: 8, fontSize: 12, color: '#8c919e' }}>
             当前不限制，所以上面的活全部置灰 —— 关掉右边的「不限制」就能按活来选。
           </div>
         )}
@@ -503,7 +507,7 @@ export default function MCPTools() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <div>
             <div style={{ fontSize: 12, color: '#8c919e', marginBottom: 2 }}>MCP 服务地址</div>
-            <span style={{ fontSize: 16, fontFamily: 'var(--font-mono)', fontWeight: 500, color: '#2e3138', letterSpacing: 0.3 }}>
+            <span style={{ fontSize: 16, fontFamily: 'var(--font-mono)', fontWeight: 500, color: '#1d2129', letterSpacing: 0.3 }}>
               {mcpUrl}
             </span>
           </div>
@@ -564,20 +568,21 @@ export default function MCPTools() {
                             </div>
                             <div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                <span style={{ fontSize: 14, fontWeight: 600, color: '#2e3138' }}>{k.name}</span>
+                                <span style={{ fontSize: 14, fontWeight: 600, color: '#1d2129' }}>{k.name}</span>
                                 <Text code style={{ fontSize: 11, color: '#8c919e' }}>{k.prefix}...</Text>
-                                {isOnline && <Tag color="cyan" style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>在线</Tag>}
-                                {!isOnline && isRecent && <Tag color="warning" style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>最近活跃</Tag>}
+                                {isOnline && <Tag color="cyan" style={{ fontSize: 11, lineHeight: '16px', padding: '0 6px', margin: 0 }}>在线</Tag>}
+                                {!isOnline && isRecent && <Tag color="warning" style={{ fontSize: 11, lineHeight: '16px', padding: '0 6px', margin: 0 }}>最近活跃</Tag>}
                                 <Tooltip title={scope?.allowedTools
                                   ? `跟随本项目的工具范围：${scope.allowedTools.length} 个工具，范围外的看不到也调不了。改范围去「工具范围」页签。`
                                   : '本项目未限制范围，可使用全部工具'}>
-                                  <Tag color={scope?.allowedTools ? 'processing' : 'default'} style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>
+                                  <Tag color={scope?.allowedTools ? 'processing' : 'default'} style={{ fontSize: 11, lineHeight: '16px', padding: '0 6px', margin: 0 }}>
                                     {scope?.allowedTools ? `${scope.allowedTools.length}/${tools.length} 工具` : '全部工具'}
                                   </Tag>
                                 </Tooltip>
                               </div>
                               <Text type="secondary" style={{ fontSize: 12 }}>
-                                {lastUsed ? `最近调用 ${lastUsed.toLocaleString('zh-CN')}` : '尚未使用'}
+                                {/* 时间格式走全站统一的 formatTime，别再各页一套 toLocaleString */}
+                                {lastUsed ? `最近调用 ${formatTime(lastUsed)}` : '尚未使用'}
                               </Text>
                             </div>
                           </div>
@@ -614,9 +619,9 @@ export default function MCPTools() {
                       <Card key={k.id} size="small" style={{ ...cardStyle, borderLeft: '3px solid #e8e8e8' }}>
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                           <Space size={10}>
-                            <span style={{ fontSize: 13, fontWeight: 600, color: '#2e3138' }}>{k.name}</span>
+                            <span style={{ fontSize: 13, fontWeight: 600, color: '#1d2129' }}>{k.name}</span>
                             <Text code style={{ fontSize: 11, color: '#8c919e' }}>{k.prefix}...</Text>
-                            <Tag color={k.allowedTools ? 'processing' : 'default'} style={{ fontSize: 10, lineHeight: '16px', padding: '0 6px', margin: 0 }}>
+                            <Tag color={k.allowedTools ? 'processing' : 'default'} style={{ fontSize: 11, lineHeight: '16px', padding: '0 6px', margin: 0 }}>
                               {k.allowedTools ? `旧范围 ${k.allowedTools.length}/${tools.length}` : '全部工具'}
                             </Tag>
                           </Space>
@@ -722,7 +727,7 @@ export default function MCPTools() {
 
             {/* 这里不再选范围。范围是项目级的，一把 Key 只是一把钥匙 ——
                 原来把"设权限"和"发钥匙"绑在一起，于是每换一次范围就多出一把 Key。 */}
-            <div style={{ marginTop: 16, fontSize: 12.5, color: '#4e5969', background: 'rgba(14,165,160,0.06)',
+            <div style={{ marginTop: 16, fontSize: 12, color: '#4e5969', background: 'rgba(14,165,160,0.06)',
               border: '1px solid rgba(14,165,160,0.18)', borderRadius: 10, padding: '8px 12px', lineHeight: 1.8 }}>
               它的工具范围<b>跟随本项目</b>
               {scope?.allowedTools ? `（当前 ${scope.allowedTools.length}/${tools.length} 个工具）` : '（当前不限制）'}

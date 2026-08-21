@@ -76,10 +76,10 @@ export default function ServiceStatusBadge() {
                 width: 2.5, height: 11, borderRadius: 2,
                 background: 'linear-gradient(180deg, #2ec4b6, #0ea5a0)',
               }} />
-              <span style={{ fontSize: 11.5, color: 'var(--text-secondary)', fontWeight: 500 }}>
+              <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>
                 {g.name}
               </span>
-              <span style={{ fontSize: 11.5, color: 'var(--text-placeholder)' }}>
+              <span style={{ fontSize: 12, color: 'var(--text-placeholder)' }}>
                 {g.items.filter(i => i.status === 'up').length}/{g.items.length}
               </span>
             </div>

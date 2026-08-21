@@ -187,7 +187,7 @@ export default function ProjectAIConfig() {
             <span style={{ color: '#86909c' }}>{'⏳'} <b>失败诊断</b> — AI 分析测试失败原因（即将上线）</span>
           </div>
           {!aiUsable && (
-            <div style={{ marginTop: 8, color: '#fa8c16' }}>
+            <div style={{ marginTop: 8, color: '#ff7d00' }}>
               {'⚠️'} 当前无可用 AI 配置（本项目未选择，且管理员的全局兜底已关闭），以上功能不可用。
               手动管理用例、执行测试、API Mock 等功能不受影响。
             </div>
@@ -200,7 +200,7 @@ export default function ProjectAIConfig() {
       <Card
         size="small"
         style={{
-          borderColor: aiUsable ? (isFallback ? '#faad14' : '#0ea5a0') : '#ff4d4f',
+          borderColor: aiUsable ? (isFallback ? '#faad14' : '#0ea5a0') : '#e8453c',
           background: aiUsable
             ? (isFallback ? 'rgba(250,173,20,0.08)' : 'rgba(14,165,160,0.08)')
             : 'rgba(255,77,79,0.08)',
@@ -210,7 +210,7 @@ export default function ProjectAIConfig() {
         <Space wrap size="middle">
           {aiUsable
             ? <CheckCircleOutlined style={{ color: isFallback ? '#faad14' : '#0ea5a0', fontSize: 16 }} />
-            : <CloseCircleOutlined style={{ color: '#ff4d4f', fontSize: 16 }} />}
+            : <CloseCircleOutlined style={{ color: '#e8453c', fontSize: 16 }} />}
           <Text strong>当前生效：</Text>
           <Tag color={isFallback ? 'orange' : (aiUsable ? 'cyan' : 'red')}>
             {KIND_LABEL[effKind] || effKind}
@@ -221,20 +221,20 @@ export default function ProjectAIConfig() {
             </Tooltip>
           )}
           {aiUsable && (
-            <Text type="secondary" style={{ fontSize: 12.5 }}>
+            <Text type="secondary" style={{ fontSize: 12 }}>
               文本生成 <Tag style={{ marginInlineEnd: 4 }}>{effModel('text') || '—'}</Tag>
               UI 脚本生成 <Tag style={{ marginInlineEnd: 0 }}>{effModel('ui_script') || '—'}</Tag>
             </Text>
           )}
         </Space>
         {isFallback && (
-          <div style={{ marginTop: 6, fontSize: 12.5, color: '#86909c' }}>
+          <div style={{ marginTop: 6, fontSize: 12, color: '#86909c' }}>
             本项目未单独选择 AI，正在使用管理员配置的全局兜底，AI 功能可正常使用。
             如需本项目专用（不同服务商/模型），在下方选择一个系统配置或创建项目专属配置即可覆盖。
           </div>
         )}
         {!aiUsable && (
-          <div style={{ marginTop: 6, fontSize: 12.5, color: '#86909c' }}>
+          <div style={{ marginTop: 6, fontSize: 12, color: '#86909c' }}>
             本项目未选择 AI，且管理员已关闭全局兜底 → AI 功能不可用。请从下方选择或自建配置。
           </div>
         )}

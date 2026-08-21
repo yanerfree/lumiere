@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
+import { timeColumn } from '../../utils/timeCol'
 import { Table, Tag, Input, Select, DatePicker, Space, message, Drawer, Tooltip } from 'antd'
 import { SearchOutlined } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
@@ -7,16 +8,42 @@ import { api } from '../../utils/request'
 const { RangePicker } = DatePicker
 
 const ACTION_CONFIG = {
-  create: { label: '创建', color: '#0ea5a0', bg: '#e0f7f6' },
-  update: { label: '修改', color: '#0ea5a0', bg: '#e0f7f6' },
-  delete: { label: '删除', color: '#e8453c', bg: '#fff2f0' },
-  execute: { label: '执行', color: '#faad14', bg: '#fffbe6' },
-  import: { label: '导入', color: '#0ea5a0', bg: '#e0f7f6' },
+  create: { label: '创建', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  update: { label: '修改', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  delete: { label: '删除', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
+  execute: { label: '执行', color: '#faad14', bg: 'rgba(250,173,20,0.12)' },
+  import: { label: '导入', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
   archive: { label: '归档', color: '#c9cdd4', bg: 'rgba(0,0,0,0.04)' },
   login: { label: '登录', color: '#7c5cbf', bg: 'rgba(124,92,191,0.06)' },
   logout: { label: '登出', color: '#7c5cbf', bg: 'rgba(124,92,191,0.06)' },
-  sync: { label: '同步', color: '#0ea5a0', bg: '#e0f7f6' },
-  change_password: { label: '改密', color: '#fa8c16', bg: '#fff7e6' },
+  sync: { label: '同步', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  change_password: { label: '改密', color: '#ff7d00', bg: 'rgba(255,125,0,0.1)' },
+  // 下面这些后端一直在写，前端没配 label —— 于是表格里直接露出 `hard_delete`
+  // `rename` 这种裸 key（走查截图里两条都在）。取自后端 audit 的全部 action 值。
+  hard_delete: { label: '彻底删除', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
+  empty_trash: { label: '清空回收站', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
+  rename: { label: '重命名', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  reorder: { label: '排序', color: '#86909c', bg: 'rgba(0,0,0,0.04)' },
+  copy: { label: '复制', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  copy_from: { label: '跨分支复制', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  clone: { label: '克隆', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  batch_update: { label: '批量修改', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  update_variables: { label: '改变量', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  unarchive: { label: '取消归档', color: '#86909c', bg: 'rgba(0,0,0,0.04)' },
+  activate: { label: '启用', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  pause: { label: '暂停', color: '#faad14', bg: 'rgba(250,173,20,0.12)' },
+  resume: { label: '恢复', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  abort: { label: '中止', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
+  complete: { label: '完成', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  reopen: { label: '重新打开', color: '#4e8af0', bg: 'rgba(78,138,240,0.1)' },
+  quarantine: { label: '隔离', color: '#ff7d00', bg: 'rgba(255,125,0,0.1)' },
+  release_quarantine: { label: '解除隔离', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  add_member: { label: '加成员', color: '#7c5cbf', bg: 'rgba(124,92,191,0.1)' },
+  remove_member: { label: '移除成员', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
+  update_member: { label: '改成员', color: '#7c5cbf', bg: 'rgba(124,92,191,0.1)' },
+  confirm_model: { label: '确认模型', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  confirm_expected: { label: '确认判据', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  refresh_token_reuse_detected: { label: '令牌复用', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
 }
 
 const TARGET_TYPES = ['user', 'project', 'branch', 'case', 'plan', 'environment', 'channel']
@@ -29,7 +56,7 @@ const TARGET_TYPE_LABELS = {
 function Field({ label, children }) {
   return (
     <div style={{ display: 'flex', gap: 12, padding: '7px 0', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-      <div style={{ width: 76, flexShrink: 0, fontSize: 12.5, color: '#86909c' }}>{label}</div>
+      <div style={{ width: 76, flexShrink: 0, fontSize: 12, color: '#86909c' }}>{label}</div>
       <div style={{ flex: 1, minWidth: 0, fontSize: 13, color: '#1d2129', wordBreak: 'break-word' }}>{children}</div>
     </div>
   )
@@ -83,13 +110,7 @@ export default function AuditLogs() {
 
   const columns = [
     {
-      title: '时间', dataIndex: 'createdAt', width: 170,
-      render: v => <span style={{ fontSize: 13, color: '#86909c', fontFamily: 'var(--font-mono)' }}>
-        {v ? new Date(v).toLocaleString('zh-CN', { hour12: false }) : '-'}
-      </span>,
-    },
-    {
-      title: '操作人', dataIndex: 'username', width: 165, align: 'center',
+      title: '操作人', dataIndex: 'username', width: 132, align: 'center',
       // 光有 username 分不出是哪台 CC —— 建 Key 的接口只能给自己建，
       // 所有 CC 的 Key 归属人都是同一个（通常是 admin）。actorLabel 是那把 Key 的名字，
       // 它才是「哪个连接」的身份，所以跟人名并列显示，而不是藏进详情。
@@ -102,7 +123,7 @@ export default function AuditLogs() {
             <Tooltip title={`外部 Claude Code 通过 MCP 调用${r.actorLabel ? `，连接：${r.actorLabel}` : '（该 Key 未命名）'}`}>
               <Tag style={{
                 color: '#7c5cbf', background: 'rgba(124,92,191,0.08)', border: 'none',
-                fontSize: 11, margin: 0, maxWidth: 145, overflow: 'hidden',
+                fontSize: 11, margin: 0, maxWidth: 116, overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>CC · {r.actorLabel || '未命名'}</Tag>
             </Tooltip>
@@ -111,7 +132,9 @@ export default function AuditLogs() {
       ),
     },
     {
-      title: '操作', dataIndex: 'action', width: 80, align: 'center',
+      // 跟下面那列（详情按钮）同名叫「操作」，一张表里两个「操作」表头分不清谁是谁。
+      // 改成跟上方筛选器同名的「操作类型」。
+      title: '操作类型', dataIndex: 'action', width: 88, align: 'center',
       render: v => {
         const cfg = ACTION_CONFIG[v] || { label: v, color: '#86909c', bg: 'rgba(0,0,0,0.04)' }
         return <Tag style={{ color: cfg.color, background: cfg.bg, border: 'none' }}>{cfg.label}</Tag>
@@ -144,6 +167,7 @@ export default function AuditLogs() {
         return <span style={{ fontSize: 12, color: '#86909c', cursor: 'default' }} title={text}>{text}</span>
       },
     },
+    timeColumn({ key: 'createdAt', title: '时间' }),
     {
       title: '操作', width: 60, align: 'center',
       render: (_, record) => (

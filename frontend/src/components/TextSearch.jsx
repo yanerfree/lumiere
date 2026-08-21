@@ -41,19 +41,19 @@ export function useTextSearch(text) {
 // 搜索条：输入框 + 命中计数 + 上一个/下一个
 export function TextSearchBar({ search, width = 170, placeholder = '搜索（忽略大小写）' }) {
   const { keyword, setKeyword, total, index, prev, next, capped } = search
-  const navStyle = (on) => ({ fontSize: 10, padding: 2, cursor: on ? 'pointer' : 'not-allowed', color: on ? '#8c8c8c' : '#e5e6eb' })
+  const navStyle = (on) => ({ fontSize: 11, padding: 2, cursor: on ? 'pointer' : 'not-allowed', color: on ? '#86909c' : '#e5e6eb' })
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
       <Input
         size="small" allowClear spellCheck={false} value={keyword} placeholder={placeholder}
-        prefix={<SearchOutlined style={{ fontSize: 11, color: '#bfbfbf' }} />}
+        prefix={<SearchOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />}
         onChange={e => setKeyword(e.target.value)}
         onPressEnter={e => { if (e.shiftKey) prev(); else next() }}
         onKeyDown={e => { if (e.key === 'Escape') setKeyword('') }}
         style={{ width, fontSize: 11 }}
       />
       {!!keyword && (<>
-        <span style={{ fontSize: 11, fontFamily: MONO, minWidth: 38, textAlign: 'center', color: total ? '#8c8c8c' : '#e8453c' }}>
+        <span style={{ fontSize: 11, fontFamily: MONO, minWidth: 38, textAlign: 'center', color: total ? '#86909c' : '#e8453c' }}>
           {total ? `${index + 1}/${total}${capped ? '+' : ''}` : '0/0'}
         </span>
         <Tooltip title="上一个 (Shift+Enter)"><UpOutlined style={navStyle(total > 1)} onClick={prev} /></Tooltip>
@@ -77,7 +77,7 @@ export function highlightText(text, matches, activeIndex, activeRef) {
       // color 一律 inherit：高亮层垫在 textarea 底下，这里再画一遍字就会和真文字重影
       <mark key={`${s}-${i}`} ref={isActive ? activeRef : undefined} style={{
         background: isActive ? '#ffc069' : 'rgba(250,173,20,0.28)', color: 'inherit',
-        boxShadow: isActive ? '0 0 0 1px #fa8c16' : 'none', padding: 0, borderRadius: 2,
+        boxShadow: isActive ? '0 0 0 1px #ff7d00' : 'none', padding: 0, borderRadius: 2,
       }}>{text.slice(s, e)}</mark>
     )
     pos = e

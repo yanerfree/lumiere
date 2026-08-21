@@ -161,7 +161,7 @@ export default function OAuth2Mock() {
           <SafetyCertificateOutlined style={{ fontSize: 18, color: '#0ea5a0' }} />
           <span style={{ fontWeight: 600, fontSize: 16 }}>OAuth2 Mock</span>
           <Badge status={serviceStatus.running ? 'success' : 'default'} text={
-            <span style={{ fontSize: 12, color: serviceStatus.running ? '#0ea5a0' : '#8c8c8c' }}>
+            <span style={{ fontSize: 12, color: serviceStatus.running ? '#0ea5a0' : '#86909c' }}>
               {serviceStatus.running ? `LIVE :${serviceStatus.port}` : 'STOPPED'}
             </span>
           } />
@@ -201,17 +201,17 @@ export default function OAuth2Mock() {
                   background: selectedId === c.clientId ? 'rgba(14,165,160,0.06)' : 'transparent',
                   borderLeft: selectedId === c.clientId ? '3px solid #0ea5a0' : '3px solid transparent',
                 }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.enabled ? '#52c41a' : '#d9d9d9', flexShrink: 0 }} />
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.enabled ? '#0ea5a0' : '#c9cdd4', flexShrink: 0 }} />
                 <div style={{ flex: 1, overflow: 'hidden' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
                     {c.locked && (
                       <Tooltip title="已锁定，不可编辑">
-                        <LockFilled style={{ fontSize: 11, color: '#fa8c16', flexShrink: 0 }} />
+                        <LockFilled style={{ fontSize: 11, color: '#ff7d00', flexShrink: 0 }} />
                       </Tooltip>
                     )}
-                    <span style={{ fontWeight: 500, color: '#262626', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || c.clientId}</span>
+                    <span style={{ fontWeight: 500, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || c.clientId}</span>
                   </div>
-                  <div style={{ fontSize: 11, color: '#8c8c8c', fontFamily: MONO }}>{c.clientId}</div>
+                  <div style={{ fontSize: 11, color: '#86909c', fontFamily: MONO }}>{c.clientId}</div>
                 </div>
               </div>
             ))}
@@ -226,7 +226,7 @@ export default function OAuth2Mock() {
               <div key={tab} onClick={() => { setActiveTab(tab); if (tab === 'logs') fetchLogs() }}
                 style={{
                   padding: '8px 14px', fontSize: 13, cursor: 'pointer', fontWeight: activeTab === tab ? 600 : 400,
-                  color: activeTab === tab ? '#0ea5a0' : '#8c8c8c',
+                  color: activeTab === tab ? '#0ea5a0' : '#86909c',
                   borderBottom: activeTab === tab ? '2px solid #0ea5a0' : '2px solid transparent',
                 }}>
                 {{ config: 'Client 配置', endpoints: '端点信息', logs: '请求日志' }[tab]}
@@ -262,7 +262,7 @@ export default function OAuth2Mock() {
                 <Field label="Audience" value={clientForm.audience} disabled={locked}
                   onChange={v => setClientForm(f => ({ ...f, audience: v }))} mono />
                 <div style={{ marginBottom: 14 }}>
-                  <div style={{ fontSize: 12, color: '#595959', fontWeight: 500, marginBottom: 4 }}>Token 有效期（秒）</div>
+                  <div style={{ fontSize: 12, color: '#4e5969', fontWeight: 500, marginBottom: 4 }}>Token 有效期（秒）</div>
                   <InputNumber value={clientForm.tokenTtl} onChange={v => setClientForm(f => ({ ...f, tokenTtl: v }))}
                     min={5} max={86400} style={{ width: '100%' }} disabled={locked} />
                 </div>
@@ -301,21 +301,21 @@ export default function OAuth2Mock() {
                     <div style={{ color: '#e53935', padding: 10, background: '#fff5f5', borderRadius: 8, fontSize: 12 }}>{tokenResult.error}</div>
                   ) : tokenResult.parsed?.access_token ? (
                     <div>
-                      <div style={{ fontSize: 12, color: '#595959', fontWeight: 500, marginBottom: 4 }}>Access Token</div>
+                      <div style={{ fontSize: 12, color: '#4e5969', fontWeight: 500, marginBottom: 4 }}>Access Token</div>
                       <div style={{ position: 'relative', padding: 10, background: 'rgba(255,255,255,0.8)', borderRadius: 8, fontFamily: MONO, fontSize: 11, wordBreak: 'break-all', color: '#434343', border: '1px solid rgba(0,0,0,0.06)' }}>
                         {tokenResult.parsed.access_token}
                         <Button type="text" size="small" icon={<CopyOutlined />}
                           style={{ position: 'absolute', top: 4, right: 4, color: '#0ea5a0' }}
                           onClick={() => { copyToClipboard(tokenResult.parsed.access_token); message.success('已复制 Token') }} />
                       </div>
-                      <div style={{ marginTop: 8, fontSize: 12, color: '#595959', fontWeight: 500, marginBottom: 4 }}>Bearer Header</div>
+                      <div style={{ marginTop: 8, fontSize: 12, color: '#4e5969', fontWeight: 500, marginBottom: 4 }}>Bearer Header</div>
                       <div style={{ position: 'relative', padding: 10, background: 'rgba(255,255,255,0.8)', borderRadius: 8, fontFamily: MONO, fontSize: 11, wordBreak: 'break-all', color: '#434343', border: '1px solid rgba(0,0,0,0.06)' }}>
                         Bearer {tokenResult.parsed.access_token}
                         <Button type="text" size="small" icon={<CopyOutlined />}
                           style={{ position: 'absolute', top: 4, right: 4, color: '#0ea5a0' }}
                           onClick={() => { copyToClipboard(`Bearer ${tokenResult.parsed.access_token}`); message.success('已复制') }} />
                       </div>
-                      <div style={{ display: 'flex', gap: 16, marginTop: 8, fontSize: 11, color: '#8c8c8c' }}>
+                      <div style={{ display: 'flex', gap: 16, marginTop: 8, fontSize: 11, color: '#86909c' }}>
                         <span>有效期: {tokenResult.parsed.expires_in}s</span>
                         <span>类型: {tokenResult.parsed.token_type}</span>
                         {tokenResult.parsed.scope && <span>Scope: {tokenResult.parsed.scope}</span>}
@@ -331,7 +331,7 @@ export default function OAuth2Mock() {
               <div style={{ maxWidth: 700 }}>
                 <h4 style={{ color: '#0ea5a0', marginBottom: 16 }}>OAuth2 端点</h4>
                 {!serviceStatus.running && (
-                  <div style={{ padding: 12, background: '#fff7e6', border: '1px solid #ffe7ba', borderRadius: 8, marginBottom: 16, fontSize: 12, color: '#ad6800' }}>
+                  <div style={{ padding: 12, background: 'var(--orange-bg)', border: '1px solid #ffe7ba', borderRadius: 8, marginBottom: 16, fontSize: 12, color: '#ad6800' }}>
                     服务未启动，请先点击顶部的「启动」按钮
                   </div>
                 )}
@@ -339,7 +339,7 @@ export default function OAuth2Mock() {
                   desc="用 client_credentials 换取 access_token" />
                 <EndpointCard title="Introspection 端点" method="POST" url={`${baseUrl}/oauth2/introspect`}
                   desc="验证 Token 是否有效（RFC 7662）— Stoa 网关调用此端点验证 Token" />
-                <div style={{ padding: '8px 12px', background: '#f0f9f8', border: '1px solid #d6ece9', borderRadius: 8, marginBottom: 10, fontSize: 12, color: '#595959', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div style={{ padding: '8px 12px', background: '#f0f9f8', border: '1px solid #d6ece9', borderRadius: 8, marginBottom: 10, fontSize: 12, color: '#4e5969', display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span>需要在 Stoa 的 OAuth2 认证配置中，将 introspection_endpoint 指向此地址</span>
                   <Button type="link" size="small" icon={<CopyOutlined />} style={{ padding: 0 }}
                     onClick={() => { copyToClipboard(`${baseUrl}/oauth2/introspect`); message.success('已复制') }}>复制</Button>
@@ -350,7 +350,7 @@ export default function OAuth2Mock() {
                   desc="服务发现文档" />
 
                 <h4 style={{ color: '#0ea5a0', margin: '24px 0 12px' }}>使用流程</h4>
-                <div style={{ fontSize: 12, color: '#595959', marginBottom: 12, lineHeight: 1.8 }}>
+                <div style={{ fontSize: 12, color: '#4e5969', marginBottom: 12, lineHeight: 1.8 }}>
                   1. 在 Stoa 创建应用，获得 client_id 和 client_secret<br/>
                   2. 点击左栏「注册 Client」，填入 Stoa 的凭据<br/>
                   3. 在 Stoa 路由的 OAuth2 配置中，将 introspection_endpoint 指向本服务<br/>
@@ -381,17 +381,17 @@ export default function OAuth2Mock() {
                         style={{ padding: '8px 12px', marginBottom: 4, background: 'rgba(255,255,255,0.8)', borderRadius: 8, cursor: 'pointer', border: '1px solid rgba(0,0,0,0.04)', fontSize: 12 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           {log.status === 'success' || log.status === 'active' ? (
-                            <CheckCircleFilled style={{ color: '#52c41a', fontSize: 13 }} />
+                            <CheckCircleFilled style={{ color: '#0ea5a0', fontSize: 13 }} />
                           ) : (
                             <CloseCircleFilled style={{ color: log.status === 'inactive' ? '#faad14' : '#e8453c', fontSize: 13 }} />
                           )}
-                          <Tag style={{ fontSize: 10, margin: 0 }}>{log.endpoint}</Tag>
-                          <span style={{ color: '#8c8c8c', fontFamily: MONO }}>{log.clientId || '-'}</span>
+                          <Tag style={{ fontSize: 11, margin: 0 }}>{log.endpoint}</Tag>
+                          <span style={{ color: '#86909c', fontFamily: MONO }}>{log.clientId || '-'}</span>
                           <span style={{ flex: 1 }} />
-                          <span style={{ color: '#bfbfbf', fontSize: 11 }}>{new Date(log.timestamp).toLocaleTimeString()}</span>
+                          <span style={{ color: '#c9cdd4', fontSize: 11 }}>{new Date(log.timestamp).toLocaleTimeString()}</span>
                         </div>
                         {expandedLogId === log.id && (
-                          <div style={{ marginTop: 8, padding: 8, background: 'rgba(0,0,0,0.02)', borderRadius: 6, fontFamily: MONO, fontSize: 11, color: '#595959' }}>
+                          <div style={{ marginTop: 8, padding: 8, background: 'rgba(0,0,0,0.02)', borderRadius: 6, fontFamily: MONO, fontSize: 11, color: '#4e5969' }}>
                             {log.detail}
                           </div>
                         )}
@@ -413,7 +413,7 @@ export default function OAuth2Mock() {
 
       <Modal title="注册 Client（从 Stoa 获取的凭据）" open={createOpen} onOk={handleCreate} onCancel={() => setCreateOpen(false)} okText="注册" cancelText="取消" width={480}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 0' }}>
-          <div style={{ padding: 10, background: '#f0f9f8', border: '1px solid #d6ece9', borderRadius: 8, fontSize: 12, color: '#595959' }}>
+          <div style={{ padding: 10, background: '#f0f9f8', border: '1px solid #d6ece9', borderRadius: 8, fontSize: 12, color: '#4e5969' }}>
             将 Stoa 创建应用时生成的 client_id 和 client_secret 填入此处，即可用这对凭据换取 Token。
           </div>
           <div>
@@ -445,7 +445,7 @@ export default function OAuth2Mock() {
 function Field({ label, value, onChange, disabled, mono, copyable }) {
   return (
     <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 12, color: '#595959', fontWeight: 500, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 12, color: '#4e5969', fontWeight: 500, marginBottom: 4 }}>{label}</div>
       <div style={{ display: 'flex', gap: 4 }}>
         <Input value={value} onChange={onChange ? e => onChange(e.target.value) : undefined}
           disabled={disabled} spellCheck={!mono}
@@ -461,14 +461,14 @@ function EndpointCard({ title, method, url, desc }) {
   return (
     <div style={{ padding: 12, background: 'rgba(255,255,255,0.8)', borderRadius: 10, border: '1px solid rgba(0,0,0,0.06)', marginBottom: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-        <Tag color={method === 'POST' ? 'orange' : 'green'} style={{ fontSize: 10, margin: 0 }}>{method}</Tag>
-        <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 500, color: '#262626' }}>{url}</span>
+        <Tag color={method === 'POST' ? 'orange' : 'green'} style={{ fontSize: 11, margin: 0 }}>{method}</Tag>
+        <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 500, color: '#1d2129' }}>{url}</span>
         <Tooltip title="复制">
-          <Button type="text" size="small" icon={<CopyOutlined />} style={{ color: '#bfbfbf' }}
+          <Button type="text" size="small" icon={<CopyOutlined />} style={{ color: '#c9cdd4' }}
             onClick={() => { copyToClipboard(url); message.success('已复制') }} />
         </Tooltip>
       </div>
-      <div style={{ fontSize: 12, color: '#8c8c8c' }}>{desc}</div>
+      <div style={{ fontSize: 12, color: '#86909c' }}>{desc}</div>
     </div>
   )
 }
@@ -476,13 +476,13 @@ function EndpointCard({ title, method, url, desc }) {
 function CodeBlock({ title, code }) {
   return (
     <div style={{ marginBottom: 12 }}>
-      <div style={{ fontSize: 12, fontWeight: 500, color: '#595959', marginBottom: 4 }}>{title}</div>
+      <div style={{ fontSize: 12, fontWeight: 500, color: '#4e5969', marginBottom: 4 }}>{title}</div>
       <div style={{ position: 'relative' }}>
         <pre style={{ padding: 12, background: 'rgba(0,0,0,0.03)', borderRadius: 8, fontFamily: MONO, fontSize: 11, color: '#434343', whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0 }}>
           {code}
         </pre>
         <Button type="text" size="small" icon={<CopyOutlined />}
-          style={{ position: 'absolute', top: 4, right: 4, color: '#bfbfbf' }}
+          style={{ position: 'absolute', top: 4, right: 4, color: '#c9cdd4' }}
           onClick={() => { copyToClipboard(code); message.success('已复制') }} />
       </div>
     </div>

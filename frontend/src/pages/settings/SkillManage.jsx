@@ -49,7 +49,7 @@ const SKILLS = [
   {
     name: 'tb-quality-review',
     title: '质量评审',
-    icon: <SearchOutlined style={{ fontSize: 20, color: '#bfbfbf' }} />,
+    icon: <SearchOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
     status: 'planned',
     phase: 'Phase 2',
     description: 'AI 从完整性、准确性、有效性、可执行性 4 个维度评审用例质量',
@@ -61,7 +61,7 @@ const SKILLS = [
   {
     name: 'tb-explore',
     title: '探索测试',
-    icon: <BugOutlined style={{ fontSize: 20, color: '#bfbfbf' }} />,
+    icon: <BugOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
     status: 'planned',
     phase: 'Phase 2',
     description: 'AI 辅助人工探索测试：生成章程 → 引导逐项检查 → 记录发现 → 输出报告',
@@ -73,7 +73,7 @@ const SKILLS = [
   {
     name: 'tb-diagnose',
     title: '失败诊断',
-    icon: <FileSearchOutlined style={{ fontSize: 20, color: '#bfbfbf' }} />,
+    icon: <FileSearchOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
     status: 'retired',
     description: '已下线。失败归因改由外部 Claude Code 做（tb_get_failed_scenarios 拿现象和证据 → '
       + 'tb_submit_analysis 提归因），平台只按规则算"现象"、由人确认"原因"。'
