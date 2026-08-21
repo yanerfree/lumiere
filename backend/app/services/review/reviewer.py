@@ -263,6 +263,7 @@ def _kind_to_dim(kind: str | None) -> str:
         "system_under_test_failed": "discipline",
         "residue_not_cleaned": "discipline",
         "cleanup_failed": "discipline",
+        "no_traffic_captured": "discipline",
     }.get(kind or "", "discipline")
 
 
@@ -454,10 +455,27 @@ async def _run_and_diff(session, case_id, ev: dict, env_id: str | None) -> None:
         facts += compare(captured,
                          (ev.get("apiScenario") or {}).get("steps") or [],
                          (ev.get("case") or {}).get("steps") or [],
-                         (ev.get("uiScript") or {}).get("content"))
+                         # 同上：数页面动作也要用全文
+                         ev.get("uiScriptFull") or (ev.get("uiScript") or {}).get("content"))
         # 跑完有没有把造的数据清干净（§3 第 8 项）—— 只有真跑过才看得见，
         # 所以它挂在这里，不在静态那批 machine_findings 里。
         facts += residue.analyze(captured)
+    elif (ran or {}).get("type") == "ui":
+        # **跑了，但一条流量都没录到。** 这时候「没发现端点问题」只说明没得比 ——
+        # 不说出来的话，报告上它和"端点都对"长得一模一样，而这两件事差着一个量级。
+        #
+        # 已知成因（活体验证查到的）：脚本用 `browser.new_context()` 自己开 context
+        # （多角色场景必须这么写），而 HAR 只在 `context.close()` 时落盘 ——
+        # 自己开又没显式关的 context 不会 flush。这是执行侧的限制，不是用例的错，
+        # 所以只报 minor、不参与打回。
+        facts.append({
+            "kind": "no_traffic_captured", "severity": "minor", "where": "run",
+            "detail": "这次真跑了，但**一条浏览器流量都没录到** —— "
+                      "「接口场景里的端点页面到底调不调」这条没得比，"
+                      "本次结论里没有它的贡献。"
+                      "多角色脚本用 `browser.new_context()` 自开 context 时，"
+                      "记得在结尾 `ctx.close()`：HAR 只在 close 时落盘，不关就没有流量证据。",
+        })
     if facts:
         ev["machineFindings"] = list(ev.get("machineFindings") or []) + facts
 
@@ -508,7 +526,9 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
     # 放在 run_first 之前，是为了让没环境的用例也照样吃到这两条判据。
     sc_facts = step_coverage.analyze(
         (ev.get("case") or {}).get("steps") or [],
-        (ev.get("uiScript") or {}).get("content"),
+        # **全文**，不是喂给 LLM 的截断版 —— 用截断版数断言，长脚本一律
+        # 被判成"一个断言都没有"（活体验证实测的假 blocker，见 evidence._judged）
+        ev.get("uiScriptFull") or (ev.get("uiScript") or {}).get("content"),
         (ev.get("apiScenario") or {}).get("steps") or [])
     if sc_facts:
         ev["machineFindings"] = list(ev.get("machineFindings") or []) + sc_facts

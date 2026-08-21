@@ -74,6 +74,43 @@ def browser_context_args(browser_context_args):
         args["record_har_content"] = "embed"
     return args
 
+
+# ── 每个 context 一个 HAR 文件 ────────────────────────────────────
+#
+# **为什么必须这么做**：多角色脚本会自己开 context
+# （`browser.new_context(**browser_context_args)`），而 args 里带着同一个
+# `record_har_path`。Playwright 在每个 context close 时把 HAR 整个写一遍 ——
+# 后关的那个直接**覆盖**先关的。实测：测试内打印 HAR 是 28MB，
+# pytest 退出后只剩 324 字节、0 条 entry。
+#
+# 后果不是"少了点流量"，是**执行式审核最值钱的那条判据从来没生效过**：
+# 「接口场景里的端点，页面到底调不调」靠的就是这份流量，而它恒为空时
+# 审核只会说"没发现端点问题"—— 跟"端点都对"在报告上长得一模一样。
+#
+# 修法是给每个 context 分一个文件名，读的时候合并（见 har.parse_har_dir）。
+# 脚本自己显式传了别的 record_har_path 就不动它。
+_TEA_HAR = {har_literal}
+if _TEA_HAR:
+    import itertools as _it
+    import pathlib as _pl
+    _tea_har_seq = _it.count(1)
+
+    @pytest.fixture(scope="session", autouse=True)
+    def _tea_split_har(browser):
+        _orig = browser.new_context
+
+        def _patched(**kw):
+            if kw.get("record_har_path") == _TEA_HAR:
+                kw["record_har_path"] = str(
+                    _pl.Path(_TEA_HAR).with_name(f"network-{{next(_tea_har_seq)}}.har"))
+            return _orig(**kw)
+
+        browser.new_context = _patched
+        try:
+            yield
+        finally:
+            browser.new_context = _orig
+
 def pytest_runtest_teardown(item, nextitem):
     """进入收尾阶段就打个标记 —— 平台据此告诉用户"在关浏览器、存流量"。
 

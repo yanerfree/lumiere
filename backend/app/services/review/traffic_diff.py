@@ -55,8 +55,17 @@ def _from_scenario(steps: list) -> dict[str, int]:
         # 于是每一条带路径变量的步骤都被当成"页面不调的幽灵端点"（滥报）。
         u = re.sub(r"\$\{[^}]+\}", "{id}", str(st.get("url") or ""))
         k = norm(u if "/api/" in u else "/api/" + u.lstrip("/"), st.get("method"))
-        if k:
-            out[k] = out.get(k, 0) + 1
+        if not k:
+            continue
+        # **整条 URL 全是变量的，跳过**。`${BASE_URL}${path}` 归一之后是
+        # `/api/{id}{id}` —— 它跟任何真实流量都对不上，于是每次都被报成
+        # 「页面一次都没发过的幽灵端点」。活体验证里就冒出来两条这种。
+        # 假的幽灵端点比不报更坏：这条判据是全套审核里最硬的一条，
+        # 它一旦开始喊狼来了，真的那条也没人信了。
+        body = k.split(" ", 1)[1].replace("/api/", "", 1)
+        if not re.sub(r"\{id\}|/", "", body):
+            continue
+        out[k] = out.get(k, 0) + 1
     return out
 
 

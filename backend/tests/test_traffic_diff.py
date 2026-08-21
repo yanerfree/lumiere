@@ -214,3 +214,68 @@ def test_抓到多少条请求要露出来():
 
     from app.services.review import reviewer
     assert '"trafficSeen": ev.get("trafficSeen")' in inspect.getsource(reviewer.review_case)
+
+
+def test_整条URL全是变量的步骤不参与比对():
+    """`${BASE_URL}${path}` 归一之后是 `/api/{id}{id}` —— 它跟任何真实流量都对不上，
+    于是每次都被报成「页面一次都没发过的幽灵端点」。活体验证里冒出来两条这种。
+
+    **假的幽灵端点比不报更坏**：这条判据是全套审核里最硬的一条
+    （它抓的就是本文件开头那个 provider / provider-unified），
+    一旦开始喊狼来了，真的那条也没人信了。
+    """
+    from app.services.review.traffic_diff import _from_scenario, compare
+
+    assert _from_scenario([{"url": "${BASE_URL}${path}", "method": "POST"}]) == {}
+    # 带真实路径段的照常参与
+    assert _from_scenario([{"url": "${BASE_URL}/api/v1/services/${id}", "method": "GET"}]) \
+        == {"GET /api/v1/services/{id}": 1}
+
+    # 真的幽灵端点仍然要抓到
+    traffic = [{"method": "GET", "url": "http://h/api/v1/subscriptions/provider-unified",
+                "status": 200}]
+    steps = [{"url": "${BASE_URL}${p}", "method": "POST"},
+             {"url": "${BASE_URL}/api/v1/subscriptions/provider", "method": "GET"}]
+    facts = compare(traffic, steps, [], None)
+    ghost = next(f for f in facts if f["kind"] == "endpoint_not_used_by_page")
+    assert "{id}{id}" not in ghost["detail"], "畸形端点名又漏进结论里了"
+    assert "subscriptions/provider" in ghost["detail"]
+
+
+def test_多个context的HAR要合并不能互相覆盖(tmp_path):
+    """**活体验证抓到的最贵的一个**：多角色脚本自己开 context，args 里带着同一个
+    `record_har_path`，而 Playwright 每个 context close 时把 HAR 整个写一遍 ——
+    后关的覆盖先关的。实测：测试内打印是 28MB，pytest 退出后只剩 324 字节、0 条。
+
+    后果不是"少了点流量"，是**本文件开头那条判据从来没生效过**：
+    修好之前同一条用例 trafficSeen 恒为 0，修好之后是 51，
+    并且立刻抓出「接口场景验的端点，页面一次都没发过」。
+    """
+    import json
+
+    from app.engine.har import parse_har_dir
+
+    def har(url):
+        return {"log": {"entries": [{
+            "startedDateTime": "2026-08-21T10:00:00Z", "time": 5,
+            "request": {"method": "GET", "url": url, "headers": []},
+            "response": {"status": 200, "content": {"mimeType": "application/json"}},
+        }]}}
+
+    (tmp_path / "network-1.har").write_text(json.dumps(har("http://h/api/a")))
+    (tmp_path / "network-2.har").write_text(json.dumps(har("http://h/api/b")))
+    got = {e["url"] for e in parse_har_dir(tmp_path)}
+    assert got == {"http://h/api/a", "http://h/api/b"}, "只读到一个 context 的流量"
+
+    assert parse_har_dir(None) == []
+    assert parse_har_dir(tmp_path / "nope") == []
+
+
+def test_conftest给每个context分独立HAR():
+    """判据在生成的 conftest 里 —— 不 patch 的话共用一个路径，必然互相覆盖。"""
+    import inspect
+
+    from app.engine import pw_conftest
+    src = inspect.getsource(pw_conftest.write_playwright_conftest)
+    assert "network-{{next(_tea_har_seq)}}.har" in src or "_tea_har_seq" in src
+    assert "browser.new_context = _patched" in src

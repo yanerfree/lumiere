@@ -94,8 +94,16 @@ async def _check_module(session: AsyncSession, branch_id, module: str | None,
 
     # 存量的裂口平台主动指出来 —— 规则只拦得住新建，
     # 事故现场那两个顶层空模块是历史遗留，没人会想起来去搜一遍。
-    for s in intake_gate.find_split_modules(tree)[:2]:
-        warns.append("⚠ " + s["hint"])
+    #
+    # **只提跟这次相关的那一处**。活体验证时踩到：无条件追加的话，
+    # 每建一条用例都会收到同样两句「顶层和订阅管理下都有跨租户订阅」——
+    # 而这两句跟「我现在要往服务管理里加一条用例」毫无关系。
+    # 每次都出现的提示等于没有提示，人和 CC 都会开始整体无视它
+    # （RULES.md ③：没有出口、又反复出现的提示，比不提更坏）。
+    touched = {intake_gate._norm_module(x) for x in (module, submodule) if x}
+    for s in intake_gate.find_split_modules(tree):
+        if intake_gate._norm_module(s["name"]) in touched:
+            warns.append("⚠ " + s["hint"])
     return errors, warns
 
 

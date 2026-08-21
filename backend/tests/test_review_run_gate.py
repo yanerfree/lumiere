@@ -187,3 +187,44 @@ def test_登录和实例动作不算造数据():
 def test_没抓到流量就不下结论():
     assert residue.analyze([]) == []
     assert residue.analyze(None) == []
+
+
+# ── 截断：判据必须看全文 ─────────────────────────────────────────
+
+def test_长脚本的断言在截断点之后也要数得到():
+    """**活体验证抓到的假打回**：`MAX_SCRIPT_CHARS=6000`，而 UI 脚本开头是大段
+    docstring —— TC-DYGL-00016 的 `def test_` 在第 10361 字符、第一个 `expect(`
+    在第 6534 字符，全在截断点之后。判据拿截断副本去数，得出"一个断言都没有"，
+    直接一个 blocker 打回一条写得好好的用例。
+
+    错的方向是固定的：**脚本注释写得越足越容易被打回**。
+    """
+    from app.services.review.evidence import MAX_SCRIPT_CHARS, _judged, _ui_script  # noqa: F401
+    steps = [{"seq": 1, "action": "点击「保存」", "expected": "出现「已保存」"}]
+    tail = 'def test_x(page):\n    page.get_by_text("保存").click()\n    expect(page.get_by_text("已保存")).to_be_visible()\n'
+    long_script = ("# " + "文档" * 4000 + "\n") + tail
+    assert len(long_script) > MAX_SCRIPT_CHARS
+
+    # 截断副本 —— 断言在外面，判据会误报
+    truncated = long_script[:MAX_SCRIPT_CHARS]
+    assert "no_assertion_for_expectations" in _kinds(step_coverage.analyze(steps, truncated)), \
+        "这一行是在示范 bug 长什么样：截断副本确实数不到断言"
+
+    # 全文 —— 必须干净
+    assert step_coverage.analyze(steps, long_script) == [], \
+        "拿全文还报问题，说明判据仍在被截断误导"
+
+
+def test_喂给LLM的截断保留尾巴():
+    """模型也是被截断骗的那一个：只给前 6000 字，它看到的全是 docstring，
+    于是"通篇没有验证动作"这种 LLM blocker 也跟着误报。头尾都留。"""
+    from app.services.review import evidence
+    long_script = ("# " + "文档" * 4000 + "\n") + "def test_x():\n    assert 1\n"
+    shown = evidence._ui_script.__wrapped__ if hasattr(evidence._ui_script, "__wrapped__") else None
+    # 直接验截断算法本身（不走 DB）
+    cut = len(long_script) - evidence.MAX_SCRIPT_CHARS
+    rebuilt = (long_script[:evidence.HEAD_CHARS]
+               + f"\n\n… 中间省略 {cut} 字 …\n\n"
+               + long_script[evidence.HEAD_CHARS + cut:])
+    assert "def test_x" in rebuilt and "assert 1" in rebuilt, "尾巴被砍了，模型看不到测试体"
+    assert len(rebuilt) < len(long_script)

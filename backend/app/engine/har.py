@@ -218,6 +218,51 @@ def truncation_marker(entries: list[dict] | None) -> dict | None:
     return None
 
 
+def parse_har_dir(output_dir: str | Path | None) -> list[dict]:
+    """把 output 目录里所有 HAR 合并成一条时间线。
+
+    **为什么不是读单个文件**：一次执行可能开好几个 context（多角色脚本必须这么写），
+    而 Playwright 每个 context close 时把 HAR 整个写一遍 —— 共用一个路径的话
+    后关的覆盖先关的，最后只剩一份空的（实测 28MB → 324 字节、0 条）。
+    conftest 现在给每个 context 分了 `network-N.har`，这里按时间归并回去。
+
+    `network.har` 也一起读：老沙箱、以及没走 patch 的路径还写在这个名字上。
+    """
+    if not output_dir:
+        return []
+    d = Path(output_dir)
+    if not d.is_dir():
+        return []
+    files = sorted(d.glob("network*.har"))
+    if not files:
+        return []
+    if len(files) == 1:
+        return parse_har(files[0])
+
+    out: list[dict] = []
+    notes: list[dict] = []
+    for p in files:
+        for e in parse_har(p):
+            # parse_har 每份自己截断时会追加一行「截断留痕」（method/url 为空），
+            # 合并后留一份就够，否则 N 个 context 就多出 N 行同样的话。
+            (notes if not e.get("url") and not e.get("method") else out).append(e)
+    out.sort(key=lambda e: str(e.get("startedAt") or ""))
+    # 每份各自封顶 MAX_ENTRIES，合起来会超 —— 再压一次，口径跟单份一致：
+    # 写操作和非 2xx 全留，剩下配额给最靠后的 GET。
+    if len(out) > MAX_ENTRIES:
+        imp = [e for e in out if (e.get("method", "").upper() != "GET"
+                                  or e.get("status") is None or (e.get("status") or 0) >= 300)]
+        ord_ = [e for e in out if e not in imp]
+        quota = max(0, MAX_ENTRIES - len(imp))
+        out = sorted(imp + (ord_[-quota:] if quota else []),
+                     key=lambda e: str(e.get("startedAt") or ""))[:MAX_ENTRIES]
+        notes = notes[:1] or [{
+            "startedAt": None, "elapsedMs": 0, "method": "", "url": "",
+            "status": None, "note": f"合并 {len(files)} 份 HAR 后超过 {MAX_ENTRIES} 条，已按重要性截断",
+        }]
+    return out + notes[:1]
+
+
 def har_path_for(output_dir: str | Path | None) -> str | None:
     """约定的 HAR 落点。跟截图共用 Playwright 的 output 目录，采集时机也跟着截图走——
     沙箱在 finally 里就被 rmtree 了，谁跟着 sandbox 谁拿不到。"""

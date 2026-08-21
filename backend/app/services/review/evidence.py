@@ -29,6 +29,14 @@ from app.models.script import Script, ScriptRun
 
 MAX_SCRIPT_CHARS = 6000      # UI 脚本正文超过这个长度就截断 —— 评审看形状不看长度；
                              # 喂太长会把网关打到限流、掉到 CLI 慢通道（实测一次评审从 30s 拖到几分钟）
+# **截断只砍中间，不砍尾巴。** 活体验证踩到：原来是 `content[:6000]`，
+# 而 UI 脚本的开头是大段 docstring —— TC-DYGL-00016 的 `def test_` 在第 10361 字符、
+# 第一个 `expect(` 在第 6534 字符，**全都在截断点之后**。
+# 于是评审看到的是"一个测试函数都没有、一个断言都没有"，两条 blocker 全是误报：
+# 脚本写得越用心（注释越足）越容易被打回。头尾都留就没这个问题 ——
+# 测试函数和断言几乎必然落在这两段里。
+HEAD_CHARS = 2200
+
 MAX_NEIGHBORS = 25           # 同模块邻居标题：判重复够用了
 
 
@@ -82,9 +90,29 @@ async def _ui_script(session: AsyncSession, case_id) -> dict | None:
     if sp is None:
         return None
     content = sp.content or ""
+    if len(content) > MAX_SCRIPT_CHARS:
+        cut = len(content) - MAX_SCRIPT_CHARS
+        shown = (content[:HEAD_CHARS]
+                 + f"\n\n… 中间省略 {cut} 字 …\n\n"
+                 + content[HEAD_CHARS + cut:])
+    else:
+        shown = content
     return {"fileName": sp.file_name, "language": sp.language,
             "chars": len(content), "truncated": len(content) > MAX_SCRIPT_CHARS,
-            "content": content[:MAX_SCRIPT_CHARS]}
+            # 给 LLM 看的（头+尾）。**代码侧判据不要用这一份** ——
+            # 用 `ev["uiScriptFull"]`，见 collect() 里那段注释。
+            "content": shown}
+
+
+def _judged(script: dict | None, full: str | None) -> dict | None:
+    """给代码侧判据用的那一份：形状跟 `uiScript` 一样，但正文是**全文**。
+
+    判据数的是 `def test_`、断言个数、页面动作个数 —— 拿截断副本去数，
+    数出来的是确定错的结论，而且错的方向固定：脚本越长越像"什么都没写"。
+    """
+    if script is None:
+        return None
+    return {**script, "content": full or script.get("content") or ""}
 
 
 async def _recent_runs(session: AsyncSession, case_id, limit: int = 3) -> list[dict]:
@@ -283,7 +311,21 @@ async def collect(session: AsyncSession, case_id: uuid.UUID) -> dict | None:
         return None
     scenario = await _api_scenario(session, case.id)
     script = await _ui_script(session, case.id)
+    # **代码侧判据要用全文**（`def test_` 在不在、有几个断言、有几个页面动作）。
+    # 这些都是几十微秒的正则扫描，没有任何理由用截断过的副本去数 ——
+    # 而用截断副本数出来的结论是**确定错的**：活体验证时两条脚本因此各吃了
+    # 两个假 blocker（"没有测试函数""一个断言都没有"，实际都有）。
+    # 单独放一个键，不放进 uiScript 里 —— `_prompt` 会把 uiScript 整个 dump 进提示词，
+    # 塞全文等于把限流风险又加回来。
+    full_script = None
+    if script is not None:
+        sp = (await session.execute(
+            select(Script.content).where(Script.case_id == case.id,
+                                         Script.script_type == "ui",
+                                         Script.status == "active"))).scalars().first()
+        full_script = sp or script.get("content")
     return {
+        "uiScriptFull": full_script,
         "case": {
             "id": str(case.id), "caseCode": case.case_code, "title": case.title,
             "type": case.type, "priority": case.priority,
@@ -306,7 +348,9 @@ async def collect(session: AsyncSession, case_id: uuid.UUID) -> dict | None:
         "uiScript": script,
         "recentRuns": await _recent_runs(session, case.id),
         "neighbors": await _neighbors(session, case),
-        "machineFindings": (machine_findings(case, scenario, script)
-                            + await _unresolvable_placeholders(session, case, script)),
+        # 判据一律喂全文那一份（`_judged`），不是给 LLM 看的截断版
+        "machineFindings": (machine_findings(case, scenario, _judged(script, full_script))
+                            + await _unresolvable_placeholders(
+                                session, case, _judged(script, full_script))),
         "owes": owed_dimensions(case, scenario, script),
     }
