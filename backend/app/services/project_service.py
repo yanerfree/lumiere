@@ -37,6 +37,14 @@ async def create_project(
     )
     session.add(default_branch)
 
+    # 默认环境 + 默认全局变量。项目化之后新项目是空的，不铺的话第一件事
+    # 是手工建 4 个环境，而且 TEST_LANGUAGE 不存在会让 t() 少一层兜底。
+    # 默认环境**不带变量** —— 预埋假凭证比没凭证更坏，见 project_defaults 的说明。
+    from app.services.project_defaults import build_defaults
+    envs, gvars = build_defaults(project.id)
+    session.add_all(envs)
+    session.add_all(gvars)
+
     # 创建者自动加入为 project_admin
     member = ProjectMember(
         project_id=project.id,

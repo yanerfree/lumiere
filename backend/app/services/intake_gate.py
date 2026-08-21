@@ -124,7 +124,10 @@ def check_module_name(name: str, existing: list[str], is_top_level: bool = True
                 f"**如果它本来就是一个词**（A/B 测试、CI/CD 这种），忽略这条。"
             )
 
-    if is_top_level and existing:
+    # `n in existing` 要单独判：上面那条只拦「拼写不同的重名」（`e != n`），
+    # 名字**一模一样**时它放行 —— 于是往已有模块里加用例，也会收到
+    # 「这是新建的一级模块」，而同一句里的「现有一级模块」列表就含它自己。
+    if is_top_level and existing and n not in existing:
         warns.append(
             f"⚠ 「{n}」是**新建的一级模块**。现有一级模块：{'、'.join(existing[:12])}。"
             f"确认它不该是其中某个的子模块 —— 一级模块是按被测系统的功能域分的，"

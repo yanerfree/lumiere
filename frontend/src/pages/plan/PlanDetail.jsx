@@ -129,7 +129,7 @@ export default function PlanDetail() {
     setEditCaseIds(plan?.caseIds || [])
     try {
       const [envRes, chRes] = await Promise.all([
-        api.get('/environments'),
+        api.get(`/projects/${projectId}/environments`),
         api.get('/channels'),
       ])
       setEnvironments(envRes.data || [])

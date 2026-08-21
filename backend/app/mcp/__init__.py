@@ -457,7 +457,7 @@ _register(
 _register(
     mocks.proxy_capture,
     name="tb_proxy_capture",
-    description="代理观测抓到的真实请求 —— 写接口场景的素材来源。活体验证最费劲的一步是「这个页面动作到底发了哪些请求、body 长什么样」，自己开 devtools 抄又慢又容易抄错，而平台的代理已经记下来了。参数: limit(默认50)",
+    description="代理观测抓到的真实请求 —— 写接口场景的素材来源。活体验证最费劲的一步是「这个页面动作到底发了哪些请求、body 长什么样」，自己开 devtools 抄又慢又容易抄错，而平台的代理已经记下来了。**前端跑 Vite 时先滤一遍**：抓到的绝大多数是 .jsx?t= 热更新，实测 156 条里只有 9 条是 /api/，不滤就被噪声占满。参数: limit(默认50，上限200), url_contains(在全量记录上按 URL 子串筛，如 '/api/'), method(如 'POST')",
 )
 
 
@@ -531,7 +531,7 @@ _section("环境与变量")
 _register(
     environments.list_environments,
     name="tb_list_environments",
-    description="列出所有测试环境（环境名 + envId）。跑任何场景前都得先选一个，拿到的 envId 传给 tb_run_api_test。",
+    description="列出**本项目**的测试环境（id + 名称）。环境是项目级的，一个项目的环境在别的项目里看不到、也用不了。拿到 env_id 再去 tb_get_merged_variables 看它有哪些变量可引用。参数: project_id(项目UUID)",
 )
 
 _register(
@@ -576,7 +576,7 @@ _section("执行报告")
 _register(
     plans.list_plans,
     name="tb_list_plans",
-    description="【执行报告】列出项目下的测试计划，拿 planId。**这是入口** —— tb_get_report_summary / tb_get_failed_scenarios 都要 planId，没有它那两个工具根本用不了。返回含用例数、最近一次 reportId。参数: project_id(项目UUID), status(可选: draft/executing/completed), limit(默认20)",
+    description="【执行报告】列出项目下的测试计划，拿 planId。拿到 planId 就能调 tb_get_report_summary / tb_get_failed_scenarios（只有 reportId 也行，它们会自己反查计划）。返回含用例数、最近一次 reportId。参数: project_id(项目UUID), status(可选: draft/executing/completed), limit(默认20)",
 )
 
 _register(
@@ -600,13 +600,13 @@ _register(
 _register(
     test_reports.get_report_summary,
     name="tb_get_report_summary",
-    description="一次执行的总览：通过 / 失败 / 跳过 / 通过率，以及按模块的分布。参数: plan_id, report_id(可选)",
+    description="一次执行的总览：通过 / 失败 / 跳过 / 通过率，以及按模块的分布。参数: plan_id 和 report_id **给一个就行**（只有 tb_run_plan 返回的 reportId 也能查，会自己反查计划）",
 )
 
 _register(
     test_reports.get_failed_scenarios,
     name="tb_get_failed_scenarios",
-    description="【执行报告】拿这次报告里所有失败的用例，**每条带 runId** —— 用它调 tb_get_ui_script_result 看证据包（截图路径 / 流量 / 平台的现象初判），判完再调 tb_submit_analysis 回填归因。参数: plan_id(计划UUID), report_id(可选，不传取最近一次)",
+    description="【执行报告】拿这次报告里所有失败的用例，**每条带 runId** —— 用它调 tb_get_ui_script_result 看证据包（截图路径 / 流量 / 平台的现象初判），判完再调 tb_submit_analysis 回填归因。参数: plan_id 和 report_id **给一个就行**（不传 report_id 取该计划最近一次）",
 )
 
 

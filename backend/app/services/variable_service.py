@@ -24,23 +24,29 @@ def _check_reserved(key: str) -> None:
         raise ValidationError(code="RESERVED_KEY", message=f"「{key}」为系统保留变量，不允许覆盖")
 
 
-async def list_variables(session: AsyncSession) -> list[GlobalVariable]:
+async def list_variables(session: AsyncSession, project_id: uuid.UUID) -> list[GlobalVariable]:
+    """本项目的全局变量。`project_id` 必填、故意不给默认值 ——
+    给个 `None=全部` 的默认值等于留一条静默返回全库的路（见 environment_service 同款说明）。"""
     result = await session.execute(
-        select(GlobalVariable).order_by(GlobalVariable.sort_order, GlobalVariable.key)
+        select(GlobalVariable)
+        .where(GlobalVariable.project_id == project_id)
+        .order_by(GlobalVariable.sort_order, GlobalVariable.key)
     )
     return list(result.scalars().all())
 
 
 @audit_log(action="create", target_type="global_variable")
-async def create_variable(session: AsyncSession, key: str, value: str, description: str | None = None) -> GlobalVariable:
+async def create_variable(session: AsyncSession, project_id: uuid.UUID, key: str, value: str,
+                          description: str | None = None) -> GlobalVariable:
     _check_reserved(key)
-    var = GlobalVariable(key=key, value=value, description=description)
+    var = GlobalVariable(project_id=project_id, key=key, value=value, description=description)
     session.add(var)
     try:
         await session.flush()
     except IntegrityError:
         await session.rollback()
-        raise ConflictError(code="VAR_KEY_EXISTS", message="变量名已存在")
+        # 唯一约束是 (project_id, key)：别的项目有同名变量不算冲突
+        raise ConflictError(code="VAR_KEY_EXISTS", message="本项目下已有同名变量")
     await session.refresh(var)
     return var
 
@@ -81,18 +87,22 @@ async def delete_variable(session: AsyncSession, var_id: uuid.UUID) -> None:
     await session.flush()
 
 
-async def put_variables(session: AsyncSession, variables: list[dict]) -> list[GlobalVariable]:
-    """全量替换全局变量（一次请求搞定）。"""
+async def put_variables(session: AsyncSession, project_id: uuid.UUID,
+                        variables: list[dict]) -> list[GlobalVariable]:
+    """全量替换**本项目**的全局变量（一次请求搞定）。"""
     for v in variables:
         _check_reserved(v["key"])
 
-    # 删除所有旧变量
-    await session.execute(delete(GlobalVariable))
+    # 只删本项目的。**这里的 where 是必须的**：项目化之前是无条件
+    # `delete(GlobalVariable)`，照原样留着的话，任何一个项目点一次「保存」
+    # 就会清空全平台所有项目的全局变量。
+    await session.execute(delete(GlobalVariable).where(GlobalVariable.project_id == project_id))
 
     # 写入新变量
     new_vars = []
     for i, v in enumerate(variables):
         gv = GlobalVariable(
+            project_id=project_id,
             key=v["key"],
             value=v["value"],
             description=v.get("description"),
@@ -121,14 +131,28 @@ async def build_run_env(session: AsyncSession, env_id) -> dict[str, str]:
     同名以环境为准：全局是兜底默认值，环境是这台机器的实情。
     """
     out: dict[str, str] = {}
-    for v in (await session.execute(
-        select(GlobalVariable).order_by(GlobalVariable.sort_order, GlobalVariable.key)
-    )).scalars().all():
-        out[v.key] = v.value
-    if env_id:
-        from app.models.environment import EnvironmentVariable
+    if not env_id:
+        # 没有环境就没有项目可依附 —— 全局变量现在是项目级的（迁移 zzp0gvarproj），
+        # 拿不到项目时返回空，而不是把某个项目的值端出来。
+        return out
+
+    from app.models.environment import Environment, EnvironmentVariable
+
+    # 从 env 反查项目，只注入这个项目的全局变量。不带 where 的话，A 项目的执行
+    # 会被 B 项目的 TEST_LANGUAGE / API_TIMEOUT 覆盖 —— 而且是静默的。
+    proj = (await session.execute(
+        select(Environment.project_id).where(Environment.id == env_id)
+    )).scalar_one_or_none()
+    if proj is not None:
         for v in (await session.execute(
-            select(EnvironmentVariable).where(EnvironmentVariable.environment_id == env_id)
+            select(GlobalVariable)
+            .where(GlobalVariable.project_id == proj)
+            .order_by(GlobalVariable.sort_order, GlobalVariable.key)
         )).scalars().all():
             out[v.key] = v.value
+
+    for v in (await session.execute(
+        select(EnvironmentVariable).where(EnvironmentVariable.environment_id == env_id)
+    )).scalars().all():
+        out[v.key] = v.value
     return out

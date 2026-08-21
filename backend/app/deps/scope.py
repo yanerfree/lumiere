@@ -46,10 +46,12 @@ async def verify_path_scope(
     路径里有 branch_id 就验 branch、有 case_id 就验 case，没有就跳过。
     """
     from app.models.case import Case
+    from app.models.environment import Environment
     from app.models.project import Branch
 
     p = request.path_params
     pid, bid, cid = _uuid(p.get("project_id")), _uuid(p.get("branch_id")), _uuid(p.get("case_id"))
+    eid = _uuid(p.get("env_id"))
 
     if pid and bid:
         owner = (await session.execute(
@@ -64,6 +66,28 @@ async def verify_path_scope(
         )).scalar_one_or_none()
         if owner is None or owner != bid:
             raise NotFoundError(code="CASE_NOT_FOUND", message="用例不存在")
+
+    # 全局变量同样是项目级的（迁移 zzp0gvarproj）。它没有环境那么敏感（不存密码），
+    # 但同一条理由：不验的话路径写自己的项目、var_id 填别人的就能改掉别人的
+    # TEST_LANGUAGE / API_TIMEOUT，而那会静默改变别的项目的执行行为。
+    vid = _uuid(p.get("var_id"))
+    if pid and vid:
+        from app.models.environment import GlobalVariable
+        owner = (await session.execute(
+            select(GlobalVariable.project_id).where(GlobalVariable.id == vid)
+        )).scalar_one_or_none()
+        if owner is None or owner != pid:
+            raise NotFoundError(code="VAR_NOT_FOUND", message="变量不存在")
+
+    # 环境 2026-08-21 起是项目级的（docs/data-scoping-and-isolation.md §4）。
+    # 环境里存着 BASE_URL、账号、密码 —— 只验"你是这个项目的成员"不够：
+    # 路径写自己的项目、env_id 填别人的，就能读到别人的凭证。
+    if pid and eid:
+        owner = (await session.execute(
+            select(Environment.project_id).where(Environment.id == eid)
+        )).scalar_one_or_none()
+        if owner is None or owner != pid:
+            raise NotFoundError(code="ENV_NOT_FOUND", message="环境不存在")
 
 
 async def verify_case_access(

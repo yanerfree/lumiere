@@ -260,7 +260,8 @@ def score_and_verdict(dimensions: dict, findings: list[dict], applicable: dict) 
     """**判定在代码里，不问 LLM。**
 
     - 有 blocker → 一律不过。哪怕它给 95 分。
-    - 加权分低于分数线 → 不过。
+    - major >= MAJOR_LIMIT → 不过。
+    - **分数不参与判定**（理由见下面 288 行那段注释），只做排序和体检。
     - LLM 没给某个适用维度的分 → 按该维度上的 finding 严重程度兜一个，
       不是当满分（缺分数默认满分，等于漏评就白送）。
     """
@@ -334,6 +335,27 @@ async def _guess_env(session, case_id) -> str | None:
             return str(row)
     except Exception:  # noqa: BLE001
         pass
+
+    # **退回默认环境。** 只认"计划/报告里跑过"的话，新用例一律找不到环境 ——
+    # 而新用例恰好是最需要真跑的那批。页面上「先跑一遍再审」不带 envId，
+    # 于是这个按钮在多数情况下**静默降级成静态审**，两个按钮点出来一样的结果，
+    # 而降级理由只是一条 minor finding，页面上看不见。
+    # 判据是"有 BASE_URL 的环境里 sort_order 最小的那个"：没有 BASE_URL 的环境
+    # 跑出来就是那种空地址的垃圾运行，跟不跑一样，还会被报成"这条挂了"。
+    try:
+        from app.models.environment import Environment, EnvironmentVariable
+        row = (await session.execute(
+            select(Environment.id)
+            .join(EnvironmentVariable,
+                  EnvironmentVariable.environment_id == Environment.id)
+            .where(EnvironmentVariable.key == "BASE_URL",
+                   EnvironmentVariable.value != "")
+            .order_by(Environment.sort_order, Environment.created_at).limit(1)
+        )).scalars().first()
+        if row:
+            return str(row)
+    except Exception:  # noqa: BLE001
+        pass
     return None
 
 
@@ -351,8 +373,10 @@ async def _run_and_diff(session, case_id, ev: dict, env_id: str | None) -> None:
     # **没有环境就别跑**。env_id 为空时跑出来的是 BASE_URL="" 的垃圾运行
     # （脚本导航到 "/login" 直接 Protocol error），而审核会把它报成"这条跑挂了" ——
     # 人会以为用例坏了。活体验证第一次就撞在这上面。
+    env_source = "传入的 envId"
     if not env_id:
         env_id = await _guess_env(session, case_id)
+        env_source = "平台自己挑的（历史执行环境，或有 BASE_URL 的默认环境）"
     if not env_id:
         ev["freshRun"] = {"skipped": "没指定环境（envId），执行式审核跳过 —— "
                                     "空环境跑出来的失败是假的，不如不跑"}
@@ -387,7 +411,8 @@ async def _run_and_diff(session, case_id, ev: dict, env_id: str | None) -> None:
                                        if x.get("status") not in ("pass", "passed", "skipped")][:6]}
         except Exception as e:  # noqa: BLE001
             ran = {"type": "api", "error": str(e)[:200]}
-    ev["freshRun"] = ran or {"note": "这条既没有 UI 脚本也没有接口场景，没得跑"}
+    ev["freshRun"] = {**(ran or {"note": "这条既没有 UI 脚本也没有接口场景，没得跑"}),
+                      "envId": str(env_id), "envSource": env_source}
 
     # 取这次执行录到的浏览器流量
     run = (await session.execute(
@@ -442,11 +467,21 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
         **scored,
         "findings": findings,
         "coverageGaps": [str(g)[:300] for g in (parsed.get("coverageGaps") or [])][:8],
+        # 砍了几条要说出来 —— 不说的话"就这 8 条"和"被截断了"长得一样。
+        "coverageGapsTotal": len(parsed.get("coverageGaps") or []),
         "summary": str(parsed.get("summary") or "")[:600],
         "owes": ev.get("owes"),
         "reviewedAt": datetime.now(timezone.utc).isoformat(),
         "model": getattr(ai_config, "model", None),
         "ranBeforeReview": ev.get("freshRun"),
+        # **这次到底是执行式审核还是静态审核，必须一眼看得见。** 此前只有
+        # 「先跑一遍再审」按钮点了没跑成时，降级理由藏在一条 minor finding 里 ——
+        # 页面上两种审核长得一模一样，而它们的结论强度差一整个量级
+        # （实测同一条：静态 84 分通过，真跑 56 分打回·致命）。
+        "reviewMode": ("run_first" if run_first and not (ev.get("freshRun") or {}).get("skipped")
+                       else "static"),
+        "reviewModeNote": (None if not run_first
+                           else (ev.get("freshRun") or {}).get("skipped")),
         # 这次比对看了多少条真实请求。**要露出来** —— 是 0 的话
         # "没发现端点问题"只说明没得比，不说明端点是对的
         "trafficSeen": ev.get("trafficSeen"),
@@ -475,6 +510,8 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
                                 verdict=scored["verdict"], total=scored["total"],
                                 dimensions={k: v["score"] for k, v in scored["dimensions"].items()},
                                 findings=findings[:20], coverage_gaps=result["coverageGaps"],
-                                summary=result["summary"], actor="ai", model=result["model"])
+                                summary=result["summary"], actor="ai", model=result["model"],
+                                review_mode=result["reviewMode"],
+                                traffic_seen=result.get("trafficSeen"))
             await session.commit()
     return result

@@ -138,6 +138,7 @@ function AppLayout() {
     {
       key: 'g-proj-config', icon: <SettingOutlined />, label: t('menu.group.projectConfig'),
       children: [
+        { key: `/projects/${projectId}/settings/env`, icon: <GlobalOutlined />, label: t('menu.envConfig') },
         { key: `/projects/${projectId}/settings/automation-data`, icon: <DatabaseOutlined />, label: t('menu.automationData') },
         { key: `/projects/${projectId}/settings/i18n`, icon: <TranslationOutlined />, label: t('menu.i18nDict') },
         { key: `/projects/${projectId}/logs`, icon: <FileSearchOutlined />, label: t('menu.logs') },
@@ -145,13 +146,16 @@ function AppLayout() {
     },
   ] : [
     // 这三档的划分和排序由用户指定（2026-08-17），别再按自己的理解重排。
-    // 项目列表跟环境/AI/通知渠道放一起，是因为后三样都是**项目要用的**配置，
+    // 项目列表跟 AI 服务/通知渠道放一起，是因为它们都是**项目要用的**配置，
     // 不是平台自己的；平台自己的只有用户、日志、端口三样，归系统管理。
+    //
+    // 「环境配置」2026-08-21 从这里挪进了项目壳的「项目配置」档 —— 不是重排，
+    // 是环境从全局改成了项目级（environments 表加了 project_id，
+    // 见 docs/data-scoping-and-isolation.md §4），这里已经没有项目可依附。
     {
       key: 'g-project', icon: <FolderOutlined />, label: t('menu.group.project'),
       children: [
         { key: '/projects', icon: <FolderOutlined />, label: t('menu.projects') },
-        { key: '/settings/env', icon: <GlobalOutlined />, label: t('menu.envConfig') },
         { key: '/settings/ai-providers', icon: <RobotOutlined />, label: t('menu.aiProviders') },
         { key: '/settings/channels', icon: <BellOutlined />, label: t('menu.channels') },
       ],
@@ -320,6 +324,7 @@ function AppLayout() {
             <Route path="/projects/:projectId/logs" element={<AuditLogs />} />
             <Route path="/projects/:projectId/settings/ai" element={<ProjectAIConfig />} />
             <Route path="/projects/:projectId/settings/automation-data" element={<AutomationData />} />
+            <Route path="/projects/:projectId/settings/env" element={<EnvConfig />} />
             <Route path="/projects/:projectId/settings/i18n" element={<I18nMessages />} />
             <Route path="/projects/:projectId/settings/ai-capabilities" element={<AICapabilities />} />
             <Route path="/projects/:projectId/settings/skills" element={<SkillManage />} />
@@ -332,7 +337,9 @@ function AppLayout() {
                 接口场景现在只在「用例详情 → 接口测试」页签里维护。 */}
             <Route path="/projects/:projectId/api-test" element={<RedirectToCases />} />
             <Route path="/settings/services" element={<SystemServices />} />
-            <Route path="/settings/env" element={<EnvConfig />} />
+            {/* 环境 2026-08-21 起是项目级的（docs/data-scoping-and-isolation.md §4）。
+                旧的 /settings/env 留一条跳转：书签点进来时给项目列表，而不是白屏。 */}
+            <Route path="/settings/env" element={<Navigate to="/projects" replace />} />
             <Route path="/settings/channels" element={<ChannelConfig />} />
             <Route path="/settings/ai-providers" element={<AIProviderConfig />} />
             <Route path="/settings/users" element={<UserManagement />} />

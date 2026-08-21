@@ -40,6 +40,11 @@ class CaseReviewRound(Base):
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     # 整改事件记「改了什么」：CC 自己说的 + 平台看到的（步骤/断言条数变化）
     changed: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # 这轮是**真跑过再评**还是静态看的。两者结论强度差一个量级（实测同一条：
+    # 静态 84 分通过、真跑 56 分打回），不记的话"过审了"看不出是凭什么过的。
+    review_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # 这轮对了多少条真实流量。是 0 的话「没发现端点问题」只说明没得比。
+    traffic_seen: Mapped[int | None] = mapped_column(Integer, nullable=True)
     actor: Mapped[str | None] = mapped_column(String(100), nullable=True)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

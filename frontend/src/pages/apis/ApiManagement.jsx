@@ -734,13 +734,13 @@ export default function ApiManagement() {
 
   useEffect(() => {
     loadNodes()
-    api.get('/environments').then(res => {
+    api.get(`/projects/${projectId}/environments`).then(res => {
       const envs = res.data || []
       setEnvironments(envs)
       const activeId = runEnv || (envs.length ? envs[0].id : null)
       if (activeId && !runEnv) setRunEnv(activeId)
       if (activeId) {
-        api.get(`/environments/${activeId}/variables`).then(r => {
+        api.get(`/projects/${projectId}/environments/${activeId}/variables`).then(r => {
           const env = envs.find(e => e.id === activeId)
           if (env) env.variables = r.data || []
           setEnvironments([...envs])
@@ -760,7 +760,7 @@ export default function ApiManagement() {
     if (env?.variables) {
       setEnvVars(env.variables)
     } else {
-      api.get(`/environments/${envId}/variables`).then(res => {
+      api.get(`/projects/${projectId}/environments/${envId}/variables`).then(res => {
         env.variables = res.data || []
         setEnvironments([...environments])
         setEnvVars(res.data || [])
@@ -958,7 +958,7 @@ export default function ApiManagement() {
                   ))}
                   <Button size="small" type="primary" block style={{ marginTop: 8 }} onClick={async () => {
                     try {
-                      await api.put(`/environments/${runEnv}/variables`, envVars.map(v => ({ key: v.key, value: v.value, description: v.description })))
+                      await api.put(`/projects/${projectId}/environments/${runEnv}/variables`, envVars.map(v => ({ key: v.key, value: v.value, description: v.description })))
                       const env = environments.find(e => e.id === runEnv)
                       if (env) env.variables = [...envVars]
                       message.success('变量已保存')

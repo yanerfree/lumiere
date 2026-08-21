@@ -5,6 +5,7 @@ import {
   GlobalOutlined, CloudServerOutlined,
   UnorderedListOutlined, CheckOutlined, CloseOutlined, HolderOutlined,
 } from '@ant-design/icons'
+import { useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
 
 export default function EnvConfig() {
@@ -15,7 +16,9 @@ export default function EnvConfig() {
       <div style={{ marginBottom: 12 }}>
         <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0, color: '#1d2129' }}>环境配置</h2>
         <span style={{ fontSize: 13, color: '#86909c' }}>
-          管理全局变量和环境变量，执行时优先级：环境变量 &gt; 全局变量 &gt; 脚本配置
+          环境和全局变量都是<b>本项目</b>的，别的项目看不到。
+          「全局变量」指的是<b>本项目所有环境共用</b>的兜底层。
+          执行时优先级：环境变量 &gt; 全局变量 &gt; 脚本配置
         </span>
       </div>
       <Tabs
@@ -32,6 +35,9 @@ export default function EnvConfig() {
 
 // ============ 环境管理面板 ============
 function EnvironmentPanel() {
+  // 环境 2026-08-21 起是项目级的，这个页面也跟着从 /settings/env
+  // 搬到 /projects/:projectId/settings/env —— 没有项目就没有环境可管。
+  const { projectId } = useParams()
   const [envs, setEnvs] = useState([])
   const [selectedId, setSelectedId] = useState(null)
   const [envVars, setEnvVars] = useState([])
@@ -51,7 +57,7 @@ function EnvironmentPanel() {
   const fetchEnvs = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await api.get('/environments')
+      const res = await api.get(`/projects/${projectId}/environments`)
       const list = res.data || []
       setEnvs(list)
       // 函数式更新才拿得到最新的 selectedId：这个 useCallback 依赖是 []，
@@ -64,7 +70,7 @@ function EnvironmentPanel() {
   const fetchEnvVars = useCallback(async () => {
     if (!selectedId) return
     try {
-      const res = await api.get(`/environments/${selectedId}/variables`)
+      const res = await api.get(`/projects/${projectId}/environments/${selectedId}/variables`)
       setEnvVars(res.data || [])
     } catch { /* */ }
   }, [selectedId])
@@ -76,7 +82,7 @@ function EnvironmentPanel() {
     let values
     try { values = await form.validateFields() } catch { return }
     try {
-      const res = await api.post('/environments', { name: values.name, description: values.description || null })
+      const res = await api.post(`/projects/${projectId}/environments`, { name: values.name, description: values.description || null })
       message.success('环境创建成功')
       setCreateOpen(false)
       form.resetFields()
@@ -95,7 +101,7 @@ function EnvironmentPanel() {
     next.splice(targetIdx, 0, moved)
     setEnvs(next)
     try {
-      await api.put('/environments/reorder', {
+      await api.put(`/projects/${projectId}/environments/reorder`, {
         items: next.map((e, i) => ({ id: e.id, sortOrder: i })),
       })
       fetchEnvs()
@@ -105,7 +111,7 @@ function EnvironmentPanel() {
   const handleClone = async () => {
     if (!selectedEnv) return
     try {
-      const res = await api.post(`/environments/${selectedId}/clone`, { name: `${selectedEnv.name}-copy` })
+      const res = await api.post(`/projects/${projectId}/environments/${selectedId}/clone`, { name: `${selectedEnv.name}-copy` })
       message.success('环境复制成功')
       fetchEnvs()
       setSelectedId(res.data.id)
@@ -114,7 +120,7 @@ function EnvironmentPanel() {
 
   const handleDeleteEnv = async () => {
     try {
-      await api.del(`/environments/${selectedId}`)
+      await api.del(`/projects/${projectId}/environments/${selectedId}`)
       message.success('环境已删除')
       setSelectedId(null)
       fetchEnvs()
@@ -124,7 +130,7 @@ function EnvironmentPanel() {
   const handleUpdateEnv = async (field, value) => {
     if (!selectedId) return
     try {
-      await api.put(`/environments/${selectedId}`, { [field]: value })
+      await api.put(`/projects/${projectId}/environments/${selectedId}`, { [field]: value })
       message.success('已更新')
       fetchEnvs()
     } catch { /* */ }
@@ -132,7 +138,7 @@ function EnvironmentPanel() {
 
   const handleSaveVars = async (vars) => {
     try {
-      await api.put(`/environments/${selectedId}/variables`, vars.map(v => ({
+      await api.put(`/projects/${projectId}/environments/${selectedId}/variables`, vars.map(v => ({
         key: v.key, value: v.value, description: v.description || null,
       })))
       message.success('变量已保存')
@@ -280,22 +286,24 @@ function EnvironmentPanel() {
 
 // ============ 全局变量面板 ============
 function GlobalVariablePanel() {
+  // 「全局」= 本项目所有环境共用，不是跨项目共用（迁移 zzp0gvarproj）
+  const { projectId } = useParams()
   const [variables, setVariables] = useState([])
   const [loading, setLoading] = useState(false)
 
   const fetchVars = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await api.get('/global-variables')
+      const res = await api.get(`/projects/${projectId}/global-variables`)
       setVariables(res.data || [])
     } catch { /* */ } finally { setLoading(false) }
-  }, [])
+  }, [projectId])
 
   useEffect(() => { fetchVars() }, [fetchVars])
 
   const handleSave = async (vars) => {
     try {
-      await api.put('/global-variables', vars.filter(v => v.key && v.value).map(v => ({
+      await api.put(`/projects/${projectId}/global-variables`, vars.filter(v => v.key && v.value).map(v => ({
         key: v.key, value: v.value, description: v.description || null,
       })))
       message.success('全局变量已保存')
@@ -308,7 +316,7 @@ function GlobalVariablePanel() {
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 15, fontWeight: 600, color: '#1d2129' }}>全局变量</div>
         <div style={{ fontSize: 12, color: '#86909c', marginTop: 4 }}>
-          全局变量在所有环境中共享，当环境变量存在同名 key 时，环境变量优先
+          在<b>本项目所有环境</b>中共享（不跨项目）。当某个环境变量存在同名 key 时，以环境变量为准
         </div>
       </div>
       {loading ? <Spin /> : <VariableTable variables={variables} onSave={handleSave} />}

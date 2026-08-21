@@ -17,7 +17,7 @@ from app.engine.tasks.execution import run_automated_execution
 from app.models.user import User
 from app.schemas.common import BaseSchema, MessageResponse
 from app.schemas.plan import CreatePlanRequest, UpdatePlanRequest, PlanListItem, PlanResponse
-from app.services import execution_service, export_service, plan_service, report_service
+from app.services import environment_service, execution_service, export_service, plan_service, report_service
 
 router = APIRouter(prefix="/api/projects/{project_id}/plans", tags=["plans"])
 
@@ -32,6 +32,9 @@ async def create_plan(
     current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
     """创建测试计划"""
+    # environment_id 从 body 来，路径上的两道校验都管不到它 ——
+    # 不验的话本项目的计划能挂上别的项目的环境，执行时注入别人的 BASE_URL/账号
+    await environment_service.assert_env_in_project(session, body.environment_id, project_id)
     plan = await plan_service.create_plan(
         session, project_id, current_user.id,
         name=body.name, plan_type=body.plan_type, test_type=body.test_type,
@@ -739,6 +742,10 @@ async def execute_adhoc(
             executable_count += 1
         else:
             skipped_count += 1
+
+    # env_id 从 body 来（这条是「批量执行」，不走计划），路径上的两道校验管不到它。
+    # 不验的话能拿别的项目的环境去跑本项目的用例 —— 注进去的是别人的 BASE_URL 和账号。
+    await environment_service.assert_env_in_project(session, body.env_id, project_id)
 
     now = datetime.now(timezone.utc)
     # 名字给人看，时间就得是人所在时区的。用 UTC 拼名字，列表右边按本地渲染

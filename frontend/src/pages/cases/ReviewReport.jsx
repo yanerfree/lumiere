@@ -69,18 +69,38 @@ export default function ReviewReport() {
     { title: '均分', dataIndex: 'avgScore', width: 60, align: 'center',
       render: v => v == null ? <span style={{ color: '#c9cdd4' }}>—</span>
         : <b style={{ color: v >= 85 ? '#0ea5a0' : v >= 70 ? '#4e8af0' : '#faad14' }}>{v}</b> },
-    { title: '覆盖缺口（去重合并 · 被提到几次）', dataIndex: 'gaps',
-      render: gaps => !gaps?.length ? <span style={{ color: '#c9cdd4' }}>—</span> : (
+    // 缺口按**话题**归并（后端 review/gap_merge.py），不按字面 —— LLM 每轮措辞都不一样，
+    // 按字面比的结果是同一件事（越权）拆成三条各 1×，而这一列的信息量全在 count 上。
+    // 各条原话放 tooltip：合并了就得能核对"这几条到底是不是一件事"，否则归并是黑箱。
+    { title: '覆盖缺口（按话题归并 · 被提到几次）', dataIndex: 'gaps',
+      render: (gaps, r) => !gaps?.length ? <span style={{ color: '#c9cdd4' }}>—</span> : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
           {gaps.map((g, i) => (
-            <Tooltip key={i} title={`提到它的用例：${g.cases.join('、')}`}>
+            <Tooltip key={i} title={
+              <div style={{ fontSize: 12 }}>
+                <div>提到它的用例：{g.cases.join('、')}</div>
+                {(g.phrasings || []).length > 1 && (
+                  <div style={{ marginTop: 4 }}>各条原话：
+                    {g.phrasings.map((t, j) => <div key={j}>· {t}</div>)}
+                  </div>
+                )}
+              </div>
+            }>
               <span style={{ fontSize: 12 }}>
                 <Tag color={g.count > 1 ? 'warning' : undefined}
                   style={{ fontSize: 10, margin: '0 6px 0 0' }}>{g.count}×</Tag>
-                {g.gap}
+                <b>{g.display || g.topic || g.gap}</b>
+                {/* 话题命中了才把原话作为副文本跟在后面；没命中时 display 本身就是原话，
+                    再跟一遍就是重复（而话题键那串实词签名不该露给人看）。 */}
+                {g.matchedTopic ? <span style={{ color: '#86909c', marginLeft: 6 }}>{g.gap}</span> : null}
               </span>
             </Tooltip>
           ))}
+          {r.gapsTotal > gaps.length && (
+            <span style={{ fontSize: 11, color: '#86909c' }}>
+              还有 {r.gapsTotal - gaps.length} 类没显示（只列前 {gaps.length} 个）
+            </span>
+          )}
         </div>
       ) },
     { title: '操作', width: 92, align: 'center',
@@ -95,7 +115,7 @@ export default function ReviewReport() {
   return (
     <Card
       title={<span>审核报告<span style={{ fontSize: 12, color: '#86909c', marginLeft: 10 }}>
-        按模块看审核进展；覆盖缺口是各条审核时提的模块级缺口去重合并 —— 被提到多次的说明这个模块真缺这一类
+        按模块看审核进展；覆盖缺口按话题归并（越权/并发/边界…）—— 被提到多次的说明这个模块真缺这一类；悬停看各条原话
       </span></span>}
       extra={<Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button>}
       styles={{ body: { padding: rows?.length ? 0 : 24 } }}

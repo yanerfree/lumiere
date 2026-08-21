@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox, Dropdown, Alert } from 'antd'
+import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox, Dropdown, Alert, Progress } from 'antd'
 import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, getValidToken } from '../../utils/request'
@@ -146,7 +146,7 @@ export default function CaseManagement() {
 
   // ---- 数据加载 ----
   useEffect(() => {
-    api.get('/environments').then(res => setEnvironments(res.data || [])).catch(() => {})
+    api.get(`/projects/${projectId}/environments`).then(res => setEnvironments(res.data || [])).catch(() => {})
   }, [])
 
   const fetchFolders = useCallback(async () => {
@@ -354,6 +354,7 @@ export default function CaseManagement() {
   const [reviewLoading, setReviewLoading] = useState(false)
   const [reviewResult, setReviewResult] = useState(null)
   const [reviewSteps, setReviewSteps] = useState([])
+  const [reviewProgress, setReviewProgress] = useState(null)
 
   // 空目录清理：目录是建用例时顺带创建的，硬删用例从不回收它（已在后端修掉），
   // 加上手动建了没用的，攒下来一屏 (0)，人分不清哪些是真模块。
@@ -418,17 +419,38 @@ export default function CaseManagement() {
     setReviewSteps([])
     setReviewLoading(true)
     try {
+      // batchId 自己生成 —— 这一跑要几分钟（30 条逐条读断言和脚本），
+      // 不轮询的话弹窗只有一句"评审中…"，跟卡死长得一模一样。
+      // 而每条都是审完就落库的：人从详情页看得到轮次出来了，弹窗还在转。
+      const batchId = (crypto?.randomUUID?.() || String(Date.now()))
       const body = selectedRowKeys.length
-        ? { caseIds: selectedRowKeys }
-        : { folderId: selectedFolderId || undefined }
-      const res = await api.post(
-        `/projects/${projectId}/branches/${globalBranchId}/ai-review/batch`, body)
-      setReviewResult(res.data)
-      fetchCases()          // 审核标签和评分会落库，列表要刷新
+        ? { caseIds: selectedRowKeys, batchId }
+        : { folderId: selectedFolderId || undefined, batchId }
+      let stop = false
+      const poll = async () => {
+        while (!stop) {
+          await new Promise(r => setTimeout(r, 1500))
+          if (stop) break
+          try {
+            const p = await api.get(
+              `/projects/${projectId}/branches/${globalBranchId}/ai-review/batch/${batchId}`)
+            if (p.data?.known) setReviewProgress(p.data)
+            if (p.data?.finished) break
+          } catch { /* 进度查不到不该影响主流程 */ }
+        }
+      }
+      poll()
+      try {
+        const res = await api.post(
+          `/projects/${projectId}/branches/${globalBranchId}/ai-review/batch`, body)
+        setReviewResult(res.data)
+        fetchCases()        // 审核标签和评分会落库，列表要刷新
+      } finally { stop = true }
     } catch (e) {
       message.error(e?.response?.data?.error?.message || 'AI 审核失败')
     } finally {
       setReviewLoading(false)
+      setReviewProgress(null)
     }
   }
 
@@ -1508,6 +1530,23 @@ export default function CaseManagement() {
           <div style={{ textAlign: 'center', padding: 40 }}>
             <LoadingOutlined style={{ fontSize: 24 }} />
             <p style={{ marginTop: 12 }}>逐条评审中（每条都要读它的断言和脚本，慢一些）…</p>
+            {/* n/N 必须有。没有它的时候"在跑"和"卡死"在页面上是同一个画面， */}
+            {/* 而结论是**逐条落库**的 —— 弹窗还在转，详情页的轮次早就出来了。 */}
+            {reviewProgress ? (
+              <>
+                <Progress percent={Math.round(100 * reviewProgress.done /
+                  Math.max(reviewProgress.total || 1, 1))} style={{ maxWidth: 420 }} />
+                <p style={{ color: '#86909c', fontSize: 12 }}>
+                  已审 {reviewProgress.done}/{reviewProgress.total} 条
+                  （过 {reviewProgress.approved} · 回 {reviewProgress.rejected}
+                  {reviewProgress.failed ? ` · 失败 ${reviewProgress.failed}` : ''}）
+                  {reviewProgress.current ? ` · 刚审完 ${reviewProgress.current}` : ''}
+                  <br />每条审完就落库了，这里关掉也不影响结果
+                </p>
+              </>
+            ) : (
+              <p style={{ color: '#86909c', fontSize: 12 }}>正在登记这一批…</p>
+            )}
           </div>
         )}
         {!reviewLoading && reviewResult && (

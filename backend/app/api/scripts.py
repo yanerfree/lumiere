@@ -434,6 +434,9 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
 
     file_name = script.file_name or "test_ui.py"
     content = script.content
+    # 项目级共享资源：脚本真的引用了才探（见 inject_project_resources 的说明）。
+    from app.services.scenario_variable_service import inject_project_resources
+    await inject_project_resources(session, case_id, env_vars, content or "")
     # 按 os.getenv 里的**键**替换，不要求左边同名（见 ui_text_render.bake_env_defaults）
     from app.services.ui_text_render import bake_env_defaults as _bake
     content, _ = _bake(content, env_vars)

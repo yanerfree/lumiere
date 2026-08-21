@@ -169,7 +169,14 @@ async def update_case(
         case.tags = bug_ref_service.normalize_tags(data.tags)
     # AI 审核扩展（FR21-FR28）
     if data.review_status is not None:
-        if data.review_status == "rejected" and not (data.review_reason and data.review_reason.get("category")):
+        # **只在真的把它改成打回的那一次**要理由。此前是「只要传了 rejected 就要」——
+        # 而详情页保存会把当前状态原样回传，且 AI 打回写的 review_reason 里没有
+        # category（那是人工打回表单的字段）。结果：一条被 AI 打回的用例在页面上
+        # 根本存不下去，点保存必 400「拒绝必须填写理由」，而人什么都没改。
+        # 而「AI 打回 → 人去改 → 保存」恰好是这条链最常走的一步。
+        becoming_rejected = (data.review_status == "rejected"
+                             and case.review_status != "rejected")
+        if becoming_rejected and not (data.review_reason and data.review_reason.get("category")):
             from app.core.exceptions import AppError
             raise AppError(code="REASON_REQUIRED", message="拒绝必须填写理由", status_code=400)
         case.review_status = data.review_status

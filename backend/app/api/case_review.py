@@ -31,6 +31,14 @@ router = APIRouter(
 
 MAX_BATCH = 30          # 一次最多评这么多条 —— 再多就该分模块评，报告也没人看得完
 
+# 批量审核的进度台账。**为什么需要它**：批量是一次长 POST（30 条 × 逐条读断言和脚本，
+# 实测跑满 5 分钟），弹窗只能显示"逐条评审中…"—— 没有 n/N、也没有完成态。
+# 而每条都是**审完就落库**的，人从详情页看得到轮次已经出来了，弹窗还在转：
+# 看起来像卡死，实际早就在干活。客户端自己带 batchId 进来，边跑边轮询这个台账。
+# 放内存里够了：进度是过程量，重启丢了无所谓（结论在库里）。
+_BATCH_PROGRESS: dict[str, dict] = {}
+_BATCH_KEEP = 20        # 只留最近这么多批，别让字典无界长
+
 
 async def _config(project_id: uuid.UUID, session: AsyncSession):
     cfg = await resolve_ai_config(project_id, session, capability="tb-quality-review")
@@ -66,10 +74,15 @@ async def review_batch(
     case_ids: list[uuid.UUID] | None = Body(default=None, embed=True, alias="caseIds"),
     folder_id: uuid.UUID | None = Body(default=None, embed=True, alias="folderId"),
     persist: bool = Body(default=True, embed=True),
+    batch_id: str | None = Body(default=None, embed=True, alias="batchId"),
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    """按勾选或按模块批量评审。逐条评，返回每条结论 + 汇总。"""
+    """按勾选或按模块批量评审。逐条评，返回每条结论 + 汇总。
+
+    传 `batchId`（客户端自己生成）就能边跑边用 GET /ai-review/batch/{batchId} 看进度 ——
+    这一跑要几分钟，不给进度的话弹窗和卡死长得一模一样。
+    """
     cfg = await _config(project_id, session)
 
     if not case_ids:
@@ -82,6 +95,14 @@ async def review_batch(
         raise AppError(code="NO_CASES", message="没有可评审的用例", status_code=400)
     truncated = len(case_ids) > MAX_BATCH
     case_ids = case_ids[:MAX_BATCH]
+
+    prog = None
+    if batch_id:
+        while len(_BATCH_PROGRESS) >= _BATCH_KEEP:
+            _BATCH_PROGRESS.pop(next(iter(_BATCH_PROGRESS)), None)
+        prog = _BATCH_PROGRESS.setdefault(str(batch_id), {})
+        prog.update({"total": len(case_ids), "done": 0, "approved": 0, "rejected": 0,
+                     "failed": 0, "current": None, "finished": False})
 
     results = []
     # 并发 3：评审是长请求，网关有 429（见 docs/ai-gateway-and-models.md），
@@ -97,11 +118,27 @@ async def review_batch(
                 return {"caseId": str(cid), "error": str(e)[:200]}
 
     for cid in case_ids:            # 串行提交、并发受 sem 控制；session 不是线程安全的
-        results.append(await one(cid))
+        r = await one(cid)
+        results.append(r)
+        if prog is not None:
+            prog["done"] = len(results)
+            prog["current"] = r.get("caseCode") or str(cid)
+            if r.get("error"):
+                prog["failed"] += 1
+            elif r.get("verdict") == "approved":
+                prog["approved"] += 1
+            else:
+                prog["rejected"] += 1
 
     ok = [r for r in results if not r.get("error")]
+    if prog is not None:
+        # 完成态要**立刻**写上：轮询侧靠它停下来，不然只能靠"done==total"猜，
+        # 而 total 为 0 或中途出错时那个猜法不成立。
+        prog["finished"] = True
+        prog["current"] = None
     return {"data": {
         "total": len(results),
+        "batchId": str(batch_id) if batch_id else None,
         "approved": len([r for r in ok if r.get("verdict") == "approved"]),
         "rejected": len([r for r in ok if r.get("verdict") == "rejected"]),
         "failed": len(results) - len(ok),
@@ -110,6 +147,25 @@ async def review_batch(
         "truncated": truncated,
         "results": results,
     }}
+
+
+@router.get("/ai-review/batch/{batch_id}")
+async def review_batch_progress(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    batch_id: str,
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    """这一批审到第几条了。**不查库** —— 进度是过程量，只在发起它的那个进程里。
+
+    查不到分两种，必须分清：批次还没登记（POST 刚发出、还没进到循环）
+    和批次已经跑完被清掉了。前者继续等，后者别再等了。
+    """
+    p = _BATCH_PROGRESS.get(str(batch_id))
+    if p is None:
+        return {"data": {"known": False,
+                         "note": "这一批没在这个进程里（刚发起还没登记，或已经跑完被清掉了）"}}
+    return {"data": {"known": True, **p}}
 
 @router.get("/cases/{case_id}/review-rounds")
 async def review_rounds(
@@ -186,7 +242,7 @@ async def review_report(
         name = (f.path.split("/")[0] if f else None) or "（未归类）"
         m = mods.setdefault(name, {"module": name, "total": 0, "approved": 0, "rejected": 0,
                                    "resubmitted": 0, "pending": 0, "notReviewed": 0,
-                                   "scores": [], "gaps": {}, "lastAt": None})
+                                   "scores": [], "gaps": [], "lastAt": None})
         m["total"] += 1
         if latest_kind.get(c.id) == "cc_resubmit":
             m["resubmitted"] += 1
@@ -205,26 +261,30 @@ async def review_report(
             if at and (m["lastAt"] is None or at > m["lastAt"]):
                 m["lastAt"] = at
         for g in ((c.review_reason or {}).get("coverageGaps") or []):
-            # 去重按"缺口的头 12 个字"归并 —— 同一件事各条的措辞不会完全一样
-            key = str(g).replace("模块级缺口：", "").replace("模块级：", "")[:12]
-            slot = m["gaps"].setdefault(key, {"gap": str(g)[:200], "count": 0, "cases": []})
-            slot["count"] += 1
-            slot["cases"].append(c.case_code)
+            # 归并按**话题**，不按字面。原来的键是"头 12 个字"，而 LLM 每轮措辞都不一样 ——
+            # 同一件事（越权）被拆成三条各 1×，而这一列存在的理由就是那个 count。
+            # 见 review/gap_merge.py。
+            m["gaps"].append((str(g), c.case_code))
 
+    from app.services.review.gap_merge import merge as _merge_gaps
     out = []
     for m in mods.values():
-        gaps = sorted(m.pop("gaps").values(), key=lambda x: -x["count"])
+        gaps, gaps_total = _merge_gaps(m.pop("gaps"), top=8)
         reviewed = m["approved"] + m["rejected"] + m["resubmitted"]
         m["avgScore"] = round(sum(m["scores"]) / len(m["scores"])) if m["scores"] else None
         m.pop("scores")
         m["status"] = ("未审" if reviewed == 0 else
                        "整改中" if (m["rejected"] or m["resubmitted"]) else "通过")
-        m["gaps"] = gaps[:8]
+        m["gaps"] = gaps
+        # 砍没砍过要说出来 —— 静默截断在页面上和"就这几类"长得一样。
+        m["gapsTotal"] = gaps_total
         out.append(m)
     out.sort(key=lambda x: (x["status"] != "整改中", -x["total"]))
     return {"data": {"modules": out,
-                     "usage": "覆盖缺口是各条审核时提的模块级缺口去重合并后的结果 —— "
-                              "被提到次数多的，说明这个模块真的缺这一类用例。"}}
+                     "usage": "覆盖缺口按**话题**归并（越权/并发/边界/…），不按字面 —— "
+                              "被提到次数多的，说明这个模块真的缺这一类用例。"
+                              "每桶的 phrasings 是各条的原话，用来核对这几条是不是真的一件事；"
+                              "gapsTotal > 桶数说明列表被截到了前 8 个。"}}
 
 # ── 失败跟进单 ──────────────────────────────────────────────────
 
