@@ -66,5 +66,48 @@ async def review_case(
         "coverageGaps": out["coverageGaps"],
         "summary": out["summary"],
         "ranBeforeReview": out.get("ranBeforeReview"),
-        "usage": "rejected 的 blocker 一条都不许留着交上去。改完再调一次这个工具复核。",
+        # 这次是**真跑过再评**还是静态看的，必须回给 CC —— 两者结论强度差一个量级
+        # （实测同一条：静态 84 分通过、真跑 56 分打回）。不说的话它会拿一个
+        # 静态 approved 当"这条过了"就交上去。
+        "reviewMode": out.get("reviewMode"),
+        "runAttribution": out.get("runAttribution"),
+        "usage": ("rejected 的 blocker 一条都不许留着交上去。改完再调一次这个工具复核。"
+                  + (" **这次是静态审的**（没真跑），"
+                     "「接口场景验的端点页面到底调不调」这类问题它看不出来 —— "
+                     "带 run_first=true 和 env_id 再审一次才算数。"
+                     if out.get("reviewMode") != "run_first" else "")
+                  + (" 这次结论是「无法审核」：既不算通过也不算打回，"
+                     "把环境弄好再审一次。"
+                     if out.get("verdict") == "inconclusive" else "")),
     }
+
+
+async def module_checkup(
+    session: AsyncSession,
+    branch_id: str,
+    module: str | None = None,
+    folder_id: str | None = None,
+    observed_actions: list | None = None,
+) -> dict:
+    """**这个模块还缺什么** —— 写完一批用例自己问一句，别等人催（review-spec §8）。
+
+    回两块：
+    · `commonIssues` 共性问题 —— 这个模块的用例反复犯的同一个错（改一处能修一片）。
+      纯汇总，不问模型。
+    · `coverageGaps` 覆盖缺口 —— 该测没测的场景。
+
+    **`observed_actions` 值得多花一步去凑**：把你在页面上探到的可操作项
+    （按钮、菜单项、状态流转）传进来，缺口就是拿它跟现有用例对账出来的 ——
+    "页面上有这个操作、用例里一条都没覆盖"是最硬的缺口。不传的话它只能
+    凭用例标题猜，出来的东西会泛。
+
+    **缺口是建议清单，不是门禁** —— 不参与任何一条用例过不过。
+    不占队列、不用环境、不碰被测系统，随时可以问。
+    """
+    from app.services.review import checkup
+
+    out = await checkup.run(session, branch_id, folder_id=folder_id, module=module,
+                            observed_actions=observed_actions)
+    if out.get("error"):
+        return out
+    return out

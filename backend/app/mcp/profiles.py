@@ -71,6 +71,8 @@ _LIVE = _LOCATE + _NOTES_READ + ["tb_add_project_note"] + [
     "tb_check_deliverable", "tb_check_branch",
     # 六维评审，回推完自己先过一遍（blocker 一条都不许留着交上去）
     "tb_review_case",
+    # 写完一批自己问一句「这个模块还缺什么」，拿到清单接着补，不用人催
+    "tb_module_checkup",
 ]
 
 # Mock 上游 / 抓真实请求。**单独一档而不是塞进 live**：
@@ -93,7 +95,7 @@ _UISCRIPT = _LOCATE + _NOTES_READ + [
     # 文案纪律要求走 t()，那就得有地方登记词条 —— 缺这个通道，纪律就只能靠人工转抄
     "tb_upsert_i18n_terms",
     "tb_check_deliverable", "tb_check_branch",
-    "tb_review_case",
+    "tb_review_case", "tb_module_checkup",
 ]
 
 _TRIAGE = _LOCATE + _NOTES_READ + [

@@ -328,41 +328,21 @@ async def _build_report(batch_id: str) -> None:
 
     **价值在这两块**：一条一条看只知道"这条不行"；看模块才知道
     "这一整片都犯同一个错"和"这个模块压根没测到的地方"。
-    审完算一次存下来 —— 每次打开重算的话，同一份报告两次打开长得不一样。
+    审完算一次存下来 —— 每次打开重算的话，LLM 每轮措辞不同，
+    同一份报告两次打开长得不一样。
     """
-    from app.services.review.gap_merge import merge as merge_gaps
+    from app.services.review import checkup
 
     async with async_session_factory() as s:
         b = await s.get(ReviewBatch, uuid.UUID(str(batch_id)))
-        if b is None or not b.with_checkup:
+        if b is None or not b.with_checkup or not b.folder_id:
             return
-        rows = (await s.execute(
-            select(Case.case_code, Case.review_reason)
-            .join(ReviewBatchItem, ReviewBatchItem.case_id == Case.id)
-            .where(ReviewBatchItem.batch_id == b.id))).all()
-
-        common: dict[str, dict] = {}
-        gaps: list[tuple] = []
-        for code, reason in rows:
-            r = reason or {}
-            for f in (r.get("findings") or []):
-                if f.get("severity") not in ("blocker", "major"):
-                    continue
-                k = f.get("kind") or "other"
-                c = common.setdefault(k, {"kind": k, "count": 0, "cases": [],
-                                          "sample": (f.get("detail") or "")[:200]})
-                c["count"] += 1
-                if code and len(c["cases"]) < 8:
-                    c["cases"].append(code)
-            for g in (r.get("coverageGaps") or []):
-                gaps.append((str(g), code))
-
-        merged_gaps, gaps_total = merge_gaps(gaps, top=8)
-        b.report = {
-            "commonIssues": sorted(common.values(), key=lambda x: -x["count"])[:10],
-            "coverageGaps": merged_gaps,
-            "coverageGapsTotal": gaps_total,
-        }
+        out = await checkup.run(s, b.branch_id, folder_id=b.folder_id)
+        if out.get("error"):
+            return
+        b.report = {k: out[k] for k in
+                    ("commonIssues", "coverageGaps", "coverageGapsTotal", "total", "reviewed")
+                    if k in out}
         await s.commit()
 
 

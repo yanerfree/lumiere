@@ -59,12 +59,12 @@ const TARGET_LEVEL = { spec: '只做步骤', spec_api: '步骤+接口', full: '�
 const dimBadge = (targetLevel, dim, status) =>
   dimPlanned(targetLevel, dim) ? dimOf(status) : NOT_PLANNED
 
-// 审核标签（用例级）。NULL=待提审，不显示 —— 见 CaseDetail 的 REVIEW 说明。
-const REVIEW = {
-  pending:  { label: '待审',   color: '#4e8af0', bg: 'rgba(78,138,240,0.12)' },
-  approved: { label: '已审',   color: '#0ea5a0', bg: 'rgba(14,165,160,0.12)' },
-  rejected: { label: '不通过', color: '#e8453c', bg: 'rgba(232,69,60,0.12)' },
-}
+// 审核标签的样式直接写在「审核」那一列的 render 里（往下搜「审核中」）。
+// 这里原来还有一份 REVIEW 常量，**定义了但没人用** —— 两份颜色表并存的话，
+// 改了没生效的那份会让人以为是缓存问题。删掉，只留列里那一处。
+//
+// ⚠ 这段注释里别再出现列定义的字面写法：有测试拿那串当解析锚点找列，
+// 注释里写一遍就会被匹配到，读出来的 defaultVisible 是隔壁列的。
 
 // ---- 主页面 ----
 export default function CaseManagement() {
@@ -190,6 +190,32 @@ export default function CaseManagement() {
 
   useEffect(() => { fetchFolders() }, [fetchFolders])
   useEffect(() => { fetchCases() }, [fetchCases])
+
+  // 「审核中」是派生的，从队列里查（§12 ④）。**队列空了就不轮询** ——
+  // 没有活跃批次时每 5 秒打一次接口纯属白烧，而列表页是常驻页面。
+  useEffect(() => {
+    if (!projectId || !globalBranchId) return
+    let alive = true
+    const pull = async () => {
+      try {
+        const r = await api.get(
+          `/projects/${projectId}/branches/${globalBranchId}/ai-review/in-progress`)
+        if (!alive) return
+        const ids = new Set(r.data?.caseIds || [])
+        setReviewingIds(prev => (prev.size === ids.size
+          && [...ids].every(i => prev.has(i))) ? prev : ids)
+        return ids.size
+      } catch { return 0 }
+    }
+    let timer
+    const loop = async () => {
+      const n = await pull()
+      if (!alive) return
+      timer = setTimeout(loop, n ? 4000 : 30000)
+    }
+    loop()
+    return () => { alive = false; clearTimeout(timer) }
+  }, [projectId, globalBranchId])
 
   // ---- 新建模块 ----
   const handleCreateFolder = async () => {
@@ -355,6 +381,12 @@ export default function CaseManagement() {
   const [reviewResult, setReviewResult] = useState(null)
   const [reviewSteps, setReviewSteps] = useState([])
   const [reviewProgress, setReviewProgress] = useState(null)
+  // 发起前的确认框（§3）：把「你选什么」和「它会查什么」分开摆
+  const [reviewConfirm, setReviewConfirm] = useState(null)
+  const [reviewScope, setReviewScope] = useState('all')
+  const [reviewCheckup, setReviewCheckup] = useState(true)
+  // 正排在审核队列里的用例（§12 ④「审核中」派生状态）
+  const [reviewingIds, setReviewingIds] = useState(() => new Set())
 
   // 空目录清理：目录是建用例时顺带创建的，硬删用例从不回收它（已在后端修掉），
   // 加上手动建了没用的，攒下来一屏 (0)，人分不清哪些是真模块。
@@ -409,48 +441,77 @@ export default function CaseManagement() {
     } catch (e) { message.error(e.message || '操作失败') }
   }
 
-  // AI 评审改成**逐条评**：原来是把一个模块的标题列表塞进一次 prompt，
-  // 出来的是"缺少安全测试场景"这类放到哪个项目都成立的话（用户看完的评价是"不适用"）。
-  // 现在每条都带着它的接口场景断言、UI 脚本正文、执行记录去评，结论能指到具体步骤。
+  // AI 审核（review-spec §2/§3）。**点下去一定先弹确认框**，把要干什么写清楚，
+  // 不让人猜。类型由「你从哪儿发起的」决定：勾了 N 条 = 抽审，一条没勾 = 整个模块。
   const handleQualityReview = async () => {
     if (!globalBranchId) { message.warning('请先选择分支'); return }
+    const picked = selectedRowKeys.length
+    setReviewConfirm({ picked, folderId: selectedFolderId || null, counts: null })
+    setReviewScope('all')
+    setReviewCheckup(true)
+    if (!picked) {
+      // 条数**从后端要**，不能拿当前页去数 —— 列表是分页的，
+      // 第 1 页数出来的数字在 3 页的模块上就是错的，而人是按它做决定的。
+      try {
+        const q = selectedFolderId ? `?folderId=${selectedFolderId}` : ''
+        const r = await api.get(
+          `/projects/${projectId}/branches/${globalBranchId}/ai-review/scope-preview${q}`)
+        setReviewConfirm(c => c && { ...c, counts: r.data })
+      } catch { /* 拿不到就不显示数字，别显示错的 */ }
+    }
+  }
+
+  // 确认之后才真发起。**入队即返回** —— 以前是一次同步长 POST，
+  // 30 条跑满 5 分钟，这五分钟里刷新一下就再也找不回这一批在跑什么。
+  const startReview = async () => {
+    const c = reviewConfirm
+    if (!c) return
+    setReviewConfirm(null)
     setReviewOpen(true)
     setReviewResult(null)
-    setReviewSteps([])
+    setReviewProgress(null)
     setReviewLoading(true)
     try {
-      // batchId 自己生成 —— 这一跑要几分钟（30 条逐条读断言和脚本），
-      // 不轮询的话弹窗只有一句"评审中…"，跟卡死长得一模一样。
-      // 而每条都是审完就落库的：人从详情页看得到轮次出来了，弹窗还在转。
-      const batchId = (crypto?.randomUUID?.() || String(Date.now()))
-      const body = selectedRowKeys.length
-        ? { caseIds: selectedRowKeys, batchId }
-        : { folderId: selectedFolderId || undefined, batchId }
+      const body = c.picked
+        ? { caseIds: selectedRowKeys, envId: runEnvId || undefined }
+        : {
+            folderId: c.folderId || undefined,
+            envId: runEnvId || undefined,
+            scope: reviewScope === 'incremental' ? 'incremental' : 'all',
+            withCheckup: reviewCheckup,
+            ...(reviewScope === 'checkup' ? { kind: 'checkup' } : {}),
+          }
+      const res = await api.post(
+        `/projects/${projectId}/branches/${globalBranchId}/ai-review/batch`, body)
+      const batchId = res.data?.batchId
+      if (res.data?.note) message.info(res.data.note)
+      setReviewProgress({ ...res.data, done: 0 })
+
+      // 轮询落库的进度。**关掉页面也没关系** —— 批次在库里，队列在后台跑。
       let stop = false
       const poll = async () => {
         while (!stop) {
-          await new Promise(r => setTimeout(r, 1500))
-          if (stop) break
+          await new Promise(r => setTimeout(r, 2000))
           try {
             const p = await api.get(
               `/projects/${projectId}/branches/${globalBranchId}/ai-review/batch/${batchId}`)
-            if (p.data?.known) setReviewProgress(p.data)
-            if (p.data?.finished) break
+            if (p.data?.known) {
+              setReviewProgress(p.data)
+              if (p.data.finished || p.data.status === 'paused') {
+                setReviewResult(p.data)
+                setReviewLoading(false)
+                fetchCases()   // 审核标签和评分会落库，列表要刷新
+                break
+              }
+            }
           } catch { /* 进度查不到不该影响主流程 */ }
         }
       }
       poll()
-      try {
-        const res = await api.post(
-          `/projects/${projectId}/branches/${globalBranchId}/ai-review/batch`, body)
-        setReviewResult(res.data)
-        fetchCases()        // 审核标签和评分会落库，列表要刷新
-      } finally { stop = true }
+      return () => { stop = true }
     } catch (e) {
-      message.error(e?.response?.data?.error?.message || 'AI 审核失败')
-    } finally {
       setReviewLoading(false)
-      setReviewProgress(null)
+      message.error(e?.response?.data?.error?.message || 'AI 审核失败')
     }
   }
 
@@ -795,7 +856,16 @@ export default function CaseManagement() {
           </Tooltip>
         )
       } },
-    { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 62, align: 'center', defaultVisible: true, render: (v, row) => {
+    { key: 'reviewStatus', title: '审核', dataIndex: 'reviewStatus', width: 72, align: 'center', defaultVisible: true, render: (v, row) => {
+      // 排在队列里的显示「审核中」（派生态，不落 review_status）。
+      // 不显示的话：人点完审核回到列表看到的还是「待审」，以为没生效，
+      // 于是再点一次 —— 队列里就多了一批重复的。
+      if (reviewingIds.has(row.id)) return (
+        <Tooltip title="已经在审核队列里排着了，不用再点一次">
+          <Tag style={{ fontSize: 10, background: 'rgba(114,46,209,0.10)', color: '#722ed1',
+                        border: 'none', margin: 0 }}>审核中</Tag>
+        </Tooltip>
+      )
       // 没提审过要给占位。原来 return null，那一格空着像列坏了
       if (!v) return <span style={{ fontSize: 11, color: '#d9d9d9' }}>—</span>
       // **列表只显示审核状态，不区分是 AI 审的还是人审的** —— 一列一种语义。
@@ -816,6 +886,12 @@ export default function CaseManagement() {
         <Tag style={{ fontSize: 10, background: '#e0f7f6', color: '#0ea5a0', border: 'none', margin: 0 }}>通过</Tag>)
       if (v === 'rejected') return wrap(
         <Tag color="error" style={{ fontSize: 10, margin: 0 }}>打回</Tag>)
+      // 「无法审核」既不是通过也不是打回。没有这一支的话它会掉进下面那个
+      // 「待审 ▾」下拉里 —— 而"审过了但没跑成"和"还没审"是两件事，
+      // 混成一个就再也说不清这批通过的含金量（§9）。
+      if (v === 'inconclusive') return wrap(
+        <Tag style={{ fontSize: 10, background: 'rgba(250,173,20,0.14)', color: '#d48806',
+                      border: 'none', margin: 0 }}>无法审核</Tag>)
       return (
         <Dropdown trigger={['click']} menu={{ items: [
           { key: 'approved', label: '通过' },
@@ -1518,6 +1594,81 @@ export default function CaseManagement() {
         </div>
       </Modal>
 
+      {/* 发起前的确认框（§3）。**检查项故意不做成可勾选** —— 能勾就能放水：
+          今天嫌某项烦关掉，以后这批「通过」就没法解释含金量。
+          能选的只有三样：审哪些、哪个环境、要不要顺带体检。 */}
+      <Modal
+        title={<Space><SearchOutlined /> AI 审核{reviewConfirm?.picked
+          ? `（勾选的 ${reviewConfirm.picked} 条）`
+          : selectedFolderId ? `「${findFolderNameById(folderTree, selectedFolderId) || '当前模块'}」` : '（全部用例）'}</Space>}
+        open={!!reviewConfirm}
+        onCancel={() => setReviewConfirm(null)}
+        onOk={startReview}
+        okText="开始审核"
+        cancelText="取消"
+        width={620}
+      >
+        <div style={{ fontSize: 13 }}>
+          <div style={{ marginBottom: 14 }}>
+            <b>你选</b>
+            {!reviewConfirm?.picked && (
+              <div style={{ margin: '8px 0 0 12px' }}>
+                <Radio.Group value={reviewScope} onChange={e => setReviewScope(e.target.value)}>
+                  <Space direction="vertical" size={4}>
+                    <Radio value="all">全部{reviewConfirm?.counts ? ` ${reviewConfirm.counts.total} 条` : ''}</Radio>
+                    <Radio value="incremental">只审没审过的和被打回的{
+                      reviewConfirm?.counts ? `（${reviewConfirm.counts.incremental} 条）` : ''}</Radio>
+                    <Radio value="checkup">不审用例，只做体检</Radio>
+                  </Space>
+                </Radio.Group>
+              </div>
+            )}
+            {reviewScope !== 'checkup' && (
+              <div style={{ margin: '10px 0 0 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span>环境</span>
+                <Select size="small" style={{ minWidth: 220 }} value={runEnvId || undefined}
+                  placeholder="用项目默认环境" onChange={setRunEnvId}
+                  options={buildEnvOptions(environments)} allowClear />
+              </div>
+            )}
+            {!reviewConfirm?.picked && reviewScope !== 'checkup' && (
+              <div style={{ margin: '8px 0 0 12px' }}>
+                <Checkbox checked={reviewCheckup} onChange={e => setReviewCheckup(e.target.checked)}>
+                  审完顺便做一次模块体检
+                </Checkbox>
+              </div>
+            )}
+          </div>
+
+          {reviewScope !== 'checkup' && (
+            <div>
+              <b>这次会逐条查这些</b>
+              <span style={{ color: '#86909c', marginLeft: 8, fontSize: 12 }}>—— 不可勾选</span>
+              <ol style={{ margin: '8px 0 0', paddingLeft: 22, lineHeight: 1.9, color: '#4e5969' }}>
+                <li>真跑一遍，跑不起来就不算通过</li>
+                <li>步骤里写的每个「操作」，脚本里有没有真做这个动作</li>
+                <li>步骤里写的每个「预期」，脚本里有没有对应的检查</li>
+                <li>接口场景里调的接口，页面上是不是真的会调它</li>
+                <li>断言是不是恒真的（写了等于没写，坏了也照样绿）</li>
+                <li>改完数据有没有读回来确认真改了</li>
+                <li>预期里有没有「显示正常」这种模糊话</li>
+                <li>跑完有没有把造的数据清干净</li>
+                <li>跑挂了先分清是脚本问题、还是被测系统的 bug</li>
+              </ol>
+              <div style={{ marginTop: 10, color: '#86909c', fontSize: 12 }}>
+                每条都要真跑一遍，慢一些 · <b>可以关掉页面</b>，结论都在库里
+              </div>
+            </div>
+          )}
+          {reviewScope === 'checkup' && (
+            <div style={{ color: '#4e5969' }}>
+              体检不跑用例、不用环境，只看这个模块的<b>共性问题</b>和<b>覆盖缺口</b>。
+              一两分钟。覆盖缺口是建议清单，不参与任何一条用例过不过。
+            </div>
+          )}
+        </div>
+      </Modal>
+
       {/* AI 评审结果：逐条列结论。**过没过、卡在哪一条**要一眼看到 */}
       <Modal
         title={<Space><SearchOutlined /> AI 审核（六维·逐条）</Space>}
@@ -1529,23 +1680,25 @@ export default function CaseManagement() {
         {reviewLoading && (
           <div style={{ textAlign: 'center', padding: 40 }}>
             <LoadingOutlined style={{ fontSize: 24 }} />
-            <p style={{ marginTop: 12 }}>逐条评审中（每条都要读它的断言和脚本，慢一些）…</p>
+            <p style={{ marginTop: 12 }}>逐条真跑 + 评审中（每条都要跑一遍再读断言和脚本，慢一些）…</p>
             {/* n/N 必须有。没有它的时候"在跑"和"卡死"在页面上是同一个画面， */}
             {/* 而结论是**逐条落库**的 —— 弹窗还在转，详情页的轮次早就出来了。 */}
-            {reviewProgress ? (
+            {reviewProgress?.total ? (
               <>
-                <Progress percent={Math.round(100 * reviewProgress.done /
+                <Progress percent={Math.round(100 * (reviewProgress.done || 0) /
                   Math.max(reviewProgress.total || 1, 1))} style={{ maxWidth: 420 }} />
                 <p style={{ color: '#86909c', fontSize: 12 }}>
-                  已审 {reviewProgress.done}/{reviewProgress.total} 条
-                  （过 {reviewProgress.approved} · 回 {reviewProgress.rejected}
-                  {reviewProgress.failed ? ` · 失败 ${reviewProgress.failed}` : ''}）
-                  {reviewProgress.current ? ` · 刚审完 ${reviewProgress.current}` : ''}
-                  <br />每条审完就落库了，这里关掉也不影响结果
+                  已审 {reviewProgress.done || 0}/{reviewProgress.total} 条
+                  （过 {reviewProgress.approved || 0} · 回 {reviewProgress.rejected || 0}
+                  {reviewProgress.inconclusive ? ` · 无法审核 ${reviewProgress.inconclusive}` : ''}
+                  {reviewProgress.failed ? ` · 异常 ${reviewProgress.failed}` : ''}）
+                  {reviewProgress.current ? ` · 正在审 ${reviewProgress.current}` : ''}
+                  <br /><b>这里关掉也不影响</b>：批次在库里，队列在后台接着跑，
+                  结果去「审核报告」页看
                 </p>
               </>
             ) : (
-              <p style={{ color: '#86909c', fontSize: 12 }}>正在登记这一批…</p>
+              <p style={{ color: '#86909c', fontSize: 12 }}>正在排队…</p>
             )}
           </div>
         )}
@@ -1553,52 +1706,32 @@ export default function CaseManagement() {
           <div>
             <div style={{ display: 'flex', gap: 16, marginBottom: 16, alignItems: 'baseline' }}>
               <span style={{ fontSize: 32, fontWeight: 700, color: '#0ea5a0' }}>
-                {reviewResult.approved}</span>
+                {reviewResult.approved || 0}</span>
               <span style={{ color: '#86909c' }}>过审</span>
               <span style={{ fontSize: 32, fontWeight: 700, color: '#e8453c' }}>
-                {reviewResult.rejected}</span>
+                {reviewResult.rejected || 0}</span>
               <span style={{ color: '#86909c' }}>打回</span>
-              {reviewResult.failed > 0 && <Tag color="warning">{reviewResult.failed} 条评审失败</Tag>}
-              <span style={{ marginLeft: 'auto', color: '#86909c' }}>
-                均分 {reviewResult.avgScore}
-              </span>
+              {/* 「无法审核」必须单独摆出来。混进打回的话，「打回 7 条」里
+                  其实有 4 条是环境没配 —— 人会去改 7 条没毛病的用例（§9） */}
+              {reviewResult.inconclusive > 0 && (
+                <>
+                  <span style={{ fontSize: 32, fontWeight: 700, color: '#faad14' }}>
+                    {reviewResult.inconclusive}</span>
+                  <Tooltip title="没真跑成功（缺环境 / 环境挂了 / 没有可跑的产物）—— 既不算通过也不算打回，环境就绪后重审">
+                    <span style={{ color: '#86909c', textDecoration: 'underline dotted' }}>无法审核</span>
+                  </Tooltip>
+                </>
+              )}
+              {reviewResult.failed > 0 && <Tag color="warning">{reviewResult.failed} 条异常</Tag>}
             </div>
-            {reviewResult.truncated && (
+            {reviewResult.status === 'paused' && (
               <Alert type="warning" showIcon style={{ marginBottom: 12 }}
-                message="超过 30 条只评了前 30 条 —— 按模块分批评，报告才看得完" />
+                message="队列已熔断" description={reviewResult.note} />
             )}
-            <div style={{ maxHeight: 460, overflow: 'auto' }}>
-              {(reviewResult.results || []).map((r, i) => (
-                <div key={i} style={{ padding: '10px 12px', marginBottom: 8, borderRadius: 12,
-                  background: r.verdict === 'approved' ? '#f6ffed' : '#fff7f6' }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <Tag color={r.verdict === 'approved' ? 'success' : 'error'} style={{ margin: 0 }}>
-                      {r.error ? '评审失败' : r.verdict === 'approved' ? '过审' : '打回'}
-                    </Tag>
-                    <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c' }}>
-                      {r.caseCode}</span>
-                    <span style={{ fontWeight: 500 }}>{r.title}</span>
-                    <span style={{ marginLeft: 'auto', fontWeight: 600 }}>{r.total}</span>
-                  </div>
-                  {r.error && <div style={{ fontSize: 12, color: '#e8453c', marginTop: 4 }}>{r.error}</div>}
-                  {r.summary && <div style={{ fontSize: 12, color: '#4e5969', marginTop: 6 }}>{r.summary}</div>}
-                  {(r.findings || []).filter(f => f.severity !== 'minor').map((f, j) => (
-                    <div key={j} style={{ fontSize: 12, marginTop: 6, lineHeight: 1.6 }}>
-                      <Tag color={f.severity === 'blocker' ? 'error' : 'warning'}
-                        style={{ fontSize: 10, margin: '0 6px 0 0' }}>
-                        {f.severity === 'blocker' ? '致命' : '重要'}</Tag>
-                      <span style={{ color: '#86909c' }}>{f.where}</span>：{f.problem}
-                      {f.fix && <span style={{ color: '#0ea5a0' }}> → {f.fix}</span>}
-                    </div>
-                  ))}
-                  {(r.coverageGaps || []).length > 0 && (
-                    <div style={{ fontSize: 12, marginTop: 6, color: '#4e5969' }}>
-                      可能漏的场景：{r.coverageGaps.join('；')}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+            <Alert type="info" showIcon style={{ marginBottom: 12 }}
+              message={<span>逐条结论、共性问题和覆盖缺口在
+                <a onClick={() => navigate(`/projects/${projectId}/review-report`)}> 审核报告 </a>
+                页 —— 一行一次审核，点进去看这一批的模块报告。</span>} />
           </div>
         )}
         {!reviewLoading && !reviewResult && (

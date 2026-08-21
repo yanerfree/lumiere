@@ -403,6 +403,12 @@ _register(
 )
 
 _register(
+    review.module_checkup,
+    name="tb_module_checkup",
+    description="【写完一批自己问一句，别等人催】这个模块**还缺什么**：回 commonIssues（这个模块的用例反复犯的同一个错，改一处能修一片，纯汇总不问模型）+ coverageGaps（该测没测的场景）。**observed_actions 值得多花一步去凑** —— 把你在页面上探到的可操作项（按钮/菜单项/状态流转）传进来，缺口就是拿它跟现有用例对账出来的：「页面上有这个操作、用例里一条都没覆盖」是最硬的缺口；不传就只能凭标题猜，出来的东西会泛。**缺口是建议清单不是门禁**，不参与任何一条用例过不过。不占队列、不用环境、不碰被测系统，随时可以问。参数: branch_id(分支UUID), module(模块名) 或 folder_id(模块UUID) 给一个, observed_actions(可选，页面上探到的可操作项列表)",
+)
+
+_register(
     deliverable.check_branch,
     name="tb_check_branch",
     description="【验收·一次看完整个分支】做完一批之后跑这个，别逐条查。回 summary（可交付/有阻塞/有脆弱点/待人审 各几条）+ 每条一行：卡在哪(firstBlocker)、有几处脆弱点(riskKinds)、审核标签。**阻塞和脆弱点是分开的**：「有一步真挂了」和「跑绿了但异步断言抢跑」在 owes 里长得一样，要做的事完全不同（一个改断言、一个加 retry_timeout_ms）。参数: branch_id(分支UUID), module(可选，按模块名筛)",

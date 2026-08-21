@@ -162,7 +162,13 @@ const REVIEW = {
   pending:  { label: '待审',   color: '#4e8af0', bg: '#eef4ff' },
   approved: { label: '已审',   color: '#0ea5a0', bg: '#e0f7f6' },
   rejected: { label: '不通过', color: '#e8453c', bg: '#fff2f0' },
+  // 审过了、但这次没得出结论（缺环境 / 环境挂了 / 没有可跑的产物）。
+  // **既不是通过也不是打回**：判成打回的话，CC 会去改一条没毛病的用例，
+  // 改完还是跑不了（review-spec §9）。
+  inconclusive: { label: '无法审核', color: '#d48806', bg: '#fffbe6' },
 }
+// 下拉里**不放 inconclusive** —— 它是审核跑出来的结论，不是人能手点的状态。
+// 放进去就等于允许人手动宣布"这条没法审"，那是给放水开了个口子。
 const REVIEW_KEYS = ['pending', 'approved', 'rejected']
 // 维度名两种拼法都要认：库里存的是 snake_case，而响应经过全局 camelize
 // 变成了 scenarioSanity 这种。只写一种的话页面上会出现「纪律 90 / apiNecessity 90」

@@ -97,6 +97,57 @@ async def _resolve_env(session, project_id, env_id):
     return e
 
 
+@router.get("/ai-review/in-progress")
+async def review_in_progress(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    """哪些用例正排在审核队列里（§12 ④「审核中」派生状态）。
+
+    **派生，不进 `review_status`**：塞进那个字段的枚举会牵连门禁、筛选、
+    批量操作一大片（`rounds.display_status` 那条注释踩过同一个坑）。
+    而列表上不显示"审核中"的后果是：人点完审核回到列表，看到的还是「待审」，
+    以为没生效，于是再点一次 —— 队列里就多了一批重复的。
+    """
+    from app.models.review_batch import ACTIVE_STATUSES, ReviewBatch, ReviewBatchItem
+    rows = (await session.execute(
+        select(ReviewBatchItem.case_id)
+        .join(ReviewBatch, ReviewBatch.id == ReviewBatchItem.batch_id)
+        .where(ReviewBatch.branch_id == branch_id,
+               ReviewBatch.status.in_(ACTIVE_STATUSES),
+               ReviewBatchItem.status.in_(("pending", "running"))))).scalars().all()
+    return {"data": {"caseIds": [str(c) for c in rows]}}
+
+
+@router.get("/ai-review/scope-preview")
+async def review_scope_preview(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    folder_id: uuid.UUID | None = Query(default=None, alias="folderId"),
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    """发起前的确认框要显示准确条数（§3 那个「全部 16 条 / 只审 7 条」）。
+
+    **不能让前端拿当前页去数** —— 列表是分页的，第 1 页数出来的「7 条」
+    在 3 页的模块上就是错的。显示一个错数字比不显示更糟：人是按它做决定的。
+    """
+    base = [Case.branch_id == branch_id, Case.deleted_at.is_(None)]
+    if folder_id:
+        base.append(Case.folder_id == folder_id)
+    total = (await session.execute(
+        select(func.count(Case.id)).where(*base))).scalar_one()
+    incremental = (await session.execute(
+        select(func.count(Case.id)).where(
+            *base,
+            (Case.review_status.is_(None))
+            | (Case.review_status.in_(("pending", "rejected", "inconclusive")))))).scalar_one()
+    return {"data": {"total": total, "incremental": incremental,
+                     "maxBatch": MAX_BATCH}}
+
+
 @router.post("/ai-review/batch")
 async def review_batch(
     project_id: uuid.UUID,
