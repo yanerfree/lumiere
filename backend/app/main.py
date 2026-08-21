@@ -12,6 +12,7 @@ from app.api.branches import router as branches_router
 from app.api.cases import router as cases_router, folders_router
 from app.api.case_review import router as case_review_router
 from app.api.variables import router as variables_router
+from app.api.variables import env_router, gvar_router
 from app.api.plans import router as plans_router, reports_router
 from app.api.tasks import router as tasks_router
 from app.api.logs import router as logs_router
@@ -60,10 +61,32 @@ _mcp_raw = mcp.http_app(path="/")
 from starlette.responses import JSONResponse
 
 class MCPAuthMiddleware:
+    """MCP 的唯一入口认证。**没有匿名通道。**
+
+    此前这里有一条「没带 bearer 且 MCP_API_KEY 未设 → 直接放行」的分支，
+    而 MCP_API_KEY 从来没设过 —— 于是那个口子一直全开。实测（2026-08-21）：
+    不带任何凭据就能 initialize，然后 tb_list_projects 列出全部 6 个项目，
+    再 tb_list_branches 往下读到任意项目的分支和用例。平台监听 0.0.0.0，
+    同局域网里谁都能当它的客户端。
+
+    **修法是删掉那条分支，不是"记得去 .env 里设一个 MCP_API_KEY"** ——
+    靠环境变量兜底的开关，.env 一丢就静默恢复成全开，而且页面上看不出来。
+    env_key 仍然支持（CI / 一次性脚本用），但它现在是**可选的额外通道**，
+    不再是"设了才开始检查"的总开关。
+
+    注意顶栏「服务 N/17」里的 MCP 探活走的是 `_tcp_alive`（只连端口，不发 HTTP），
+    所以堵掉匿名 HTTP 不会让它变成 DOWN。
+    """
+
     def __init__(self, app):
         self.app = app
         import os
         self.env_key = os.environ.get("MCP_API_KEY", "")
+
+    @staticmethod
+    async def _deny(scope, receive, send):
+        response = JSONResponse({"error": "Unauthorized"}, status_code=401)
+        await response(scope, receive, send)
 
     @property
     def lifespan(self):
@@ -79,11 +102,8 @@ class MCPAuthMiddleware:
         bearer_token = auth[7:] if auth.startswith("Bearer ") else ""
 
         if not bearer_token:
-            if self.env_key:
-                response = JSONResponse({"error": "Unauthorized"}, status_code=401)
-                await response(scope, receive, send)
-                return
-            await self.app(scope, receive, send)
+            # 不带凭据一律 401 —— 这里以前会放行（见类文档）
+            await self._deny(scope, receive, send)
             return
 
         if self.env_key and bearer_token == self.env_key:
@@ -108,10 +128,10 @@ class MCPAuthMiddleware:
                     await self.app(scope, receive, send)
                     return
         except Exception:
+            # 查库失败也不放行 —— 认证这条路必须 fail closed
             pass
 
-        response = JSONResponse({"error": "Unauthorized"}, status_code=401)
-        await response(scope, receive, send)
+        await self._deny(scope, receive, send)
 
 _mcp_app = MCPAuthMiddleware(_mcp_raw)
 
@@ -134,6 +154,13 @@ async def lifespan(app):
             # 计划会永远停在 executing 再也触发不了。这个看门狗负责收拾现场。
             from app.services import stuck_recovery
             stuck_task = await stuck_recovery.start_watchdog()
+            # 审核队列同理：进程被 kill 时正在跑的那批永远停在 running，
+            # 页面进度条转到天荒地老。退回排队 + 把 worker 拉起来接着跑。
+            try:
+                from app.services.review import queue as review_queue
+                await review_queue.recover_orphans()
+            except Exception as e:  # noqa: BLE001
+                _startup_logger.warning("审核队列重启收尾失败: %s", e)
             # MCP 独立端口（给 Claude Code 连接，避免与主服务 8756 端口混用）
             mcp_server = _start_standalone_mcp_server()
             yield
@@ -295,6 +322,11 @@ app.include_router(cases_router, dependencies=_SCOPED)
 app.include_router(case_review_router, dependencies=_SCOPED)
 app.include_router(folders_router, dependencies=_SCOPED)
 app.include_router(variables_router)
+# 环境是项目级的：既要验成员身份（各路由自己的 require_project_role），
+# 也要验路径里的 env_id 真属于这个项目（_SCOPED）。少了后者，
+# 路径写自己的项目、env_id 填别人的就能读到别人的凭证。
+app.include_router(env_router, dependencies=_SCOPED)
+app.include_router(gvar_router, dependencies=_SCOPED)
 app.include_router(plans_router)
 app.include_router(reports_router)
 app.include_router(tasks_router)

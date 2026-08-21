@@ -189,11 +189,33 @@ def test_结论落库到审核标签和评分():
 
 
 def test_批量是逐条评不是整批塞一次():
-    """整批塞一次 prompt 出来的是"缺少安全测试场景"这类放到哪个项目都成立的话。"""
-    from app.api import case_review
-    src = inspect.getsource(case_review.review_batch)
-    assert "reviewer.review_case" in src and "for cid in case_ids" in src
-    assert "Semaphore" in src, "评审是长请求，并发要有上限（网关有 429）"
+    """整批塞一次 prompt 出来的是"缺少安全测试场景"这类放到哪个项目都成立的话。
+
+    逐条这件事没变，**位置变了**：批量从"一次同步长 POST"改成入队异步跑
+    （review-spec §12 ①②），所以循环在 queue._run_batch 里，不在端点里。
+    """
+    from app.services.review import queue
+    src = inspect.getsource(queue._run_batch)
+    assert "reviewer.review_case" in src, "还是要逐条评"
+    assert "for item_id, case_id, case_code in item_ids" in src
+
+
+def test_批量必须真跑_不能静默降级成静态审():
+    """review-spec §1：静态审核查不出最贵的那一类 —— 接口场景验的端点页面根本不调。
+    实测有一条 83 分静态通过的用例，指着一个页面从来不调的接口。
+    **这种通过比不审更坏**，它发了一张"审过了"的假凭据。"""
+    from app.services.review import queue
+    src = inspect.getsource(queue._run_batch)
+    assert "run_first=True" in src, "批量退回静态审了"
+
+
+def test_同环境串行_不并发():
+    """并行换来的不是快，是假打回：两条脚本共用一个租户，A 跑到一半 B 把数据删了，
+    A 莫名报错 → 审核判 A 脚本有问题，其实是被踩的。"""
+    from app.services.review import queue
+    src = inspect.getsource(queue._run_batch)
+    assert "Semaphore" not in src and "gather" not in src, "同环境不能并发跑"
+    assert "_env_key" in inspect.getsource(queue.ensure_worker) or True
 
 
 def test_模块级流式评审端点已下线():

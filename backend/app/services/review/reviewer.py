@@ -30,7 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.case import Case
 from app.services.ai import llm_client
-from app.services.review import evidence
+from app.services.review import evidence, residue, run_outcome, step_coverage
 
 logger = logging.getLogger(__name__)
 
@@ -253,14 +253,28 @@ def _kind_to_dim(kind: str | None) -> str:
         "ui_script_hard_error": "ui_correctness",
         "i18n_key_not_in_dict": "ui_correctness",
         "ui_script_warning": "ui_correctness",
+        # 步骤↔脚本对账（review-spec §3 第 2、3 条）
+        "step_action_not_in_script": "ui_correctness",
+        "no_assertion_for_expectations": "verification_depth",
+        "expectation_not_asserted": "verification_depth",
+        "verify_step_without_assertion": "verification_depth",
+        # 真跑归因与残留（§9、§3 第 8 项）
+        "script_cannot_run": "discipline",
+        "system_under_test_failed": "discipline",
+        "residue_not_cleaned": "discipline",
+        "cleanup_failed": "discipline",
     }.get(kind or "", "discipline")
 
 
-def score_and_verdict(dimensions: dict, findings: list[dict], applicable: dict) -> dict:
+def score_and_verdict(dimensions: dict, findings: list[dict], applicable: dict,
+                      run_state: dict | None = None) -> dict:
     """**判定在代码里，不问 LLM。**
 
     - 有 blocker → 一律不过。哪怕它给 95 分。
-    - 加权分低于分数线 → 不过。
+    - major >= MAJOR_LIMIT → 不过。
+    - **没真跑成功 → 不可能是 approved**（review-spec §9）。落成第三种结论
+      「无法审核」，既不算通过也不算打回 —— 见下面 `run_state` 那段。
+    - **分数不参与判定**（理由见下面那段注释），只做排序和体检。
     - LLM 没给某个适用维度的分 → 按该维度上的 finding 严重程度兜一个，
       不是当满分（缺分数默认满分，等于漏评就白送）。
     """
@@ -298,12 +312,26 @@ def score_and_verdict(dimensions: dict, findings: list[dict], applicable: dict) 
         # 两处"验不出该验的"叠在一起就该打回；一处不打回 ——
         # 否则任何"还能更强"的用例都过不了，人一样会开始无视这个结论。
         verdict, reason = "rejected", f"有 {len(majors)} 处重要问题（验不出该验的东西）"
+    elif (run_state or {}).get("kind") in run_outcome.INCONCLUSIVE_KINDS:
+        # **没真跑成功就不可能通过**（review-spec §9）。
+        #
+        # 为什么非要有第三种结论：原来 `review_run_skipped` 只是一条 minor finding，
+        # 不阻断 —— 于是"全批 16 条通过"里混着 4 条根本没跑过的，而报告上
+        # 它们和真跑过的长得一模一样。实测有一条静态 84 分通过、真跑 56 分打回，
+        # 差一整个量级。**含金量看不出来的通过，比不审更坏**：它发了一张假凭据。
+        #
+        # 也不能判成 rejected —— 用例可能完全没问题，是环境没配/挂了。
+        # 打回它等于让 CC 去改一条没毛病的用例，改完还是跑不了。
+        verdict = "inconclusive"
+        reason = f"无法审核：{(run_state or {}).get('reason') or '这次没真跑成功'}。" \
+                 f"既不算通过也不算打回 —— 环境就绪后重审。"
     else:
         verdict, reason = "approved", (
             f"没有致命问题" + (f"，1 处重要问题已列出" if majors else "") + f"（体检分 {total}）")
     return {"total": total, "dimensions": per_dim, "verdict": verdict, "verdictReason": reason,
             "blockerCount": len(blockers),
-            "majorCount": len([f for f in findings if f.get("severity") == "major"])}
+            "majorCount": len([f for f in findings if f.get("severity") == "major"]),
+            "runState": (run_state or {}).get("kind")}
 
 
 def _worst_severity(findings: list[dict]) -> str | None:
@@ -334,6 +362,27 @@ async def _guess_env(session, case_id) -> str | None:
             return str(row)
     except Exception:  # noqa: BLE001
         pass
+
+    # **退回默认环境。** 只认"计划/报告里跑过"的话，新用例一律找不到环境 ——
+    # 而新用例恰好是最需要真跑的那批。页面上「先跑一遍再审」不带 envId，
+    # 于是这个按钮在多数情况下**静默降级成静态审**，两个按钮点出来一样的结果，
+    # 而降级理由只是一条 minor finding，页面上看不见。
+    # 判据是"有 BASE_URL 的环境里 sort_order 最小的那个"：没有 BASE_URL 的环境
+    # 跑出来就是那种空地址的垃圾运行，跟不跑一样，还会被报成"这条挂了"。
+    try:
+        from app.models.environment import Environment, EnvironmentVariable
+        row = (await session.execute(
+            select(Environment.id)
+            .join(EnvironmentVariable,
+                  EnvironmentVariable.environment_id == Environment.id)
+            .where(EnvironmentVariable.key == "BASE_URL",
+                   EnvironmentVariable.value != "")
+            .order_by(Environment.sort_order, Environment.created_at).limit(1)
+        )).scalars().first()
+        if row:
+            return str(row)
+    except Exception:  # noqa: BLE001
+        pass
     return None
 
 
@@ -351,8 +400,10 @@ async def _run_and_diff(session, case_id, ev: dict, env_id: str | None) -> None:
     # **没有环境就别跑**。env_id 为空时跑出来的是 BASE_URL="" 的垃圾运行
     # （脚本导航到 "/login" 直接 Protocol error），而审核会把它报成"这条跑挂了" ——
     # 人会以为用例坏了。活体验证第一次就撞在这上面。
+    env_source = "传入的 envId"
     if not env_id:
         env_id = await _guess_env(session, case_id)
+        env_source = "平台自己挑的（历史执行环境，或有 BASE_URL 的默认环境）"
     if not env_id:
         ev["freshRun"] = {"skipped": "没指定环境（envId），执行式审核跳过 —— "
                                     "空环境跑出来的失败是假的，不如不跑"}
@@ -387,7 +438,8 @@ async def _run_and_diff(session, case_id, ev: dict, env_id: str | None) -> None:
                                        if x.get("status") not in ("pass", "passed", "skipped")][:6]}
         except Exception as e:  # noqa: BLE001
             ran = {"type": "api", "error": str(e)[:200]}
-    ev["freshRun"] = ran or {"note": "这条既没有 UI 脚本也没有接口场景，没得跑"}
+    ev["freshRun"] = {**(ran or {"note": "这条既没有 UI 脚本也没有接口场景，没得跑"}),
+                      "envId": str(env_id), "envSource": env_source}
 
     # 取这次执行录到的浏览器流量
     run = (await session.execute(
@@ -395,14 +447,47 @@ async def _run_and_diff(session, case_id, ev: dict, env_id: str | None) -> None:
         .order_by(ScriptRun.created_at.desc()).limit(1))).scalars().first()
     captured = (run.captured_requests or []) if run is not None else []
     ev["trafficSeen"] = len(captured)
+    ev["lastRunId"] = str(run.id) if run is not None else None
     logger.info("执行式审核：case=%s 抓到 %d 条请求", case_id, len(captured))
+    facts: list[dict] = []
     if captured:
-        facts = compare(captured,
-                        (ev.get("apiScenario") or {}).get("steps") or [],
-                        (ev.get("case") or {}).get("steps") or [],
-                        (ev.get("uiScript") or {}).get("content"))
-        if facts:
-            ev["machineFindings"] = list(ev.get("machineFindings") or []) + facts
+        facts += compare(captured,
+                         (ev.get("apiScenario") or {}).get("steps") or [],
+                         (ev.get("case") or {}).get("steps") or [],
+                         (ev.get("uiScript") or {}).get("content"))
+        # 跑完有没有把造的数据清干净（§3 第 8 项）—— 只有真跑过才看得见，
+        # 所以它挂在这里，不在静态那批 machine_findings 里。
+        facts += residue.analyze(captured)
+    if facts:
+        ev["machineFindings"] = list(ev.get("machineFindings") or []) + facts
+
+
+async def _ensure_failure_ticket(session, case_id, run_id) -> str | None:
+    """被测系统的 bug 要有单可跟。**先查再补，不重复开** ——
+    `script_run_service.record_run` 已经在每次失败执行时开过单了（审核的 debug 跑
+    也走它），这里再调一次 `on_run` 会把同一件事的 occurrences 又加一。
+    只有那条执行没经过记账入口（接口场景的某些路径）时才补开。
+    """
+    from sqlalchemy import select
+
+    from app.models.failure_ticket import OPEN_STATUSES, FailureTicket
+    from app.models.script import ScriptRun
+    try:
+        existing = (await session.execute(
+            select(FailureTicket.id).where(FailureTicket.case_id == case_id,
+                                           FailureTicket.status.in_(OPEN_STATUSES))
+            .order_by(FailureTicket.created_at.desc()).limit(1))).scalars().first()
+        if existing:
+            return str(existing)
+        run = await session.get(ScriptRun, uuid.UUID(str(run_id)))
+        if run is None or (run.status or "") == "passed":
+            return None
+        from app.services import failure_ticket_service
+        t = await failure_ticket_service.on_run(session, run)
+        return str(t.id) if t is not None else None
+    except Exception:  # noqa: BLE001
+        logger.exception("补开失败跟进单失败（不影响这次审核结论）")
+        return None
 
 
 async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=None,
@@ -418,11 +503,27 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
     if ev is None:
         return {"error": f"用例 {case_id} 不存在"}
 
+    # 步骤↔脚本对账（§3 第 2、3 条）。**静态就能判**，不依赖真跑 ——
+    # 它比的是"步骤里写的锚点在脚本里有没有"，跑不跑都成立。
+    # 放在 run_first 之前，是为了让没环境的用例也照样吃到这两条判据。
+    sc_facts = step_coverage.analyze(
+        (ev.get("case") or {}).get("steps") or [],
+        (ev.get("uiScript") or {}).get("content"),
+        (ev.get("apiScenario") or {}).get("steps") or [])
+    if sc_facts:
+        ev["machineFindings"] = list(ev.get("machineFindings") or []) + sc_facts
+
+    run_state = None
     if run_first:
         # **执行式审核**：不真跑就发现不了"接口调错端点""步骤没落实"这两类 ——
         # 两个端点都合法、都返回 200 时，静态审核只会说"写得挺完整"。
         # 用户的原话：不能只停留在查看，而不真实执行。
         await _run_and_diff(session, case_id, ev, env_id)
+        # 跑挂了先归因（§9）：脚本的错 / 被测系统的错 / 环境的错，三种后续完全不同。
+        run_state = run_outcome.classify(ev.get("freshRun"))
+        rf = run_outcome.to_finding(run_state)
+        if rf:
+            ev["machineFindings"] = list(ev.get("machineFindings") or []) + [rf]
 
     applicable = _applicable(ev)
     try:
@@ -434,7 +535,8 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
 
     parsed = _parse(resp.content) or {}
     findings = merge_findings(ev.get("machineFindings") or [], parsed.get("findings") or [])
-    scored = score_and_verdict(parsed.get("dimensions") or {}, findings, applicable)
+    scored = score_and_verdict(parsed.get("dimensions") or {}, findings, applicable,
+                               run_state=run_state)
 
     result = {
         "caseId": str(case_id), "caseCode": ev["case"]["caseCode"],
@@ -442,14 +544,27 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
         **scored,
         "findings": findings,
         "coverageGaps": [str(g)[:300] for g in (parsed.get("coverageGaps") or [])][:8],
+        # 砍了几条要说出来 —— 不说的话"就这 8 条"和"被截断了"长得一样。
+        "coverageGapsTotal": len(parsed.get("coverageGaps") or []),
         "summary": str(parsed.get("summary") or "")[:600],
         "owes": ev.get("owes"),
         "reviewedAt": datetime.now(timezone.utc).isoformat(),
         "model": getattr(ai_config, "model", None),
         "ranBeforeReview": ev.get("freshRun"),
+        # **这次到底是执行式审核还是静态审核，必须一眼看得见。** 此前只有
+        # 「先跑一遍再审」按钮点了没跑成时，降级理由藏在一条 minor finding 里 ——
+        # 页面上两种审核长得一模一样，而它们的结论强度差一整个量级
+        # （实测同一条：静态 84 分通过，真跑 56 分打回·致命）。
+        "reviewMode": ("run_first" if run_first and not (ev.get("freshRun") or {}).get("skipped")
+                       else "static"),
+        "reviewModeNote": (None if not run_first
+                           else (ev.get("freshRun") or {}).get("skipped")),
         # 这次比对看了多少条真实请求。**要露出来** —— 是 0 的话
         # "没发现端点问题"只说明没得比，不说明端点是对的
         "trafficSeen": ev.get("trafficSeen"),
+        # 跑挂了归到哪一档（§9）。页面上要分清"用例不合格"和"环境挂了/系统有 bug"，
+        # 三者在报告里长得一样的话，被测系统一出问题整批全红就没人信这套审核了。
+        "runAttribution": run_state,
     }
 
     if persist:
@@ -467,7 +582,17 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
                 # 结论要能复核：把 findings 存下来，人点开看得到"凭什么不过"
                 "findings": findings[:20],
                 "coverageGaps": result["coverageGaps"],
+                # 「无法审核」要能追到是哪一档卡住的，否则页面上只剩一句
+                # "无法审核"，人不知道是去配环境还是去写脚本。
+                "runAttribution": run_state,
             }
+            # 被测系统的 bug 要留痕迹 —— 不开单的话「用例通过了但它其实是红的」
+            # 这件事就消失了，而这正是 §9 最怕的后果：bug 没人管。
+            if (run_state or {}).get("kind") == run_outcome.SYSTEM_BUG and ev.get("lastRunId"):
+                tid = await _ensure_failure_ticket(session, case_id, ev["lastRunId"])
+                if tid:
+                    run_state["ticketId"] = tid
+                    result["runAttribution"] = run_state
             # 记一轮 —— 审核以前只有"当前值"，没有过程。有了它，
             # 「AI 打回 → CC 整改 → 再审 → 通过」这条链在页面上看得见。
             from app.services.review import rounds
@@ -475,6 +600,8 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
                                 verdict=scored["verdict"], total=scored["total"],
                                 dimensions={k: v["score"] for k, v in scored["dimensions"].items()},
                                 findings=findings[:20], coverage_gaps=result["coverageGaps"],
-                                summary=result["summary"], actor="ai", model=result["model"])
+                                summary=result["summary"], actor="ai", model=result["model"],
+                                review_mode=result["reviewMode"],
+                                traffic_seen=result.get("trafficSeen"))
             await session.commit()
     return result

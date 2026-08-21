@@ -2065,7 +2065,19 @@ def test_审核标签是独立的且不挡回归():
     import inspect
     src = inspect.getsource(script_run_service.sync_review_status)
     assert '"pending"' in src and "target_level" in src, "没按 target_level 判三维是否全完成"
-    assert '("approved", "rejected")' in src, "人审过的结论会被重跑抹掉"
+    # 已有结论的不能被一次重跑抹掉。`inconclusive`（无法审核）也在里面 ——
+    # 它是**审过了、但这次没得出结论**（缺环境/环境挂了），不是"还没审"。
+    # 被冲回 pending 的话，「有 4 条没跑成」这个事实就在下一次执行时静默消失，
+    # 而报告页正是靠它才能说清这批通过的含金量（review-spec §9）。
+    # ⚠ 剥掉 docstring 再查 —— 说明里正好也写着这几个词（同一个坑这文件踩过五次）
+    import ast as _ast
+    _fn = _ast.parse(src.lstrip()).body[0]
+    if (_fn.body and isinstance(_fn.body[0], _ast.Expr)
+            and isinstance(_fn.body[0].value, _ast.Constant)):
+        _fn.body = _fn.body[1:]
+    body = _ast.unparse(_fn)
+    for kept in ("approved", "rejected", "inconclusive"):
+        assert f"'{kept}'" in body, f"{kept} 的结论会被重跑抹掉"
 
     # 回归门禁不许看审核，也不许看维度状态
     # ⚠ 只查**函数体**，不查 docstring —— 说明里正好写着这两个词

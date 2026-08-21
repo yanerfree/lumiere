@@ -39,6 +39,10 @@ from app.models.ai_provider_config import (  # noqa: F401 — AI 配置 + 能力
 )
 from app.models.i18n_message import ProjectI18nMessage  # noqa: F401 — 项目级 i18n 词典
 from app.models.skill import Skill, SkillVersion  # noqa: F401 — 项目 Skill（客户端侧执行）
+# 审核：轮次 + 批次。**不 import 的话 autogenerate 会提议 DROP 掉它们** ——
+# 库里有、metadata 里没有，在 alembic 眼里就是"多余的表"。review_round 之前就漏在外面。
+from app.models.review_round import CaseReviewRound  # noqa: F401
+from app.models.review_batch import ReviewBatch, ReviewBatchItem  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

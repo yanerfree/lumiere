@@ -92,11 +92,61 @@ def test_门禁接在建用例和改用例两条路上():
         assert "_check_module" in inspect.getsource(fn)
 
 
-def test_只跟同级比():
-    """跟全库比会把别的模块下的同名子模块算进来 ——
-    「订阅管理/审批配置」和「服务管理/审批配置」是两个正常的子模块。"""
-    src = inspect.getsource(__import__("app.mcp.tools.test_cases", fromlist=["_check_module"])._check_module)
-    assert "parent_id.is_(None)" in src and "parent_id == parent.id" in src
+def test_不同父模块下的同名子模块要放行():
+    """「订阅管理/审批配置」和「服务管理/审批配置」确实是两回事，不能硬拦。
+
+    这条原来是拿源码文本钉「只跟同级比」的。§11 规则 1 把那个决定推翻了 ——
+    只给一级列表正是「同一个东西摆两处」那个事故的根因。改成钉**行为**：
+    全树照查，但跨父同名只提示、不拒绝。
+    """
+    from app.services.intake_gate import check_module_placement
+    tree = [{"name": "订阅管理", "parent": None}, {"name": "审批配置", "parent": "订阅管理"},
+            {"name": "服务管理", "parent": None}]
+    errors, warns = check_module_placement("审批配置", tree, "服务管理")
+    assert errors == [], "跨父同名被硬拦了 —— 它们是两个正常的子模块"
+    assert warns, "跨父同名至少要说一句，免得下次有人以为它俩是一个"
+
+
+def test_同一位置已有就硬拒():
+    from app.services.intake_gate import check_module_placement
+    tree = [{"name": "订阅管理", "parent": None}, {"name": "审批配置", "parent": "订阅管理"}]
+    errors, _ = check_module_placement("审批配置", tree, "订阅管理")
+    assert errors, "同一处再建一个，等于把用例劈成两半"
+
+
+def test_顶层和子模块下各一个要硬拒():
+    """**事故现场**：网关那边顶层有「跨租户订阅(1)」，「订阅管理」下也有
+    「跨租户订阅(7)」—— 同一个东西摆两处，顶层那个还是空的。"""
+    from app.services.intake_gate import check_module_placement
+    tree = [{"name": "跨租户订阅", "parent": None}, {"name": "订阅管理", "parent": None}]
+    errors, _ = check_module_placement("跨租户订阅", tree, "订阅管理")
+    assert errors, "顶层已有同名，还允许挂到模块下 —— 这就是那个事故"
+
+    tree2 = [{"name": "订阅管理", "parent": None}, {"name": "跨租户订阅", "parent": "订阅管理"}]
+    errors2, _ = check_module_placement("跨租户订阅", tree2, None)
+    assert errors2, "模块下已有同名，还允许建到顶层 —— 同一个事故的反方向"
+
+
+def test_范围词硬拒():
+    """「平台自身」不是模块名。放行的代价是洗不掉的 case_code 前缀。"""
+    for w in ("平台自身", "其他", "通用", "系统", "未分类"):
+        assert check_module_name(w, [])[0], f"{w} 居然放行了"
+
+
+def test_范围词只整名匹配_不能误伤正经模块():
+    """「系统」是范围词，「系统管理」「系统设置」是正经模块 ——
+    用 substring 匹配的话这两个会被一起拦掉。"""
+    for ok in ("系统管理", "系统设置", "通用权限", "公共服务管理", "平台配置"):
+        assert check_module_name(ok, [])[0] == [], f"{ok} 被范围词规则误伤了"
+
+
+def test_平台自己找得出存量的裂口():
+    from app.services.intake_gate import find_split_modules
+    tree = [{"name": "跨租户订阅", "parent": None}, {"name": "订阅管理", "parent": None},
+            {"name": "跨租户订阅", "parent": "订阅管理"}]
+    found = find_split_modules(tree)
+    assert found and found[0]["name"] == "跨租户订阅"
+    assert "订阅管理" in found[0]["under"]
 
 
 def test_规范里前置了命名口径():

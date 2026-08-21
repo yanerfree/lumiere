@@ -93,14 +93,139 @@ def _norm_module(name: str) -> str:
     return re.sub(r"[\s\-/_:：·|]", "", (name or "")).upper()
 
 
+# **范围词 / 自指词硬拒**（review-spec §11 规则 5）。
+#
+# 事故现场：测试平台自己的项目里，4 条用例全挂在「平台自身」下 —— 那是个
+# **范围词，不是模块名**。真实模块该是「用例管理」「国际化词典」这些，
+# 左侧菜单指得到的东西。连带后果很贵：`case_code` 前缀由模块名生成，
+# 而且**改名刻意不变**（`former_names` 就是为这个做的），所以 `TC-PTZS-*`
+# 这个前缀洗不掉，会一直挂在那 4 条上。
+#
+# 敢硬拒是因为这批词**可枚举、判断确定、没有合法反例** —— 没有任何被测系统
+# 的左侧菜单上会写着「其他」这一项。按 RULES.md ① 这就该硬拦。
+# **必须整名匹配**：「系统」是范围词，「系统管理」「系统设置」是正经模块。
+_SCOPE_WORDS = {
+    "平台自身", "平台自己", "本平台", "本系统", "平台", "系统", "通用", "公共",
+    "其他", "其它", "杂项", "临时", "默认", "未分类", "待分类", "综合", "全局",
+    "通用功能", "公共功能", "基础", "其他功能", "测试", "自测",
+    "COMMON", "MISC", "OTHER", "OTHERS", "GENERAL", "SYSTEM", "PLATFORM",
+    "DEFAULT", "TEMP", "UNCATEGORIZED", "MODULE",
+}
+
+
+def is_scope_word(name: str) -> bool:
+    return _norm_module(name) in {_norm_module(w) for w in _SCOPE_WORDS}
+
+
+def check_module_placement(name: str, tree: list[dict], parent_name: str | None
+                           ) -> tuple[list[str], list[str]]:
+    """**全树查重**（review-spec §11 规则 1-4）。`tree` 是全项目的模块清单，
+    每项 `{"name": ..., "parent": 父模块名或 None}`。
+
+    ## 事故现场
+
+    网关管理系统里，顶层有「本租户订阅(0)」「跨租户订阅(1)」，同时
+    「订阅管理」下面又有「本租户订阅(8)」「跨租户订阅(7)」——
+    **同一个东西摆在两处，用例被劈成两半**，顶层那两个还是空的。
+
+    **根因就在这个函数原来拿不到的东西**：建模块时平台只告诉 CC
+    「现在有哪些一级模块」，没给完整模块树。它看不见「订阅管理」下已经有这个
+    子模块，就在顶层又建了一个。原来那句"一级模块是按功能域分的"只是**警告**，
+    被无视了 —— 而无视一条无害的警告是完全理性的行为。
+
+    所以规则 1 是**判据的前提**，不是一条规则：不给全树，后面三条都判不出来。
+    """
+    errors: list[str] = []
+    warns: list[str] = []
+    key = _norm_module(name)
+    if not key:
+        return errors, warns
+
+    same = [n for n in (tree or []) if _norm_module(n.get("name") or "") == key]
+    if not same:
+        return errors, warns
+
+    here = [n for n in same if _norm_module(n.get("parent") or "") == _norm_module(parent_name or "")]
+    if here:
+        # 规则 2：同一位置已有 → 硬拒，用现成的
+        errors.append(
+            f"「{here[0]['name']}」已经在"
+            f"{('「' + parent_name + '」下') if parent_name else '顶层'}了 —— "
+            f"直接往它里面加用例，别再建一个。")
+        return errors, warns
+
+    tops = [n for n in same if not n.get("parent")]
+    subs = [n for n in same if n.get("parent")]
+
+    if (tops and parent_name) or (subs and not parent_name):
+        # 规则 4：一个在顶层、一个要挂到模块下 → **硬拒**。这就是事故现场那种，
+        # 放行就会把同一个东西劈成两处，而且两边都不完整。
+        where = (f"顶层已经有「{tops[0]['name']}」" if tops
+                 else f"「{subs[0]['parent']}」下已经有「{subs[0]['name']}」")
+        want = (f"「{parent_name}」下" if parent_name else "顶层")
+        errors.append(
+            f"{where}，你这次要建在{want} —— **同一个东西会被摆到两处，"
+            f"用例劈成两半，两边都不完整**（网关那边的「跨租户订阅」就是这么裂的）。"
+            f"先决定它归谁：要挂到模块下就把顶层那个搬进去，"
+            f"要放顶层就别在模块下再建。")
+        return errors, warns
+
+    if subs and parent_name:
+        # 规则 3：不同父模块下的同名子模块 → **允许**
+        # （「订阅管理/审批配置」和「服务管理/审批配置」确实是两回事），
+        # 但必须说出来，免得下次有人以为它俩是一个。
+        others = "、".join(f"「{n['parent']}」" for n in subs[:3])
+        warns.append(
+            f"注意：{others}下也有同名的「{name}」，你这次建的是「{parent_name}」下的。"
+            f"如果它们其实是同一个东西，现在合并还来得及。")
+    return errors, warns
+
+
+def find_split_modules(tree: list[dict]) -> list[dict]:
+    """平台自己找「同一处被拆两处」（§11 的合并动作）。
+
+    返回 `[{"name", "top", "under": [父模块名…]}]`。规则 4 只能拦住**新建**，
+    存量的裂口得平台主动指出来 —— 事故现场那两个顶层模块就是历史遗留，
+    没人会想起来去搜一遍。
+    """
+    by_key: dict[str, list[dict]] = {}
+    for n in (tree or []):
+        by_key.setdefault(_norm_module(n.get("name") or ""), []).append(n)
+    out = []
+    for nodes in by_key.values():
+        tops = [n for n in nodes if not n.get("parent")]
+        subs = [n for n in nodes if n.get("parent")]
+        if tops and subs:
+            out.append({"name": tops[0]["name"],
+                        "top": tops[0].get("count"),
+                        "under": [n.get("parent") for n in subs],
+                        "hint": f"顶层的「{tops[0]['name']}」和"
+                                f"{'、'.join('「' + str(n.get('parent')) + '」' for n in subs[:3])}"
+                                f"下的同名模块疑似同一处被拆成了两处。"
+                                f"把用例少的那边搬过去、空的删掉。"})
+    return out
+
+
 def check_module_name(name: str, existing: list[str], is_top_level: bool = True
                       ) -> tuple[list[str], list[str]]:
-    """模块名规范。返回 (硬错误, 软警告)。existing 是同级已有的名字。"""
+    """模块名规范。返回 (硬错误, 软警告)。existing 是同级已有的名字。
+
+    全树查重和摆放位置在 `check_module_placement`，这里只管**名字本身**。
+    """
     errors: list[str] = []
     warns: list[str] = []
     n = (name or "").strip()
     if not n:
         return ["模块名不能为空"], warns
+
+    # 规则 5：范围词 / 自指词硬拒。见 `_SCOPE_WORDS` 的注释 ——
+    # 这批词可枚举、判断确定、没有合法反例，而放行的代价是洗不掉的 case_code 前缀。
+    if is_scope_word(n):
+        return ([f"「{n}」是**范围词，不是模块名** —— 被测系统的左侧菜单上不会有这一项。"
+                 f"用真实的功能模块名（「用例管理」「订阅管理」这种，"
+                 f"菜单上指得到的东西）。"
+                 f"注意：模块名会生成 case_code 前缀，而且**改名之后前缀不变**，"
+                 f"现在起错了就洗不掉了。"], warns)
 
     # **重名写法先判**：`llm_providers` 既像两级、又是已有「LLM PROVIDERS」的
     # 另一种写法。这时候该说的是"用现成那个名字"，说"拆成 llm + providers"是把人带歪。
@@ -124,7 +249,10 @@ def check_module_name(name: str, existing: list[str], is_top_level: bool = True
                 f"**如果它本来就是一个词**（A/B 测试、CI/CD 这种），忽略这条。"
             )
 
-    if is_top_level and existing:
+    # `n in existing` 要单独判：上面那条只拦「拼写不同的重名」（`e != n`），
+    # 名字**一模一样**时它放行 —— 于是往已有模块里加用例，也会收到
+    # 「这是新建的一级模块」，而同一句里的「现有一级模块」列表就含它自己。
+    if is_top_level and existing and n not in existing:
         warns.append(
             f"⚠ 「{n}」是**新建的一级模块**。现有一级模块：{'、'.join(existing[:12])}。"
             f"确认它不该是其中某个的子模块 —— 一级模块是按被测系统的功能域分的，"

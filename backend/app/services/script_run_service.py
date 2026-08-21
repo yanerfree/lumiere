@@ -250,10 +250,15 @@ def sync_review_status(case) -> None:
 
     往回也自动：任何一维被打回调试，标签退回 NULL（待提审）。但**人已经审过的
     （approved/rejected）不动** —— 那是人的结论，不能被一次重跑悄悄抹掉。
+
+    `inconclusive`（无法审核）一样不动。它是**审过了、但这次没能得出结论**
+    （缺环境/环境挂了/没得跑），不是"还没审"。被这里冲回 pending 的话，
+    「有 4 条没跑成」这个事实就在下一次执行时静默消失了 —— 而报告页正是靠它
+    才能说清"这批通过的含金量"。
     """
     if case is None:
         return
-    if case.review_status in ("approved", "rejected"):
+    if case.review_status in ("approved", "rejected", "inconclusive"):
         return
     target = getattr(case, "target_level", None) or "spec"
     dims = ["manual"] + (["api"] if target in ("spec_api", "full") else []) \

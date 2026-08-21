@@ -25,10 +25,32 @@ def _case_to_dict(c) -> dict:
     }
 
 
+async def _module_tree(session: AsyncSession, branch_id) -> list[dict]:
+    """全项目的模块清单 `[{name, parent}]`。
+
+    **必须是全树，不能只给一级列表**（review-spec §11 规则 1）。原来只给一级，
+    于是 CC 看不见「订阅管理」下已经有「跨租户订阅」，就在顶层又建了一个 ——
+    同一个东西摆两处、用例劈成两半，顶层那个还是空的。
+    """
+    from sqlalchemy import select
+
+    from app.models.case import CaseFolder
+
+    rows = (await session.execute(
+        select(CaseFolder.id, CaseFolder.name, CaseFolder.parent_id)
+        .where(CaseFolder.branch_id == branch_id))).all()
+    by_id = {r[0]: r[1] for r in rows}
+    return [{"name": name, "parent": by_id.get(pid)} for _id, name, pid in rows]
+
+
 async def _check_module(session: AsyncSession, branch_id, module: str | None,
                         submodule: str | None) -> tuple[list[str], list[str]]:
-    """模块/子模块名过一遍规范。同级已有的名字要查出来给门禁 ——
-    「是不是同一个模块换了写法」只能跟同级比，跟全库比会把别的模块下的同名子模块算进来。
+    """模块/子模块名过一遍规范。
+
+    两件事分开做：
+    · **名字本身**（范围词、重名写法、看着像两级）→ `check_module_name`，跟同级比。
+    · **摆放位置**（同一处已有 / 顶层和子模块下各一个）→ `check_module_placement`，
+      跟**全树**比。后者原来根本没有，是「同一个东西摆两处」那个事故的根因。
     """
     from sqlalchemy import select
 
@@ -38,14 +60,19 @@ async def _check_module(session: AsyncSession, branch_id, module: str | None,
     errors: list[str] = []
     warns: list[str] = []
     bid = branch_id if not isinstance(branch_id, str) else uuid.UUID(branch_id)
+    tree = await _module_tree(session, bid)
+
     if module:
-        tops = [r[0] for r in (await session.execute(
-            select(CaseFolder.name).where(CaseFolder.branch_id == bid,
-                                          CaseFolder.parent_id.is_(None))
-        )).all()]
+        tops = [n["name"] for n in tree if not n["parent"]]
         e, w = intake_gate.check_module_name(module, tops, is_top_level=True)
         errors += e
         warns += w
+        if not e and not submodule:
+            # 只建一级模块时，位置就是顶层
+            e2, w2 = intake_gate.check_module_placement(module, tree, None)
+            errors += e2
+            warns += w2
+
     if submodule and module and not errors:
         parent = (await session.execute(
             select(CaseFolder).where(CaseFolder.branch_id == bid,
@@ -60,6 +87,15 @@ async def _check_module(session: AsyncSession, branch_id, module: str | None,
         e, w = intake_gate.check_module_name(submodule, sibs, is_top_level=False)
         errors += e
         warns += w
+        if not e:
+            e2, w2 = intake_gate.check_module_placement(submodule, tree, module)
+            errors += e2
+            warns += w2
+
+    # 存量的裂口平台主动指出来 —— 规则只拦得住新建，
+    # 事故现场那两个顶层空模块是历史遗留，没人会想起来去搜一遍。
+    for s in intake_gate.find_split_modules(tree)[:2]:
+        warns.append("⚠ " + s["hint"])
     return errors, warns
 
 
