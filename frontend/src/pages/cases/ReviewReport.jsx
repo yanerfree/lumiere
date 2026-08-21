@@ -229,7 +229,10 @@ function ModuleReport({ d, projectId, navigate }) {
               <li key={i} style={{ marginBottom: 6 }}>
                 <Tag color={c.severity === 'blocker' ? 'error' : 'warning'}
                   style={{ fontSize: 10 }}>{c.count} 条</Tag>
-                {c.sample}
+                {/* label 是人话（「验的端点页面根本不调」），kind 是判据名 ——
+                    只显示 kind 的话没人知道该改什么，而这一块的价值全在"改一处修一片" */}
+                <b>{c.label || c.kind}</b>
+                <div style={{ color: '#4e5969', marginTop: 2 }}>{c.sample}</div>
                 <div style={{ color: '#86909c', fontSize: 11 }}>{(c.cases || []).join('、')}</div>
               </li>
             ))}

@@ -59,7 +59,43 @@ _SYSTEM = """你在给一个测试模块做覆盖体检。给你这个模块**�
 
 
 def _norm_kind(kind: str) -> str:
-    return re.sub(r"[^a-z_]", "", (kind or "other").lower()) or "other"
+    return re.sub(r"[^a-z_]", "", (kind or "").lower())
+
+
+# 判据 kind → 人话。**没有这张表这一页就没法读**：一列
+# `endpoint_not_used_by_page` 谁也不知道该改什么，而这一块存在的理由
+# 恰恰是"改一处能修一片"——说不清是哪一处就白搭。
+_KIND_LABEL = {
+    "tautology_assertion": "断言恒真（写了等于没写）",
+    "missing_baseline": "改之前没取基线",
+    "no_readback": "改完没读回来确认",
+    "control_plane_only": "只打了控制面，没验真生效",
+    "status_only_assertion": "只断状态码，没断内容",
+    "vague_expectation": "预期是「显示正常」这类模糊话",
+    "control_group_in_one": "对照组挤在一条用例里",
+    "endpoint_not_used_by_page": "验的端点页面根本不调",
+    "traffic_not_covered": "页面真发的写请求没人验",
+    "script_no_action": "脚本里一个页面动作都没有",
+    "script_fewer_actions": "脚本动作数远少于步骤数",
+    "ui_script_hard_error": "UI 脚本必挂",
+    "i18n_key_not_in_dict": "文案键不在词典里",
+    "step_action_not_in_script": "步骤写的操作脚本里没有",
+    "no_assertion_for_expectations": "写了预期却一个断言都没有",
+    "expectation_not_asserted": "某几条预期没有对应检查",
+    "verify_step_without_assertion": "「验证」步骤没带断言",
+    "script_cannot_run": "真跑挂在脚本自己身上",
+    "residue_not_cleaned": "跑完没清理造的数据",
+    "cleanup_failed": "清理发起了但没删掉",
+    "no_traffic_captured": "跑了但没录到流量（没得对账）",
+    "expectation_copied_from_impl": "预期照着实现抄",
+    "assertion_cannot_fail": "这条断言不可能红",
+    "no_real_verification": "通篇没有验证该功能的动作",
+}
+_DIM_LABEL = {
+    "scenario_sanity": "场景合理性", "verification_depth": "验证点到位",
+    "api_necessity": "接口必要性", "ui_correctness": "UI 脚本正确性",
+    "self_coverage": "本条覆盖完整性", "discipline": "可执行与纪律",
+}
 
 
 async def common_issues(session, case_ids: list) -> list[dict]:
@@ -78,8 +114,18 @@ async def common_issues(session, case_ids: list) -> list[dict]:
         for f in ((reason or {}).get("findings") or []):
             if f.get("severity") not in ("blocker", "major"):
                 continue
+            # **模型产出的 finding 没有 kind，只有 dimension** —— 全归到一个
+            # `other` 桶的话，这一页最大的一格写着「5× other」，等于没说。
+            # 活体验证第一次跑出来就是这样。没 kind 就按维度分桶。
             k = _norm_kind(f.get("kind"))
-            b = buckets.setdefault(k, {"kind": k, "count": 0, "cases": [],
+            dim = str(f.get("dimension") or "")
+            if k:
+                label = _KIND_LABEL.get(k, k)
+            elif dim:
+                k, label = f"dim:{dim}", f"{_DIM_LABEL.get(dim, dim)}（模型判的）"
+            else:
+                k, label = "other", "其他"
+            b = buckets.setdefault(k, {"kind": k, "label": label, "count": 0, "cases": [],
                                        "severity": f.get("severity"),
                                        "sample": str(f.get("detail")
                                                       or f.get("problem") or "")[:220]})
@@ -144,8 +190,17 @@ async def run(session, branch_id, *, folder_id=None, module: str | None = None,
     if folder is None:
         return {"error": "找不到这个模块"}
 
+    # **要连子模块一起算**（§8「这个模块全部用例」）。只查直属的话，
+    # 「订阅管理」这种把用例全放在子模块（审批配置/本租户订阅/跨租户订阅）里的
+    # 会被算成 0 条 —— 活体验证第一次跑就是这个结果，报告上一片空白，
+    # 看起来像"这个模块很干净"，实际是 16 条一条都没看。
+    folder_ids = [folder.id] + [
+        r for r in (await session.execute(
+            select(CaseFolder.id).where(CaseFolder.branch_id == bid,
+                                        CaseFolder.path.like(f"{folder.path}/%")))).scalars().all()
+    ]
     cases = (await session.execute(
-        select(Case).where(Case.branch_id == bid, Case.folder_id == folder.id,
+        select(Case).where(Case.branch_id == bid, Case.folder_id.in_(folder_ids),
                            Case.deleted_at.is_(None))
         .order_by(Case.case_code))).scalars().all()
     if not cases:

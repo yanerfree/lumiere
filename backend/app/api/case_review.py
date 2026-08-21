@@ -60,6 +60,25 @@ async def review_one(
 
 # ── 批量审核：入队 + 轮询，不再是一次长 POST ──────────────────────
 
+async def _folder_scope(session, branch_id, folder_id):
+    """这个模块**连同子模块**的所有目录 id。
+
+    **不能只查直属**：「订阅管理」的 16 条用例全挂在它的子模块下
+    （审批配置 1 / 本租户订阅 8 / 跨租户订阅 7），直属是 0 条。
+    活体验证第一次跑模块体检就返回「用例 0」—— 报告一片空白，
+    看起来像"这个模块很干净"，实际一条都没看。
+    """
+    from app.models.case import CaseFolder
+    if not folder_id:
+        return None
+    f = await session.get(CaseFolder, folder_id)
+    if f is None:
+        return [folder_id]
+    subs = (await session.execute(
+        select(CaseFolder.id).where(CaseFolder.branch_id == branch_id,
+                                    CaseFolder.path.like(f"{f.path}/%")))).scalars().all()
+    return [f.id, *subs]
+
 async def _resolve_env(session, project_id, env_id):
     """挑这次在哪个环境上跑。**环境是结论的一部分**（§5）——
     测试环境过了不等于预发环境也过，所以它要跟着批次一起落库。
@@ -135,8 +154,9 @@ async def review_scope_preview(
     在 3 页的模块上就是错的。显示一个错数字比不显示更糟：人是按它做决定的。
     """
     base = [Case.branch_id == branch_id, Case.deleted_at.is_(None)]
-    if folder_id:
-        base.append(Case.folder_id == folder_id)
+    scope = await _folder_scope(session, branch_id, folder_id)
+    if scope:
+        base.append(Case.folder_id.in_(scope))
     total = (await session.execute(
         select(func.count(Case.id)).where(*base))).scalar_one()
     incremental = (await session.execute(
@@ -190,8 +210,10 @@ async def review_batch(
 
     if not case_ids:
         stmt = select(Case.id).where(Case.branch_id == branch_id, Case.deleted_at.is_(None))
-        if folder_id:
-            stmt = stmt.where(Case.folder_id == folder_id)
+        fscope = await _folder_scope(session, branch_id, folder_id)
+        if fscope:
+            # 连子模块一起 —— 见 `_folder_scope` 的说明
+            stmt = stmt.where(Case.folder_id.in_(fscope))
         if scope == "incremental":
             # 「只审没审过的和被打回的」。**无法审核的也算没审过** ——
             # 它上次就是因为环境不行才没得出结论，正是这次该补的那批。
