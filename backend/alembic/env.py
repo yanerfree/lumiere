@@ -43,6 +43,9 @@ from app.models.skill import Skill, SkillVersion  # noqa: F401 — 项目 Skill�
 # 库里有、metadata 里没有，在 alembic 眼里就是"多余的表"。review_round 之前就漏在外面。
 from app.models.review_round import CaseReviewRound  # noqa: F401
 from app.models.review_batch import ReviewBatch, ReviewBatchItem  # noqa: F401
+from app.models.endpoint_diff import (  # noqa: F401 — 版本升级·分支对账清单
+    EndpointDiffBatch, EndpointDiffHit,
+)
 
 config = context.config
 if config.config_file_name is not None:

@@ -30,6 +30,11 @@ router = APIRouter(
 
 MAX_BATCH = 30          # 一次最多评这么多条 —— 再多就该分模块评，报告也没人看得完
 
+# 这里原来有个内存进度台账 `_BATCH_PROGRESS`（批量是一次长 POST 时的产物）。
+# 批次改成落库 + 队列之后它就多余了 —— 留着最坏：一份**看起来还在用**的
+# 内存状态，会让人以为进度仍然是"刷新就丢、重启就没"的。进度现在在
+# `review_batches` 表上，见 `queue.py`。
+
 
 async def _config(project_id: uuid.UUID, session: AsyncSession):
     cfg = await resolve_ai_config(project_id, session, capability="tb-quality-review")
@@ -428,6 +433,121 @@ async def review_override(
                         summary=reason, actor=current_user.username)
     await session.commit()
     return {"data": {"verdict": verdict}}
+
+
+@router.get("/deprecate-pending")
+async def list_deprecate_pending(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """这个分支上挂着「待废审」等人拍板的。列表页的徽标和详情页的提示条都读它。
+
+    **一条一条点，不做批量。** 误废一条用例，那块功能就再没人测了，
+    而且**永远不报错** —— 没有任何信号会说"这里本来该有覆盖"。
+    批量确认按钮的存在本身就是在鼓励不看证据就点过去。
+    """
+    rows = (await session.execute(
+        select(Case).where(Case.branch_id == branch_id, Case.deleted_at.is_(None),
+                           Case.deprecate_status == "requested")
+        .order_by(Case.case_code)
+    )).scalars().all()
+    return {"data": [{
+        "id": str(c.id), "caseCode": c.case_code, "title": c.title,
+        "targetLevel": c.target_level,
+        "reason": (c.deprecate_reason or {}).get("reason"),
+        "evidence": (c.deprecate_reason or {}).get("evidence"),
+        "requestedBy": (c.deprecate_reason or {}).get("requestedBy"),
+        "requestedAt": (c.deprecate_reason or {}).get("requestedAt"),
+        "note": (c.deprecate_reason or {}).get("note"),
+        "platformProbe": (c.deprecate_reason or {}).get("platformProbe"),
+    } for c in rows]}
+
+
+@router.post("/cases/{case_id}/deprecate-decide")
+async def deprecate_decide(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    case_id: uuid.UUID,
+    approve: bool = Query(...),
+    note: str | None = Query(default=None),
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """人确认或驳回一条废弃请求。批准才落 lifecycle_status=deprecated。
+
+    驳回的语义是「这是要改，不是要废」—— 用例回到要改堆，不是被否掉。
+    """
+    from app.services import branch_diff_review
+
+    out = await branch_diff_review.decide_deprecate(
+        session, case_id, approve=approve, note=note,
+        user_id=current_user.id, actor=current_user.username,
+    )
+    if out.get("error"):
+        raise AppError(code="DEPRECATE_DECIDE_FAILED", message=out["error"], status_code=400)
+    await session.commit()
+    return {"data": out}
+
+
+@router.post("/cases/{case_id}/deprecate-undo")
+async def deprecate_undo(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    case_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """撤销废弃，回草稿。**废弃可逆是 AI 敢直接批准的前提之一**，所以这条必须有。"""
+    from app.services import branch_diff_review
+
+    out = await branch_diff_review.undo_deprecate(session, case_id)
+    if out.get("error"):
+        raise AppError(code="DEPRECATE_UNDO_FAILED", message=out["error"], status_code=400)
+    await session.commit()
+    return {"data": out}
+
+
+@router.get("/branch-diff")
+async def branch_diff_summary(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+):
+    """这个分支对过账没有、分了几堆。分支复制窗口和用例列表的提示条读它。"""
+    from app.models.endpoint_diff import EndpointDiffBatch, EndpointDiffHit
+
+    batches = (await session.execute(
+        select(EndpointDiffBatch).where(EndpointDiffBatch.branch_id == branch_id)
+        .order_by(EndpointDiffBatch.created_at)
+    )).scalars().all()
+    if not batches:
+        return {"data": {"reconciled": False}}
+
+    hit_ids = set((await session.execute(
+        select(EndpointDiffHit.case_id)
+        .where(EndpointDiffHit.batch_id.in_([b.id for b in batches]))
+    )).scalars().all())
+    total = (await session.execute(
+        select(Case).where(Case.branch_id == branch_id, Case.deleted_at.is_(None))
+    )).scalars().all()
+    pending_new: list = []
+    for b in batches:
+        pending_new.extend(b.pending_new or [])
+    return {"data": {
+        "reconciled": True,
+        "batches": len(batches),
+        "lastAt": batches[-1].created_at.isoformat() if batches[-1].created_at else None,
+        "fromRef": batches[-1].from_ref, "toRef": batches[-1].to_ref,
+        "revise": len([c for c in total if c.id in hit_ids]),
+        "reuse": len([c for c in total if c.id not in hit_ids
+                      and c.lifecycle_status != "deprecated"]),
+        "pendingNew": len(pending_new),
+        "deprecated": len([c for c in total if c.lifecycle_status == "deprecated"]),
+        "pendingDeprecate": len([c for c in total if c.deprecate_status == "requested"]),
+    }}
 
 
 @router.get("/review-report")

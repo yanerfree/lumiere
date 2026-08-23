@@ -143,18 +143,33 @@ class TestLoginInactiveUser:
 class TestJwtTokenUnit:
 
     @pytest.mark.unit
-    def test_jwt_token_expires_in_8_hours(self):
-        """AC: JWT token 有效期 8 小时"""
+    def test_access_token有效期跟配置一致(self):
+        """access token 是**短期**的，长度由 settings.access_token_expire_minutes 决定。
+
+        这条原来写死断言「8 小时」（Story 1.2 的初版 AC），实测 1800s 一直是红的 ——
+        因为后来改成了**短 access + 长 refresh** 的双 token 设计
+        （auth_service.issue_token_pair + POST /api/auth/refresh），
+        access token 短命才是对的，8 小时反而是漏洞。
+
+        改成对着配置断言，而不是再写死一个数：写死的话下次调整过期时间又会红一次，
+        而那次红说明不了任何问题。这里只钉两件事 ——
+        ① 长度确实等于配置值；② 它确实是"短期"的（不超过 2 小时），
+        后者才是这条测试真正想守的那条线。
+        """
         import uuid
+
+        from app.config import settings
         from app.core.security import create_access_token, decode_token
 
-        user_id = uuid.uuid4()
-        token = create_access_token(user_id=user_id, role="user")
+        token = create_access_token(user_id=uuid.uuid4(), role="user")
         payload = decode_token(token)
-
-        # Then: exp - iat ≈ 8 hours (28800 seconds)
         duration = payload["exp"] - payload["iat"]
-        assert 28000 <= duration <= 29000, f"Token 有效期 {duration}s，不在 8h 范围内"
+
+        expected = settings.access_token_expire_minutes * 60
+        assert duration == expected, f"有效期 {duration}s，配置说 {expected}s"
+        assert duration <= 2 * 3600, (
+            f"access token {duration}s 太长了 —— 双 token 设计的前提是它短命，"
+            "长效凭据该走 refresh token")
 
     @pytest.mark.unit
     def test_jwt_valid_token_decodes_correctly(self):

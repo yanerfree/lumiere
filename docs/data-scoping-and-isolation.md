@@ -280,7 +280,7 @@ CLAUDE.md 里那句「直接占用 `/v1/chat/completions` 会被拒，你配成 
 | `mock_routes` / `api_mock_routes` / `grpc·tcp·udp·ws_mock_*` / `*_mock_logs` / `custom_mock_presets` | 全局 | **留全局**，改 path 约束（§5） |
 | `http_requests`（47 条） | 全局，零 FK | 留全局 —— 接口调试草稿箱，无所谓 |
 | `ai_global_settings` / `ai_capability_bindings` | 全局 | 留全局；项目级覆盖本来就排在二期 |
-| `setup_refs` | 全局，零 FK，**0 条数据** | 倾向留全局（靠 `condition_pattern` + `base_url` 匹配，base_url 天然带项目区分，跨项目复用 setup 代码是它存在的理由）。**但它 0 条数据、没被任何 MCP 工具引用 —— 动手时先确认是不是死代码** |
+| `setup_refs` | 全局，零 FK，**0 条数据，已确认是死代码** | **不动。** `new_setup_refs` 只在 `step_generator.py` 内部产生和返回，**没有任何调用方消费** —— 从没落过库。而 step_generator 属于已封存的平台侧 UI 生成链，删表要动封存代码，白费 |
 | `healing_archives` / `failure_tickets` / `case_review_rounds` | → `case_id` | 已归属 |
 | `exploratory_findings` | → `exploratory_sessions.project_id` | 已归属 |
 
@@ -299,8 +299,15 @@ CLAUDE.md 里那句「直接占用 `/v1/chat/completions` 会被拒，你配成 
 
 ### 验证方式（不是"编译过了"）
 
-- 单测：`tests/test_mcp_data_scope.py` 24 条 + `tests/test_env_project_scoped.py` 15 条，
-  全套 1118 条通过。
+- **两套测试都跑了**（这一点自己先漏过一次，见下）：
+  - `backend/tests/` —— 单测 + 结构封样，1130 条通过。新增
+    `test_mcp_data_scope.py` 24 条、`test_env_project_scoped.py` 27 条。
+  - 根目录 `tests/` —— 打真接口（`testbench_test` 库）。`tests/api/variables/` 29 条通过，
+    其中 12 条是这次新写的跨项目隔离用例。
+
+  ⚠ **两个目录都叫 `tests/`。** 环境项目化时只跑了 `backend/tests/`，1130 全绿，
+  而根目录那套有 14 条红在旧路径上 —— 「后端全绿、页面全 404」就是这么来的。
+  改路由/改路径必须两套都跑，CLAUDE.md 里已加了命令。
 - 反查 SQL **逐条真打库跑过**（14/14）—— 表名写错不会有编译期提示，而这一层是
   fail open 的，写错的症状是"静默失效、每次都放行"。
 - 端到端（MCP）：临时建一把 UAG 项目的 Key，in-process 驱动真中间件 + 真库，17 项全过。

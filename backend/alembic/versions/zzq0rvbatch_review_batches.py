@@ -1,7 +1,10 @@
 """审核批次落库 —— 一次审核 = 一条记录
 
 Revision ID: zzq0rvbatch
-Revises: zzp0gvarproj
+Revises: zzq0bdiff
+
+（原来接在 zzp0gvarproj 后面，和版本升级那条 `zzq0bdiff` 撞成两个 head ——
+合并时重新串到它后面。两条互不相干，谁先谁后都行。）
 
 批量审核原来是一次长 POST + 一份内存台账（只留最近 20 批）。三个后果都真实发生过：
 刷新页面就丢（30 条实测跑满 5 分钟，这五分钟不能碰浏览器）；重启之后正在跑的
@@ -16,7 +19,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "zzq0rvbatch"
-down_revision = "zzp0gvarproj"
+down_revision = "zzq0bdiff"
 branch_labels = None
 depends_on = None
 

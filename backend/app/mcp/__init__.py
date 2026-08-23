@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff
 
 mcp = FastMCP(
     name="testBench",
@@ -381,7 +381,7 @@ _section("用例·手工步骤")
 _register(
     test_cases.list_cases,
     name="tb_list_cases",
-    description="列出分支下的用例（手工步骤那一层）。找已有用例、确认编号、看某模块测了哪些时用。**断点续跑靠它**：传 pending_only=true 只返回还欠着的那些 —— target_level 说这条要做到哪一步（spec 只要步骤 / spec_api 步骤+接口 / full 三件套），三个维度状态说已经做到哪一步，差集就是待办；返回里的 owes 直接列出还欠哪几维。中断之后重跑不用从头来，也不会把做完的又捡回来重做。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, module(按模块名，省得先查folder_id), priority(P0/P1/P2/P3), case_type(e2e=场景 / api=单接口), target_level(spec/spec_api/full), ui_status/api_status/manual_status(draft草稿/debugging调试中/completed完成), pending_only(默认false)，**bug_state**('blocked'=关联的 bug 还没验回来，跟 git 上已关闭 issue 取交集就是该回来调的那批，批量回归也会跳过它们；'fixed'=抓到过 bug 且已验回来的痕迹清单；'none'=从没关联过)",
+    description="列出分支下的用例（手工步骤那一层）。找已有用例、确认编号、看某模块测了哪些时用。**断点续跑靠它**：传 pending_only=true 只返回还欠着的那些 —— target_level 说这条要做到哪一步（spec 只要步骤 / spec_api 步骤+接口 / full 三件套），三个维度状态说已经做到哪一步，差集就是待办；返回里的 owes 直接列出还欠哪几维。中断之后重跑不用从头来，也不会把做完的又捡回来重做。参数: branch_id(分支UUID), page, page_size, keyword, folder_id, module(按模块名，省得先查folder_id), priority(P0/P1/P2/P3), case_type(e2e=场景 / api=单接口), target_level(spec/spec_api/full), **lifecycle_status**(draft/done/deprecated —— 不传时**自动排除已废弃的**；要找回废弃的用例就显式传 deprecated，否则撤销都撤不了), ui_status/api_status/manual_status(draft草稿/debugging调试中/completed完成), pending_only(默认false)，**bug_state**('blocked'=关联的 bug 还没验回来，跟 git 上已关闭 issue 取交集就是该回来调的那批，批量回归也会跳过它们；'fixed'=抓到过 bug 且已验回来的痕迹清单；'none'=从没关联过)",
 )
 
 _register(
@@ -419,6 +419,28 @@ _register(
     name="tb_check_deliverable",
     description="【交付门禁·做完自己先跑】这条用例现在**能不能交付**，只读不改任何状态。回三类结论：blockers=交不了（有一条就是不可交付：欠维度/一步没跑过/有步骤挂着/断言把布尔写成字符串这种必然假红）、risks=交得了但脆（典型是异步断言没开 retry_timeout_ms —— 跑绿了也是侥幸跑赢时间窗，换台机器就红；还有只跑了勾选的一部分、流量被截断）、notes=要你自己判断的（疑似越界的测试点、只用 body_contains 兑付「应产生/应记入」这类承诺、请求体里的驼峰键）。**别再自己宣布「这条可以交付了」** —— 跑这个，把它的结论贴出来。参数: case_id(用例UUID)",
 )
+
+_section("版本升级·分支对账")
+
+_register(
+    branch_diff.list_branch_endpoints,
+    name="tb_list_branch_endpoints",
+    description="【版本升级·对账第一步】这个分支的用例依赖了哪些端点、哪些字段 —— 反查的**平台那一半**（另一半「新版本改了什么」在你本机 git 里，两半求交集才是影响清单，所以平台单独产不出清单）。回每个端点的归一化路径模板 + 用它的用例编号/场景/步骤名/期望状态码/断言字段路径。⚠ **必读返回里的「覆盖不到的」**：手工步骤和 UI 脚本里没有结构化 method/url，这套反查探不到它们 —— 纯 UI 改版在这份表上一个字都不会变，而「没命中」下一步会被当成「可以照抄」。参数: branch_id(分支UUID)",
+)
+
+_register(
+    branch_diff.apply_endpoint_diff,
+    name="tb_apply_endpoint_diff",
+    description="【版本升级·对账第二步】把新版本的变更报上来求交集落清单，**一个用例都不改**。分堆：命中→要改（removed→该废候选）、未命中→照抄、kind=added→待补用例。changes 每条 {url, method, kind, detail}；kind: removed(端点没了) / field_changed(字段变了，detail必填) / new_state(新增状态值，detail必填) / renamed(改名挪位置 → **要改不是要废**) / added(新端点 → 待补用例，**不报就零覆盖且永远不报错**)。url 用路由声明的写法，平台归一化后匹配（剥 host/query、id 段和变量压成通配、容忍部署前缀差异），**故意偏向多命中** —— 多命中只多审一次，漏命中是假绿。可多次调补交：命中累积、重复不重落，**新命中的会撤回已自动过审的用例**。命中的用例预期落款自动打回「待重新确认」。参数: branch_id, changes(数组), from_ref(旧版本号), to_ref(新版本号)",
+)
+
+_register(
+    branch_diff.request_deprecate,
+    name="tb_request_deprecate",
+    description="提请废弃一条用例（新版本上这个场景不存在了）。**平台硬校验证据，交不齐不受理** —— 假废弃比假绿更毒：误废一条，那块功能就再没人测了而且**永远不报错**（假绿至少还在回归池里刷红）。证据要正反两面：正面 apiProbe=[{url,method,status}] 打老端点拿 404/410，或 uiProbe=[{page,找了什么,结论,截图}]；反面 searchedElsewhere=[...] 排除改名/挪菜单/拆页面（这三种在 UI 上都长得像「没了」）。提请只挂「待废审」，**用例状态一个字不动**，要等批准才落 deprecated。批准走 tb_review_case（有待决请求时它改审「该不该废」，平台自己复核接口那半边）或人在页面上一条条确认；探不出来一律落人。参数: case_id, reason(一句话), evidence(证据对象)",
+)
+
+_section("用例·手工步骤")
 
 _register(
     test_cases.create_case,

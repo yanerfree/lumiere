@@ -255,6 +255,104 @@ function RunSteps({ steps }) {
  * 失败归因**不进页签**，留在最上面：那是失败时唯一要人动手的东西，
  * 藏进页签就等于藏起来了。
  */
+// 详情页顶部的废弃提示条。列表页那个徽标是「一眼看到有东西等我」，
+// 这里是「看完证据再决定」—— 所以证据要摊开，不藏在 tooltip 里。
+//
+// 两个按钮跟列表页同一套语义：确认要二次弹窗（误废一条，那块功能就再没人测了，
+// 而且永远不报错），驳回不弹（驳回=「这是要改，不是要废」，什么都没丢）。
+function DeprecateBanner({ info, projectId, branchId, caseId, onDone }) {
+  if (!info) return null
+  const { status, reason, lifecycle } = info
+  const ev = reason?.evidence || {}
+
+  const post = async (path, okMsg) => {
+    try {
+      await api.post(`/projects/${projectId}/branches/${branchId}/cases/${caseId}/${path}`)
+      message.success(okMsg)
+      onDone?.()
+    } catch (e) { message.error(e.message || '操作失败') }
+  }
+
+  if (lifecycle === 'deprecated') {
+    return (
+      <Alert type="info" showIcon style={{ marginBottom: 16 }}
+        title={<span>这条已废弃 · {reason?.decidedBy === 'ai' ? 'AI 批准' : '人工批准'}
+          {reason?.decidedAt ? ` · ${String(reason.decidedAt).slice(0, 19).replace('T', ' ')}` : ''}</span>}
+        description={
+          <div style={{ fontSize: 12 }}>
+            {reason?.reason && <div>理由：{reason.reason}</div>}
+            {reason?.note && <div style={{ marginTop: 2, color: '#8c8c8c' }}>{reason.note}</div>}
+            <div style={{ marginTop: 6, color: '#8c8c8c' }}>
+              已废弃的用例不进待办队列、不进批量回归、不算进通过率分母；建计划时会被拦住。
+            </div>
+          </div>
+        }
+        action={
+          <Button size="small" onClick={() => Modal.confirm({
+            title: '撤销废弃，回到草稿？',
+            content: '它会回到草稿、审核标签清空 —— 要重新走一遍验证和审核。',
+            okText: '撤销废弃', cancelText: '算了',
+            onOk: () => post('deprecate-undo', '已撤销，回到草稿'),
+          })}>撤销废弃</Button>
+        }
+      />
+    )
+  }
+
+  if (status !== 'requested') return null
+  return (
+    <Alert type="warning" showIcon style={{ marginBottom: 16 }}
+      title={<span><b>有人申请废弃这条用例，等你拍板</b>{reason?.requestedBy ? ` · 提请方 ${reason.requestedBy}` : ''}</span>}
+      description={
+        <div style={{ fontSize: 12 }}>
+          <div style={{ marginBottom: 4 }}>理由：{reason?.reason || '（没写）'}</div>
+          {(ev.apiProbe || []).length > 0 && (
+            <div style={{ marginBottom: 2 }}>正面·接口：{ev.apiProbe.map((p, i) => (
+              <span key={i} style={{ marginRight: 10, fontFamily: 'var(--font-mono)' }}>
+                {p.method} {p.url} → {p.status}
+              </span>
+            ))}</div>
+          )}
+          {(ev.uiProbe || []).length > 0 && (
+            <div style={{ marginBottom: 2 }}>正面·页面：{ev.uiProbe.map((p, i) => (
+              <span key={i} style={{ marginRight: 10 }}>{p.page} 找「{p['找了什么']}」→ {p['结论']}</span>
+            ))}</div>
+          )}
+          {(ev.searchedElsewhere || []).length > 0 && (
+            <div style={{ marginBottom: 2 }}>反面排查：{ev.searchedElsewhere.join('；')}</div>
+          )}
+          {reason?.note && <div style={{ marginTop: 4, color: '#d48806' }}>平台/AI：{reason.note}</div>}
+          {(reason?.platformProbe?.结果 || []).length > 0 && (
+            <div style={{ marginTop: 4, color: '#8c8c8c' }}>
+              平台自己复核：{reason.platformProbe.结果.map((p, i) => (
+                <span key={i} style={{ marginRight: 10 }}>{p.步骤}：{p.结论}</span>
+              ))}
+            </div>
+          )}
+          <div style={{ marginTop: 6, color: '#d48806' }}>
+            <b>「我在页面上找不到」不等于「这个功能没了」</b> ——
+            入口挪到二级菜单、改名、拆成两个页面，在 UI 上都长得像没了。
+            误废一条用例，那块功能就再没人测了，<b>而且永远不报错</b>。拿不准就驳回。
+          </div>
+        </div>
+      }
+      action={
+        <Space orientation="vertical" size={4}>
+          <Button size="small" danger onClick={() => Modal.confirm({
+            title: '确认废弃这条用例？',
+            content: '废弃后不进待办、不进回归、不算通过率分母。可撤销、会留痕。',
+            okText: '确认废弃', okButtonProps: { danger: true }, cancelText: '先不废',
+            onOk: () => post('deprecate-decide?approve=true', '已确认废弃'),
+          })}>确认废弃</Button>
+          <Button size="small" onClick={() => post('deprecate-decide?approve=false', '已驳回 —— 这条回到「要改」')}>
+            驳回（这是要改）
+          </Button>
+        </Space>
+      }
+    />
+  )
+}
+
 function RunDetail({ run, projectId, branchId, caseId, onConfirmed }) {
   const r = run
   const traffic = r.capturedRequests || r.captured_requests
@@ -2090,6 +2188,10 @@ export default function CaseDetail() {
   const [lifecycleStatus, setLifecycleStatus] = useState('draft')
   // 审核标签（NULL = 待提审，不显示）
   const [reviewStatus, setReviewStatus] = useState(null)
+  // 废弃审核的只读信息。**刻意不放进 vals/savedRef** —— 那份快照参与脏检查，
+  // 把只读字段塞进去，用例一加载完就会被判成「有未保存的修改」，点返回必弹确认框
+  // （reviewStatus 当年就是这么踩的，注释还留在下面）。
+  const [deprecate, setDeprecate] = useState(null)
   const [manualStatus, setManualStatus] = useState('draft')
   // 这条要做到哪一步（spec/spec_api/full）。CC 靠它决定做几维，
   // 页面上原来根本不显示 —— 于是「UI·草稿」到底是没做还是不做，人分不出来。
@@ -2241,6 +2343,8 @@ export default function CaseDetail() {
       // 用例一加载完就被判成「有未保存的修改」，点返回必弹确认框。
       // 往 currentSnap 里加字段时，setter 必须跟着加。
       setReviewStatus(vals.reviewStatus)
+      setDeprecate({ status: c.deprecateStatus || null, reason: c.deprecateReason || null,
+                     lifecycle: c.lifecycleStatus || 'draft' })
       setIsCore(vals.isCore)
       setPreconditions(vals.preconditions); setExpectedResult(vals.expectedResult)
       setScriptRefFile(vals.scriptRefFile); setScriptRefFunc(vals.scriptRefFunc)
@@ -2393,6 +2497,9 @@ export default function CaseDetail() {
         <span style={{ color: 'rgba(0,0,0,0.15)', fontSize: 12 }}>/</span>
         <span style={{ fontSize: 12, color: '#86909c', fontFamily: 'var(--font-mono)' }}>{caseCode}</span>
       </div>
+
+      <DeprecateBanner info={deprecate} projectId={projectId} branchId={branchId}
+        caseId={caseId} onDone={() => window.location.reload()} />
 
       <Card styles={{ body: { padding: '16px 20px' } }} style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>

@@ -489,7 +489,18 @@ async def check_branch(session: AsyncSession, branch_id: str,
     要做的事却完全不同：一个改断言，一个加 retry_timeout_ms。
     """
     bid = uuid.UUID(branch_id)
-    q = select(Case).where(Case.branch_id == bid, Case.deleted_at.is_(None))
+
+    # **验收之前先结算照抄堆。** 版本升级时未被对账清单命中、内容与上一版逐字一致、
+    # 上一版已审通过、这一版跑绿且断言咬得住的那些，四条件全过就自动过审 ——
+    # 在这里结算是因为验收看到的必须是**结算之后**的状态，否则一批本该自动通过的
+    # 用例会以「待人审」的样子出现在验收结论里，而人点开发现无事可做。
+    # 没对过账的分支这一步是空操作（「未被清单命中」在没有清单时不成立）。
+    from app.services import branch_diff_review
+    settle = await branch_diff_review.evaluate_auto_approve(session, str(bid))
+
+    # 废弃的不进交付门禁 —— 它不算欠着，也不算可交付，它就是不在盘子里了。
+    q = select(Case).where(Case.branch_id == bid, Case.deleted_at.is_(None),
+                           Case.lifecycle_status != "deprecated")
     if module:
         from app.models.case import CaseFolder
         folders = (await session.execute(
@@ -556,12 +567,30 @@ async def check_branch(session: AsyncSession, branch_id: str,
         },
         "moduleGaps": gaps,
         "cases": rows,
+        # 版本升级时才有内容：这一趟自动过审结算了几条、哪几条还差什么。
+        # 没对过账的分支只回一句说明。
+        "照抄堆结算": settle if (settle.get("结算") or settle.get("还没够条件的")) else None,
+        "待人拍板的废弃": await _pending_deprecate(session, bid),
         "verdict": _branch_verdict(len(rows), deliverable, blocked, risky, waiting_review, gaps),
         "usage": "blockers=交不了，必须先修；riskKinds=交得了但会偶发红；"
                  "review=pending 表示三维都完成了、等你审（不审也能建计划跑）；"
                  "blockedByBug=卡在产品 bug（还没验回来），别重跑；"
                  "hasFixedBug=这条抓到过 bug 且已验回来，是痕迹不是待办。",
     }
+
+
+async def _pending_deprecate(session: AsyncSession, bid) -> list | None:
+    """挂着「待废审」等人拍板的。**必须在验收里露出来** —— 这是人在这条链上
+    出现的三次之一，不报的话它就静静挂在那儿，没人知道有东西在等自己。"""
+    rows = (await session.execute(
+        select(Case).where(Case.branch_id == bid, Case.deleted_at.is_(None),
+                           Case.deprecate_status == "requested")
+    )).scalars().all()
+    return [{
+        "caseCode": c.case_code, "caseId": str(c.id), "标题": c.title,
+        "理由": (c.deprecate_reason or {}).get("reason"),
+        "AI/平台说": (c.deprecate_reason or {}).get("note"),
+    } for c in rows] or None
 
 
 async def _defect_verdict(session: AsyncSession, case_id, script_type: str):

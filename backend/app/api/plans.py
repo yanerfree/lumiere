@@ -727,6 +727,17 @@ async def execute_adhoc(
         select(Case).where(Case.id.in_(body.case_ids))
     )).scalars().all()
 
+    # **废弃的不许进计划。** 进了就会算进那份正式回归报告的通过率分母，
+    # 而它已经是"决定不再测"的场景了。静默剔掉不行 —— 报错说清是哪几条，
+    # 让人自己把它们从选择里去掉（多半是拿旧的勾选列表建的计划）。
+    deprecated = [c.case_code for c in cases if c.lifecycle_status == "deprecated"]
+    if deprecated:
+        raise ValidationError(
+            code="DEPRECATED_CASES",
+            message=f"这些用例已废弃，不能进计划：{'、'.join(deprecated)}。"
+                    f"废弃的用例不算进通过率分母 —— 要重新测就先在详情页撤销废弃。",
+        )
+
     if not cases:
         raise ValidationError(code="NO_CASES", message="未找到有效用例")
 

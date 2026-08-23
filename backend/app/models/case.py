@@ -197,6 +197,39 @@ class Case(Base):
     )
     # 需求点 UUID 数组（GIN 索引，覆盖矩阵聚合用）
     requirement_point_ids: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+    # —— 版本升级·分支对账（2026-08-21）——
+    # **我是从哪条复制来的 + 复制那一刻的内容长什么样。**
+    # 存它是为了让「内容与源分支逐字一致」变成**机械判定**，不靠 CC 自己声明"我没改"。
+    # 照抄堆自动过审的全部合法性建立在这一条上：内容一变（哪怕只改了标题），
+    # 指纹就对不上，自动过审立刻降级成必须人审/AI 审。
+    # 跨分支只靠 case_code / tea_id 对同一条是不够的 —— 那两个是**人给的编号**，
+    # 复制之后源分支那条还可能被继续改，编号一样内容早就不一样了。
+    source_case_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("cases.id", ondelete="SET NULL"), nullable=True
+    )
+    # sha256 前 32 字节十六进制。指纹覆盖**三份产物**：手工步骤/预期、接口场景正文、
+    # UI 脚本正文 —— 只盖手工步骤的话，CC 改了接口断言指纹照旧，防线等于没有。
+    content_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    # 断言咬合（tb_check_assertion_bite）**最后一次的结论**。
+    # 存它是为了让照抄堆自动过审的条件 4「断言咬得住」在库里**查得到** ——
+    # 那个检查是一次真跑（跳掉动作步看断言会不会红），结论此前只回给 CC、不落库，
+    # 于是"断言有效"这件事只能听 CC 自称，而自称正是这条链上最不能信的一环。
+    # {at, scenarioId, skipped:[], summary:{bites,stillGreen,inconclusive,outOfWindow},
+    #  fingerprint}  —— fingerprint 是跑那一刻的内容指纹：内容变了这份结论就过期。
+    bite_result: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # 废弃审核。跟 review_status 同形（NULL / requested / approved / rejected），
+    # **不复用 review_status** —— 那个问的是「这条验得对不对」，这个问的是
+    # 「这个场景在新版本上还存不存在」，两个问题的证据和判据完全不同，
+    # 挤在一个字段里就没法同时表达「六维通过、但正在申请废弃」。
+    # lifecycle_status = deprecated 只在 deprecate_status = approved 时才落。
+    deprecate_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # {reason, evidence:{apiProbe:[], uiProbe:[]}, requestedBy, requestedAt,
+    #  decision, decidedBy, decidedAt, note}
+    deprecate_reason: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     # 并发审核乐观锁（FR22）
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1, server_default="1")
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

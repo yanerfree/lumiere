@@ -8,6 +8,10 @@ from app.core.security import hash_password
 from app.deps.db import async_session_factory
 from app.models.user import User
 from app.models.environment import Environment, EnvironmentVariable, GlobalVariable, NotificationChannel
+# 环境和全局变量 2026-08-21 改成项目级之后，这两张表的 project_id 外键指向 projects。
+# 不导入 Project，metadata 里就没有那张表，一 import 就 NoReferencedTableError ——
+# **新库压根初始化不了**。（这个漏是项目化那次改动留下的，seed 没跟着更新。）
+from app.models.project import Project, Branch, ProjectMember  # noqa: F401
 
 
 # ---- 默认全局变量 ----
@@ -125,10 +129,15 @@ async def main():
     print("testBench 种子数据初始化")
     print("=" * 50)
     await seed_admin()
-    await seed_global_variables()
-    await seed_environments()
+    # **环境和全局变量不在这里铺了。** 2026-08-21 它们从全平台改成项目级
+    # （`project_id` NOT NULL），铺全局的那两个函数在新库上直接撞非空约束 ——
+    # 新库压根初始化不了。新项目的默认环境/变量由 app/services/project_defaults.py
+    # 在建项目时铺，要改默认值改那一个文件。
+    #
+    # 两个老函数留着不删：它们对**改造之前建的库**还有意义（补齐历史缺的），
+    # 但不再进默认流程 —— 别让 seed 的失败挡住整个初始化。
     print("=" * 50)
-    print("初始化完成")
+    print("初始化完成（环境/全局变量已改项目级，建项目时自动铺，见 project_defaults.py）")
 
 
 if __name__ == "__main__":

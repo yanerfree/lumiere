@@ -123,6 +123,7 @@ async def list_cases(
     manual_status: str | None = None,
     pending_only: bool = False,
     bug_state: str | None = None,
+    lifecycle_status: str | None = None,
 ) -> dict:
     """列出分支下的测试用例，支持分页和筛选。
 
@@ -145,6 +146,13 @@ async def list_cases(
     from app.models.case import Case
 
     stmt = select(Case).where(Case.branch_id == uuid.UUID(branch_id), Case.deleted_at.is_(None))
+    # **废弃的默认不出现，但显式问就查得到。**
+    # 不排除的话，一条已经决定不再测的用例照样进 CC 的待办、照样被判成"还欠着"。
+    # 而一律隐藏也不行：废了就再也找不着，**撤销都撤不了**。
+    if lifecycle_status:
+        stmt = stmt.where(Case.lifecycle_status == lifecycle_status)
+    else:
+        stmt = stmt.where(Case.lifecycle_status != "deprecated")
     if keyword:
         stmt = stmt.where(Case.title.ilike(f"%{keyword}%"))
     if folder_id:
