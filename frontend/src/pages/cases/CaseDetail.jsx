@@ -19,6 +19,7 @@ import { scenarioToNodes, nodeToStepPatch } from './apiStepAdapter'
 import RunResultPanel from '../../components/RunResultPanel'
 import FailureTriagePanel from '../../components/FailureTriagePanel'
 import { createSseParser } from '../../utils/sseParser'
+import mdBold from '../../utils/mdBold'
 
 const priorityColors = { P0: '#fff', P1: '#fff', P2: '#fff', P3: '#fff' }
 const priorityBg = { P0: '#e8453c', P1: '#ff7d00', P2: '#4e8af0', P3: 'rgba(0,0,0,0.08)' }
@@ -2632,8 +2633,8 @@ export default function CaseDetail() {
                       <Tag color={f.severity === 'blocker' ? 'error' : 'warning'}
                         style={{ fontSize: 11, margin: '0 4px 0 0' }}>
                         {f.severity === 'blocker' ? '致命' : '重要'}</Tag>
-                      <span style={{ color: '#86909c' }}>{f.where}</span>：{f.problem}
-                      {f.fix && <span style={{ color: '#0ea5a0' }}> → {f.fix}</span>}
+                      <span style={{ color: '#86909c' }}>{f.where}</span>：{mdBold(f.problem)}
+                      {f.fix && <span style={{ color: '#0ea5a0' }}> → {mdBold(f.fix)}</span>}
                     </div>
                   ))}
                 </div>
@@ -3051,14 +3052,14 @@ export default function CaseDetail() {
                           {Object.entries(r.dimensions).map(([k, v]) => `${DIM_LABEL[k] || k} ${v}`).join(' / ')}
                         </div>
                       )}
-                      {r.summary && <div style={{ color: '#4e5969', marginBottom: 4 }}>{r.summary}</div>}
+                      {r.summary && <div style={{ color: '#4e5969', marginBottom: 4 }}>{mdBold(r.summary)}</div>}
                       {(r.findings || []).filter(f => f.severity !== 'minor').map((f, i) => (
                         <div key={i} style={{ fontSize: 12, marginTop: 3, lineHeight: 1.7 }}>
                           <Tag color={f.severity === 'blocker' ? 'error' : 'warning'}
                             style={{ fontSize: 11, margin: '0 6px 0 0' }}>
                             {f.severity === 'blocker' ? '致命' : '重要'}</Tag>
-                          <span style={{ color: '#86909c' }}>{f.where}</span>：{f.problem}
-                          {f.fix && <span style={{ color: '#0ea5a0' }}> → {f.fix}</span>}
+                          <span style={{ color: '#86909c' }}>{f.where}</span>：{mdBold(f.problem)}
+                          {f.fix && <span style={{ color: '#0ea5a0' }}> → {mdBold(f.fix)}</span>}
                         </div>
                       ))}
                       {r.changed && (
@@ -3069,7 +3070,7 @@ export default function CaseDetail() {
                       )}
                       {(r.coverageGaps || []).length > 0 && (
                         <div style={{ fontSize: 12, color: '#86909c', marginTop: 4 }}>
-                          覆盖情报：{r.coverageGaps.join('；')}
+                          覆盖情报：{mdBold(r.coverageGaps.join('；'))}
                         </div>
                       )}
                     </div>

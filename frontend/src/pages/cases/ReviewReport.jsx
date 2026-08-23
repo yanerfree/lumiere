@@ -4,6 +4,7 @@ import { Card, Table, Tag, Button, Empty, Spin, Tooltip, Drawer, Switch, Progres
 import { ReloadOutlined, PauseCircleOutlined } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
+import mdBold from '../../utils/mdBold'
 
 // 审核报告：**一行一次审核**（review-spec §6）。
 //
@@ -207,7 +208,9 @@ function ModuleReport({ d, projectId, navigate }) {
       {/* 这次能不能代表整个模块，要写在最上面 —— 不写的话抽审三条的报告
           过两周会被当成"这个模块审过了" */}
       <div style={{ padding: '8px 12px', marginBottom: 14, borderRadius: 6,
-        background: d.representative ? 'rgba(14,165,160,0.08)' : 'rgba(250,173,20,0.10)' }}>
+        background: d.representative ? 'rgba(14,165,160,0.08)' : 'rgba(250,173,20,0.10)',
+        // 抽审那句要比"可以代表模块"重一档 —— 这句是唯一防止"抽三条被当成审过了"的东西
+        fontWeight: d.representative ? 400 : 600 }}>
         {d.scopeNote}
       </div>
 
@@ -251,8 +254,8 @@ function ModuleReport({ d, projectId, navigate }) {
                 : null}>
                 <li style={{ marginBottom: 4 }}>
                   <Tag color={g.count > 1 ? 'warning' : undefined} style={{ fontSize: 11 }}>{g.count}×</Tag>
-                  <b>{g.display || g.topic || g.gap}</b>
-                  {g.matchedTopic ? <span style={{ color: '#86909c', marginLeft: 6 }}>{g.gap}</span> : null}
+                  <b>{mdBold(g.display || g.topic || g.gap)}</b>
+                  {g.matchedTopic ? <span style={{ color: '#86909c', marginLeft: 6 }}>{mdBold(g.gap)}</span> : null}
                 </li>
               </Tooltip>
             ))}

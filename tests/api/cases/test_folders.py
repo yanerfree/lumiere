@@ -47,12 +47,21 @@ class TestFolders:
             f"/api/projects/{pid}/branches/{bid}/folders?name=auth", headers=headers
         )
 
-        # Then: 201
+        # Then: 201。name 存人写的原样，path 存大写匹配键（e09d7a9 改的：
+        # 原来 name 也强制大写，页面上一律 SHOUTING 且没有任何地方能改回来）
         assert response.status_code == 201
         data = response.json()["data"]
-        assert data["name"] == "AUTH"
+        assert data["name"] == "auth"
         assert data["path"] == "AUTH"
         assert data["depth"] == 1
+
+        # 大小写混排的显示名要原样留住 —— 这条才挡得住 .upper() 被加回 name
+        r2 = await client.post(
+            f"/api/projects/{pid}/branches/{bid}/folders?name=LLM%20Providers", headers=headers
+        )
+        assert r2.status_code == 201
+        assert r2.json()["data"]["name"] == "LLM Providers"
+        assert r2.json()["data"]["path"] == "LLM PROVIDERS"
 
     @pytest.mark.asyncio
     async def test_create_submodule(self, client, db_session):
@@ -66,10 +75,10 @@ class TestFolders:
             f"/api/projects/{pid}/branches/{bid}/folders?name=login&parentId={parent_id}", headers=headers
         )
 
-        # Then: 201，depth=2
+        # Then: 201，depth=2。name 原样、path 大写
         assert response.status_code == 201
         data = response.json()["data"]
-        assert data["name"] == "LOGIN"
+        assert data["name"] == "login"
         assert data["path"] == "AUTH/LOGIN"
         assert data["depth"] == 2
 
@@ -98,8 +107,10 @@ class TestFolders:
         assert response.status_code == 200
         tree = response.json()["data"]
         assert len(tree) >= 1
-        auth = next(n for n in tree if n["name"] == "AUTH")
-        login = next(n for n in auth["children"] if n["name"] == "LOGIN")
+        # 按 path 找 —— path 才是大写匹配键，name 是人写的原样
+        auth = next(n for n in tree if n["path"] == "AUTH")
+        assert auth["name"] == "auth"
+        login = next(n for n in auth["children"] if n["path"] == "AUTH/LOGIN")
         assert login["caseCount"] == 2
 
     @pytest.mark.asyncio
@@ -128,7 +139,7 @@ class TestFolders:
 
         # 找到 ORDERS 目录 ID
         tree = (await client.get(f"/api/projects/{pid}/branches/{bid}/folders", headers=headers)).json()["data"]
-        orders_folder = next(n for n in tree if n["name"] == "ORDERS")
+        orders_folder = next(n for n in tree if n["path"] == "ORDERS")
 
         # When: 尝试删除
         response = await client.delete(

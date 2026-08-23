@@ -87,4 +87,24 @@ class TestReviewFlow:
             "steps": [{"action": "手动操作", "expected": "成功"}],
         })
         data = case_resp.json()["data"]
-        assert data["reviewStatus"] is None  # 手动用例无审核状态
+        case_id = data["id"]
+
+        # 写了步骤 → manual 维完成 → 审核标签自动进「待审」（6e5cea5a：
+        # 「提交审核」那一下不产生任何信息，所以不让人点）。
+        # 这里断言的**不是**这个标签的字面值，而是 FR27 真正保证的东西：
+        # 审核不挡回归 —— 待审的手动用例照样能建计划、照样能跑。
+        assert data["reviewStatus"] != "rejected"
+
+        plan_resp = await client.post(f"/api/projects/{pid}/plans", headers=headers, json={
+            "name": "手动用例回归", "planType": "manual", "testType": "api", "caseIds": [case_id],
+        })
+        assert plan_resp.status_code in (200, 201), plan_resp.text
+        plan_id = plan_resp.json()["data"]["id"]
+
+        exec_resp = await client.post(f"/api/projects/{pid}/plans/{plan_id}/execute", headers=headers)
+        assert exec_resp.status_code in (200, 201, 202), exec_resp.text
+
+        results = await client.get(f"/api/projects/{pid}/plans/{plan_id}/results", headers=headers)
+        assert results.status_code == 200
+        scenarios = results.json()["data"]["scenarios"]
+        assert len(scenarios) == 1, f"待审用例被挡在计划外了: {scenarios}"

@@ -82,8 +82,9 @@ class TestReportDashboard:
         modules = data["modules"]
         assert len(modules) >= 2
 
-        # AUTH 模块应该有 2 条（2 passed）
-        auth_mod = next((m for m in modules if m["module"] == "AUTH"), None)
+        # auth 模块应该有 2 条（2 passed）。报告按 CaseFolder.name 分组，
+        # 而 name 存的是建目录时人写的原样（这里用例传的 module 就是小写 auth）
+        auth_mod = next((m for m in modules if m["module"] == "auth"), None)
         assert auth_mod is not None
         assert auth_mod["total"] == 2
         assert auth_mod["passed"] == 2
