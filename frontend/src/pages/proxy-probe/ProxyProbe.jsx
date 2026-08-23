@@ -211,7 +211,7 @@ function ProxyProbeInner() {
     <div style={{ padding: 20, maxWidth: 1200 }}>
       {/* ---------- 顶部：状态 + 代理地址 ---------- */}
       <div style={{
-        background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14,
+        background: 'var(--panel-bg)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14,
         padding: '16px 20px', marginBottom: 14,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
@@ -260,7 +260,7 @@ function ProxyProbeInner() {
 
       {/* ---------- 计数区 + 清零 ---------- */}
       <div style={{
-        background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14,
+        background: 'var(--panel-bg)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14,
         padding: '18px 20px', marginBottom: 14,
         display: 'flex', alignItems: 'center', gap: 40, flexWrap: 'wrap',
       }}>
@@ -289,7 +289,7 @@ function ProxyProbeInner() {
 
       {/* ---------- 工具区：故障注入 ---------- */}
       <div style={{
-        background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14,
+        background: 'var(--panel-bg)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14,
         padding: '14px 20px', marginBottom: 14,
       }}>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>
@@ -351,7 +351,7 @@ function ProxyProbeInner() {
       </div>
 
       {/* ---------- 实时请求列表 ---------- */}
-      <div style={{ background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14, overflow: 'hidden' }}>
+      <div style={{ background: 'var(--panel-bg)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 14, overflow: 'hidden' }}>
         <div style={{
           padding: '12px 20px', borderBottom: '1px solid #f5f5f5',
           display: 'flex', alignItems: 'center', gap: 10,

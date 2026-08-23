@@ -20,7 +20,7 @@ import { withFrontendRow } from '../../utils/serviceList'
 
 // 玻璃拟态面板 —— 与 HttpClient / OAuth2Mock / EnvConfig 保持同一套（无边框，靠阴影和模糊分层）
 const PANEL = {
-  background: 'rgba(255,255,255,0.55)',
+  background: 'var(--panel-bg)',
   backdropFilter: 'blur(12px)',
   WebkitBackdropFilter: 'blur(12px)',
   borderRadius: 16,
@@ -124,7 +124,7 @@ function SystemServicesInner() {
     <div style={{ letterSpacing: 0.3 }}>
       <style>{`
         .svc-row { transition: background 0.2s ease; }
-        .svc-row:hover { background: rgba(255,255,255,0.45); }
+        .svc-row:hover { background: var(--table-row-hover-bg); }
         .svc-port { transition: opacity 0.2s ease; }
         .svc-port:hover { opacity: 0.65; }
         .svc-hint { transition: background 0.2s ease; }

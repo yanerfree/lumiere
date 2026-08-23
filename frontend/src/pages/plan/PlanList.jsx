@@ -216,12 +216,13 @@ export default function PlanList() {
         <div style={{ background: 'var(--panel-bg)', border: 'none', borderRadius: 16, backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px', height: 36, background: 'var(--table-header-bg)', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
-            <div style={{ flex: 4, ...th }}>计划名称</div>
-            <div style={{ width: 62, textAlign: 'center', flexShrink: 0, ...th }}>类型</div>
-            <div style={{ width: 62, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
-            <div style={{ width: 90, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
+            <div style={{ flex: 4, maxWidth: 460, ...th }}>计划名称</div>
+            <div style={{ flex: 1 }} />
+            <div style={{ width: 76, textAlign: 'center', flexShrink: 0, ...th }}>类型</div>
+            <div style={{ width: 64, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
+            <div style={{ width: 104, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
             <div style={{ width: 60, textAlign: 'center', flexShrink: 0, ...th }}>用例</div>
-            <div style={{ width: 80, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
+            <div style={{ width: 88, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
             <div style={{ width: 112, textAlign: 'center', flexShrink: 0, ...th }}>创建时间</div>
             <div style={{ width: 240, textAlign: 'center', flexShrink: 0, ...th }}>操作</div>
           </div>
@@ -240,14 +241,15 @@ export default function PlanList() {
                   onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                 >
                   {/* Name + meta */}
-                  <div style={{ flex: 4, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 4, maxWidth: 460, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontWeight: 500, fontSize: 13, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {plan.name}
                     </span>
                   </div>
+                  <div style={{ flex: 1 }} />
 
                   {/* Type：自动化/手动 —— 这一列回答的不是"跑的什么" */}
-                  <div style={{ width: 62, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 76, textAlign: 'center', flexShrink: 0 }}>
                     <span style={{ fontSize: 12, color: '#86909c' }}>
                       {plan.planType === 'automated' ? '自动化' : '手动'}
                     </span>
@@ -255,7 +257,7 @@ export default function PlanList() {
 
                   {/* 执行方式：UI 脚本还是接口场景。库里一直有 test_type，
                       只是从没显示过 —— 12 条计划全是接口，页面上完全看不出来 */}
-                  <div style={{ width: 62, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 64, textAlign: 'center', flexShrink: 0 }}>
                     {plan.testType ? (
                       <span style={{
                         fontSize: 11, padding: '1px 6px', borderRadius: 6,
@@ -266,7 +268,7 @@ export default function PlanList() {
                   </div>
 
                   {/* Environment */}
-                  <div style={{ width: 90, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 104, textAlign: 'center', flexShrink: 0 }}>
                     {plan.environmentName ? (
                       <span style={{ fontSize: 12, color: '#86909c' }}>
                         {plan.environmentName}
@@ -280,7 +282,7 @@ export default function PlanList() {
                   </div>
 
                   {/* Status */}
-                  <div style={{ width: 80, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 88, textAlign: 'center', flexShrink: 0 }}>
                     <span style={{
                       display: 'inline-flex', alignItems: 'center', gap: 4,
                       fontSize: 11, padding: '2px 8px', borderRadius: 12,

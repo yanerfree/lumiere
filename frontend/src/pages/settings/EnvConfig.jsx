@@ -173,7 +173,7 @@ function EnvironmentPanel() {
           左栏拉到和右侧详情一样高，多出来的高度全落在列表和「新增环境」之间，
           变成一块空白 —— 而且右侧变量越多空白越大（实测 4 个变量时 15px，
           16 个变量时 325px），看着像切换环境就多出个空条目 */}
-      <div style={{ width: 200, background: 'rgba(255,255,255,0.5)', borderRadius: 14, border: 'none', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column', flexShrink: 0, alignSelf: 'flex-start' }}>
+      <div style={{ width: 200, background: 'var(--panel-bg)', borderRadius: 14, border: 'none', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column', flexShrink: 0, alignSelf: 'flex-start' }}>
         <div style={{ flex: 1, overflow: 'auto' }}>
           {loading ? <div style={{ textAlign: 'center', padding: 20 }}><Spin size="small" /></div> :
             envs.map((env, i) => (
@@ -220,7 +220,7 @@ function EnvironmentPanel() {
       </div>
 
       {/* 右侧环境详情 */}
-      <div style={{ flex: 1, background: 'rgba(255,255,255,0.5)', borderRadius: 14, border: 'none', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', padding: '20px 24px' }}>
+      <div style={{ flex: 1, background: 'var(--panel-bg)', borderRadius: 14, border: 'none', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', padding: '20px 24px' }}>
         {selectedEnv ? (<>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -312,7 +312,7 @@ function GlobalVariablePanel() {
   }
 
   return (
-    <div style={{ background: 'rgba(255,255,255,0.5)', borderRadius: 14, border: 'none', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', padding: '20px 24px', maxWidth: 900 }}>
+    <div style={{ background: 'var(--panel-bg)', borderRadius: 14, border: 'none', backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', padding: '20px 24px', maxWidth: 900 }}>
       <div style={{ marginBottom: 16 }}>
         <div style={{ fontSize: 15, fontWeight: 600, color: '#1d2129' }}>全局变量</div>
         <div style={{ fontSize: 12, color: '#86909c', marginTop: 4 }}>

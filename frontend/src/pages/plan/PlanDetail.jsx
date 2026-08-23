@@ -289,13 +289,14 @@ export default function PlanDetail() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
             {/* Table Header */}
             <div style={{ display: 'flex', padding: '8px 16px', background: 'var(--table-header-bg)', borderRadius: '8px 8px 0 0', fontSize: 12, color: '#86909c', fontWeight: 500 }}>
-              <div style={{ width: 50 }}>#</div>
-              <div style={{ flex: 2, textAlign: 'center' }}>状态</div>
-              <div style={{ flex: 3 }}>结果 <span style={{ color: '#c9cdd4', fontWeight: 400 }}>通过/失败/总</span></div>
-              <div style={{ flex: 2, textAlign: 'center' }}>通过率</div>
-              <div style={{ flex: 2, textAlign: 'right' }}>耗时</div>
+              <div style={{ width: 46 }}>#</div>
+              <div style={{ width: 96, textAlign: 'center' }}>状态</div>
+              <div style={{ width: 160 }}>结果 <span style={{ color: '#c9cdd4', fontWeight: 400 }}>通过/失败/总</span></div>
+              <div style={{ flex: 1 }} />
+              <div style={{ width: 84, textAlign: 'center' }}>通过率</div>
+              <div style={{ width: 84, textAlign: 'right' }}>耗时</div>
               <div style={{ width: 112, textAlign: 'center' }}>执行时间</div>
-              <div style={{ flex: 2, textAlign: 'center' }}>操作</div>
+              <div style={{ width: 116, textAlign: 'center' }}>操作</div>
             </div>
             {executions.map((exec, i) => {
               const num = executions.length - i
@@ -306,8 +307,8 @@ export default function PlanDetail() {
                   display: 'flex', alignItems: 'center', padding: '12px 16px',
                   borderBottom: '1px solid rgba(0,0,0,0.04)', fontSize: 13,
                 }}>
-                  <div style={{ width: 50, color: '#86909c', fontWeight: 600 }}>#{num}</div>
-                  <div style={{ flex: 2, textAlign: 'center' }}>
+                  <div style={{ width: 46, color: '#86909c', fontWeight: 600 }}>#{num}</div>
+                  <div style={{ width: 96, textAlign: 'center' }}>
                     {isRunning ? (
                       <Tag icon={<SyncOutlined spin />} color="processing">执行中</Tag>
                     ) : (
@@ -320,27 +321,28 @@ export default function PlanDetail() {
                       </Tag>
                     )}
                   </div>
-                  <div style={{ flex: 3 }}>
+                  <div style={{ width: 160 }}>
                     <span style={{ color: '#0ea5a0', fontWeight: 500 }}>{exec.passed}</span>
                     <span style={{ color: '#86909c' }}> / </span>
                     <span style={{ color: '#e8453c', fontWeight: 500 }}>{exec.failed + exec.error}</span>
                     <span style={{ color: '#86909c' }}> / </span>
                     <span>{exec.totalScenarios}</span>
                   </div>
-                  <div style={{ flex: 2, textAlign: 'center' }}>
+                  <div style={{ flex: 1 }} />
+                  <div style={{ width: 84, textAlign: 'center' }}>
                     {exec.passRate != null ? (
                       <span style={{ fontWeight: 600, color: exec.passRate >= 95 ? '#0ea5a0' : exec.passRate >= 80 ? '#faad14' : '#e8453c' }}>
                         {exec.passRate}%
                       </span>
                     ) : '-'}
                   </div>
-                  <div style={{ flex: 2, textAlign: 'right', fontFamily: 'var(--font-mono)', color: '#86909c' }}>
+                  <div style={{ width: 84, textAlign: 'right', fontFamily: 'var(--font-mono)', color: '#86909c' }}>
                     {fmt(exec.totalDurationMs)}
                   </div>
                   <div style={{ width: 112, textAlign: 'center' }}>
                     <TimeCell value={exec.executedAt} />
                   </div>
-                  <div style={{ flex: 2, textAlign: 'center' }}>
+                  <div style={{ width: 116, textAlign: 'center' }}>
                     <Button type="link" size="small" icon={<BarChartOutlined />}
                       onClick={() => navigate(`/projects/${projectId}/reports/${exec.id}`)}>
                       查看报告

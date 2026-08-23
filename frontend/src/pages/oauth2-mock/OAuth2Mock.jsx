@@ -156,7 +156,7 @@ export default function OAuth2Mock() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 70px)' }}>
       {/* 顶栏 */}
-      <div style={{ padding: '8px 20px', background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(16px)', borderBottom: '1px solid rgba(255,255,255,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+      <div className="tb-page-strip" style={{ padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <SafetyCertificateOutlined style={{ fontSize: 18, color: '#0ea5a0' }} />
           <span style={{ fontWeight: 600, fontSize: 16 }}>OAuth2 Mock</span>
@@ -189,7 +189,7 @@ export default function OAuth2Mock() {
 
       <div style={{ flex: 1, display: 'flex', minHeight: 0, padding: 10, gap: 10 }}>
         {/* 左栏 */}
-        <div style={{ width: 260, flexShrink: 0, background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(16px)', borderRadius: 16, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+        <div style={{ width: 260, flexShrink: 0, background: 'var(--panel-bg)', backdropFilter: 'blur(16px)', borderRadius: 16, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
           <div style={{ padding: '8px 10px', borderBottom: '1px solid rgba(0,0,0,0.04)', display: 'flex', gap: 6 }}>
             <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)} style={{ flex: 1 }}>注册 Client</Button>
           </div>
@@ -220,7 +220,7 @@ export default function OAuth2Mock() {
         </div>
 
         {/* 右栏 */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(16px)', borderRadius: 16, boxShadow: '0 2px 12px rgba(0,0,0,0.04)', minWidth: 0 }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', background: 'var(--panel-bg)', backdropFilter: 'blur(16px)', borderRadius: 16, boxShadow: '0 2px 12px rgba(0,0,0,0.04)', minWidth: 0 }}>
           <div style={{ display: 'flex', borderBottom: '1px solid rgba(0,0,0,0.04)', padding: '0 16px', gap: 4 }}>
             {['config', 'endpoints', 'logs'].map(tab => (
               <div key={tab} onClick={() => { setActiveTab(tab); if (tab === 'logs') fetchLogs() }}
@@ -302,14 +302,14 @@ export default function OAuth2Mock() {
                   ) : tokenResult.parsed?.access_token ? (
                     <div>
                       <div style={{ fontSize: 12, color: '#4e5969', fontWeight: 500, marginBottom: 4 }}>Access Token</div>
-                      <div style={{ position: 'relative', padding: 10, background: 'rgba(255,255,255,0.8)', borderRadius: 8, fontFamily: MONO, fontSize: 11, wordBreak: 'break-all', color: '#434343', border: '1px solid rgba(0,0,0,0.06)' }}>
+                      <div style={{ position: 'relative', padding: 10, background: 'var(--field-bg)', borderRadius: 8, fontFamily: MONO, fontSize: 11, wordBreak: 'break-all', color: '#434343', border: '1px solid rgba(0,0,0,0.06)' }}>
                         {tokenResult.parsed.access_token}
                         <Button type="text" size="small" icon={<CopyOutlined />}
                           style={{ position: 'absolute', top: 4, right: 4, color: '#0ea5a0' }}
                           onClick={() => { copyToClipboard(tokenResult.parsed.access_token); message.success('已复制 Token') }} />
                       </div>
                       <div style={{ marginTop: 8, fontSize: 12, color: '#4e5969', fontWeight: 500, marginBottom: 4 }}>Bearer Header</div>
-                      <div style={{ position: 'relative', padding: 10, background: 'rgba(255,255,255,0.8)', borderRadius: 8, fontFamily: MONO, fontSize: 11, wordBreak: 'break-all', color: '#434343', border: '1px solid rgba(0,0,0,0.06)' }}>
+                      <div style={{ position: 'relative', padding: 10, background: 'var(--field-bg)', borderRadius: 8, fontFamily: MONO, fontSize: 11, wordBreak: 'break-all', color: '#434343', border: '1px solid rgba(0,0,0,0.06)' }}>
                         Bearer {tokenResult.parsed.access_token}
                         <Button type="text" size="small" icon={<CopyOutlined />}
                           style={{ position: 'absolute', top: 4, right: 4, color: '#0ea5a0' }}
@@ -378,7 +378,7 @@ export default function OAuth2Mock() {
                   <>
                     {logs.map(log => (
                       <div key={log.id} onClick={() => setExpandedLogId(expandedLogId === log.id ? null : log.id)}
-                        style={{ padding: '8px 12px', marginBottom: 4, background: 'rgba(255,255,255,0.8)', borderRadius: 8, cursor: 'pointer', border: '1px solid rgba(0,0,0,0.04)', fontSize: 12 }}>
+                        style={{ padding: '8px 12px', marginBottom: 4, background: 'var(--field-bg)', borderRadius: 8, cursor: 'pointer', border: '1px solid rgba(0,0,0,0.04)', fontSize: 12 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           {log.status === 'success' || log.status === 'active' ? (
                             <CheckCircleFilled style={{ color: '#0ea5a0', fontSize: 13 }} />
@@ -459,7 +459,7 @@ function Field({ label, value, onChange, disabled, mono, copyable }) {
 
 function EndpointCard({ title, method, url, desc }) {
   return (
-    <div style={{ padding: 12, background: 'rgba(255,255,255,0.8)', borderRadius: 10, border: '1px solid rgba(0,0,0,0.06)', marginBottom: 10 }}>
+    <div style={{ padding: 12, background: 'var(--field-bg)', borderRadius: 10, border: '1px solid rgba(0,0,0,0.06)', marginBottom: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <Tag color={method === 'POST' ? 'orange' : 'green'} style={{ fontSize: 11, margin: 0 }}>{method}</Tag>
         <span style={{ fontFamily: MONO, fontSize: 12, fontWeight: 500, color: '#1d2129' }}>{url}</span>

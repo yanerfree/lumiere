@@ -93,9 +93,8 @@ export default function ApiMock() {
   return (
     <div style={{ height: 'calc(100vh - 70px)', display: 'flex', flexDirection: 'column' }}>
       {/* 协议标签栏 */}
-      <div style={{
+      <div className="tb-page-strip" style={{
         display: 'flex', alignItems: 'center', gap: 0, padding: '0 20px',
-        background: 'rgba(255,255,255,0.5)', borderBottom: '1px solid rgba(0,0,0,0.06)',
         flexShrink: 0, height: 42,
       }}>
         {PROTOCOLS.map(p => (
@@ -1057,7 +1056,7 @@ function HttpMockPanel() {
 
       {/* ━━━ 顶栏 ━━━ */}
       <div style={{
-        padding: '10px 20px', background: 'transparent', borderBottom: '1px solid rgba(0,0,0,0.03)', background: 'rgba(255,255,255,0.25)',
+        padding: '10px 20px', borderBottom: '1px solid rgba(0,0,0,0.04)', background: 'var(--strip-bg)',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>

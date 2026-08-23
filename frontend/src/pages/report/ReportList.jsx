@@ -130,12 +130,13 @@ export default function ReportList() {
         <div style={{ background: 'var(--panel-bg)', border: 'none', borderRadius: 16, backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px', height: 36, background: 'var(--table-header-bg)', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
-            <div style={{ flex: 4, ...th }}>报告名称</div>
+            <div style={{ flex: 4, maxWidth: 520, ...th }}>报告名称</div>
+            <div style={{ flex: 1 }} />
             {/* 「入口」和「跑的什么」是两件事，此前挤在一列叫「类型」——
                 于是报告页清一色「接口测试」，用例页清一色 UI，看着像互相打架。 */}
             <div style={{ width: 76, textAlign: 'center', flexShrink: 0, ...th }}>入口</div>
             <div style={{ width: 62, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
-            <div style={{ width: 80, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
+            <div style={{ width: 104, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
             <div style={{ width: 80, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
             {/* 图例放表头 —— 原来每一行都印一遍「通过/失败/总计」，10px 还折成两行 */}
             <div style={{ width: 132, textAlign: 'center', flexShrink: 0, ...th }}>
@@ -161,11 +162,13 @@ export default function ReportList() {
                   onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                 >
                   {/* Report name */}
-                  <div style={{ flex: 4, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 4, maxWidth: 520, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontWeight: 500, fontSize: 13, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {r.reportName || r.planName}
                     </span>
                   </div>
+                  {/* 余量放在名称列后面，位置必须和表头里那个 spacer 一致，否则列错位 */}
+                  <div style={{ flex: 1 }} />
 
                   {/* 入口：从哪儿发起的 */}
                   <div style={{ width: 76, textAlign: 'center', flexShrink: 0 }}>
@@ -198,7 +201,7 @@ export default function ReportList() {
                   </div>
 
                   {/* Environment */}
-                  <div style={{ width: 80, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 104, textAlign: 'center', flexShrink: 0 }}>
                     {r.environmentName ? (
                       <span style={{ fontSize: 12, color: '#86909c' }}>
                         {r.environmentName}

@@ -442,7 +442,7 @@ export default function HttpClient() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 70px)', background: 'transparent' }}>
       {/* 顶栏 */}
-      <div style={{ padding: '8px 20px', background: 'rgba(255,255,255,0.7)', backdropFilter: 'blur(16px)', borderBottom: '1px solid rgba(255,255,255,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+      <div className="tb-page-strip" style={{ padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <SendOutlined style={{ fontSize: 18, color: '#0ea5a0' }} />
           <span style={{ fontWeight: 600, fontSize: 16 }}>HTTP 请求</span>
@@ -471,7 +471,7 @@ export default function HttpClient() {
             </div>
           </Tooltip>
         ) : (
-          <div style={{ width: 240, flexShrink: 0, background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(16px)', borderRadius: 16, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+          <div style={{ width: 240, flexShrink: 0, background: 'var(--panel-bg)', backdropFilter: 'blur(16px)', borderRadius: 16, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <div style={{ padding: '6px 8px', borderBottom: '1px solid rgba(0,0,0,0.04)', display: 'flex', gap: 4, alignItems: 'center' }}>
               <Button type="primary" size="small" icon={<FileAddOutlined />} onClick={() => handleCreate('request', selectedFolderId)} style={{ flex: 1 }}>新建请求</Button>
               <Button size="small" icon={<FolderAddOutlined />} onClick={() => handleCreate('folder')}>文件夹</Button>
@@ -490,7 +490,7 @@ export default function HttpClient() {
         )}
 
         {/* 右栏 */}
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: 'rgba(255,255,255,0.55)', backdropFilter: 'blur(12px)', borderRadius: 16, boxShadow: '0 2px 12px rgba(0,0,0,0.04)', overflow: 'hidden' }}>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, background: 'var(--panel-bg)', backdropFilter: 'blur(12px)', borderRadius: 16, boxShadow: '0 2px 12px rgba(0,0,0,0.04)', overflow: 'hidden' }}>
           {/* Tab 栏 */}
           {openTabs.length > 0 && (
             <div style={{ display: 'flex', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0, overflow: 'auto' }}>
@@ -698,7 +698,7 @@ export default function HttpClient() {
 
         {/* 历史面板 */}
         {showHistory && (
-          <div style={{ width: 260, flexShrink: 0, background: 'rgba(255,255,255,0.65)', backdropFilter: 'blur(16px)', borderRadius: 16, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
+          <div style={{ width: 260, flexShrink: 0, background: 'var(--panel-bg)', backdropFilter: 'blur(16px)', borderRadius: 16, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <div style={{ padding: '6px 10px', borderBottom: '1px solid rgba(0,0,0,0.04)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 13, fontWeight: 600 }}>历史 ({history.length})</span>
               <Space size={4}>

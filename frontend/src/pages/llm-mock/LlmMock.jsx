@@ -1087,8 +1087,8 @@ export default function LlmMock() {
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 70px)', background: 'transparent' }}>
 
       {/* ━━━ 顶栏 ━━━ */}
-      <div style={{
-        padding: '10px 20px', background: 'transparent', borderBottom: '1px solid rgba(0,0,0,0.03)', background: 'rgba(255,255,255,0.25)',
+      <div className="tb-page-strip" style={{
+        padding: '10px 20px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>

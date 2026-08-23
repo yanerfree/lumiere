@@ -1477,7 +1477,13 @@ export default function Toolbox() {
   const theme = THEMES[activeTool]
   const ActiveComponent = TOOL_MAP[activeTool]
 
-  const gradient = `linear-gradient(160deg, ${theme.light}88 0%, #f0ecfb44 40%, #edf5f044 70%, ${theme.pale} 100%)`
+  // 原来这里给整页铺了一层自己的渐变
+  //   linear-gradient(160deg, ${theme.light}88, #f0ecfb44, #edf5f044, ${theme.pale})
+  // 两个毛病：
+  // 1) 色板换成 rgba() 之后 `${theme.light}88` 拼出来是 `rgba(...)88`，是无效 CSS
+  // 2) 就算有效，它也是盖在全局渐变之上的第二层浅色 —— 实测工具箱是全站底色
+  //    最白的一页（亮度 248，别的页面 235~241）
+  // 页面不再自己铺底，工具的标识色只体现在图标/胶囊/边框上。
 
   return (
     <div className="toolbox-page" style={{
@@ -1488,14 +1494,13 @@ export default function Toolbox() {
       '--tb-border': theme.border,
       display: 'flex', flexDirection: 'column',
       height: 'calc(100vh - 70px)',
-      background: gradient,
-      transition: 'background 0.5s ease',
+      background: 'transparent',
     }}>
       <style>{TOOLBOX_CSS}</style>
 
       <div style={{
         padding: '10px 24px',
-        background: 'rgba(255,255,255,0.45)',
+        background: 'var(--strip-bg)',
         borderBottom: '1px solid rgba(0,0,0,0.04)',
         display: 'flex', alignItems: 'center', gap: 12, flexShrink: 0,
       }}>
@@ -1518,7 +1523,7 @@ export default function Toolbox() {
       <div style={{ flex: 1, display: 'flex', minHeight: 0, padding: '8px 10px 10px', gap: 8 }}>
         <div style={{
           width: 200, flexShrink: 0,
-          background: 'rgba(255,255,255,0.5)',
+          background: 'var(--panel-bg)',
           borderRadius: 16,
           overflow: 'auto',
           padding: '10px 8px 8px',
@@ -1563,9 +1568,11 @@ export default function Toolbox() {
           </div>
         </div>
 
+        {/* 这一层只是包住工具本体，不要再铺一层底 ——
+            工具自己的输入/输出区已经有 0.4 的底，叠上这层 0.3 等效 0.58，
+            整页就白了（实测工具箱亮度比别的页面高 8 个色阶）。 */}
         <div style={{
           flex: 1, minWidth: 0, overflow: 'hidden',
-          background: 'rgba(255,255,255,0.4)',
           borderRadius: 16,
         }}>
           <div key={activeTool} className="tb-content-fade" style={{ height: '100%' }}>

@@ -12,14 +12,29 @@
   --bg-active: rgba(14, 165, 160, 0.1);
   --bg-sidebar: rgba(255, 255, 255, 0.4);
 
-  /* 统一的"面板"与"输入控件"底色 —— 全站只认这两个 */
-  --panel-bg: rgba(255, 255, 255, 0.55);
-  --panel-bg-hover: rgba(255, 255, 255, 0.68);
-  --field-bg: rgba(255, 255, 255, 0.55);
-  --field-bg-hover: rgba(255, 255, 255, 0.72);
+  /* ── 表面分三层，全站只认这三个 ──
+     为什么面板只有 0.3：白色图层的不透明度决定渐变还剩多少。实测在渐变
+     (239,228,237) 上盖一层白：
+        0.55 → (248,243,247) 色度 5，亮度 245  ← 肉眼就是"一层偏白的底盘"
+        0.30 → (244,236,243) 色度 8，亮度 241
+        0    → (239,228,237) 色度 11，亮度 235  ← 裸渐变
+     0.55 那一档和裸渐变差 11 个色阶，所以"有面板的页面"和"没面板的页面"
+     并排看明显是两种底色（OAuth2 Mock vs 协议 Mock 就是这么被看出来的）。
+     压到 0.3：面板还看得出是一块面（配上边框和投影），渐变也还在。
+     控件要比面板亮一档，否则输入框在面板上看不出是可输入的。 */
+  --panel-bg: rgba(255, 255, 255, 0.3);
+  --panel-bg-hover: rgba(255, 255, 255, 0.42);
+  /* 页面顶部那条「标题 + 状态 + 操作」的横条，全站一个值 + 上方圆角 */
+  --strip-bg: rgba(255, 255, 255, 0.42);
+  --field-bg: rgba(255, 255, 255, 0.52);
+  /* 大面积文本域（工具箱的输入/输出、脚本编辑器）用低一档的底：
+     它们能占到页面七成面积，用 0.52 会把整页拉成白的 —— 实测工具箱亮度 248，
+     比别的页面高 8 个色阶，就是这两块编辑区造成的。 */
+  --field-bg-large: rgba(255, 255, 255, 0.4);
+  --field-bg-hover: rgba(255, 255, 255, 0.68);
   --field-bg-disabled: rgba(0, 0, 0, 0.03);
-  --table-header-bg: rgba(255, 255, 255, 0.45);
-  --table-row-hover-bg: rgba(255, 255, 255, 0.6);
+  --table-header-bg: rgba(255, 255, 255, 0.42);
+  --table-row-hover-bg: rgba(255, 255, 255, 0.5);
 
   --text-primary: #1d2129;
   --text-regular: #4e5969;
@@ -487,6 +502,9 @@ textarea.ant-input,
   background: transparent !important;
   border: none !important;
 }
+textarea.ant-input {
+  background: var(--field-bg-large) !important;
+}
 .ant-input:hover,
 .ant-input-affix-wrapper:hover,
 .ant-input-number:hover,
@@ -676,6 +694,26 @@ table.plain-table {
 .ant-switch .ant-switch-inner-checked,
 .ant-switch .ant-switch-inner-unchecked {
   font-size: var(--fs-xs) !important;
+}
+
+/* --- 页面顶部横条（标题 + 状态 + 右侧操作）---
+   工具页各写了一套：OAuth2 Mock 0.7 白、HTTP 请求 0.7、协议 Mock 0.5、
+   LLM Mock 0.25、MCP Mock 全透，而且**全是直角**，所以并排看像五个不同产品。
+   统一成一个类：同一档底色 + 上方 16px 圆角（跟面板的圆角对齐）。 */
+.tb-page-strip {
+  background: var(--strip-bg) !important;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0 !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05) !important;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* 页面级的大面板（表格容器、左右分栏的两侧）—— 圆角 + 统一底色 */
+.tb-panel {
+  background: var(--panel-bg) !important;
+  border-radius: var(--radius-lg) !important;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 /* --- 列表里的"时间"列：统一等宽 + 次要色，让它不抢主信息 --- */
