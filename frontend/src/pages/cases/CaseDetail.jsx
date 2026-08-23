@@ -86,15 +86,15 @@ function analyzeApiRequests(requests) {
   return { indices: list.map((_, i) => i).filter(i => reasons[i].pick), reasons }
 }
 const _API_REASON_BADGE = {
-  write: { label: '写操作', color: '#0ea5a0', bg: '#e0f7f6' },
+  write: { label: '写操作', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
   dependency: { label: '依赖', color: '#7c5cbf', bg: 'rgba(124,92,191,0.1)' },
   noise: { label: '噪音', color: '#c9cdd4', bg: 'transparent' },
 }
 // 状态体系 v2
 const lifecycleMap = {
   draft: { label: '草稿', color: '#86909c', bg: 'rgba(0,0,0,0.03)' },
-  done: { label: '完成', color: '#0ea5a0', bg: '#e0f7f6' },
-  deprecated: { label: '废弃', color: '#e8453c', bg: '#fff2f0' },
+  done: { label: '完成', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  deprecated: { label: '废弃', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
 }
 // 三维统一状态（手动/UI/接口 共用）。
 //
@@ -107,8 +107,8 @@ const lifecycleMap = {
 // 有问题直接改「调试中」或「草稿」。库里一条都没有（全库 0 条），删掉零成本。
 const dimStatusMap = {
   draft: { label: '草稿', color: '#86909c', bg: 'rgba(0,0,0,0.03)' },
-  debugging: { label: '调试中', color: '#faad14', bg: '#fffbe6' },
-  completed: { label: '完成', color: '#0ea5a0', bg: '#e0f7f6' },
+  debugging: { label: '调试中', color: '#faad14', bg: 'rgba(250,173,20,0.12)' },
+  completed: { label: '完成', color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
 }
 // 和列表页同一套口径（CaseManagement 的 tierOf，两处必须一致）。
 //
@@ -159,13 +159,13 @@ const dimBadge = (targetLevel, dim, status) =>
 // 「待审」是三维全完成后**自动进**的，没有「提交审核」那一下。
 // 审没审**不挡回归**：建计划直接能跑。
 const REVIEW = {
-  pending:  { label: '待审',   color: '#4e8af0', bg: '#eef4ff' },
-  approved: { label: '已审',   color: '#0ea5a0', bg: '#e0f7f6' },
-  rejected: { label: '不通过', color: '#e8453c', bg: '#fff2f0' },
+  pending:  { label: '待审',   color: '#4e8af0', bg: 'rgba(78,138,240,0.1)' },
+  approved: { label: '已审',   color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
+  rejected: { label: '不通过', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
   // 审过了、但这次没得出结论（缺环境 / 环境挂了 / 没有可跑的产物）。
   // **既不是通过也不是打回**：判成打回的话，CC 会去改一条没毛病的用例，
   // 改完还是跑不了（review-spec §9）。
-  inconclusive: { label: '无法审核', color: '#d48806', bg: '#fffbe6' },
+  inconclusive: { label: '无法审核', color: '#d48806', bg: 'rgba(250,173,20,0.12)' },
 }
 // 下拉里**不放 inconclusive** —— 它是审核跑出来的结论，不是人能手点的状态。
 // 放进去就等于允许人手动宣布"这条没法审"，那是给放水开了个口子。
@@ -228,7 +228,7 @@ function RunSteps({ steps }) {
           <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '4px 10px', fontSize: 12,
             borderTop: i ? '1px solid rgba(0,0,0,0.03)' : 'none', background: bad ? '#fff5f5' : 'transparent' }}>
             <span style={{ color: '#c9cdd4', minWidth: 20, textAlign: 'right', fontFamily: 'var(--font-mono)' }}>{i + 1}</span>
-            <span style={{ fontSize: 10, padding: '0 5px', borderRadius: 6, lineHeight: '17px', flexShrink: 0,
+            <span style={{ fontSize: 11, padding: '0 5px', borderRadius: 6, lineHeight: '17px', flexShrink: 0,
               background: ph === 'verify' ? 'rgba(78,138,240,0.1)' : 'rgba(0,0,0,0.04)',
               color: ph === 'verify' ? '#4e8af0' : '#86909c' }}>
               {ph === 'verify' ? '验证' : ph === 'setup' ? '前置' : '操作'}
@@ -281,8 +281,8 @@ function DeprecateBanner({ info, projectId, branchId, caseId, onDone }) {
         description={
           <div style={{ fontSize: 12 }}>
             {reason?.reason && <div>理由：{reason.reason}</div>}
-            {reason?.note && <div style={{ marginTop: 2, color: '#8c8c8c' }}>{reason.note}</div>}
-            <div style={{ marginTop: 6, color: '#8c8c8c' }}>
+            {reason?.note && <div style={{ marginTop: 2, color: '#86909c' }}>{reason.note}</div>}
+            <div style={{ marginTop: 6, color: '#86909c' }}>
               已废弃的用例不进待办队列、不进批量回归、不算进通过率分母；建计划时会被拦住。
             </div>
           </div>
@@ -323,7 +323,7 @@ function DeprecateBanner({ info, projectId, branchId, caseId, onDone }) {
           )}
           {reason?.note && <div style={{ marginTop: 4, color: '#d48806' }}>平台/AI：{reason.note}</div>}
           {(reason?.platformProbe?.结果 || []).length > 0 && (
-            <div style={{ marginTop: 4, color: '#8c8c8c' }}>
+            <div style={{ marginTop: 4, color: '#86909c' }}>
               平台自己复核：{reason.platformProbe.结果.map((p, i) => (
                 <span key={i} style={{ marginRight: 10 }}>{p.步骤}：{p.结论}</span>
               ))}
@@ -358,7 +358,7 @@ function RunDetail({ run, projectId, branchId, caseId, onConfirmed }) {
   const traffic = r.capturedRequests || r.captured_requests
   const pruned = r.capturedPrunedCount ?? r.captured_pruned_count
   const passedSteps = (r.steps || []).filter(s => s.status === 'passed').length
-  const label = (t, n) => <span style={{ fontSize: 12.5 }}>{t}{n != null && <span style={{ color: '#86909c' }}>（{n}）</span>}</span>
+  const label = (t, n) => <span style={{ fontSize: 12 }}>{t}{n != null && <span style={{ color: '#86909c' }}>（{n}）</span>}</span>
 
   const items = []
   if (r.steps?.length) {
@@ -378,7 +378,7 @@ function RunDetail({ run, projectId, branchId, caseId, onConfirmed }) {
             onClick={() => window.open(`data:image/png;base64,${s.base64}`, '_blank')}>
             <img src={`data:image/png;base64,${s.base64}`} alt={s.name}
               style={{ width: 160, height: 100, objectFit: 'cover', display: 'block' }} />
-            <div style={{ fontSize: 10, color: '#86909c', padding: '1px 4px', background: 'rgba(0,0,0,0.02)' }}>{s.name}</div>
+            <div style={{ fontSize: 11, color: '#86909c', padding: '1px 4px', background: 'rgba(0,0,0,0.02)' }}>{s.name}</div>
           </div>
         ))}
       </div>
@@ -407,8 +407,8 @@ function RunDetail({ run, projectId, branchId, caseId, onConfirmed }) {
           </Tag>
         )}
         {r.errorSummary
-          ? <span style={{ fontSize: 12.5, color: '#e8453c', fontFamily: 'var(--font-mono)' }}>{r.errorSummary}</span>
-          : <span style={{ fontSize: 12.5, color: '#86909c' }}>脚本跑完没有报错</span>}
+          ? <span style={{ fontSize: 12, color: '#e8453c', fontFamily: 'var(--font-mono)' }}>{r.errorSummary}</span>
+          : <span style={{ fontSize: 12, color: '#86909c' }}>脚本跑完没有报错</span>}
       </div>
       {items.length
         ? <Tabs size="small" items={items} destroyOnHidden />
@@ -457,7 +457,7 @@ function RunTraffic({ run }) {
           const bad = code && code >= 400
           return (
             <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'baseline', padding: '3px 10px',
-              fontSize: 11.5, fontFamily: 'var(--font-mono)',
+              fontSize: 12, fontFamily: 'var(--font-mono)',
               borderTop: i ? '1px solid rgba(0,0,0,0.03)' : 'none',
               background: bad ? '#fff5f5' : 'transparent' }}>
               <span style={{ minWidth: 46, color: '#4e5969' }}>{q.method}</span>
@@ -603,7 +603,7 @@ function StepTable({ steps, updateStep, addStep, removeStep }) {
         }}>
           <HolderOutlined style={{ color: 'rgba(0,0,0,0.15)', cursor: 'grab', flexShrink: 0, marginTop: 6 }} />
           <span style={{
-            width: 28, height: 24, borderRadius: 12, background: '#e0f7f6', color: '#0ea5a0',
+            width: 28, height: 24, borderRadius: 12, background: 'var(--green-bg)', color: '#0ea5a0',
             display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 12, flexShrink: 0, marginTop: 2,
           }}>{s.seq}</span>
           <Input.TextArea value={s.action} onChange={e => updateStep(i, 'action', e.target.value)}
@@ -650,7 +650,7 @@ function ScenarioStepsView({ steps, extraCol, extraColLabel, extraPlaceholder, e
           borderBottom: i < steps.length - 1 ? '1px solid rgba(0,0,0,0.03)' : 'none', alignItems: 'center',
         }}>
           <span style={{
-            width: 28, height: 24, borderRadius: 12, background: '#e0f7f6', color: '#0ea5a0',
+            width: 28, height: 24, borderRadius: 12, background: 'var(--green-bg)', color: '#0ea5a0',
             display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 12, flexShrink: 0,
           }}>{s.seq || i + 1}</span>
           {s.phase ? (
@@ -763,7 +763,7 @@ function ScenarioCard({ scenario, type, accentColor, icon, scriptContent, script
           <h4 style={{ fontSize: 13, color: '#86909c', marginBottom: 8 }}>依赖参数</h4>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {scenario.variablesUsed.map((v, i) => (
-              <Tag key={i} style={{ fontFamily: 'var(--font-mono)', fontSize: 12, background: '#edf3ff', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '2px 8px' }}>{v}</Tag>
+              <Tag key={i} style={{ fontFamily: 'var(--font-mono)', fontSize: 12, background: 'var(--blue-bg)', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '2px 8px' }}>{v}</Tag>
             ))}
           </div>
         </div>
@@ -934,8 +934,8 @@ function LinkedApiScenarios({ projectId, branchId, caseId, caseTitle, active, ru
           {scenario && scenario.code && scenario.code.startsWith('AT-') && (
             // 没绑用例的孤儿场景才会是 AT-####，这种要标出来 —— 它不属于任何用例。
             <Tooltip title="这条场景的编号还是 AT-####，说明它没有绑定用例（孤儿场景）。正常回推的编排场景编号就是用例编号。">
-              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#fa8c16',
-                borderBottom: '1px dotted #ffd591', cursor: 'help' }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#ff7d00',
+                borderBottom: '1px dotted rgba(255,125,0,0.3)', cursor: 'help' }}>
                 未绑定用例 · {scenario.code}
               </span>
             </Tooltip>
@@ -1357,7 +1357,7 @@ function ScenarioEditor({
             {debugResult && (
               <Tag color={passed ? undefined : 'error'}
                 style={{ cursor: 'pointer', fontWeight: 600, fontSize: 12, padding: '2px 10px', margin: 0,
-                  ...(passed ? { background: '#e0f7f6', color: '#0ea5a0', border: 'none' } : {}) }}
+                  ...(passed ? { background: 'var(--green-bg)', color: '#0ea5a0', border: 'none' } : {}) }}
                 onClick={() => setDebugResult(prev => prev ? { ...prev, _drawerOpen: true } : prev)}>
                 {passed ? '✓ 通过' : '✗ 失败'} · {debugResult.durationMs != null ? `${(debugResult.durationMs / 1000).toFixed(1)}s` : ''}
                 {debugResult.screenshots?.length > 0 ? ` · ${debugResult.screenshots.length} 截图` : ''}
@@ -1402,7 +1402,7 @@ function ScenarioEditor({
               <Tooltip title={trunc
                 ? `这次实际发出 ${trunc.totalSeen} 条，只留存了前 ${trunc.kept} 条，后面的请求没有记录 —— 靠后的写操作可能不在里面`
                 : "本次执行期间抓到的 HTTP 请求条数（同一接口被调多次算多条），不是覆盖的接口数量"}>
-                <span style={{ fontSize: 12, color: trunc ? '#fa8c16' : '#86909c', borderBottom: '1px dotted #d9d9d9' }}>
+                <span style={{ fontSize: 12, color: trunc ? '#ff7d00' : '#86909c', borderBottom: '1px dotted #c9cdd4' }}>
                   抓到 {debugResult.captured_requests.filter(r => !r.truncated).length} 条请求
                   {trunc ? ` · 已截断（共 ${trunc.totalSeen} 条）` : ''}
                 </span>
@@ -1676,7 +1676,7 @@ function ScenarioEditor({
                           if (!badge) return null
                           return (
                             <span title={rn.tag === 'write' ? '写操作，场景核心，已推荐' : rn.tag === 'dependency' ? '被写操作依赖（提供了其用到的 ID），已推荐' : '后台轮询/列表刷新等噪音，未推荐'}
-                              style={{ marginLeft: 6, padding: '0 6px', height: 18, lineHeight: '18px', borderRadius: 9, fontSize: 10, fontWeight: 600, color: badge.color, background: badge.bg, border: rn.tag === 'noise' ? '1px solid rgba(0,0,0,0.06)' : 'none', whiteSpace: 'nowrap' }}>
+                              style={{ marginLeft: 6, padding: '0 6px', height: 18, lineHeight: '18px', borderRadius: 9, fontSize: 11, fontWeight: 600, color: badge.color, background: badge.bg, border: rn.tag === 'noise' ? '1px solid rgba(0,0,0,0.06)' : 'none', whiteSpace: 'nowrap' }}>
                               {badge.label}
                             </span>
                           )
@@ -1686,7 +1686,7 @@ function ScenarioEditor({
                             {(r.path || r.url || '').replace(/^https?:\/\/[^/]+/, '')}
                           </div>
                           {reqBody && (
-                            <div style={{ fontSize: 10, color: '#86909c', fontFamily: 'var(--font-mono)', marginTop: 2, maxHeight: 40, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            <div style={{ fontSize: 11, color: '#86909c', fontFamily: 'var(--font-mono)', marginTop: 2, maxHeight: 40, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                               {String(reqBody).substring(0, 120)}{String(reqBody).length > 120 ? '...' : ''}
                             </div>
                           )}
@@ -1697,7 +1697,7 @@ function ScenarioEditor({
                             {expanded ? '收起' : '详情'}
                           </a>
                         )}
-                        <Tag color={r.status < 400 ? undefined : 'error'} style={{ margin: 0, fontSize: 11, ...(r.status < 400 && r.status >= 0 ? { background: '#e0f7f6', color: '#0ea5a0', border: 'none' } : {}) }}>{r.status}</Tag>
+                        <Tag color={r.status < 400 ? undefined : 'error'} style={{ margin: 0, fontSize: 11, ...(r.status < 400 && r.status >= 0 ? { background: 'var(--green-bg)', color: '#0ea5a0', border: 'none' } : {}) }}>{r.status}</Tag>
                       </div>
                       {expanded && (
                         <div style={{ padding: '10px 12px 12px 44px', background: 'rgba(14,165,160,0.03)', borderBottom: '1px solid rgba(0,0,0,0.04)', fontSize: 12 }}>
@@ -1707,19 +1707,19 @@ function ScenarioEditor({
                           {r.queryParams && Object.keys(r.queryParams).length > 0 && (
                             <div style={{ marginBottom: 8 }}>
                               <div style={{ color: '#86909c', fontWeight: 600, marginBottom: 2 }}>Query 参数</div>
-                              <pre style={{ margin: 0, padding: 8, background: '#fff', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, fontSize: 11, maxHeight: 140, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{JSON.stringify(r.queryParams, null, 2)}</pre>
+                              <pre style={{ margin: 0, padding: 8, background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, fontSize: 11, maxHeight: 140, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{JSON.stringify(r.queryParams, null, 2)}</pre>
                             </div>
                           )}
                           {reqBody ? (
                             <div style={{ marginBottom: 8 }}>
                               <div style={{ color: '#86909c', fontWeight: 600, marginBottom: 2 }}>请求体{r.requestContentType ? ` (${r.requestContentType})` : ''}</div>
-                              <pre style={{ margin: 0, padding: 8, background: '#fff', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, fontSize: 11, maxHeight: 200, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{prettyJson(reqBody)}</pre>
+                              <pre style={{ margin: 0, padding: 8, background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, fontSize: 11, maxHeight: 200, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{prettyJson(reqBody)}</pre>
                             </div>
                           ) : (r.method !== 'GET' && <div style={{ color: '#c9cdd4', marginBottom: 8 }}>（无请求体）</div>)}
                           {respBody ? (
                             <div>
                               <div style={{ color: '#86909c', fontWeight: 600, marginBottom: 2 }}>响应体{r.responseContentType ? ` (${r.responseContentType})` : ''}{r.status >= 0 ? ` · ${r.status}` : ''}</div>
-                              <pre style={{ margin: 0, padding: 8, background: '#fff', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, fontSize: 11, maxHeight: 240, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{prettyJson(respBody)}</pre>
+                              <pre style={{ margin: 0, padding: 8, background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 6, fontSize: 11, maxHeight: 240, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{prettyJson(respBody)}</pre>
                             </div>
                           ) : (
                             <div style={{ color: '#c9cdd4' }}>（无响应体{r.status < 0 ? '，请求未完成' : ''}）</div>
@@ -1804,12 +1804,12 @@ function ScenarioEditor({
                             width: 32, height: 32, borderRadius: 16, display: 'flex', alignItems: 'center', justifyContent: 'center',
                             fontSize: 16, flexShrink: 0,
                             background: isRunning ? '#f3f0ff' : ok ? '#f0faf9' : '#fff5f5',
-                            border: isRunning ? '2px solid #d3adf7' : ok ? '2px solid #b5e8e3' : '2px solid #ffccc7',
+                            border: isRunning ? '2px solid rgba(124,92,191,0.3)' : ok ? '2px solid #b5e8e3' : '2px solid #ffccc7',
                           }}>
                             {isRunning ? <Spin size="small" /> : ok ? (phaseEmoji[phase] || '✅') : '❌'}
                           </div>
                           {i < stepList.length - 1 && (
-                            <div style={{ width: 2, flex: 1, minHeight: 16, background: isRunning ? '#d3adf7' : ok ? '#b5e8e3' : '#ffccc7' }} />
+                            <div style={{ width: 2, flex: 1, minHeight: 16, background: isRunning ? 'rgba(124,92,191,0.3)' : ok ? '#b5e8e3' : '#ffccc7' }} />
                           )}
                         </div>
                         {/* 右：内容 */}
@@ -1959,7 +1959,7 @@ function ScenarioEditor({
               disabled={dimStatus !== 'completed'}
               icon={isTemplate ? <StarFilled /> : <StarOutlined />}
               onClick={() => setIsTemplate(!isTemplate)}
-              style={isTemplate ? { background: '#fff7e6', borderColor: '#ffc069', color: '#fa8c16' } : {}}>
+              style={isTemplate ? { background: 'var(--orange-bg)', borderColor: '#ffc069', color: '#ff7d00' } : {}}>
               {isTemplate ? '模板' : '标记模板'}
             </Button>
           </Tooltip>
@@ -2016,7 +2016,7 @@ function ScenarioEditor({
                   }}>
                     <HolderOutlined style={{ color: 'rgba(0,0,0,0.15)', cursor: 'grab', flexShrink: 0 }} />
                     <span style={{
-                      width: 28, height: 24, borderRadius: 12, background: '#e0f7f6', color: '#0ea5a0',
+                      width: 28, height: 24, borderRadius: 12, background: 'var(--green-bg)', color: '#0ea5a0',
                       display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 600, fontSize: 12, flexShrink: 0,
                     }}>{s.seq}</span>
                     <Input value={s.action || ''} onChange={e => updateStepField(i, 'action', e.target.value)}
@@ -2513,7 +2513,7 @@ export default function CaseDetail() {
             <Button size="small" type={isCore ? 'primary' : 'default'}
               icon={isCore ? <StarFilled /> : <StarOutlined />}
               onClick={() => setIsCore(v => !v)}
-              style={isCore ? { background: '#fff7e6', borderColor: '#ffc069', color: '#fa8c16' } : {}}>
+              style={isCore ? { background: 'var(--orange-bg)', borderColor: '#ffc069', color: '#ff7d00' } : {}}>
               {isCore ? '核心' : '设为核心'}
             </Button>
           </Tooltip>
@@ -2564,7 +2564,7 @@ export default function CaseDetail() {
               一模一样，每轮都要人挨个去问一遍。它不是状态、不免检任何阻塞，只是归责。 */}
           {blockedExternal && (
             <InlineProp icon={<WarningOutlined />} value={`等外部·${blockedExternal}`}
-              color="#fa8c16" bg="#fff7e6" />
+              color="#ff7d00" bg="#fff7e6" />
           )}
           {/* 关联 bug：人和 CC 都能写。**标 fixed 不等于关系解除** ——
               解除由「重跑绿了」这个执行事实决定，平台自动摘；这里只表达
@@ -2575,7 +2575,7 @@ export default function CaseDetail() {
             value={aiReview ? `AI ${aiReview.verdict === 'approved' ? '通过' : '打回'}·${aiReview.total}`
               : caseData.qualityScore?.total != null ? `AI 评分 ${caseData.qualityScore.total}` : 'AI 审核'}
             color={aiReview ? (aiReview.verdict === 'approved' ? '#0ea5a0' : '#e8453c') : '#86909c'}
-            bg={aiReview ? (aiReview.verdict === 'approved' ? '#f6ffed' : '#fff1f0') : 'rgba(0,0,0,0.02)'}>
+            bg={aiReview ? (aiReview.verdict === 'approved' ? 'rgba(14,165,160,0.1)' : '#fff1f0') : 'rgba(0,0,0,0.02)'}>
             <div style={{ minWidth: 380 }}>
               <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
                 <Button size="small" type="primary" loading={aiReviewing}
@@ -2630,7 +2630,7 @@ export default function CaseDetail() {
                   {(aiReview.findings || []).filter(f => f.severity !== 'minor').map((f, i) => (
                     <div key={i} style={{ marginTop: 6 }}>
                       <Tag color={f.severity === 'blocker' ? 'error' : 'warning'}
-                        style={{ fontSize: 10, margin: '0 4px 0 0' }}>
+                        style={{ fontSize: 11, margin: '0 4px 0 0' }}>
                         {f.severity === 'blocker' ? '致命' : '重要'}</Tag>
                       <span style={{ color: '#86909c' }}>{f.where}</span>：{f.problem}
                       {f.fix && <span style={{ color: '#0ea5a0' }}> → {f.fix}</span>}
@@ -2650,11 +2650,11 @@ export default function CaseDetail() {
               人要补充意见写备注。没答的话审核会按「自证不全」扣分，所以这里要看得见。 */}
           <InlineProp icon={<FlagOutlined />}
             value={caseData.reflectionPending ? '待自证' : '已自证'}
-            color={caseData.reflectionPending ? '#fa8c16' : '#0ea5a0'}
-            bg={caseData.reflectionPending ? '#fff7e6' : '#f6ffed'}>
+            color={caseData.reflectionPending ? '#ff7d00' : '#0ea5a0'}
+            bg={caseData.reflectionPending ? '#fff7e6' : 'rgba(14,165,160,0.1)'}>
             <div style={{ minWidth: 400, fontSize: 12, lineHeight: 1.75 }}>
               {caseData.reflectionPending && (
-                <div style={{ color: '#fa8c16', marginBottom: 8 }}>
+                <div style={{ color: '#ff7d00', marginBottom: 8 }}>
                   回推时的四个场景级反问还没答完。规则判不了这四件，只有干活的人答得上；
                   没答的话 AI 审核会按「自证不全」扣分，这条也算不上可交付。
                 </div>
@@ -2720,7 +2720,7 @@ export default function CaseDetail() {
           </InlineProp>
           <InlineProp icon={<WarningOutlined />}
             value={quarantined ? '已隔离' : unstable ? '不稳定' : flaky ? 'Flaky' : '正常'}
-            color={quarantined ? '#e8453c' : unstable ? '#fa8c16' : flaky ? '#faad14' : '#86909c'}
+            color={quarantined ? '#e8453c' : unstable ? '#ff7d00' : flaky ? '#faad14' : '#86909c'}
             bg={quarantined ? '#fff1f0' : unstable ? '#fff7e6' : flaky ? '#fffbe6' : 'rgba(0,0,0,0.02)'}>
             <div style={{ padding: '4px 8px', minWidth: 300 }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
@@ -2734,7 +2734,7 @@ export default function CaseDetail() {
                   把问题藏起来。跳不跳由人定，下面那个按钮才会隔离。 */}
               {unstable && (
                 <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
-                  <div style={{ fontSize: 12.5, color: quarantined ? '#e8453c' : '#fa8c16', fontWeight: 600, marginBottom: 4 }}>
+                  <div style={{ fontSize: 12, color: quarantined ? '#e8453c' : '#ff7d00', fontWeight: 600, marginBottom: 4 }}>
                     {quarantined ? '已隔离，执行时会被跳过' : '检测到不稳定 —— 仍会照常执行'}
                   </div>
                   <div style={{ fontSize: 12, color: '#4e5969', lineHeight: 1.8 }}>
@@ -2773,7 +2773,7 @@ export default function CaseDetail() {
                   {(caseData.flakyEvidence?.runs || []).length > 0 && (
                     <div style={{ marginTop: 6 }}>
                       {caseData.flakyEvidence.runs.map((r, i) => (
-                        <div key={i} style={{ fontSize: 11.5, color: '#86909c', fontFamily: 'var(--font-mono)' }}>
+                        <div key={i} style={{ fontSize: 12, color: '#86909c', fontFamily: 'var(--font-mono)' }}>
                           {r.status === 'passed' ? '✓' : '✗'} {(r.at || '').slice(0, 16).replace('T', ' ')}
                           {r.error ? ` — ${String(r.error).slice(0, 40)}` : ''}
                         </div>
@@ -2819,12 +2819,12 @@ export default function CaseDetail() {
           {priority === 'P0' && (
             <InlineProp icon={<CheckCircleOutlined />}
               value={expectedConfirmed ? '预期已确认' : '预期待确认'}
-              color={expectedConfirmed ? '#0ea5a0' : '#fa8c16'}
+              color={expectedConfirmed ? '#0ea5a0' : '#ff7d00'}
               bg={expectedConfirmed ? '#e0f7f6' : '#fff7e6'}>
               <div style={{ padding: '4px 8px', minWidth: 320, lineHeight: 1.8 }}>
                 {expectedConfirmed ? (
                   <>
-                    <div style={{ fontSize: 12.5, color: '#0ea5a0', fontWeight: 600 }}>
+                    <div style={{ fontSize: 12, color: '#0ea5a0', fontWeight: 600 }}>
                       已确认预期结果
                     </div>
                     <div style={{ fontSize: 12, color: '#4e5969' }}>
@@ -2843,7 +2843,7 @@ export default function CaseDetail() {
                   </>
                 ) : (
                   <>
-                    <div style={{ fontSize: 12.5, color: '#fa8c16', fontWeight: 600 }}>
+                    <div style={{ fontSize: 12, color: '#ff7d00', fontWeight: 600 }}>
                       还没有人确认过预期结果
                     </div>
                     <div style={{ fontSize: 12, color: '#4e5969' }}>
@@ -2908,7 +2908,7 @@ export default function CaseDetail() {
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
                     {variablesUsed.map((v, i) => (
                       <Tag key={i} closable onClose={() => setVariablesUsed(prev => prev.filter((_, j) => j !== i))}
-                        style={{ fontFamily: 'var(--font-mono)', fontSize: 11, background: '#edf3ff', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '1px 6px' }}>
+                        style={{ fontFamily: 'var(--font-mono)', fontSize: 11, background: 'var(--blue-bg)', border: '1px solid rgba(78,138,240,0.3)', color: '#4e8af0', borderRadius: 12, padding: '1px 6px' }}>
                         {v}
                       </Tag>
                     ))}
@@ -3055,7 +3055,7 @@ export default function CaseDetail() {
                       {(r.findings || []).filter(f => f.severity !== 'minor').map((f, i) => (
                         <div key={i} style={{ fontSize: 12, marginTop: 3, lineHeight: 1.7 }}>
                           <Tag color={f.severity === 'blocker' ? 'error' : 'warning'}
-                            style={{ fontSize: 10, margin: '0 6px 0 0' }}>
+                            style={{ fontSize: 11, margin: '0 6px 0 0' }}>
                             {f.severity === 'blocker' ? '致命' : '重要'}</Tag>
                           <span style={{ color: '#86909c' }}>{f.where}</span>：{f.problem}
                           {f.fix && <span style={{ color: '#0ea5a0' }}> → {f.fix}</span>}
@@ -3108,13 +3108,13 @@ export default function CaseDetail() {
                       render: (v, row) => (
                         <span style={{ fontSize: 12, color: v === 'regression' ? '#0ea5a0' : '#86909c' }}>
                           {v === 'regression' ? '回归' : '调试'}
-                          {row.attempt > 1 && <span style={{ marginLeft: 4, color: '#fa8c16' }}>第{row.attempt}次</span>}
+                          {row.attempt > 1 && <span style={{ marginLeft: 4, color: '#ff7d00' }}>第{row.attempt}次</span>}
                         </span>
                       )
                     },
                     {
                       title: '状态', dataIndex: 'status', width: 100,
-                      render: v => <Tag color={v === 'passed' ? undefined : v === 'failed' ? 'error' : 'warning'} style={{ fontWeight: 600, ...(v === 'passed' ? { background: '#e0f7f6', color: '#0ea5a0', border: 'none' } : {}) }}>{(v || 'unknown').toUpperCase()}</Tag>
+                      render: v => <Tag color={v === 'passed' ? undefined : v === 'failed' ? 'error' : 'warning'} style={{ fontWeight: 600, ...(v === 'passed' ? { background: 'var(--green-bg)', color: '#0ea5a0', border: 'none' } : {}) }}>{(v || 'unknown').toUpperCase()}</Tag>
                     },
                     {
                       title: '耗时', dataIndex: 'durationMs', width: 100,
@@ -3209,7 +3209,7 @@ export default function CaseDetail() {
                 <div style={{ marginTop: 16 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
                     <Tag color={runResult.status === 'passed' ? undefined : runResult.status === 'failed' ? 'error' : 'warning'}
-                      style={{ fontWeight: 700, fontSize: 13, padding: '2px 12px', ...(runResult.status === 'passed' ? { background: '#e0f7f6', color: '#0ea5a0', border: 'none' } : {}) }}>
+                      style={{ fontWeight: 700, fontSize: 13, padding: '2px 12px', ...(runResult.status === 'passed' ? { background: 'var(--green-bg)', color: '#0ea5a0', border: 'none' } : {}) }}>
                       {(runResult.status || 'UNKNOWN').toUpperCase()}
                     </Tag>
                     {runResult.durationMs != null && (
@@ -3218,7 +3218,7 @@ export default function CaseDetail() {
                   </div>
 
                   {runResult.errorSummary && (
-                    <div style={{ padding: '10px 14px', background: '#fff2f0', border: '1px solid #ffccc7', borderRadius: 12, marginBottom: 12 }}>
+                    <div style={{ padding: '10px 14px', background: 'var(--red-bg)', border: '1px solid #ffccc7', borderRadius: 12, marginBottom: 12 }}>
                       <div style={{ fontSize: 12, fontWeight: 600, color: '#e8453c', marginBottom: 4 }}>错误信息</div>
                       <pre style={{ margin: 0, fontSize: 12, color: '#434343', fontFamily: 'var(--font-mono)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 150, overflow: 'auto' }}>{runResult.errorSummary}</pre>
                     </div>
@@ -3308,7 +3308,7 @@ function ProvenanceTab({ caseId }) {
             </Space>
             {p.quoteText && (
               <div style={{
-                fontSize: 12.5, color: '#4e5969', lineHeight: 1.7,
+                fontSize: 12, color: '#4e5969', lineHeight: 1.7,
                 paddingLeft: 10, borderLeft: '3px solid rgba(78,138,240,0.35)',
               }}>
                 {p.quoteText}
@@ -3382,7 +3382,7 @@ function CaseFileTab({ caseId }) {
     ai_reviewed: { label: 'AI 审核', color: '#7c5cbf', icon: '🟡' },
     executed_pass: { label: '执行通过', color: '#0ea5a0', icon: '🟢' },
     executed_fail: { label: '执行失败', color: '#e8453c', icon: '🔴' },
-    ai_diagnosed: { label: 'AI 诊断', color: '#fa8c16', icon: '🟠' },
+    ai_diagnosed: { label: 'AI 诊断', color: '#ff7d00', icon: '🟠' },
     manual_edit: { label: '手动编辑', color: '#86909c', icon: '⚪' },
   }
 

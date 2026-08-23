@@ -107,7 +107,7 @@ export default function ReviewReport() {
       render: v => v || <span style={{ color: '#c9cdd4' }}>—</span> },
     { title: '发起人', dataIndex: 'actor', width: 90,
       render: (v, r) => <span style={{ fontSize: 12 }}>{v || '—'}
-        {r.actorKind !== 'human' && <Tag style={{ marginLeft: 4, fontSize: 10 }}>CC</Tag>}</span> },
+        {r.actorKind !== 'human' && <Tag style={{ marginLeft: 4, fontSize: 11 }}>CC</Tag>}</span> },
     { title: '状态 / 结果', width: 250,
       render: (_, r) => {
         const st = STATUS[r.status] || {}
@@ -228,7 +228,7 @@ function ModuleReport({ d, projectId, navigate }) {
             {r.commonIssues.map((c, i) => (
               <li key={i} style={{ marginBottom: 6 }}>
                 <Tag color={c.severity === 'blocker' ? 'error' : 'warning'}
-                  style={{ fontSize: 10 }}>{c.count} 条</Tag>
+                  style={{ fontSize: 11 }}>{c.count} 条</Tag>
                 {/* label 是人话（「验的端点页面根本不调」），kind 是判据名 ——
                     只显示 kind 的话没人知道该改什么，而这一块的价值全在"改一处修一片" */}
                 <b>{c.label || c.kind}</b>
@@ -250,7 +250,7 @@ function ModuleReport({ d, projectId, navigate }) {
                 ? <div style={{ fontSize: 12 }}>各条原话：{g.phrasings.map((t, j) => <div key={j}>· {t}</div>)}</div>
                 : null}>
                 <li style={{ marginBottom: 4 }}>
-                  <Tag color={g.count > 1 ? 'warning' : undefined} style={{ fontSize: 10 }}>{g.count}×</Tag>
+                  <Tag color={g.count > 1 ? 'warning' : undefined} style={{ fontSize: 11 }}>{g.count}×</Tag>
                   <b>{g.display || g.topic || g.gap}</b>
                   {g.matchedTopic ? <span style={{ color: '#86909c', marginLeft: 6 }}>{g.gap}</span> : null}
                 </li>
