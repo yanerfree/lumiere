@@ -21,6 +21,15 @@ _IDLIKE = re.compile(
 # 每个页面都会发的公共请求，不算"这条用例调的接口"
 _NOISE = re.compile(r"auth/(me|login|refresh)|system/services|/health|\.js|\.css|\.map|"
                     r"favicon|sockjs|hot-update|/i18n|global-variables|environments$")
+# 数据面/网关地址 —— 页面**永远不会**直接打这类地址，跟 sync._DATA_PLANE_RE 同一个口径。
+# 反例（什么时候它不该被排除）：如果一个步骤的 URL 本身就是 ${BASE_URL}，
+# 而 BASE_URL 恰好长得像这几个变量名——不存在，回推那边的变量纪律已经把
+# gatewayBase/dataPlane 和 BASE_URL 分开命名了，两者不会撞。
+_DATA_PLANE_RE = re.compile(r"\$\{(gatewayBase|gateway_base|dataPlane|GATEWAY_URL)\}", re.I)
+# 前置/制备/清理这类步骤本来就不是"页面上会做的动作"，它们打的接口
+# （造数据、轮询收敛、删残留）页面执行一次都不会经过，拿页面流量去对账
+# 天然对不上——不是这条用例的场景写错了，是判据问的问题本身就不成立。
+_PREP_ROLE_RE = re.compile(r"^\s*(前置|准备|制备|清理|收尾|环境|数据准备)\s*[:：]")
 
 
 def norm(url: str, method: str = "GET") -> str | None:
@@ -46,14 +55,26 @@ def _from_traffic(captured: list) -> dict[str, int]:
     return out
 
 
-def _from_scenario(steps: list) -> dict[str, int]:
+def _from_scenario(steps: list, raw_map: dict | None = None) -> dict[str, int]:
+    """`raw_map`（可选）：归一化 key → 原始 URL，只是个副作用输出，不影响返回值——
+    展示层要能回溯到原始 URL（不然一个 `POST /api/{id}{id}` 除了让人怀疑场景
+    真写错了 URL，什么忙都帮不上，见 test_幽灵端点要能回溯原始URL）。"""
     out: dict[str, int] = {}
     for st in (steps or []):
+        raw_url = str(st.get("url") or "")
+        # 前置/制备/清理这类步骤本来就不是页面动作，打的多半是造数据/收敛轮询接口，
+        # 页面执行一次都不会经过——拿页面流量对账天然对不上，不是场景写错了。
+        if _PREP_ROLE_RE.match(str(st.get("name") or "")):
+            continue
+        # 数据面/网关地址：页面拿不到网关凭据，不可能直接打这类地址，
+        # 这类步骤本来就该是接口场景自己独有的，不该跟页面流量比对。
+        if _DATA_PLANE_RE.search(raw_url):
+            continue
         # 场景里的 URL 带 ${BASE_URL} 和 ${变量}，先剥掉变量再归一
         # `${var}` 换成 `{id}` —— **不要带斜杠**：`/api/projects/${projId}` 会变成
         # `/api/projects//{id}`，跟流量侧的 `/api/projects/{id}` 永远对不上，
         # 于是每一条带路径变量的步骤都被当成"页面不调的幽灵端点"（滥报）。
-        u = re.sub(r"\$\{[^}]+\}", "{id}", str(st.get("url") or ""))
+        u = re.sub(r"\$\{[^}]+\}", "{id}", raw_url)
         k = norm(u if "/api/" in u else "/api/" + u.lstrip("/"), st.get("method"))
         if not k:
             continue
@@ -66,6 +87,8 @@ def _from_scenario(steps: list) -> dict[str, int]:
         if not re.sub(r"\{id\}|/", "", body):
             continue
         out[k] = out.get(k, 0) + 1
+        if raw_map is not None:
+            raw_map.setdefault(k, raw_url)
     return out
 
 
@@ -73,7 +96,8 @@ def compare(captured: list, scenario_steps: list, manual_steps: list,
             script_content: str | None = None) -> list[dict]:
     """产出**平台事实**（不是猜）。每条都指到具体 URL 或步骤。"""
     traffic = _from_traffic(captured)
-    api_chain = _from_scenario(scenario_steps)
+    raw_map: dict[str, str] = {}
+    api_chain = _from_scenario(scenario_steps, raw_map=raw_map)
     out: list[dict] = []
     if not traffic:
         return out          # 这次没抓到流量（没跑 UI 或被回收了），不下任何结论
@@ -85,9 +109,15 @@ def compare(captured: list, scenario_steps: list, manual_steps: list,
     # 它把自己要抓的那个案例滤掉了。id 差异两边都已经归一成 {id}，不需要兜底。
     ghosts = [k for k in api_chain if k not in traffic]
     if ghosts:
+        # **归一化的 key 只用来比对，不能只用它来展示。** 归一化把路径参数段
+        # 压成 `{id}` 之后，看着完全不像真实端点（比如把连续两个变量段压成
+        # `{id}{id}`），这时候不带回原始 URL，排查的人会先怀疑是场景本身把
+        # URL 写错了，绕一圈才发现是展示层的问题——所以每条都把原始 URL 带上，
+        # 不去猜"这条像不像被压坏了"。
+        shown = [f"{k}（原文：{raw_map[k]}）" if k in raw_map else k for k in ghosts[:5]]
         out.append({"kind": "endpoint_not_used_by_page", "severity": "blocker", "where": "api",
                     "detail": f"接口场景里这些端点，这次页面执行**一次都没发过**："
-                              f"{'、'.join(ghosts[:5])}。"
+                              f"{'、'.join(shown)}。"
                               f"真实流量里出现的是：{'、'.join(list(traffic)[:5])}。"
                               f"两个端点都可能存在、都返回 200，所以用例照样绿 —— "
                               f"但页面用的不是你验的那个，它坏掉这条用例不会红。"

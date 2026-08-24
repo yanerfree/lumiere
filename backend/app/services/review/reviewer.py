@@ -94,13 +94,25 @@ _SYSTEM = """你是这个测试平台的评审员，替代人工那道「待审�
    ⚠ **不要因为这个模块缺别的场景而扣这一条的分**。模块级的缺口（越权、幂等、
    边界、状态切回来、异步收敛、删除残留）写进 `coverageGaps` —— 那是给人看的情报，
    不影响这一条过不过。已经有邻居覆盖的不要重复提。
-6. **`reflections` 是作者自己写的"这条在验什么"**（回推时四问的答案）。用法：
+6. **步骤名/接口场景步骤名带角色前缀的，先按前缀判，别凭常识猜**：
+   `前置:`/`准备:`/`制备:`/`清理:`/`收尾:` 打头的步骤是造数据、收尾，**不是被测行为**，
+   不该因为它没有对应的 UI 断言就算"预期没查"或扣 self_coverage 的分——
+   这类步骤走接口铺数据、走接口清理，本来就不会出现在 UI 脚本里。
+   `操作:`/`验证:` 才是需要在页面上有对应动作/断言的。
+   · expectedResult 里出现「由接口场景『制备：等推送收敛』断言覆盖」这类**指向
+     接口场景步骤名的说明**，不算一条新的验证承诺——那是作者在说"这件事换了
+     地方验"，不是又许了一个诺。**不要因为这句话里提到的步骤名在 UI 脚本里找
+     不到对应元素，就单独再标一条缺口**——它本来就不该出现在 UI 脚本里。
+   · 给 verification_depth/self_coverage 的 `fix` 建议时，**优先建议把步骤名改成
+     规范里的角色前缀**，而不是建议在 expected 里塞自然语言说明——那段说明文字
+     本身还会被同一套判据当成新的待验证内容再抓一次，越改越多。
+7. **`reflections` 是作者自己写的"这条在验什么"**（回推时四问的答案）。用法：
    · 它说"第 8 步验编号不变"，你就去看第 8 步的断言 ——
      **说的和断言对不上，是最硬的证据**，标 blocker + kind=no_real_verification。
    · 它说某类场景"不适用"，理由站得住就别再当遗漏提。
    · **`reflections` 为空** = **自证不全**：作者没说这条在验什么。不是零分，
      但 self_coverage 最高给 70，并列一条 major「没答回推四问，这条在验什么只能靠猜」。
-7. 只输出一个 JSON 对象，用 ```json 包裹。
+8. 只输出一个 JSON 对象，用 ```json 包裹。
 
 JSON 形状（dimensions 里只出现适用的维度，分数 0-100 整数）：
 {
@@ -195,19 +207,46 @@ def _parse(text: str) -> dict | None:
         return None
 
 
+_LOC_NUM = re.compile(r"\d+")
+
+
+def _loc_sig(*texts: str | None) -> set[str]:
+    """从文本里挑数字当"位置指纹"——机器判据和 LLM 复述措辞常常完全不同
+    （一个是模板拼出来的"第 19 步缺读回"，一个是模型自己组织的句子），
+    但两边多半都会带着同一个步骤号/状态码。只用于粗筛，不是精确匹配。"""
+    sig: set[str] = set()
+    for t in texts:
+        sig |= set(_LOC_NUM.findall(t or ""))
+    return sig
+
+
 def merge_findings(machine: list[dict], llm: list[dict]) -> list[dict]:
     """机器事实 + LLM 判断合成一份清单。
 
     机器那份**必须原样进结果**：LLM 可能漏掉它、也可能把 blocker 说成 minor，
     而这几条正是最贵的那几条（恒真断言、只打控制面）。
     去重按 kind/where 粗粒度做 —— 同一件事说两遍会让人以为有两个问题。
+
+    **两道去重判据都要用，缺一个都会漏**：
+    1. 措辞前缀重合（原有的）——LLM 抄机器的话时命中。
+    2. **同一维度 + 提到同一个位置数字**——LLM 用自己的话复述同一处问题时，
+       前缀重合抓不到（活体验证撞过：机检说"第 19 步缺读回"，AI 复述成
+       另一种说法，两条都进了 mustFix，`verdictReason` 写"有 2 处重要问题"，
+       实际是一处）。
+    反例：同一步骤号下机器和 LLM **各自指出一件不相关的事**（比如第 19 步既缺
+    读回、又断言方向写反）会被误判成一条丢掉一条——两害相权，"同一件事说两遍
+    显得比实际更严重"比"偶尔漏掉一条巧合撞了步骤号的独立问题"后果更常见也更贵，
+    所以这条判据只做粗筛、不追求精确。
     """
     out = []
     seen_detail = set()
+    seen_loc: list[tuple[str, set[str]]] = []
     for f in machine:
         key = (f.get("kind"), (f.get("detail") or "")[:40])
         seen_detail.add(key)
-        out.append({"dimension": _kind_to_dim(f.get("kind")), "severity": f.get("severity", "major"),
+        dim = _kind_to_dim(f.get("kind"))
+        seen_loc.append((dim, _loc_sig(f.get("detail"), f.get("where"))))
+        out.append({"dimension": dim, "severity": f.get("severity", "major"),
                     "where": f.get("where") or "-", "problem": f.get("detail"),
                     # **kind 要留着**：前端要按类型筛、CC 要按类型判该怎么改，
                     # 丢了之后只能对着文本做子串匹配（活体验证时我自己就栽在这上面：
@@ -227,11 +266,16 @@ def merge_findings(machine: list[dict], llm: list[dict]) -> list[dict]:
         prob = str(f.get("problem") or "")[:600]
         if not prob:
             continue
+        where = str(f.get("where") or "")
+        dim = f.get("dimension") or "scenario_sanity"
+        loc = _loc_sig(prob, where)
         # LLM 复述了机器那条 → 丢掉，保留机器那条（它的 severity 才是权威）
-        if any(prob[:24] in (d or "") for _, d in seen_detail):
+        is_dup = any(prob[:24] in (d or "") for _, d in seen_detail) or \
+            any(dim == d2 and loc and (loc & sig) for d2, sig in seen_loc)
+        if is_dup:
             continue
-        out.append({"dimension": f.get("dimension") or "scenario_sanity", "severity": sev,
-                    "where": str(f.get("where") or "-")[:200],
+        out.append({"dimension": dim, "severity": sev,
+                    "where": where[:200] or "-",
                     "problem": prob, "fix": str(f.get("fix") or "")[:600] or None,
                     "kind": kind or None, "source": "ai"})
     return out
@@ -616,12 +660,16 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
             # 记一轮 —— 审核以前只有"当前值"，没有过程。有了它，
             # 「AI 打回 → CC 整改 → 再审 → 通过」这条链在页面上看得见。
             from app.services.review import rounds
+            # 记下这轮审的是哪份内容 —— 场景/脚本之后被覆盖时，这份 verdict
+            # 就该显示成"过期"而不是原样留着（review-spec.md 反馈 §1）。
+            content_hash = await rounds.content_signature(session, case_id)
             await rounds.record(session, case_id, "ai_review",
                                 verdict=scored["verdict"], total=scored["total"],
                                 dimensions={k: v["score"] for k, v in scored["dimensions"].items()},
                                 findings=findings[:20], coverage_gaps=result["coverageGaps"],
                                 summary=result["summary"], actor="ai", model=result["model"],
                                 review_mode=result["reviewMode"],
-                                traffic_seen=result.get("trafficSeen"))
+                                traffic_seen=result.get("trafficSeen"),
+                                content_hash=content_hash)
             await session.commit()
     return result

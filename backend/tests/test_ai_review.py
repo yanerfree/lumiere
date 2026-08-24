@@ -142,6 +142,31 @@ def test_没有problem的finding丢掉():
     assert merge_findings([], [{"dimension": "discipline", "severity": "major"}]) == []
 
 
+def test_LLM换个说法复述机器那条也要去重():
+    """措辞前缀重合那条去重逮不住这种：机检是模板拼的话，AI 复述是模型自己
+    组织的句子，开头完全不一样，但两边都在说"第 19 步缺读回"这同一件事。
+    活体验证撞过：TC-DYGL-00007 的 mustFix 有两条，`verdictReason` 写
+    "有 2 处重要问题"，实际是一处被机检和 AI 复述各算了一次。
+    """
+    machine = [{"kind": "no_readback", "severity": "major", "where": "api",
+                "detail": "第 19 步改了配置没有读回确认"}]
+    llm = [{"dimension": "verification_depth", "severity": "major",
+            "problem": "步骤 19 只发了修改请求，压根没有再查一次结果", "where": ""}]
+    out = merge_findings(machine, llm)
+    assert len(out) == 1, out
+
+
+def test_不同维度撞了同一个数字不去重():
+    """数字重合只是粗筛的必要条件之一，还得同一维度——不然两处毫不相关的问题
+    只因为都提到"19"就被合并，会把真的第二个问题吃掉。"""
+    machine = [{"kind": "no_readback", "severity": "major", "where": "api",
+                "detail": "第 19 步改了配置没有读回确认"}]
+    llm = [{"dimension": "scenario_sanity", "severity": "minor",
+            "problem": "模块目前一共 19 条用例，都是正向流程", "where": ""}]
+    out = merge_findings(machine, llm)
+    assert len(out) == 2, "维度不同、说的不是同一件事，不该被合并"
+
+
 # ── 证据面 ───────────────────────────────────────────────────────
 
 def test_证据里必须有断言原文和脚本正文():
@@ -171,6 +196,22 @@ def test_CC能自审():
     d = {t["name"]: t["description"] for t in TOOL_CATALOG}
     assert "tb_review_case" in d
     assert "blocker" in d["tb_review_case"] and "六维" in d["tb_review_case"]
+
+
+def test_超时不代表没跑完():
+    """这个工具是一次不间断的同步调用，run_first=true 时可能跑到分钟级，
+    中途没有心跳——批量审核已经有 batchId 轮询解决了同样的问题，单条这边
+    还没跟上。活体验证撞过：`tb_review_case` 报"300s 无响应，已中止"，
+    但服务端其实跑完了、结果也写库了（77 分），当时按"没跑出结果"汇报，
+    后来靠 tb_check_deliverable 才发现已经有结论。至少要在工具说明里
+    把这条路指出来，别让调用方以为这次调用完全没有产出。
+    """
+    from app.mcp import TOOL_CATALOG
+    d = {t["name"]: t["description"] for t in TOOL_CATALOG}
+    assert "超时" in d["tb_review_case"] and "不代表没跑完" in d["tb_review_case"]
+    import inspect
+    from app.mcp.tools import review
+    assert "不代表这条没跑完" in inspect.getsource(review.review_case)
 
 
 def test_自审工具在回推那两档里():
@@ -234,6 +275,19 @@ def test_模块缺场景不扣单条的分():
     assert "不要因为这个模块缺别的场景而扣这一条的分" in reviewer._SYSTEM
     assert "self_coverage" in DIMENSIONS and "coverage_gap" not in DIMENSIONS
     assert DIMENSIONS["self_coverage"]["label"] == "本条覆盖完整性"
+
+
+def test_prompt知道步骤角色前缀():
+    """TC-DYGL-00001 走了三轮才过：第一轮说预期没查，改成往 expected 里塞散文
+    锚点（"由接口场景『制备：等推送收敛』断言覆盖"），第二轮反而把那句话里提到
+    的步骤名当成新的待验证承诺，又标了 4 条。最后靠**步骤角色前缀**
+    （前置:/操作:/验证:/清理:）过审——这是规范里本来就有的机制，三轮评审
+    一次都没提示用它，因为 LLM 判 self_coverage 时压根不知道这套约定
+    （只有代码侧的 step_coverage._ROLE_SKIP 认，LLM 读的是自然语言）。
+    """
+    assert "前置:" in reviewer._SYSTEM and "清理:" in reviewer._SYSTEM
+    assert "不算一条新的验证承诺" in reviewer._SYSTEM
+    assert "优先建议把步骤名改成" in reviewer._SYSTEM, "修复建议不该引导往 expected 里塞散文"
 
 
 def test_列表不区分谁审的():

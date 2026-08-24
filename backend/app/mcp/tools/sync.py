@@ -383,8 +383,12 @@ def _nondiscriminating(norm: list[dict]) -> list[dict]:
     return out
 
 
+_STAR_FILTER = re.compile(r"\[\*")
+
+
 def _missing_path_baseline(norm: list[dict]) -> list[dict]:
-    """断了「空 / 取不到」（not_exists、is_empty、length==0），但这条路径**从来没被证明过有东西**。
+    """断了「空 / 取不到」（not_exists、is_empty、星号过滤的 length==0），
+    但这条路径**从来没被证明过有东西**。
 
     活体跑回推链路时逼出来的一条：`data[name=${svcName}].id not_exists` 用来验
     「删完按名字查不到」是对的写法，但**字段名写错也一样取不到** —— 于是它恒真，
@@ -393,6 +397,14 @@ def _missing_path_baseline(norm: list[dict]) -> list[dict]:
     判据是结构性的、不会误报：同一条 field 路径，在这一步之前有没有任何一步
     断过 not_empty / == / contains（都要求取到值）。有 = 基准建过了；没有 = 这条
     从头到尾没人证明过它取得到。
+
+    **`length` 只在星号过滤（`[*key=val]`）时才算 empty_ish。**
+    `_extract_value` 里非星号的路径（普通字段、`[key=val]` 单条过滤、下标）解析
+    失败一律返回 `None`，而 `length` 要求 `isinstance(actual, list/tuple/str)`——
+    取不到的 `None` 直接判 False 报错，根本不会悄悄"当 0 通过"，这条路径本身
+    就自带基准，不该被这条判据拦。只有 `[*key=val]` 是例外：它设计成"零命中也
+    返回空列表"（配合 length 断"有且只有一条"，见 test_唯一性只能用星号过滤加length），
+    这时候过滤键写错和真的零命中长得一模一样，才需要这条判据兜底。
     """
     proven: set[str] = set()
     out: list[dict] = []
@@ -403,7 +415,8 @@ def _missing_path_baseline(norm: list[dict]) -> list[dict]:
             field = str(a.get("field") or "")
             op = a.get("operator") or "=="
             empty_ish = (op == "not_exists" or op == "is_empty"
-                         or (op == "length" and str(a.get("expected")) == "0"))
+                         or (op == "length" and str(a.get("expected")) == "0"
+                             and _STAR_FILTER.search(field)))
             if empty_ish:
                 if field and field not in proven:
                     out.append({

@@ -310,3 +310,28 @@ def test_断空断不存在都要有基准():
             step("删之前查得到", "data[*name=x]", "length", 1),
             step("删后查", "data[*name=x]", op, exp)])
         assert ok == [], f"{op}：前面建过基准就不该再报"
+
+
+def test_length在非星号路径上不需要基准():
+    """`length` 不是所有路径都有 not_exists/is_empty 那个"字段名写错也是空的"坑——
+    `_extract_value` 对普通字段/单条过滤/下标解析失败一律返回 `None`，而 `length`
+    要求 `isinstance(actual, list/tuple/str)`，取不到直接判 False 报错，不会悄悄
+    "当 0 通过"。这条路径本身就带基准，不该被这条判据拦——之前跟 `data[*name=x]`
+    那种星号过滤一视同仁,是把两种不同的运行时行为混成了一条判据。
+    只有星号过滤 `[*key=val]`（上面那条测试）才会"零命中也返回空列表"，
+    过滤键写错和真的零命中长得一样，那种情况仍然要拦。
+    """
+    from app.mcp.tools.sync import _missing_path_baseline
+
+    def step(name, field, op, expected=None):
+        a = {"type": "body_field", "field": field, "operator": op}
+        if expected is not None:
+            a["expected"] = expected
+        return {"name": name, "method": "GET", "url": "/x", "assertions": [a]}
+
+    for field in ("data.items", "data[name=x].items", "data.items[0]"):
+        assert _missing_path_baseline([step("删后查", field, "length", 0)]) == [], field
+    # not_exists / is_empty 在同样的非星号路径上仍然要拦——它们没有 length 那份基准
+    for op in ("not_exists", "is_empty"):
+        w = _missing_path_baseline([step("删后查", "data.items", op)])
+        assert len(w) == 1, op

@@ -71,13 +71,13 @@ def _scenario():
 
 
 def _step(order, name, status="pass", assertions=None, retry=0, url="${BASE_URL}/api/v1/x",
-          body=None, group=None, method="GET"):
+          body=None, group=None, method="GET", last_response=None):
     # method 是真模型上就有的字段。假 step 少一个，写操作那类判据就整个跑不起来 ——
     # 上一次假 Case 少了 review_status 也是同样的问题。
     return SimpleNamespace(sort_order=order, name=name, last_status=status,
                            assertions=assertions or [{"type": "status", "value": 200}],
                            retry_timeout_ms=retry, url=url, body=body, group_name=group,
-                           method=method)
+                           method=method, last_response=last_response)
 
 
 def _run(session):
@@ -119,14 +119,45 @@ def test_有步骤挂着不算可交付():
     assert any(b["kind"] == "api_steps_failed" for b in r["blockers"])
 
 
-def test_布尔断言写成字符串不算可交付():
-    """必然假红。这是 TC-FWGL-00001 当初被卡住的那条。"""
+def test_布尔断言写成字符串且实测确实是布尔才不算可交付():
+    """必然假红——但只有**实测证据**证明这个字段确实是布尔才能硬拦
+    （判据规范 RULES.md 附则：没证据只能警告）。这是 TC-FWGL-00001 当初被
+    卡住的那条：实测 `data.enabled` 是布尔 `true`，断言写成字符串 "true"。
+    """
     steps = [_step(0, "确认已启用", assertions=[
-        {"type": "body_field", "field": "data.enabled", "expected": "true"}])]
+        {"type": "body_field", "field": "data.enabled", "expected": "true"}],
+        last_response={"assertions": [{"field": "data.enabled", "actual": True}]})]
     r = _run(FakeSession(case=_case(), scenario=_scenario(), steps=steps))
     assert r["deliverable"] is False
     b = [x for x in r["blockers"] if x["kind"] == "assertion_bool_as_string"]
     assert b and "data.enabled" in b[0]["detail"] and "不加引号" in b[0]["detail"]
+
+
+def test_实测字段本来就是字符串不拦():
+    """TC-DYGL-00013：`message_args.cascaded` 读后端源码确认是
+    `map[string]string`，实测返回的就是字符串 "true"，断言写成字符串是**对的
+    写法**——门禁原来不管三七二十一见了带引号的 true/false 就拦，逼着照建议
+    改成不加引号会让断言必然假红。回推阶段（sync._typo_assertions）早给了
+    "如果这个接口确实返回字符串，忽略这条"的逃生阀，交付门禁必须认同一个口径。
+    """
+    steps = [_step(0, "确认已连坐", assertions=[
+        {"type": "body_field", "field": "message_args.cascaded", "expected": "true"}],
+        last_response={"assertions": [{"field": "message_args.cascaded", "actual": "true"}]})]
+    r = _run(FakeSession(case=_case(), scenario=_scenario(), steps=steps))
+    assert r["deliverable"] is True, r["blockers"]
+    assert not any(x["kind"] == "assertion_bool_as_string" for x in r["blockers"])
+
+
+def test_布尔断言写成字符串但没实测过只能警告():
+    """还没跑过（或这条断言是这次才加的，跑的记录里没有它）——平台并不知道这个
+    接口这个字段是布尔还是字符串，只能软警告、给逃生阀，不能硬拦当场判不可交付。
+    """
+    steps = [_step(0, "确认已启用", assertions=[
+        {"type": "body_field", "field": "data.enabled", "expected": "true"}])]
+    r = _run(FakeSession(case=_case(), scenario=_scenario(), steps=steps))
+    assert not any(x["kind"] == "assertion_bool_as_string" for x in r["blockers"])
+    risks = [x for x in r["risks"] if x["kind"] == "assertion_bool_as_string_unverified"]
+    assert risks and "忽略这条" in risks[0]["detail"]
 
 
 def test_欠接口维度不算可交付():

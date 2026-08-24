@@ -25,8 +25,24 @@ from app.models.case import Case
 from app.models.script import Script, ScriptRun
 from app.services.data_health import is_protocol_envelope
 
-# 期望值写成字符串的布尔 —— 必然假红（平台故意不兜布尔，兜了会假绿）
+# 期望值写成字符串的布尔 —— 平台故意不兜布尔（兜了会假绿），但字符串写法
+# 是不是错的，取决于这个字段实测到底是不是布尔——见 _recorded_actual。
 _BOOL_STRINGS = {"true", "false", "True", "False"}
+
+
+def _recorded_actual(step, field: str | None) -> tuple[bool, object]:
+    """从上一次真跑记录里找这条断言当时实际取到的值 —— 不是重新解析响应体，
+    是读 `ApiTestStep.last_response.assertions`（api_test_runner 跑的时候就存好
+    了每条断言的 `actual`）。返回 (有没有证据, 实际值)。
+
+    field 对不上当时跑的那条 = 没有证据（比如断言是这次才加的、还没跑过），
+    按判据规范附则只能警告，不能硬拦。
+    """
+    recorded = ((getattr(step, "last_response", None) or {}).get("assertions") or [])
+    for r in recorded:
+        if isinstance(r, dict) and r.get("field") == field:
+            return True, r.get("actual")
+    return False, None
 # 异步下发之后立刻断言「已生效」的两种形状
 _ASYNC_FIELD_RE = re.compile(r"(push|sync)[-_]?status|data\.(status|phase|synced_count)", re.I)
 _DATA_PLANE_RE = re.compile(r"\$\{(gatewayBase|gateway_base|dataPlane|GATEWAY_URL)\}", re.I)
@@ -306,16 +322,36 @@ def _audit_api_steps(scenario, steps, case, blockers, risks, notes,
                       "steps": [{"sortOrder": s.sort_order, "name": s.name} for s in never[:5]]})
 
     for s in steps:
-        # 断言期望值类型写错 —— 必然假红
+        # 断言期望值写成字符串的布尔 —— **有证据（实测这个字段确实是布尔）才硬拦，
+        # 没证据只能警告、给逃生阀**（判据规范 RULES.md 附则：「断言期望值写成字符串
+        # "true"」就是那份文档自己举的例子）。回推那一刻（sync._typo_assertions）
+        # 就是这么降级的，理由写得很明白："有证据的时候……那个判定放在评审侧做"——
+        # 但评审侧（这里）原来一个字都没查过 last_response，只要写成 "true" 就无条件拦，
+        # 跟回推侧的降级根本没接上。TC-DYGL-00013 就是反例：`message_args.cascaded`
+        # 读源码确认是 `map[string]string`，后端真返回字符串 "true"，门禁却要求
+        # 去掉引号——照做会让断言必然假红。
         for a in (s.assertions or []):
             if not isinstance(a, dict):
                 continue
             exp = a.get("expected") if a.get("expected") is not None else a.get("value")
-            if isinstance(exp, str) and "${" not in exp and exp in _BOOL_STRINGS:
+            if not (isinstance(exp, str) and "${" not in exp and exp in _BOOL_STRINGS):
+                continue
+            field = a.get("field")
+            has_evidence, actual = _recorded_actual(s, field)
+            if has_evidence and isinstance(actual, bool):
                 blockers.append({"kind": "assertion_bool_as_string",
                                  "detail": f"第 {s.sort_order + 1} 步「{s.name}」断言 "
-                                           f"{a.get('field')} 期望写成了字符串 \"{exp}\"，"
+                                           f"{field} 期望写成了字符串 \"{exp}\"，"
+                                           f"实测这个字段是布尔（{actual!r}），"
                                            f"应为 {exp.lower()}（不加引号）"})
+            elif has_evidence and isinstance(actual, str):
+                pass  # 实测这个字段本来就是字符串，"true"/"false" 是对的写法——不拦
+            else:
+                risks.append({"kind": "assertion_bool_as_string_unverified",
+                              "detail": f"第 {s.sort_order + 1} 步「{s.name}」断言 "
+                                        f"{field} 期望写成了字符串 \"{exp}\"——还没有实测证据"
+                                        f"证明这个字段是布尔还是字符串。如果这个接口这个字段"
+                                        f"本来就返回字符串，忽略这条；如果应为布尔，去掉引号。"})
         # 异步断言裸奔 —— 跑绿了也是侥幸。
         # **但否定/稳态断言要放过**：重试的语义是「等它变成期望值」，对
         # 「应 404」「应保持 200」恰恰是反的 —— 路由本该立刻且一直不存在，

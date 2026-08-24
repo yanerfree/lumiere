@@ -45,6 +45,10 @@ class CaseReviewRound(Base):
     review_mode: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # 这轮对了多少条真实流量。是 0 的话「没发现端点问题」只说明没得比。
     traffic_seen: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # 审的是哪个版本的场景/脚本 —— 只在 ai_review 轮次填。场景/脚本被后续
+    # sync 覆盖掉之后，靠它才能判断这份 verdict 是不是已经对不上现在的内容
+    # （见 rounds.content_signature、迁移 zzs0rvhash 的说明）。
+    content_hash: Mapped[str | None] = mapped_column(String(32), nullable=True)
     actor: Mapped[str | None] = mapped_column(String(100), nullable=True)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

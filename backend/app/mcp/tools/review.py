@@ -32,6 +32,12 @@ async def review_case(
 
     结论会落库：审核标签（approved/rejected）、评分、findings。
     评完照着 findings 改，改完再评一次；rejected 的 blocker 一条都不许留着交上去。
+
+    ⚠ **这是一次不间断的同步调用，`run_first=True` 时可能跑到分钟级**（先真跑一遍
+    接口场景/UI 脚本，再等 LLM 出结论）——中途没有心跳。如果调用方那边先超时中止了，
+    **不代表这条没跑完**：评审是跑完就落库，超时只是"没等到响应"，不是"没产出结果"。
+    看不到返回值时，去查这条用例最近一轮 `ai_review` 记录（审核历史/详情页）或
+    `tb_check_deliverable` 确认是不是已经有结论了，别当场重新审一遍浪费一轮真跑。
     """
     from app.services.ai_config_resolver import resolve_ai_config
     from app.services.review import reviewer

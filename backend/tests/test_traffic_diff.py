@@ -242,6 +242,49 @@ def test_整条URL全是变量的步骤不参与比对():
     assert "subscriptions/provider" in ghost["detail"]
 
 
+def test_数据面地址不参与幽灵端点比对():
+    """`${gatewayBase}${isoPrefix}/echo` 这类步骤打的是网关/数据面，页面拿不到
+    网关凭据、永远不会直接调它——报「页面一次都没发过」是在拿一个页面结构性
+    做不到的事去要求场景，不是场景写错了。跟 sync._DATA_PLANE_RE 同一个口径。
+    """
+    from app.services.review.traffic_diff import _from_scenario, compare
+
+    assert _from_scenario([{"url": "${gatewayBase}${isoPrefix}/echo", "method": "GET",
+                           "name": "验证: 打网关应 200"}]) == {}
+
+    traffic = [{"method": "GET", "url": "http://h/api/v1/services", "status": 200}]
+    steps = [{"url": "${BASE_URL}/api/v1/services", "method": "GET", "name": "操作: 查列表"},
+             {"url": "${gatewayBase}/svc/echo", "method": "GET", "name": "验证: 打网关应 200"}]
+    assert compare(traffic, steps, [], None) == []
+
+
+def test_前置制备步骤不参与幽灵端点比对():
+    """`push-status` 是制备阶段轮询收敛用的接口，不是页面动作——页面执行一次
+    都不会经过它，拿页面流量对账天然对不上，跟 step_coverage._ROLE_SKIP 同一个口径。
+    """
+    from app.services.review.traffic_diff import _from_scenario, compare
+
+    assert _from_scenario([{"url": "${BASE_URL}/api/v1/push-status", "method": "GET",
+                           "name": "制备：等推送收敛"}]) == {}
+
+    traffic = [{"method": "GET", "url": "http://h/api/v1/services", "status": 200}]
+    steps = [{"url": "${BASE_URL}/api/v1/services", "method": "GET", "name": "操作: 查列表"},
+             {"url": "${BASE_URL}/api/v1/push-status", "method": "GET", "name": "前置: 等收敛"}]
+    assert compare(traffic, steps, [], None) == []
+
+
+def test_幽灵端点报告要带回原始URL():
+    """归一化把路径参数段压掉之后，展示只留归一化的 key 会让人怀疑是场景本身
+    把 URL 写错了，排查一圈才发现是展示层的问题。detail 里必须带得回原始 URL。
+    """
+    traffic = [{"method": "GET", "url": "http://h/api/v1/subscriptions/provider-unified"}]
+    steps = [{"url": "${BASE_URL}/api/v1/subscriptions/provider", "method": "GET"}]
+    facts = compare(traffic, steps, [], None)
+    ghost = next(f for f in facts if f["kind"] == "endpoint_not_used_by_page")
+    assert "${BASE_URL}/api/v1/subscriptions/provider" in ghost["detail"], \
+        "只给归一化后的 key 排查不动，得带上原文"
+
+
 def test_多个context的HAR要合并不能互相覆盖(tmp_path):
     """**活体验证抓到的最贵的一个**：多角色脚本自己开 context，args 里带着同一个
     `record_har_path`，而 Playwright 每个 context close 时把 HAR 整个写一遍 ——
