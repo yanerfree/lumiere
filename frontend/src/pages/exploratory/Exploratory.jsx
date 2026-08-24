@@ -10,6 +10,7 @@ import {
   PlayCircleOutlined, StopOutlined, FileTextOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
+import { formatTime } from '../../utils/timeCol'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -126,7 +127,7 @@ export default function Exploratory() {
     { title: '目标模块', dataIndex: 'targetModule', width: 100 },
     { title: '状态', dataIndex: 'status', width: 80, render: (s) => s === 'completed' ? <Tag color="cyan">已完成</Tag> : <Tag color="processing">进行中</Tag> },
     { title: '进度', width: 100, render: (_, r) => <span>{r.completedCheckpoints}/{r.totalCheckpoints} 检查点</span> },
-    { title: '创建时间', dataIndex: 'createdAt', width: 140, render: (t) => t?.slice(0, 16).replace('T', ' ') },
+    { title: '创建时间', dataIndex: 'createdAt', width: 140, render: (t) => formatTime(t) },
   ]
 
   return (

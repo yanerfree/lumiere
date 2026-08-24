@@ -7,6 +7,7 @@
 import { useState, useEffect } from 'react'
 import { Tag, Select, Input, Button, message } from 'antd'
 import { api } from '../utils/request'
+import { formatTime } from '../utils/timeCol'
 
 export default function FailureTriagePanel({ projectId, branchId, caseId, run, onConfirmed }) {
   const [data, setData] = useState(null)
@@ -59,7 +60,7 @@ export default function FailureTriagePanel({ projectId, branchId, caseId, run, o
             <span style={{ color: '#86909c' }}>Claude Code 归因　</span>
             <Tag color="blue" style={{ margin: 0 }}>{cc.cause}</Tag>
             <span style={{ marginLeft: 6, color: '#86909c' }}>置信 {cc.confidence}</span>
-            <span style={{ marginLeft: 6, color: '#c9cdd4' }}>by {cc.author} · {(cc.submittedAt || '').slice(0, 16).replace('T', ' ')}</span>
+            <span style={{ marginLeft: 6, color: '#c9cdd4' }}>by {cc.author} · {formatTime(cc.submittedAt)}</span>
           </div>
           <div style={{ fontSize: 12, color: '#4e5969', lineHeight: 1.6 }}>{cc.reasoning}</div>
           <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
@@ -88,7 +89,7 @@ export default function FailureTriagePanel({ projectId, branchId, caseId, run, o
       </div>
       {confirmed && (
         <div style={{ fontSize: 11, color: '#86909c', marginTop: 4 }}>
-          确认于 {(data.confirmedAt || '').slice(0, 16).replace('T', ' ')}
+          确认于 {formatTime(data.confirmedAt)}
           {cc && cc.cause !== data.confirmedCause && <span style={{ color: '#ff7d00', marginLeft: 8 }}>（推翻了 CC 的判断）</span>}
         </div>
       )}

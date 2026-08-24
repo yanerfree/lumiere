@@ -12,6 +12,7 @@ import {
 import { marked } from 'marked'
 import { api, getValidToken } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
+import { formatTime } from '../../utils/timeCol'
 
 const { Text } = Typography
 const { TextArea } = Input
@@ -203,7 +204,7 @@ export default function Documents() {
     { title: '类型', dataIndex: 'docType', width: 100, render: (t) => <Tag color={DOC_TYPE_COLORS[t]}>{DOC_TYPE_LABELS[t] || t}</Tag> },
     { title: '语种', dataIndex: 'language', width: 60, render: (l) => LANG_LABELS[l] || l },
     { title: '状态', dataIndex: 'status', width: 70, render: (s) => s === 'published' ? <Tag color="cyan">已生成</Tag> : <Tag>草稿</Tag> },
-    { title: '生成时间', dataIndex: 'createdAt', width: 150, render: (t) => <Text type="secondary">{t?.slice(0, 16).replace('T', ' ')}</Text> },
+    { title: '生成时间', dataIndex: 'createdAt', width: 150, render: (t) => <Text type="secondary">{formatTime(t)}</Text> },
     {
       title: '操作', width: 320,
       render: (_, r) => (

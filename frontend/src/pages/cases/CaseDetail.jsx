@@ -20,6 +20,7 @@ import RunResultPanel from '../../components/RunResultPanel'
 import FailureTriagePanel from '../../components/FailureTriagePanel'
 import { createSseParser } from '../../utils/sseParser'
 import mdBold from '../../utils/mdBold'
+import { formatTime } from '../../utils/timeCol'
 
 const priorityColors = { P0: '#fff', P1: '#fff', P2: '#fff', P3: '#fff' }
 const priorityBg = { P0: '#e8453c', P1: '#ff7d00', P2: '#4e8af0', P3: 'rgba(0,0,0,0.08)' }
@@ -2671,7 +2672,7 @@ export default function CaseDetail() {
               ))}
               {caseData.reflections?.answeredAt && (
                 <div style={{ color: '#86909c' }}>
-                  {caseData.reflections.by} · {String(caseData.reflections.answeredAt).slice(0, 16).replace('T', ' ')}
+                  {caseData.reflections.by} · {formatTime(caseData.reflections.answeredAt)}
                 </div>
               )}
             </div>
@@ -2775,7 +2776,7 @@ export default function CaseDetail() {
                     <div style={{ marginTop: 6 }}>
                       {caseData.flakyEvidence.runs.map((r, i) => (
                         <div key={i} style={{ fontSize: 12, color: '#86909c', fontFamily: 'var(--font-mono)' }}>
-                          {r.status === 'passed' ? '✓' : '✗'} {(r.at || '').slice(0, 16).replace('T', ' ')}
+                          {r.status === 'passed' ? '✓' : '✗'} {formatTime(r.at)}
                           {r.error ? ` — ${String(r.error).slice(0, 40)}` : ''}
                         </div>
                       ))}
@@ -3014,7 +3015,7 @@ export default function CaseDetail() {
                     borderTop: '1px solid rgba(0,0,0,0.04)' }}>
                     <div style={{ width: 96, flexShrink: 0, fontSize: 12, color: '#86909c' }}>
                       第 {r.round} 轮<br />
-                      {r.at ? String(r.at).slice(5, 16).replace('T', ' ') : ''}
+                      {formatTime(r.at)}
                     </div>
                     <div style={{ flex: 1, fontSize: 13 }}>
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
@@ -3345,7 +3346,7 @@ function ProvenanceTab({ caseId }) {
                   <Space size={8}>
                     <Tag color={cfg.color} style={{ margin: 0, fontSize: 11 }}>{cfg.label}</Tag>
                     <span style={{ fontSize: 12, color: '#86909c' }}>
-                      {(e.createdAt || '').slice(0, 16).replace('T', ' ')}
+                      {formatTime(e.createdAt)}
                     </span>
                     {e.actor && <span style={{ fontSize: 12, color: '#c9cdd4' }}>by {e.actor}</span>}
                   </Space>
@@ -3420,7 +3421,7 @@ function CaseFileTab({ caseId }) {
                 <div>
                   <Space size={8}>
                     <Tag color={cfg.color} style={{ fontSize: 11 }}>{cfg.label}</Tag>
-                    <span style={{ fontSize: 12, color: '#86909c' }}>{e.createdAt?.slice(0, 16).replace('T', ' ')}</span>
+                    <span style={{ fontSize: 12, color: '#86909c' }}>{formatTime(e.createdAt)}</span>
                   </Space>
                   {e.summary && <div style={{ fontSize: 13, marginTop: 2 }}>{e.summary}</div>}
                 </div>
