@@ -74,21 +74,39 @@ async def list_pending_confirm(
     session: AsyncSession,
     project_id: str | None = None,
     limit: int = 20,
+    include_self_serve: bool = False,
 ) -> dict:
-    """列出「已归因、等人确认」的失败 —— 你交上去还没被拍板的那些。"""
+    """列出**真正在等人**的归因 —— 你交上去、还得人拍板才能往下走的那些。
+
+    默认**不含自证放行的**（`self_serve`）。此前这里列的是"所有还没确认的"，
+    于是 CC 明明被告知"你自己改不用等"的那些也混在里面 —— 队列里绝大多数
+    是不需要人动的东西，人扫两眼发现没一条要自己做，之后就不看了。
+
+    留在默认结果里的两种：
+      · `needs_human` —— 需求没写清 / 拿不准 / 产品缺陷自证缺样，**只有人能定**
+      · `self_serve_sampled` —— 自证的抽检样本（每 10 条抽 1），你照旧自己改，
+        人另外复核一次用来校准归因准不准
+
+    要看全部（含自证放行的）传 `include_self_serve=true`。
+    """
     import uuid
 
-    from sqlalchemy import select
+    from sqlalchemy import or_, select
 
     from app.models.case import Case
     from app.models.project import Branch
     from app.models.script import ScriptRun
+    from app.services.analysis_service import WAITING_ON_HUMAN
 
     stmt = (
         select(ScriptRun, Case.case_code, Case.title)
         .join(Case, Case.id == ScriptRun.case_id)
         .where(ScriptRun.cc_analysis.isnot(None), ScriptRun.confirmed_cause.is_(None))
     )
+    if not include_self_serve:
+        # route 缺失的是分流上线之前写的老行 —— 当成"要人看"，宁可多列不漏列
+        route_col = ScriptRun.cc_analysis["route"].astext
+        stmt = stmt.where(or_(route_col.is_(None), route_col.in_(WAITING_ON_HUMAN)))
     if project_id:
         stmt = stmt.join(Branch, Branch.id == Case.branch_id).where(
             Branch.project_id == uuid.UUID(project_id)
@@ -103,7 +121,12 @@ async def list_pending_confirm(
             "phenomenon": r.ScriptRun.failure_phenomenon,
             "ccCause": (r.ScriptRun.cc_analysis or {}).get("cause"),
             "ccConfidence": (r.ScriptRun.cc_analysis or {}).get("confidence"),
+            "route": (r.ScriptRun.cc_analysis or {}).get("route"),
             "submittedAt": (r.ScriptRun.cc_analysis or {}).get("submittedAt"),
         } for r in rows],
-        "usage": "这些还没人确认，所以还没改动任何状态。确认在平台页面上做。",
+        "usage": ("这些还没人确认，所以还没改动任何状态。确认在平台页面上做。"
+                  "`route=self_serve_sampled` 的是抽检 —— **你照旧自己改，别等**；"
+                  "`needs_human` 的才是真等人拍板。"
+                  + ("" if include_self_serve else
+                     " （自证放行的默认不列，传 include_self_serve=true 看全部。）")),
     }

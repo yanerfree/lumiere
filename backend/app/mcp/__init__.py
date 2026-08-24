@@ -225,9 +225,22 @@ mcp = FastMCP(
    多推只会互相覆盖。一条用例要覆盖多个流程时，应该拆成多条用例。
    返回值里的 replacedExisting 告诉你这次是覆盖还是新建。
 
-⑦ 【动库之前先报清单，等用户确认】调用任何写库工具（tb_create_case /
-   tb_sync_orchestrated_scenario / tb_upsert_scenario_variables / tb_create_api_node）
-   之前，先把清单列给用户看，**得到确认再执行**。清单一条一行，四列：
+⑦ 【新增用例之前先报清单，等用户确认】
+
+   **判据是「这个动作回滚贵不贵」，不是「是不是写库」**（2026-08-24 收窄）：
+
+     要报清单等确认 —— 新建用例、删用例、改动**别人**的用例、
+       往接口库里加节点（tb_create_case / tb_create_api_node / 删改类动作）
+     不用报，直接做 —— 补一个还欠着的维度（回推脚本/接口场景/场景变量）、
+       改**你自己**刚写错的字、改和实测不符的步骤（tb_update_case）。
+       做完在回复里说一句改了什么就行。
+
+   为什么收窄：原来写的是"调用任何写库工具之前都要报"，而 tb_update_case 的说明里
+   写着「**你写错了自己改，别喊人**」—— 两处打架，照哪条都不对。更实际的后果是
+   补一维、改个错字也要走一遍确认，人一天被问十几次，几次之后就闭眼说"都对"，
+   **这道确认就废了**。确认要留给真正贵的那几个动作。
+
+   报清单时一条一行，四列：
 
      场景名称 | 这条验什么（一句话） | 用户在哪儿看得到 | 库里已有吗（标出相似的那条编号）
 
@@ -405,6 +418,18 @@ _register(
     review.review_case,
     name="tb_review_case",
     description="【回推完自己先过一遍，别等人】按六维评审一条用例并落库审核结论：场景合理性 / 验证点到位 / 接口必要性 / UI 脚本正确性 / **本条覆盖完整性** / 可执行与纪律（不适用的维度自动摊掉权重）。⚠「本条覆盖完整性」只判**这一条自己承诺的东西验全了没有**（标题和预期里说到的每件事，断言里是不是都验了）——模块还缺哪些场景走 coverageGaps，是情报，**不扣这一条的分**，别为了提分去补邻居用例。**判定不由 AI 说，也不看分数**：有 blocker 一律不过、**两处以上 major 不过**、没真跑成功 → 第三种结论 `inconclusive`（无法审核：既不算通过也不算打回，环境弄好再审）。**分数只做体检和排序，不参与判定**（六维加权是模型给的，同一条两次拿到 86 和 78 是常事，拿抖动的数当闸门没法照着改）。blocker = 放进回归就是假绿或根本跑不了（断言恒真、只断控制面状态就当生效、预期照着实现抄、UI 脚本必挂）。返回 mustFix 逐条指到步骤名/断言/脚本位置。run_first=true 会先真跑一遍再评（UI 优先，debug 模式不进通过率）——断言咬不咬得住静态看不出来；**没带 run_first 就是静态审，结论强度差一个量级**（实测同一条：静态 84 分通过、真跑 56 分打回），reviewMode 会告诉你这次是哪种。另有两条岔路，返回形状不同：这条正申请废弃时它改审「**该不该废**」；版本升级里没被对账清单命中、内容与上一版逐字一致、上一版已审通过的「照抄堆」直接四条件自动过审（decidedBy=system），都不走六维。参数: case_id(用例UUID), run_first(可选), env_id(试跑用的环境UUID)",
+)
+
+_register(
+    review.review_batch,
+    name="tb_review_batch",
+    description="【一批一起送审·别自己 for 循环】把一批用例送进平台的**审核队列**。⚠ 推一批时**不要自己循环调 tb_review_case** —— 那个是直调、一条也不排队，你并发送 20 条就是 20 次真跑同时打一个环境，而这条队列要防的两件事一件都吃不到：①**同环境串行**（两条脚本共用租户/账号，A 跑到一半 B 把 A 要用的数据删了 → A 莫名报错 → 审核判 A「脚本有问题」，**这是假打回**）②**熔断**（环境一挂，连续 3 条环境类失败就暂停整批；逐条调的话 20 条全标「无法审核」，看着像用例集体坏了）。**这批一定是真跑**，所以没有 run_first 参数。范围三选一：case_ids(逗号分隔，1 条=单条 / 多条=抽审) / module(模块名，连子模块一起，=模块全量) / 都不传=整个分支；scope='incremental' 只审没审过的和被打回的（**无法审核的也算没审过**）。单批上限 30 条，超了只排前 30。**人工发起的排在你前面**，入队后用 tb_review_batch_status 轮询，别重复入队。同一条已在这个环境的活跃批次里排着 → 自动合并不跑两遍。参数: branch_id(分支UUID), case_ids(可选), module(可选), env_id(可选，不传挑有 BASE_URL 的默认环境), scope(all/incremental，默认all), with_checkup(模块级审核时顺带做模块体检，默认true)",
+)
+
+_register(
+    review.review_batch_status,
+    name="tb_review_batch_status",
+    description="【看审核批次跑到哪了】轮询一个批次的进度：每条的结论(approved/rejected/inconclusive)、当前在审哪条、通过/打回/无法审核各几条。**判完没完看 finished 字段**，别拿 done==total 猜（total 为 0 或中途熔断时那个猜法不成立）。**status=paused 就是熔断了** —— 连续 3 条环境类失败，那不是用例的问题，去把环境弄好再在页面上续跑，接着刷只会继续红。参数: batch_id(批次UUID，tb_review_batch 返回的)",
 )
 
 _register(
@@ -599,7 +624,7 @@ _register(
 _register(
     analysis.list_pending_confirm,
     name="tb_list_pending_confirm",
-    description="【失败归因】列出「已归因、还没人确认」的失败 —— 你交上去还没被拍板的那些。参数: project_id(可选), limit(默认20)",
+    description="【失败归因】列出**真正在等人**的归因 —— 你交上去、还得人拍板才能往下走的那些。默认**不含自证放行的**（此前列的是「所有还没确认的」，CC 明明被告知「自己改不用等」的那些也混在里面，人扫两眼发现没一条要自己做，之后就不看了）。默认留两种：`needs_human`（需求没写清/拿不准/产品缺陷自证缺样，只有人能定）和 `self_serve_sampled`（自证的抽检样本，每 10 条抽 1，**你照旧自己改别等**，人另外复核一次用来校准归因准不准）。要看全部传 include_self_serve=true。参数: project_id(可选), limit(默认20), include_self_serve(默认false)",
 )
 
 _section("执行报告")
@@ -740,7 +765,7 @@ _register(
 _register(
     ui_scripts.get_ui_script_result,
     name="tb_get_ui_script_result",
-    description="【失败证据包】拿这条用例最近一次执行的**完整证据**，用来判断为什么挂：截图（返回**文件路径**，和平台同机，直接 Read 打开看图）、网络流量摘要（按状态码分桶 + 展开非 2xx 和写操作那几条，其余页面自身的 GET 已折叠）、stdout 尾部、run_id，以及平台按确定性规则给的**现象**初判 failure_phenomenon（timeout / element_not_found / assertion_mismatch / http_5xx / script_error / dependency_unresolved / unknown）。**UI 和接口场景都收**（不传 script_type 就是最近那一次，返回里的 script_type 说明是哪一维）——接口执行没有截图和浏览器流量，但 error_summary / stdout 轨迹 / 现象都在，够写 evidence。⚠ 现象不是归因 —— 平台判「是什么」，「为什么」由你判断。⚠ **入参是 case_id，不是 runId**（runId 是下一步 tb_submit_analysis 用的）。参数: case_id(用例UUID), script_type(可选 ui/api，不传取最近一次)",
+    description="【失败证据包】拿这条用例最近一次执行的**完整证据**，用来判断为什么挂：截图（返回**文件路径**，和平台同机，直接 Read 打开看图）、网络流量摘要（按状态码分桶 + 展开非 2xx 和写操作那几条，其余页面自身的 GET 已折叠）、stdout 尾部、run_id，以及平台按确定性规则给的**现象**初判 failure_phenomenon（timeout / element_not_found / assertion_mismatch / http_5xx / script_error / dependency_unresolved / unknown）。**UI 和接口场景都收**（返回里的 script_type 说明是哪一维）——接口执行没有截图和浏览器流量，但 error_summary / stdout 轨迹 / 现象都在，够写 evidence。⚠ **要归因就把 run_id 传上**（tb_get_failed_scenarios 给的那个）：不传只取「最近一次」，而这条用例可能已经被复跑过 —— 活体撞到过 TC-DYGL-00013 六次接口执行、最近一次是 passed，于是证据包里什么指针都写不出来，而 tb_submit_analysis 又拒收 passed 的执行。**报告指着失败那次、这里给最新那次**，不传 run_id 就会踩这个错位。⚠ 现象不是归因 —— 平台判「是什么」，「为什么」由你判断。参数: case_id(用例UUID), run_id(可选但归因时强烈建议), script_type(可选 ui/api，不传取最近一次)",
 )
 
 

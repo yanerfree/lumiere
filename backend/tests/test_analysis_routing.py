@@ -15,7 +15,8 @@ from __future__ import annotations
 import inspect
 
 from app.services.analysis_service import (CAUSES, DEFECT_EVIDENCE, NEEDS_HUMAN,
-                                           SELF_SERVE, route)
+                                           SELF_SERVE, WAITING_ON_HUMAN,
+                                           agreement_stats, route, sampled, submit)
 
 
 def test_脚本自己错的不用等人():
@@ -123,3 +124,55 @@ def test_对象里的items仍按指针校验():
                           error_summary=None, stdout=None, failure_phenomenon=None)
     bad = _validate_evidence({"liveVerified": "a", "items": [{"type": "乱写", "ref": "x"}]}, run)
     assert bad, "items 里的类型写错了该报"
+
+
+# ── 抽检：自动化会把体温计一起收走（2026-08-24）────────────────────
+
+def test_抽检是按哈希的_同一条用例每次结果一样():
+    """**反例：用随机。** 那样同一条用例反复提交归因，这次要等人、下次不用等，
+    CC 从返回里分辨不出这是抽检还是判据变了，会当成平台行为不稳定。"""
+    import uuid as _u
+    for _ in range(20):
+        cid = _u.uuid4()
+        first = sampled(cid)
+        assert all(sampled(cid) is first for _ in range(5)), f"{cid} 抽检结果会变"
+
+
+def test_抽检比例大致是十分之一():
+    """按哈希均匀抽 —— 偏得太多就代表不了总体，这个指标也就白留了。"""
+    import uuid as _u
+    hits = sum(1 for _ in range(4000) if sampled(_u.uuid4()))
+    assert 250 <= hits <= 550, f"4000 条抽中 {hits} 条，偏离 10% 太远"
+
+
+def test_抽中的仍然算自证_不能把CC拦下来():
+    """抽检的语义是「人另外看一眼校准」，**不是「这条要等人」**。
+    拦下来的话自证放行就白做了 —— 而自证正是这一轮要保住的东西。"""
+    src = inspect.getsource(submit)
+    assert 'where = "self_serve_sampled"' in src, "没在 submit 里挂抽检"
+    assert 'self_serving = where in ("self_serve", "self_serve_sampled")' in src, \
+        "抽中的必须仍然走自证那条分支，否则等于把 CC 拦下来了"
+
+
+def test_真正在等人的只有两种():
+    """`tb_list_pending_confirm` 默认列的就是这两种。自证放行的混进来的后果：
+    队列里绝大多数不需要人动，人扫两眼就再也不看了。"""
+    assert set(WAITING_ON_HUMAN) == {"needs_human", "self_serve_sampled"}
+
+
+def test_抽检比例是写死的():
+    """**反例：做成可配置。** 又一个能被调成 0 的开关 ——
+    和 review-spec §3「检查项不做成可勾选」同一条纪律。"""
+    src = inspect.getsource(__import__("app.services.analysis_service",
+                                       fromlist=["x"]))
+    assert "SAMPLE_EVERY = 10" in src
+    assert "os.environ" not in src.split("SAMPLE_EVERY")[0][-500:], \
+        "抽检比例不许从环境变量读"
+
+
+def test_一致率把抽检和人主动确认分开算():
+    """人主动去看的那批有选择偏差 —— 他挑的本来就是可疑的，算出来的一致率
+    天然偏低。混在一起会误报成「CC 在系统性甩锅」，而那是要触发人工复核的告警。"""
+    src = inspect.getsource(agreement_stats)
+    assert "bySource" in src, "没把两种来源分开报"
+    assert "self_serve_sampled" in src, "没按 route 区分抽检样本"

@@ -211,6 +211,9 @@ _OWNER_SQL: dict[str, tuple[str, ...]] = {
         "select b.project_id from script_runs r join cases c on c.id = r.case_id "
         "join branches b on b.id = c.branch_id where r.id = :v",
     ),
+    # 审核批次自己带 project_id。不校的话 A 项目的 Key 能拿 B 项目的 batchId
+    # 读出逐条结论和用例编号 —— 和当初"随便填 branch_id 就能改别人用例"同一个洞。
+    "batch_id": ("select project_id from review_batches where id = :v",),
 }
 
 # 故意**不**校验的 id 参数。每一条都得写清为什么，否则下一个人只会以为是漏了。

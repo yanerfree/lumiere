@@ -115,6 +115,175 @@ async def review_case(
     }
 
 
+async def review_batch(
+    session: AsyncSession,
+    branch_id: str,
+    case_ids: str | None = None,
+    module: str | None = None,
+    env_id: str | None = None,
+    scope: str = "all",
+    with_checkup: bool = True,
+) -> dict:
+    """批量送审 —— **入平台的审核队列，别自己 for 循环调 tb_review_case**。
+
+    为什么必须走队列（review-spec §5）：`tb_review_case` 是直调 `reviewer.review_case`，
+    一条也不排队。你自己循环推一批的后果是**并发真跑打同一个环境**，而这条队列
+    要防的两件事一件都吃不到：
+
+    · **同环境串行** —— 两条脚本共用租户/账号，A 跑到一半 B 把 A 要用的数据删了，
+      A 莫名报错，审核判 A「脚本有问题」。**这是假打回**，出几次这套审核就没人信了。
+    · **熔断** —— 环境一挂，连续 3 条环境类失败就该暂停整批；逐条调的话 20 条会
+      一条接一条全标「无法审核」，看起来像用例集体坏了。
+
+    **这批一定是真跑**（`_run_batch` 写死 run_first=True）：静态审核查不出最贵的
+    那一类 —— 接口场景验的端点页面根本不调。所以这里没有 run_first 参数。
+
+    队列里**人发起的排在 CC 前面**（人在等结果，CC 不在等），所以你入队之后
+    可能要等一会儿；用 tb_review_batch_status 轮询，别重复入队。
+    同一条用例已经在这个环境的活跃批次里排着 → 自动合并，不会跑两遍。
+    """
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    # 直接复用 REST 那两个解析器 —— **别写第二份**。这个库里"两份实现各改各的"
+    # 已经栽过好几次（孪生 playwright.config、FailureTriagePanel 两处、
+    # start_execution 和执行器两套判据）。
+    from app.api.case_review import MAX_BATCH, _folder_scope, _resolve_env
+    from app.core.exceptions import AppError
+    from app.models.case import Case, CaseFolder
+    from app.models.project import Branch
+
+    from app.services.review import queue
+
+    try:
+        bid = _uuid.UUID(branch_id)
+    except (ValueError, AttributeError):
+        return {"error": f"branch_id 不是合法 UUID: {branch_id}"}
+
+    pid = (await session.execute(
+        select(Branch.project_id).where(Branch.id == bid))).scalars().first()
+    if pid is None:
+        return {"error": f"分支不存在: {branch_id}"}
+
+    # module 名 → folder。和 tb_module_checkup 同一套查法（按名字，本分支内）
+    folder = None
+    if module:
+        folder = (await session.execute(
+            select(CaseFolder).where(CaseFolder.branch_id == bid,
+                                     CaseFolder.name == module))).scalars().first()
+        if folder is None:
+            return {"error": f"这个分支下找不到模块「{module}」"}
+
+    cids: list = []
+    if case_ids:
+        for raw in str(case_ids).split(","):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                cids.append(_uuid.UUID(raw))
+            except ValueError:
+                return {"error": f"case_ids 里有不合法的 UUID: {raw}"}
+        inferred = "single" if len(cids) == 1 else "sample"
+    else:
+        stmt = select(Case.id).where(Case.branch_id == bid, Case.deleted_at.is_(None))
+        fscope = await _folder_scope(session, bid, folder.id if folder else None)
+        if fscope:
+            stmt = stmt.where(Case.folder_id.in_(fscope))
+        if scope == "incremental":
+            # 「只审没审过的和被打回的」。**无法审核的也算没审过** ——
+            # 它上次是环境不行才没得出结论，正是这次该补的那批。
+            stmt = stmt.where(
+                (Case.review_status.is_(None))
+                | (Case.review_status.in_(("pending", "rejected", "inconclusive"))))
+        cids = [r[0] for r in (await session.execute(stmt.limit(MAX_BATCH + 1))).all()]
+        inferred = "module_incremental" if scope == "incremental" else "module_full"
+
+    if not cids:
+        return {"error": "没有可评审的用例"
+                         + ("（这个范围里的都审过了，要重审就显式传 case_ids）"
+                            if scope == "incremental" else "")}
+    truncated = len(cids) > MAX_BATCH
+    cids = cids[:MAX_BATCH]
+
+    try:
+        env = await _resolve_env(session, pid, env_id)
+    except AppError as e:
+        return {"error": e.message}
+
+    label = (f"{folder.name} {len(cids)} 条" if folder else f"{len(cids)} 条")
+    if inferred == "single":
+        one = await session.get(Case, cids[0])
+        label = one.case_code if one else label
+
+    actor = None
+    try:
+        from app.mcp.middleware import current_caller_user_id
+        uid = await current_caller_user_id()
+        if uid:
+            from app.models.user import User
+            actor = (await session.execute(
+                select(User.username).where(User.id == uid))).scalar_one_or_none()
+    except Exception:  # noqa: BLE001
+        pass
+
+    batch, merged = await queue.enqueue(
+        session, project_id=pid, branch_id=bid, kind=inferred, case_ids=cids,
+        folder_id=(folder.id if folder else None), scope_label=label,
+        environment_id=env.id, environment_name=env.name,
+        actor=actor or "cc", actor_kind="cc",
+        with_checkup=with_checkup and inferred.startswith("module"))
+
+    return {
+        "batchId": str(batch.id),
+        "kind": batch.kind,
+        "total": batch.total,
+        "scopeLabel": batch.scope_label,
+        "environment": env.name,
+        # 被合并掉的要说出来 —— 静默少审几条，和"审完了"长得一样
+        "merged": merged or None,
+        "truncated": truncated or None,
+        "usage": ("已入队，**这批一定是真跑**。用 tb_review_batch_status(batch_id) 轮询，"
+                  "别重复入队、也别再逐条调 tb_review_case。"
+                  "人工发起的批次排在你前面，所以可能要等。"
+                  + (f" 其中 {len(merged)} 条已经在别的批次里排着了，这次不重复跑。"
+                     if merged else "")
+                  + (f" 超过单批上限 {MAX_BATCH} 条，这次只排了前 {MAX_BATCH} 条，"
+                     "剩下的分模块再来一批。" if truncated else "")),
+    }
+
+
+async def review_batch_status(session: AsyncSession, batch_id: str) -> dict:
+    """看一个审核批次跑到哪了。`finished=true` 才算跑完，别拿 done==total 猜
+    （total 为 0、或中途熔断时那个猜法不成立）。
+
+    `status=paused` = **熔断了**（连续 3 条环境类失败）—— 那不是用例的问题，
+    去把环境弄好，然后在页面上续跑；接着刷这批只会继续红。
+    """
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from app.api.case_review import _batch_dict
+    from app.models.review_batch import ReviewBatch, ReviewBatchItem
+
+    try:
+        bid = _uuid.UUID(batch_id)
+    except (ValueError, AttributeError):
+        return {"error": f"batch_id 不是合法 UUID: {batch_id}"}
+    b = await session.get(ReviewBatch, bid)
+    if b is None:
+        return {"error": f"找不到这个批次: {batch_id}"}
+    items = (await session.execute(
+        select(ReviewBatchItem).where(ReviewBatchItem.batch_id == bid)
+        .order_by(ReviewBatchItem.case_code))).scalars().all()
+    out = _batch_dict(b, items)
+    if b.status == "paused":
+        out["hint"] = ("熔断暂停：连续 3 条都是环境类失败。**这不是用例的问题** —— "
+                       "先把环境弄好，再在审核报告页续跑。")
+    return out
+
 async def module_checkup(
     session: AsyncSession,
     branch_id: str,
