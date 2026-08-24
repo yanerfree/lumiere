@@ -49,7 +49,10 @@ async def run_ui_script(
     cid = uuid.UUID(case_id)
     script = await script_service.get_active_script(session, cid, "ui")
     if not script:
-        return {"status": "error", "message": "没有可执行的 UI 脚本，请先调用 tb_generate_ui_script 生成"}
+        return {"status": "error",
+                "message": "没有可执行的 UI 脚本 —— 先用 tb_sync_ui_script 把你本地"
+                           "写好并跑通的脚本回推上来。（平台侧生成已封存，"
+                           "**没有 tb_generate_ui_script 这个工具**。）"}
 
     # 全局变量 + 环境变量（同名以环境为准）。见 variable_service.build_run_env ——
     # 四条执行路径原来各写一份 select，全局变量一条都没被注入过。
@@ -289,20 +292,44 @@ async def run_ui_scripts_batch(
 
 async def get_ui_script_result(
     case_id: str,
+    script_type: str | None = None,
     session: AsyncSession = None,
 ) -> dict:
-    """获取最近一次 UI 脚本执行结果"""
+    """最近一次执行的**证据包** —— UI 和接口场景都收。
+
+    原来这里硬过滤 `script_type == "ui"`，于是**接口场景的失败拿不到证据包**：
+    没有 run_id、没有 error_summary、没有现象初判。而 `tb_submit_analysis` 必须带
+    run_id、evidence 还要能对上这次执行 —— 等于接口那半边的归因链是断的。
+    偏偏 `tb_get_failed_scenarios` 对 api 计划照样把人指到这里来（它按
+    report_scenario_id 取 run，不分维度），所以这个断口是走得到的。
+
+    接口执行没有截图和浏览器流量（那是浏览器才有的），但 error_summary、
+    stdout 的逐步轨迹、failure_phenomenon 都落了库（见 api_test_runner 里的
+    record_run）—— 够 evidence 的 error_summary / stdout / phenomenon 三种指针用。
+
+    `script_type` 不传 = 取这条用例**最近的一次**执行，不管哪一维。
+    """
     cid = uuid.UUID(case_id)
 
-    script = await script_service.get_active_script(session, cid, "ui")
+    st = (script_type or "").strip().lower() or None
+    if st and st not in ("ui", "api"):
+        return {"error": f"script_type 只支持 ui / api，收到 {script_type}"}
 
+    cond = [ScriptRun.case_id == cid]
+    if st:
+        cond.append(ScriptRun.script_type == st)
     result = await session.execute(
         select(ScriptRun)
-        .where(ScriptRun.case_id == cid, ScriptRun.script_type == "ui")
+        .where(*cond)
         .order_by(ScriptRun.created_at.desc())
         .limit(1)
     )
     run = result.scalar_one_or_none()
+
+    # 活跃脚本按**这次执行的那一维**取，没跑过才退回 ui ——
+    # 固定取 ui 的话，接口场景会报 has_script=false，看着像"脚本没了"。
+    script = await script_service.get_active_script(
+        session, cid, run.script_type if run is not None else (st or "ui"))
 
     if not run:
         return {
@@ -321,6 +348,8 @@ async def get_ui_script_result(
         "script_source": script.source if script else None,
         "last_run": {
             "run_id": str(run.id),
+            # 哪一维跑的 —— 接口执行没有截图/流量，不说清会被当成"证据丢了"
+            "script_type": run.script_type,
             "status": run.status,
             "run_mode": run.run_mode,
             "attempt": run.attempt,

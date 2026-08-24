@@ -28,9 +28,19 @@ async def submit_analysis(
     evidence: Any = None,
     proposed_fix_target: str = "none",
 ) -> dict:
-    """把你对某次失败的归因写回平台（进待确认队列，不改任何状态）。
+    """把你对某次失败的归因写回平台。
 
     先调 tb_get_ui_script_result 拿证据包和 run_id，看完截图和流量再来。
+
+    **去向按证据齐不齐分流，不是一律等人**（见 analysis_service.route）：
+    · test_defect / case_expired / env_issue / data_issue / flaky → `self_serve`，
+      你自己改；闸门是"改完复跑跑绿，跟进单才关"
+    · product_defect → evidence 里 liveVerified + codeRefs + issue 三样齐全才放行，
+      缺一样落回 `needs_human` 并告诉你缺什么
+    · requirement_unclear / unknown → 只有人能定，直接进待确认
+
+    两条都成立的边界：**用例状态、通过率、报告结论一个字节都不动**
+    （`confirmed_cause` 只由人写，红线 3）；self_serve 动的是失败跟进单的状态。
     """
     from app.mcp.middleware import current_caller_user_id
 

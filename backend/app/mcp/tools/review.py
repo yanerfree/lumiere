@@ -20,17 +20,20 @@ async def review_case(
 ) -> dict:
     """按六个维度评审一条用例，回结论 + 每条 finding 指到具体位置。
 
-    维度：场景合理性 / 验证点到位 / 接口必要性 / UI 脚本正确性 / 覆盖遗漏 / 可执行与纪律。
+    维度：场景合理性 / 验证点到位 / 接口必要性 / UI 脚本正确性 / 本条覆盖完整性 / 可执行与纪律。
     不适用的维度自动摊掉权重（没写 UI 脚本就不评 UI 那一维）。
 
-    **判定不由 AI 说**：有 blocker 一律不过、加权低于 80 不过 —— 规则写在平台代码里。
+    **判定不由 AI 说，也不看分数**：有 blocker 一律不过、major >= 2 不过、
+    没真跑成功落第三种结论 `inconclusive`（无法审核）—— 规则写在 score_and_verdict 里。
+    **分数只做体检和排序，不参与判定**（理由见那个函数的注释：模型给的分会抖，
+    同一条两次 86 / 78 是常事，拿抖动的数当闸门没法照着改）。
     blocker 的定义是"放进回归就是假绿或根本跑不了"：断言恒真、只断控制面状态就当生效、
     预期照着实现抄、UI 脚本必挂。
 
     `run_first=True` 会先真跑一遍这条的接口场景再评（debug 模式，不进通过率口径）。
     断言咬不咬得住静态看不出来 —— "改完读回来还是 200" 长得完全正常。
 
-    结论会落库：审核标签（approved/rejected）、评分、findings。
+    结论会落库：审核标签（approved/rejected/inconclusive）、评分、findings、一轮记录。
     评完照着 findings 改，改完再评一次；rejected 的 blocker 一条都不许留着交上去。
     """
     from app.services.ai_config_resolver import resolve_ai_config
