@@ -15,6 +15,7 @@ from app.models.user import User
 from app.schemas.case import BatchCaseRequest, CaseResponse, CopyFromBranchRequest, CreateCaseRequest, UpdateCaseRequest
 from app.schemas.common import MessageResponse
 from app.services import case_service, folder_service, import_service
+from app.services.review import rounds
 from app.services.git_service import get_paths, read_file_content
 
 router = APIRouter(prefix="/api/projects/{project_id}/branches/{branch_id}/cases", tags=["cases"])
@@ -232,10 +233,18 @@ async def list_cases(
         bug_state=bug_state,
     )
     assets = await case_service.list_case_assets(session, [c.id for c in cases])
+    # 审核结论过不过期是**只读派生**的，不进 review_status 枚举、不进 CaseResponse
+    # （照抄 `rounds.display_status()` 的取舍：动那个字段会牵连门禁/筛选/批量操作）。
+    # 只对列表上真的显示了结论的那些算 —— 没审过的算过期没有意义。
+    stale = await rounds.stale_map(
+        session, [c.id for c in cases if c.review_status in ("approved", "rejected")])
     data = []
     for c in cases:
         row = CaseResponse.model_validate(c, from_attributes=True).model_dump(by_alias=True)
         row.update(assets.get(c.id, {}))
+        # 缺键的意思是"判不出来"，不是"没过期" —— 前端别拿它当 false 用。
+        if c.id in stale:
+            row["reviewStale"] = stale[c.id]
         data.append(row)
     return {
         "data": data,
@@ -555,9 +564,13 @@ async def get_case(
 ):
     """用例详情"""
     case = await case_service.get_case(session, case_id)
-    return {
-        "data": CaseResponse.model_validate(case, from_attributes=True).model_dump(by_alias=True)
-    }
+    row = CaseResponse.model_validate(case, from_attributes=True).model_dump(by_alias=True)
+    # 跟列表同一个只读派生字段（`rounds.stale_map`），详情页顶部的审核标签也要能显示过期。
+    if case.review_status in ("approved", "rejected"):
+        stale = await rounds.stale_map(session, [case.id])
+        if case.id in stale:
+            row["reviewStale"] = stale[case.id]
+    return {"data": row}
 
 
 @router.put("/{case_id}")

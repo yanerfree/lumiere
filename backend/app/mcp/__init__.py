@@ -399,7 +399,13 @@ _register(
 _register(
     review.review_case,
     name="tb_review_case",
-    description="【回推完自己先过一遍，别等人】按六维评审一条用例并落库审核结论：场景合理性 / 验证点到位 / 接口必要性 / UI 脚本正确性 / 覆盖遗漏 / 可执行与纪律（不适用的维度自动摊掉权重）。**判定不由 AI 说**：有 blocker 一律不过、加权低于 80 不过，规则在平台代码里。blocker = 放进回归就是假绿或根本跑不了（断言恒真、只断控制面状态就当生效、预期照着实现抄、UI 脚本必挂）。返回 mustFix 逐条指到步骤名/断言/脚本位置。run_first=true 会先真跑一遍接口场景再评（debug 模式不进通过率）——断言咬不咬得住静态看不出来。⚠ 这是一次不间断的同步调用，run_first=true 时可能跑到分钟级，中途没有心跳——如果这次调用**超时/无响应就中止了，不代表没跑完**：评审是跑完就落库，别当场重新审一遍，先去查这条用例最近一轮审核记录或 tb_check_deliverable 确认是不是已经有结论。参数: case_id(用例UUID), run_first(可选), env_id(试跑用的环境UUID)",
+    description="【回推完自己先过一遍，别等人】按六维评审一条用例并落库审核结论：场景合理性 / 验证点到位 / 接口必要性 / UI 脚本正确性 / 覆盖遗漏 / 可执行与纪律（不适用的维度自动摊掉权重）。**判定不由 AI 说**：有 blocker 一律不过、加权低于 80 不过，规则在平台代码里。blocker = 放进回归就是假绿或根本跑不了（断言恒真、只断控制面状态就当生效、预期照着实现抄、UI 脚本必挂）。返回 mustFix 逐条指到步骤名/断言/脚本位置。run_first=true 会先真跑一遍接口场景再评（debug 模式不进通过率）——断言咬不咬得住静态看不出来。⚠ 这是一次不间断的同步调用，run_first=true 时可能跑到分钟级，中途没有心跳——如果这次调用**超时/无响应就中止了，不代表没跑完**：评审是跑完就落库，**别当场重新审一遍**，调 tb_review_check 看是还在跑还是已经出结论了。真的在跑的话这个工具也会挡下来（返回 status=in_progress，不会重复触发一轮真跑）。参数: case_id(用例UUID), run_first(可选), env_id(试跑用的环境UUID)",
+)
+
+_register(
+    review.review_status,
+    name="tb_review_check",
+    description="【tb_review_case 超时了先调这个，别重审】只读地查一条用例的审核状态，**不触发评审、不占环境、不跑任何东西**，随时可以调。三种回答：①status=in_progress —— 有一次审核正在跑（含别人在页面上发起的模块批量），带已经跑了多久，等一会再来查，这期间调 tb_review_case 只会被挡回来；②status=reviewed —— 已经有结论，返回跟 tb_review_case 同一形状的摘要（verdict/mustFix/niceToFix/summary/runAttribution），另带 stale=true 表示这条结论出具之后场景或 UI 脚本又被改过、结论可能对不上现在的内容；③status=not_reviewed —— 从没审过，去调 tb_review_case。参数: case_id(用例UUID)",
 )
 
 _register(

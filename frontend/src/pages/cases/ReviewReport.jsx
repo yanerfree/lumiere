@@ -17,6 +17,10 @@ const KIND = {
   sample:             { label: '抽审',     color: 'default', hint: '只审勾选的这几条 —— 不能代表整个模块' },
   single:             { label: '单条',     color: 'default', hint: '详情页发起的单条审核' },
   checkup:            { label: '体检',     color: 'purple',  hint: '不跑用例，只看模块覆盖缺口' },
+  // CC 调 tb_review_case 自审的那一条。**跟「单条」分开** —— 那个是人在详情页
+  // 发起、排队跑的；这个是 MCP 在进程内直接跑的，账本上这行主要是「正在审」的
+  // 标记（防它超时后重复触发）。混成一种，报告里就分不出"人审的"和"CC 自审的"。
+  cc_inline:          { label: 'CC 自审', color: 'default', hint: 'CC 调 tb_review_case 自己过的一遍，不占队列' },
 }
 
 const STATUS = {

@@ -26,6 +26,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.api_test import ApiTestScenario, ApiTestStep
 from app.models.case import Case, CaseFolder
 from app.models.script import Script, ScriptRun
+# 角色前缀判据只有一份，代码侧和喂给 LLM 的结构共用（见 _steps_text）。
+# step_coverage 只 import re，不会绕回来。
+from app.services.review import step_coverage
 
 MAX_SCRIPT_CHARS = 6000      # UI 脚本正文超过这个长度就截断 —— 评审看形状不看长度；
                              # 喂太长会把网关打到限流、掉到 CLI 慢通道（实测一次评审从 30s 拖到几分钟）
@@ -48,13 +51,63 @@ async def _folder_path(session: AsyncSession, folder_id) -> str | None:
     )).scalar_one_or_none()
 
 
-def _steps_text(steps: Any) -> list[dict]:
+# 归一化用：把引号、冒号、括号、空白全去掉再比。**必须归一化才比得上** ——
+# 步骤名存的是 `制备:等推送收敛`（半角冒号），而作者在 expected 里引用它时写的是
+# 「由接口场景『制备：等推送收敛』断言覆盖」（全角冒号 + 另一种引号）。
+# 拿原文做子串匹配一条都命中不了，等于这个标记白打。
+_REF_PUNCT = __import__("re").compile(
+    r"[\s:：「」『』“”\"'()（）\[\]【】,，。.、;；/\\_\-]+")
+# 太短的步骤名不参与引用判定：`验证:` 剥掉标点只剩两个字，
+# 在任何一段 expected 里都能撞上，会把满屏的 expected 全标成"引用别处"。
+_REF_MIN_CHARS = 4
+
+
+def _norm_ref(s: Any) -> str:
+    return _REF_PUNCT.sub("", str(s or ""))
+
+
+def _refs_scenario_step(text: Any, names: list[str] | None) -> bool:
+    """这段 expected 是不是在**引用接口场景的某个步骤名**。
+
+    要判它的原因（review-spec 反馈 §4）：作者写「由接口场景『制备：等推送收敛』
+    断言覆盖」时，说的是"这件事换了地方验"，不是又许了一个新承诺。
+    模型读不出这个区别 —— 实测它会因为"这个步骤名在 UI 脚本里找不到对应元素"
+    再单独标一条缺口，而那件事本来就不该出现在 UI 脚本里。
+    所以这里代码先判、打成标记，不指望模型自己认。
+    """
+    if not names:
+        return False
+    hay = _norm_ref(text)
+    if not hay:
+        return False
+    for n in names:
+        needle = _norm_ref(n)
+        if len(needle) >= _REF_MIN_CHARS and needle in hay:
+            return True
+    return False
+
+
+def _steps_text(steps: Any, scenario_step_names: list[str] | None = None) -> list[dict]:
+    """喂给 LLM 的步骤。**角色和引用关系在这里就判好**，不让模型自己从中文里猜。
+
+    `role`（setup/verify/action/None）和 `refsScenarioStep` 是这次新加的两个
+    结构化字段。判据跟代码侧用的是同一份（`step_coverage.role_of`），
+    所以不会出现"代码跳过了前置步骤、模型却还在拿它扣 self_coverage 的分"。
+    两个字段都**只在有值时才写进去**，省提示词长度（喂太长会撞限流）。
+    """
     out = []
     for i, s in enumerate(steps or []):
-        if isinstance(s, dict):
-            out.append({"seq": s.get("seq") or i + 1,
-                        "action": (s.get("action") or "")[:400],
-                        "expected": (s.get("expected") or "")[:400]})
+        if not isinstance(s, dict):
+            continue
+        action = (s.get("action") or "")[:400]
+        expected = (s.get("expected") or "")[:400]
+        row: dict = {"seq": s.get("seq") or i + 1, "action": action, "expected": expected}
+        role = step_coverage.role_of(action)
+        if role:
+            row["role"] = role
+        if _refs_scenario_step(expected, scenario_step_names):
+            row["refsScenarioStep"] = True
+        out.append(row)
     return out
 
 
@@ -151,6 +204,7 @@ def _vague_findings(case: Case) -> list[dict]:
     from app.services.intake_gate import _VAGUE
 
     hits: list[str] = []
+    seqs: list[str] = []
     m = _VAGUE.search(case.expected_result or "")
     if m:
         hits.append(f"预期结果里的「{m.group(0)}」")
@@ -159,10 +213,15 @@ def _vague_findings(case: Case) -> list[dict]:
             continue
         m2 = _VAGUE.search(str(st.get("expected") or ""))
         if m2:
-            hits.append(f"步骤 {st.get('seq') or i + 1} 的预期「{m2.group(0)}」")
+            seq = st.get("seq") or i + 1
+            hits.append(f"步骤 {seq} 的预期「{m2.group(0)}」")
+            seqs.append(str(seq))
     if not hits:
         return []
     return [{"kind": "vague_expectation", "severity": "blocker", "where": "步骤/预期",
+             # 命中的步骤号照实带上（整条用例级那次命中的是 expectedResult，
+             # 没有步骤号，seqs 就是空的 —— 空就不填，别编）
+             **({"stepRef": ",".join(seqs)} if seqs else {}),
              "detail": f"这些预期验不出对错：{'；'.join(hits[:4])}。"
                        f"「功能正常/无报错/显示正常」这类词跑起来永远是绿的 —— "
                        f"要写清具体看到什么（哪个文案、哪个字段、哪个状态）。"}]
@@ -324,6 +383,9 @@ async def collect(session: AsyncSession, case_id: uuid.UUID) -> dict | None:
                                          Script.script_type == "ui",
                                          Script.status == "active"))).scalars().first()
         full_script = sp or script.get("content")
+    # 接口场景的步骤名 —— 用来判 expected 里那句话是"引用别处的验证"还是"新承诺"
+    sc_names = [str(s.get("name") or "")
+                for s in ((scenario or {}).get("steps") or []) if isinstance(s, dict)]
     return {
         "uiScriptFull": full_script,
         "case": {
@@ -333,8 +395,12 @@ async def collect(session: AsyncSession, case_id: uuid.UUID) -> dict | None:
             "targetLevelReason": case.target_level_reason,
             "module": await _folder_path(session, case.folder_id),
             "preconditions": case.preconditions,
-            "steps": _steps_text(case.steps),
+            "steps": _steps_text(case.steps, sc_names),
             "expectedResult": case.expected_result,
+            # 整条的 expectedResult 也会引用接口场景步骤名（"由接口场景 X 覆盖"），
+            # 同一个理由：那不是新承诺。只在真命中时才写，不给提示词加噪音。
+            **({"expectedResultRefsScenarioStep": True}
+               if _refs_scenario_step(case.expected_result, sc_names) else {}),
             "expectedConfirmedNote": case.expected_confirmed_note,
             "expectedConfirmedActor": case.expected_confirmed_actor,
             "manualStatus": case.manual_status, "uiStatus": case.ui_status,

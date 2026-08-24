@@ -23,15 +23,23 @@ from app.services.review import rounds
 
 
 class FakeSession:
-    """execute() 按 select 的目标模型分发预置行，够 content_signature/list_rounds 用。"""
+    """execute() 按 select 的目标模型分发预置行，够 content_signature/list_rounds 用。
 
-    def __init__(self, by_model=None):
+    单列和多列分开放（`by_model` / `multi`）：`content_signature` 查的是
+    `select(ApiTestScenario.id)` 这种单列（取 scalar），`stale_map` 查的是
+    `select(ApiTestScenario.id, .source_case_id)` 这种多列（取元组）——
+    同一个模型两种形状，混在一个 dict 里会把元组当 scalar 喂进去。
+    """
+
+    def __init__(self, by_model=None, multi=None):
         self._by_model = by_model or {}
+        self._multi = multi or {}
 
     async def execute(self, stmt):
         model = stmt.column_descriptions[0]["entity"]
-        rows = self._by_model.get(model, [])
-        return SimpleNamespace(scalars=lambda: SimpleNamespace(
+        src = self._multi if len(stmt.column_descriptions) > 1 else self._by_model
+        rows = src.get(model, [])
+        return SimpleNamespace(all=lambda: rows, scalars=lambda: SimpleNamespace(
             first=lambda: (rows[0] if rows else None), all=lambda: rows))
 
 
@@ -99,3 +107,73 @@ def test_列表按当前内容标过期():
     assert by_round[2]["stale"] is False, "内容没变的最新一轮不该被标过期"
     assert by_round[1]["stale"] is True, "签名对不上当前内容，得说出来"
     assert by_round[0]["stale"] is None, "存量轮次没存过签名，不能瞎猜说它过期"
+
+
+# ── 列表那一级：stale_map ────────────────────────────────────
+#
+# 详情页时间线标了过期，列表上那个"通过/打回"却照旧 —— 于是一条被
+# tb_sync_ui_script 换过脚本的 approved 用例，在列表上仍然干干净净，
+# 没人会想到去点开看那个结论是对着哪一版算的（原反馈 #1 的遗留部分）。
+
+def _sc_step(sc_id, **kw):
+    st = _step(**kw)
+    st.scenario_id = sc_id
+    return st
+
+
+def _stale_map(hash_rows, steps=None, ui_version=1, case_id=None, extra_scenarios=0):
+    """hash_rows: [(case_id, round, content_hash), ...]"""
+    cid = case_id or uuid.uuid4()
+    sc = uuid.uuid4()
+    rows = steps if steps is not None else [_sc_step(sc)]
+    session = FakeSession(
+        # 单列：退回单条算法（`content_signature`）时走这几条
+        by_model={ApiTestScenario: [sc], ApiTestStep: rows,
+                  Script: [ui_version] if ui_version is not None else []},
+        # 多列：批量那几条
+        multi={CaseReviewRound: hash_rows,
+               ApiTestScenario: ([(sc, cid)]
+                                 + [(uuid.uuid4(), cid) for _ in range(extra_scenarios)]),
+               Script: [(cid, ui_version)] if ui_version is not None else []})
+    return cid, asyncio.run(rounds.stale_map(session, [cid]))
+
+
+def test_批量算的签名跟单条算的一模一样():
+    """**这是这一组里最要紧的一条**：两处各写一遍哈希公式的话，任何一处漂移
+    都会让批量算出来的对不上落库那份，于是整库的 approved 全被标成过期 ——
+    一个假警报比不报警更贵。"""
+    cid = uuid.uuid4()
+    cid, out = _stale_map([(cid, 3, _sig())], case_id=cid)
+    assert out[cid] is False
+
+
+def test_脚本被换过就在列表上标过期():
+    cid = uuid.uuid4()
+    cid, out = _stale_map([(cid, 3, _sig(ui_version=1))], ui_version=2, case_id=cid)
+    assert out[cid] is True
+
+
+def test_最新一轮没存签名就不收录():
+    """人工在 AI 审之后又点过一次通过的话，那次改动到底发生在人点之前
+    还是之后，库里没有依据 —— **不收录 ≠ 没过期**，是判不出来。"""
+    cid = uuid.uuid4()
+    cid, out = _stale_map([(cid, 1, _sig()), (cid, 2, None)], case_id=cid)
+    assert cid not in out
+
+
+def test_只看最新一轮不看历史轮次():
+    cid = uuid.uuid4()
+    cid, out = _stale_map([(cid, 1, "deadbeef" * 4), (cid, 2, _sig())], case_id=cid)
+    assert out[cid] is False, "旧轮次早就过期了，但列表上显示的是最新那条结论"
+
+
+def test_一条用例挂多个场景时退回单条算法():
+    """单条那边是 `.first()` 取的（没有 order_by，顺序由库定），批量这边
+    猜一个就可能凭空报一个过期。这种少数情况直接走单条那段代码。"""
+    cid = uuid.uuid4()
+    cid, out = _stale_map([(cid, 1, _sig())], case_id=cid, extra_scenarios=1)
+    assert out[cid] is False
+
+
+def test_没审过的一条都不查():
+    assert asyncio.run(rounds.stale_map(FakeSession({}), [])) == {}

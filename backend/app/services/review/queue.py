@@ -40,7 +40,8 @@ from sqlalchemy import func, select, update
 
 from app.deps.db import async_session_factory
 from app.models.case import Case
-from app.models.review_batch import ACTIVE_STATUSES, ReviewBatch, ReviewBatchItem
+from app.models.review_batch import (ACTIVE_STATUSES, INLINE_KIND, ReviewBatch,
+                                     ReviewBatchItem)
 from app.services.review import run_outcome
 
 logger = logging.getLogger(__name__)
@@ -190,7 +191,11 @@ async def _worker(env_key: str) -> None:
 async def _claim_next(env_key: str) -> str | None:
     """挑下一个。**人发起的插到 CC 自审前面** —— 人在等结果，CC 不在等（§5）。"""
     async with async_session_factory() as s:
-        cond = [ReviewBatch.status == "queued"]
+        # `INLINE_KIND` 是 MCP 在进程内自己跑的，账本上那行只是"在跑"的标记 ——
+        # 它建出来就是 running、永远不会是 queued，这一句是**结构上的兜底**：
+        # 万一哪天有人手滑把它建成 queued，worker 捡走就是凭空多一次真跑
+        # （`_run_batch` 固定 `run_first=True`），而且跟已落库的结论打架。
+        cond = [ReviewBatch.status == "queued", ReviewBatch.kind != INLINE_KIND]
         if env_key == "-":
             cond.append(ReviewBatch.environment_id.is_(None))
         else:
@@ -357,23 +362,53 @@ async def recover_orphans() -> int:
 
     收拾方式是**退回 queued 而不是标失败**：已经审完的那几条结论都在库里，
     item 的 status 记着谁审完了，重新排队只会跑剩下的。
+
+    ⚠ **`INLINE_KIND` 的不能退回 queued**。那是 `tb_review_case` 在账本上留的
+    在跑标记（MCP 内联跑，不经队列，见 `mcp/tools/review._open_single_batch`）——
+    退回 queued 的话，worker 会把它当成一个待跑批次捡走**再真跑一遍**
+    （`_run_batch` 固定 `run_first=True`），等于重启一次就凭空多一轮真跑，
+    还会跟已经落库的结论打架。它们直接标成终态：进程都崩了，那次审核确实没跑完。
+
+    排除的是 `INLINE_KIND`，**不是 `single`** —— `single` 是详情页点"审这一条"
+    发起的，那种**走队列**（`api/case_review.py` 里 `len(case_ids)==1` 就推断成
+    single），排除它等于服务一重启，人在页面上发起的单条审核就被判死。
     """
     async with async_session_factory() as s:
         rows = (await s.execute(
             select(ReviewBatch).where(ReviewBatch.status == "running"))).scalars().all()
-        for b in rows:
+        inline = [b for b in rows if b.kind == INLINE_KIND]
+        owned = [b for b in rows if b.kind != INLINE_KIND]
+        for b in owned:
             b.status = "queued"
             b.current_case_code = None
             b.note = "服务重启过，这批从没审完的那条接着跑"
-        await s.execute(
-            update(ReviewBatchItem)
-            .where(ReviewBatchItem.status == "running")
-            .values(status="pending"))
+        for b in inline:
+            b.status = "partial"
+            b.current_case_code = None
+            b.failed = b.failed + max(0, b.total - b.done)
+            b.done = b.total
+            b.finished_at = _now()
+            b.note = "服务重启过，这次单条审核没跑完（内联跑的，不排队重跑）"
+        if inline:
+            await s.execute(
+                update(ReviewBatchItem)
+                .where(ReviewBatchItem.batch_id.in_([b.id for b in inline]),
+                       ReviewBatchItem.status.in_(("pending", "running")))
+                .values(status="failed", error="服务重启过，这次单条审核没跑完",
+                        finished_at=_now()))
+        if owned:
+            await s.execute(
+                update(ReviewBatchItem)
+                .where(ReviewBatchItem.status == "running",
+                       ReviewBatchItem.batch_id.in_([b.id for b in owned]))
+                .values(status="pending"))
         await s.commit()
-        n = len(rows)
+        n, n_inline = len(owned), len(inline)
 
     if n:
         logger.warning("重启收尾：%d 个审核批次退回排队", n)
+    if n_inline:
+        logger.warning("重启收尾：%d 次单条审核标为没跑完（内联跑的，不重排）", n_inline)
     # 把队列重新拉起来 —— 只标状态不拉 worker 的话，它们会一直排着没人跑。
     async with async_session_factory() as s:
         keys = (await s.execute(

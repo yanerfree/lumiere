@@ -21,7 +21,9 @@
    这时候锚点必然对不上，但脚本是对的。出口：脚本里**一个中文字符都没有**时
    整条判据不生效（`_script_uses_literals`）。半中半英的脚本照判 ——
    它既然写得出一部分中文，就不是 key 驱动的写法。
-2. **前置/清理步骤**不要求页面动作（数据可以走 API 铺）。出口：`_ROLE_SKIP` 跳过。
+2. **前置/清理步骤**不要求页面动作（数据可以走 API 铺）。出口：`role_of()` 判成
+   setup 的跳过。同一个函数也喂给 LLM（`evidence._steps_text` 里的 `role` 字段），
+   免得"代码跳过了、模型却还在按常识猜前缀"。
 3. **预期是隐式验证**（比如"页面不报错"）。出口：`expected` 里没有引号锚点、
    也没有数字/状态码时，不参与「预期有没有查」的判定 —— 只数总量。
 """
@@ -35,7 +37,33 @@ _ANCHOR = re.compile(r"[「『“]([^」』”]{1,24})[」』”]")
 _NUMERIC = re.compile(r"\b([1-5]\d{2})\b|\b(\d+)\s*(条|个|次|项)")
 # 前置/清理不要求页面动作
 _ROLE_SKIP = re.compile(r"^\s*(前置|准备|制备|清理|收尾|环境|数据准备)\s*[:：]?")
+# 「验证:」角色的步骤必须带断言。**跟 _ROLE_SKIP 一样是共享判据** ——
+# 它原来是 analyze() 里的一句内联 re.match，而 `role_of()` 要对外给出同一套分类，
+# 两处各写一份正则的话，代码跳过的和告诉 LLM 的会慢慢漂成两回事。
+_ROLE_VERIFY = re.compile(r"^\s*(验证|校验|断言)\s*[:：]")
+_ROLE_ACTION = re.compile(r"^\s*(操作|执行)\s*[:：]")
 _CJK = re.compile(r"[一-鿿]")
+
+# **判 setup 在最前面**：`_ROLE_SKIP` 的冒号是可选的（"环境准备完成" 也算），
+# 而 verify/action 必须带冒号 —— 「检查列表是否显示」是一句正常的动作描述，
+# 不是角色前缀，认成角色会把普通步骤误标成"该有断言"。
+_ROLES = (("setup", _ROLE_SKIP), ("verify", _ROLE_VERIFY), ("action", _ROLE_ACTION))
+
+
+def role_of(text: str | None) -> str | None:
+    """步骤名/动作文本的**角色前缀**：setup / verify / action / None。
+
+    这个函数就是这次要下沉的那条规则本身。原来它有两个身份：
+    代码侧用 `_ROLE_SKIP` 跳过前置/清理（确定判据），LLM 侧靠 `_SYSTEM`
+    提示词里一段中文让模型自己认前缀（引导，模型可以不照做）。
+    现在两边读同一个函数：`evidence._steps_text` 把结果写进喂给 LLM 的
+    `role` 字段，模型不用再从中文里猜。
+    """
+    t = str(text or "")
+    for role, pat in _ROLES:
+        if pat.match(t):
+            return role
+    return None
 
 _ACTION_CALL = re.compile(
     r"\.(click|dblclick|fill|type|check|uncheck|select_option|selectOption|press|"
@@ -71,7 +99,7 @@ def analyze(manual_steps: list, script_content: str | None,
         if not isinstance(st, dict):
             continue
         name = str(st.get("name") or "")
-        if re.match(r"^\s*(验证|校验|断言)\s*[:：]", name) and not (st.get("assertions") or []):
+        if role_of(name) == "verify" and not (st.get("assertions") or []):
             out.append({
                 "kind": "verify_step_without_assertion", "severity": "blocker", "where": "api",
                 "detail": f"接口场景步骤「{name[:40]}」的角色是**验证**，却一条断言都没有 —— "
@@ -84,7 +112,7 @@ def analyze(manual_steps: list, script_content: str | None,
         return out
 
     steps = [s for s in (manual_steps or [])
-             if isinstance(s, dict) and not _ROLE_SKIP.match(str(s.get("action") or ""))]
+             if isinstance(s, dict) and role_of(s.get("action")) != "setup"]
     if not steps:
         return out
 
@@ -104,6 +132,10 @@ def analyze(manual_steps: list, script_content: str | None,
                 f"步骤{seq}「{'/'.join(a)}」" for seq, _txt, a in missing_act[:6])
             out.append({
                 "kind": "step_action_not_in_script", "severity": "blocker", "where": "ui",
+                # 步骤号这里是**现成的**（missing_act 第一项就是 seq），别只拼进
+                # 上面那句散文里 —— 去重那边得靠正则从句子里再刮一遍才能拿回来。
+                # 详见 reviewer.merge_findings 判据 1。
+                "stepRef": ",".join(str(seq) for seq, _t, _a in missing_act if seq),
                 "detail": f"这些步骤写了要做的动作，脚本里找不到对应的元素："
                           f"{detail}"
                           + (f"（另有 {len(missing_act) - 6} 步同样对不上）"
@@ -139,6 +171,7 @@ def analyze(manual_steps: list, script_content: str | None,
             detail = "；".join(f"步骤{seq}「{'/'.join(a)}」" for seq, a in missing_exp[:6])
             out.append({
                 "kind": "expectation_not_asserted", "severity": "blocker", "where": "ui",
+                "stepRef": ",".join(str(seq) for seq, _a in missing_exp if seq),
                 "detail": f"这些步骤的预期，脚本里没有任何一处检查它："
                           f"{detail}"
                           + (f"（另有 {len(missing_exp) - 6} 条同样没查）"

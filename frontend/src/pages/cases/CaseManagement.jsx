@@ -949,16 +949,37 @@ export default function CaseManagement() {
       // 谁审的、审了几轮、每轮的必改清单，都在详情页的「审核」tab 里。
       // （原来这里给 AI 的结论标了「AI 过/AI 打回」，同一列混两套语义，看着就是不一致。）
       const why = [row.reviewReason?.text, row.reviewReason?.summary].filter(Boolean).join(' · ')
-      const wrap = (tag) => (why || row.qualityScore?.total != null) ? (
-        <Tooltip title={<div style={{ fontSize: 12, maxWidth: 320 }}>
-          {row.qualityScore?.total != null && <div>体检分 {row.qualityScore.total}</div>}
-          {why && <div style={{ marginTop: 2 }}>{why}</div>}
-          {(row.reviewReason?.findings || []).filter(f => f.severity !== 'minor').slice(0, 4).map((f, i) => (
-            <div key={i} style={{ marginTop: 4 }}>· [{f.severity === 'blocker' ? '致命' : '重要'}] {f.where}：{f.problem}</div>
-          ))}
-          <div style={{ marginTop: 4, color: '#c9cdd4' }}>明细和历史看详情页「审核」</div>
-        </div>}>{tag}</Tooltip>
-      ) : tag
+      // 结论出具之后场景/UI 脚本又被改过（`reviewStale`，只读派生字段，见
+      // `rounds.stale_map`）。**标签本身不改** —— 它确实是通过/打回；但列表上
+      // 必须看得出"这个结论对的是哪一版"：一条 approved 的用例被
+      // tb_sync_ui_script 换过脚本之后，原来在列表上干干净净，没人会想到
+      // 点开看那个结论算的是旧内容（原反馈 #1）。
+      // **缺键/null = 判不出来，不当过期处理** —— 存量轮次没存签名，不猜。
+      const stale = row.reviewStale === true
+      // 过期标记挂在 wrap 里（**不动标签本身的字和颜色**）：三种结论
+      // 通过/打回/无法审核共用一处，而且"通过"还是"通过" —— 它确实审过、确实过了，
+      // 变灰或改字会让人读成"没审"。加一个 ⚠ 说明的是"对的是哪一版"这件事。
+      const wrap = (tag) => {
+        const body = stale ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+            <span style={{ fontSize: 10, color: '#d48806', lineHeight: 1 }}>⚠</span>{tag}
+          </span>
+        ) : tag
+        return (why || stale || row.qualityScore?.total != null) ? (
+          <Tooltip title={<div style={{ fontSize: 12, maxWidth: 320 }}>
+            {stale && <div style={{ color: '#ffc53d', marginBottom: 4 }}>
+              这个结论已经过期：出具之后这条的接口场景 / UI 脚本又被改过，
+              下面这些问题说的可能是已经不存在的内容。去详情页「审核」看它对的是哪一版，或者重新审一次。
+            </div>}
+            {row.qualityScore?.total != null && <div>体检分 {row.qualityScore.total}</div>}
+            {why && <div style={{ marginTop: 2 }}>{why}</div>}
+            {(row.reviewReason?.findings || []).filter(f => f.severity !== 'minor').slice(0, 4).map((f, i) => (
+              <div key={i} style={{ marginTop: 4 }}>· [{f.severity === 'blocker' ? '致命' : '重要'}] {f.where}：{f.problem}</div>
+            ))}
+            <div style={{ marginTop: 4, color: '#c9cdd4' }}>明细和历史看详情页「审核」</div>
+          </div>}>{body}</Tooltip>
+        ) : body
+      }
       if (v === 'approved') return wrap(
         <Tag style={{ fontSize: 11, background: 'var(--green-bg)', color: '#0ea5a0', border: 'none', margin: 0 }}>通过</Tag>)
       if (v === 'rejected') return wrap(

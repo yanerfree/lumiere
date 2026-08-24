@@ -74,6 +74,11 @@ _SYSTEM = """你是这个测试平台的评审员，替代人工那道「待审�
 1. **不要输出任何统计数字**（多少条、百分比、覆盖率）。平台会算，你数会数错。
 2. 每条 finding 必须**指到具体位置**：步骤名、断言、脚本里的那一行/那个选择器。
    指不到位置的意见一律不要写 —— 那种话对每条用例都成立，等于没说。
+   · **说得出是哪一步的，把步骤号填进 `stepRef`**（手工步骤的 `seq` 或接口场景步骤的
+     `seq`，多步就写 `"6,7"`）。这个字段是给平台**去重**用的：平台自己也会判出一批
+     问题，你用自己的话复述同一处时，只有靠这个号才认得出是同一件事 ——
+     认不出来就会在报告里把一处问题写成两处。
+     **判不出是哪一步的就别填**（比如整条用例级别的问题），不要编一个。
 3. 严重程度只有三档，按"放它进回归会怎样"判。
    **标 blocker 必须同时给 `kind`**，且只能从这四类里选（点不出类别的，最重只能标 major）：
    · `expectation_copied_from_impl` —— 预期照着实现抄，把 bug 固化成"预期"
@@ -94,18 +99,21 @@ _SYSTEM = """你是这个测试平台的评审员，替代人工那道「待审�
    ⚠ **不要因为这个模块缺别的场景而扣这一条的分**。模块级的缺口（越权、幂等、
    边界、状态切回来、异步收敛、删除残留）写进 `coverageGaps` —— 那是给人看的情报，
    不影响这一条过不过。已经有邻居覆盖的不要重复提。
-6. **步骤名/接口场景步骤名带角色前缀的，先按前缀判，别凭常识猜**：
-   `前置:`/`准备:`/`制备:`/`清理:`/`收尾:` 打头的步骤是造数据、收尾，**不是被测行为**，
-   不该因为它没有对应的 UI 断言就算"预期没查"或扣 self_coverage 的分——
-   这类步骤走接口铺数据、走接口清理，本来就不会出现在 UI 脚本里。
-   `操作:`/`验证:` 才是需要在页面上有对应动作/断言的。
-   · expectedResult 里出现「由接口场景『制备：等推送收敛』断言覆盖」这类**指向
-     接口场景步骤名的说明**，不算一条新的验证承诺——那是作者在说"这件事换了
-     地方验"，不是又许了一个诺。**不要因为这句话里提到的步骤名在 UI 脚本里找
-     不到对应元素，就单独再标一条缺口**——它本来就不该出现在 UI 脚本里。
+6. **步骤的角色平台已经判好了，直接读字段，不要自己再从中文前缀猜**：
+   每个步骤上的 `role` 字段就是结论（`setup`/`action`/`verify`/没有这个字段=判不出来）。
+   · `role: "setup"` —— 造数据、清理、收尾，**不是被测行为**。
+     **不许**因为它没有对应的 UI 动作/断言就算"预期没查"、也不许拿它扣
+     self_coverage 的分：这类步骤走接口铺数据、走接口清理，本来就不出现在 UI 脚本里。
+   · `role: "action"`/`"verify"` —— 才是需要在页面上有对应动作/断言的。
+   · 步骤上有 `refsScenarioStep: true`（或整条用例的
+     `expectedResultRefsScenarioStep: true`）—— 这段 expected **引用了接口场景的某个
+     步骤名**（"由接口场景『制备：等推送收敛』断言覆盖"这类）。那是作者在说"这件事
+     换了地方验"，**不算一条新的验证承诺**。不要因为这句话里提到的东西在 UI 脚本里
+     找不到对应元素就单独再标一条缺口 —— 它本来就不该出现在 UI 脚本里。
    · 给 verification_depth/self_coverage 的 `fix` 建议时，**优先建议把步骤名改成
-     规范里的角色前缀**，而不是建议在 expected 里塞自然语言说明——那段说明文字
-     本身还会被同一套判据当成新的待验证内容再抓一次，越改越多。
+     规范里的角色前缀**（这样平台下次就能判出 `role`），而不是建议在 expected 里塞
+     自然语言说明——那段说明文字本身还会被同一套判据当成新的待验证内容再抓一次，
+     越改越多。
 7. **`reflections` 是作者自己写的"这条在验什么"**（回推时四问的答案）。用法：
    · 它说"第 8 步验编号不变"，你就去看第 8 步的断言 ——
      **说的和断言对不上，是最硬的证据**，标 blocker + kind=no_real_verification。
@@ -125,6 +133,7 @@ JSON 形状（dimensions 里只出现适用的维度，分数 0-100 整数）：
     {"dimension": "verification_depth", "severity": "blocker",
      "kind": "no_real_verification",
      "where": "步骤 6「审批通过后应生效」",
+     "stepRef": "6",
      "problem": "只断了控制面 status=approved",
      "fix": "补一步拿该应用凭据打网关，审批前必须 401、审批后 200"}
   ],
@@ -220,6 +229,28 @@ def _loc_sig(*texts: str | None) -> set[str]:
     return sig
 
 
+def _step_refs(f: dict) -> set[str]:
+    """一条 finding 自己声明的步骤号（`stepRef`）—— LLM 那份和机器那份都可能有。
+
+    这一条是**结构化的**，跟 `_loc_sig` 从散文里刮数字不是一回事：
+    去重原来只能靠"两边正好都在文本里提了同一个数字"，而机器判据和模型复述
+    都不提数字时（都只说"这条断言恒真"）就漏掉了，一处问题在报告上写成两处。
+    所以两边都直接把步骤号填成字段，不用猜它有没有写在句子里。
+    `"6,7"`、`6`、`"步骤 6"` 都能吃；填不出来的（整条用例级问题）是空集。
+
+    **机器那份只有一部分判据填得出来**：`step_action_not_in_script` /
+    `expectation_not_asserted` / `vague_expectation` 手上现成有 `seq`；
+    而接口侧那批（`tautology_assertion`、`no_readback` …）是**按步骤名**定位的，
+    压根没拿到序号，那些仍然只能靠散文里的数字兜底。
+    """
+    raw = f.get("stepRef")
+    if raw is None:
+        return set()
+    if isinstance(raw, (list, tuple, set)):
+        raw = ",".join(str(x) for x in raw)
+    return set(_LOC_NUM.findall(str(raw)))
+
+
 def merge_findings(machine: list[dict], llm: list[dict]) -> list[dict]:
     """机器事实 + LLM 判断合成一份清单。
 
@@ -227,16 +258,26 @@ def merge_findings(machine: list[dict], llm: list[dict]) -> list[dict]:
     而这几条正是最贵的那几条（恒真断言、只打控制面）。
     去重按 kind/where 粗粒度做 —— 同一件事说两遍会让人以为有两个问题。
 
-    **两道去重判据都要用，缺一个都会漏**：
-    1. 措辞前缀重合（原有的）——LLM 抄机器的话时命中。
-    2. **同一维度 + 提到同一个位置数字**——LLM 用自己的话复述同一处问题时，
-       前缀重合抓不到（活体验证撞过：机检说"第 19 步缺读回"，AI 复述成
+    **三道去重判据，任一命中就算重复，缺一个都会漏**：
+    1. **同一维度 + 两边声明的步骤号撞上** —— 这次新加的，最准的一道。
+       两边的号都优先取结构化的 `stepRef`（LLM 按提示词填，机器那边由
+       `step_coverage` / `_vague_findings` 直接带出 `seq`），取不到才退回从散文里
+       刮数字。**注意它只在"至少一边填得出 `stepRef`、另一边也能给出同一个号"时
+       才比旧判据强**：接口侧那批机器判据（`tautology_assertion`、`no_readback`…）
+       是按步骤名定位的、根本没有序号，那些仍然只能靠散文数字碰运气 ——
+       活体验证时就撞见过这种够不着的情况，所以下面两道一条都不能删。
+    2. 措辞前缀重合（原有的）——LLM 抄机器的话时命中。
+    3. **同一维度 + 提到同一个位置数字**（原有的）——LLM 用自己的话复述同一处问题、
+       句子里恰好带着步骤号时命中（活体验证撞过：机检说"第 19 步缺读回"，AI 复述成
        另一种说法，两条都进了 mustFix，`verdictReason` 写"有 2 处重要问题"，
        实际是一处）。
+    **旧的两道一条都没删**：新字段是可选的，模型不填时（或填不出来时）去重能力
+    必须至少不比现在差 —— 换成"只认 stepRef"就是拿一个模型可能不写的字段
+    去换掉两道已经在跑的判据。
     反例：同一步骤号下机器和 LLM **各自指出一件不相关的事**（比如第 19 步既缺
     读回、又断言方向写反）会被误判成一条丢掉一条——两害相权，"同一件事说两遍
     显得比实际更严重"比"偶尔漏掉一条巧合撞了步骤号的独立问题"后果更常见也更贵，
-    所以这条判据只做粗筛、不追求精确。
+    所以这几条判据都只做粗筛、不追求精确。
     """
     out = []
     seen_detail = set()
@@ -245,9 +286,14 @@ def merge_findings(machine: list[dict], llm: list[dict]) -> list[dict]:
         key = (f.get("kind"), (f.get("detail") or "")[:40])
         seen_detail.add(key)
         dim = _kind_to_dim(f.get("kind"))
-        seen_loc.append((dim, _loc_sig(f.get("detail"), f.get("where"))))
+        # 机器那条自己声明的步骤号也算进位置指纹：原来这里只有从散文刮出来的数字，
+        # 于是"机器判据句子里一个数字都不提"时，LLM 就算老老实实填了 stepRef 也
+        # 无处可撞 —— 判据 1 形同虚设。现在两边都优先用结构化的号。
+        mrefs = _step_refs(f)
+        seen_loc.append((dim, _loc_sig(f.get("detail"), f.get("where")) | mrefs))
         out.append({"dimension": dim, "severity": f.get("severity", "major"),
                     "where": f.get("where") or "-", "problem": f.get("detail"),
+                    **({"stepRef": ",".join(sorted(mrefs, key=int))} if mrefs else {}),
                     # **kind 要留着**：前端要按类型筛、CC 要按类型判该怎么改，
                     # 丢了之后只能对着文本做子串匹配（活体验证时我自己就栽在这上面：
                     # 探针按 kind 过滤永远是空，看起来像"没报"，其实报了）
@@ -269,14 +315,19 @@ def merge_findings(machine: list[dict], llm: list[dict]) -> list[dict]:
         where = str(f.get("where") or "")
         dim = f.get("dimension") or "scenario_sanity"
         loc = _loc_sig(prob, where)
+        refs = _step_refs(f)
         # LLM 复述了机器那条 → 丢掉，保留机器那条（它的 severity 才是权威）
-        is_dup = any(prob[:24] in (d or "") for _, d in seen_detail) or \
+        is_dup = any(dim == d2 and refs and (refs & sig) for d2, sig in seen_loc) or \
+            any(prob[:24] in (d or "") for _, d in seen_detail) or \
             any(dim == d2 and loc and (loc & sig) for d2, sig in seen_loc)
         if is_dup:
             continue
         out.append({"dimension": dim, "severity": sev,
                     "where": where[:200] or "-",
                     "problem": prob, "fix": str(f.get("fix") or "")[:600] or None,
+                    # **stepRef 要留着**：跟 kind 同一个理由 —— 前端要能跳到那一步，
+                    # CC 要知道该改哪一步，丢了就只能回去从文本里刮数字。
+                    **({"stepRef": ",".join(sorted(refs, key=int))} if refs else {}),
                     "kind": kind or None, "source": "ai"})
     return out
 

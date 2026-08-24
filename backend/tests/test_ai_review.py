@@ -18,9 +18,9 @@ import inspect
 import pytest
 from types import SimpleNamespace
 
-from app.services.review import reviewer
+from app.services.review import reviewer, step_coverage
 from app.services.review.reviewer import (DIMENSIONS, PASS_SCORE, _applicable,
-                                          merge_findings, score_and_verdict)
+                                          _loc_sig, merge_findings, score_and_verdict)
 
 
 def _ev(api=True, ui=False):
@@ -156,6 +156,91 @@ def test_LLM换个说法复述机器那条也要去重():
     assert len(out) == 1, out
 
 
+def test_LLM句子里不提数字时靠stepRef去重():
+    """上一轮补的"同一维度 + 同一个位置数字"逮不住这种：**两边都不提步骤号**
+    （机检的 detail 里有"19"，但 AI 复述只说"这条断言恒真"）。
+    于是一处问题在报告上写成两处，`verdictReason` 又开始虚报数量。
+    修法是让模型把步骤号填成结构化字段 `stepRef`，不用赌它写在句子里。
+    """
+    machine = [{"kind": "no_readback", "severity": "major", "where": "api",
+                "detail": "第 19 步改了配置没有读回确认"}]
+    llm = [{"dimension": "verification_depth", "severity": "major", "stepRef": "19",
+            "problem": "改完之后没有再查一次，这一步验不出配置到底有没有落库", "where": "接口场景"}]
+    out = merge_findings(machine, llm)
+    assert len(out) == 1, out
+    # 反向：stepRef 指到别处就不该合并
+    llm2 = [{**llm[0], "stepRef": "7"}]
+    assert len(merge_findings(machine, llm2)) == 2
+
+
+def test_机器那条一个数字都不提时也能靠结构化步骤号去重():
+    """上面那条其实是**半场**：它靠的是机器 detail 里恰好写着"19"。
+    活体验证撞见了真正够不着的那一半 —— 机器判据的措辞里**一个数字都没有**
+    （"这些步骤的预期，脚本里没有任何一处检查它。"），模型老老实实填了 `stepRef`
+    也无处可撞，判据 1 形同虚设。
+    所以机器那边手上有 `seq` 的判据也要把它填成字段，两边都不靠从散文里刮。
+    """
+    machine = [{"kind": "expectation_not_asserted", "severity": "major", "where": "ui",
+                "stepRef": "1",
+                "detail": "这些步骤的预期，脚本里没有任何一处检查它。预期写了不查，等于没写。"}]
+    llm = [{"dimension": "verification_depth", "severity": "major", "stepRef": "1",
+            "problem": "这一步走完之后没有任何读回，页面上到底变没变没人查。",
+            "where": "UI 脚本"}]
+    # 先封住前提：旧的两道在这个构造下确实都够不着，否则这条测试证明不了新判据
+    assert not _loc_sig(machine[0]["detail"], machine[0]["where"]), "机器正文不该有数字"
+    assert not _loc_sig(llm[0]["problem"], llm[0]["where"]), "LLM 正文不该有数字"
+    assert llm[0]["problem"][:24] not in machine[0]["detail"][:40], "措辞不该重合"
+
+    assert len(merge_findings(machine, llm)) == 1, "两边都声明了步骤 1，是同一处"
+    # 机器那条自己的 stepRef 也要带进输出（前端跳转、CC 定位都要用）
+    assert merge_findings(machine, llm)[0]["stepRef"] == "1"
+    # 反向两条：号对不上、以及只有一边给得出号 —— 都不许合并
+    assert len(merge_findings(machine, [{**llm[0], "stepRef": "99"}])) == 2
+    assert len(merge_findings([{k: v for k, v in machine[0].items() if k != "stepRef"}],
+                              llm)) == 2, "机器那条既没数字也没步骤号，凭什么判成同一件事"
+
+
+def test_机器判据把手上现成的步骤号填成字段():
+    """上一条测的是 `merge_findings` 吃得下这个字段，这一条测**真的有人填**。
+    `step_coverage.analyze` 手上本来就有 `seq`（`missing_act`/`missing_exp` 的第一项），
+    以前只拼进散文里，去重那边还得用正则刮回来。
+    """
+    steps = [{"seq": 3, "action": "点击「保存」按钮", "expected": "列表出现「订单已创建」"},
+             {"seq": 5, "action": "点击「导出」", "expected": "下载出 report.csv"}]
+    # 脚本里得有中文字面量这条判据才启动；这个字面量跟上面两步的锚点无关，
+    # 所以两步都会落成"对不上"
+    script = ('page.get_by_text("登录").click()\n'
+              'assert page.get_by_text("登录").is_visible()\n')
+    got = {f["kind"]: f.get("stepRef") for f in step_coverage.analyze(steps, script,
+                                                                     scenario_steps=[])}
+    assert got.get("step_action_not_in_script") == "3,5", got
+    assert got.get("expectation_not_asserted") == "3", got
+
+
+def test_stepRef缺失时旧的两道判据照样生效():
+    """新字段是可选的。模型不填时去重能力必须**至少不比现在差** ——
+    否则等于拿一个可能不写的字段换掉两道已经在跑的判据。
+    """
+    machine = [{"kind": "no_readback", "severity": "major", "where": "api",
+                "detail": "第 19 步改了配置没有读回确认"}]
+    # 不带 stepRef，但句子里有 19 → 老的数字粗筛接手
+    llm = [{"dimension": "verification_depth", "severity": "major",
+            "problem": "步骤 19 只发了修改请求，压根没有再查一次结果"}]
+    assert len(merge_findings(machine, llm)) == 1
+
+
+def test_stepRef留在结果里():
+    """跟 kind 同一个理由：前端要能跳到那一步、CC 要知道该改哪一步。
+    丢了之后只能回去从文本里刮数字 —— 那正是这次要摆脱的做法。"""
+    out = merge_findings([], [{"dimension": "verification_depth", "severity": "major",
+                               "problem": "这一步没断言", "stepRef": "步骤 6 和 7"}])
+    assert out[0]["stepRef"] == "6,7"
+    # 填不出来的（整条用例级问题）不该凭空多一个空字段
+    out2 = merge_findings([], [{"dimension": "scenario_sanity", "severity": "minor",
+                                "problem": "整条用例没写清测的是哪个角色"}])
+    assert "stepRef" not in out2[0]
+
+
 def test_不同维度撞了同一个数字不去重():
     """数字重合只是粗筛的必要条件之一，还得同一维度——不然两处毫不相关的问题
     只因为都提到"19"就被合并，会把真的第二个问题吃掉。"""
@@ -277,15 +362,49 @@ def test_模块缺场景不扣单条的分():
     assert DIMENSIONS["self_coverage"]["label"] == "本条覆盖完整性"
 
 
-def test_prompt知道步骤角色前缀():
+def test_步骤角色是代码判的不是提示词引导():
     """TC-DYGL-00001 走了三轮才过：第一轮说预期没查，改成往 expected 里塞散文
     锚点（"由接口场景『制备：等推送收敛』断言覆盖"），第二轮反而把那句话里提到
     的步骤名当成新的待验证承诺，又标了 4 条。最后靠**步骤角色前缀**
-    （前置:/操作:/验证:/清理:）过审——这是规范里本来就有的机制，三轮评审
-    一次都没提示用它，因为 LLM 判 self_coverage 时压根不知道这套约定
-    （只有代码侧的 step_coverage._ROLE_SKIP 认，LLM 读的是自然语言）。
+    （前置:/操作:/验证:/清理:）过审。
+
+    上一轮的修法是把这套约定写进 `_SYSTEM` 提示词 —— 那只是**引导**：模型可以
+    读了不照做，跟 `step_coverage` 里的确定判据不是一回事。现在下沉成结构：
+    角色由 `role_of()` 判（代码侧跳过前置/清理用的是同一个函数），
+    "这句 expected 是在引用接口场景步骤名"由 `_refs_scenario_step()` 判，
+    两个结论以 `role` / `refsScenarioStep` 字段喂给 LLM。
+    **提示词里不再有让模型自己认中文前缀的话** —— 有的话就是又漂回引导了。
     """
-    assert "前置:" in reviewer._SYSTEM and "清理:" in reviewer._SYSTEM
+    from app.services.review import evidence
+    from app.services.review.step_coverage import role_of
+
+    # ① 角色是代码判的，两边同一个函数
+    assert role_of("前置：建三个应用") == "setup"
+    assert role_of("清理: 删掉测试数据") == "setup"
+    assert role_of("验证：列表查不到该记录") == "verify"
+    assert role_of("操作：点击「弃用」") == "action"
+    assert role_of("点击「弃用」按钮") is None      # 没前缀就不猜
+
+    # ② 判出来的角色真的进了喂给 LLM 的结构里
+    rows = evidence._steps_text([
+        {"seq": 1, "action": "前置：调接口铺三条数据", "expected": "铺好"},
+        {"seq": 2, "action": "操作：点击「弃用服务」", "expected": "状态变为「已弃用」"},
+    ])
+    assert rows[0]["role"] == "setup" and rows[1]["role"] == "action"
+
+    # ③ "引用接口场景步骤名"也是代码判的 —— 全角/半角冒号和引号不一样照样认得出
+    rows = evidence._steps_text(
+        [{"seq": 1, "action": "操作：推送", "expected": "由接口场景『制备：等推送收敛』断言覆盖"}],
+        ["制备:等推送收敛", "验证:列表可见"])
+    assert rows[0]["refsScenarioStep"] is True, "全角冒号+另一种引号也必须认出来"
+    # 没引用的不能乱打标记（打了就等于告诉模型"这条承诺换地方验了"，是假免责）
+    assert "refsScenarioStep" not in evidence._steps_text(
+        [{"seq": 1, "action": "操作：推送", "expected": "列表出现该记录"}],
+        ["制备:等推送收敛"])[0]
+
+    # ④ 提示词读字段，不再让模型自己认前缀
+    assert "`role`" in reviewer._SYSTEM and "refsScenarioStep" in reviewer._SYSTEM
+    assert "不要自己再从中文前缀猜" in reviewer._SYSTEM
     assert "不算一条新的验证承诺" in reviewer._SYSTEM
     assert "优先建议把步骤名改成" in reviewer._SYSTEM, "修复建议不该引导往 expected 里塞散文"
 
@@ -298,8 +417,11 @@ def test_列表不区分谁审的():
     src = (__import__("pathlib").Path("../frontend/src/pages/cases/CaseManagement.jsx")
            .read_text(encoding="utf-8"))
     i = src.index("key: 'reviewStatus'")
+    # 切到**下一列开头**为止，不是切固定字数 —— 这一列的注释一多，
+    # 固定窗口就够不着底下的 `>通过<`，测试红在一个跟它要封的事无关的地方。
+    nxt = src.index("\n    { key: '", i + 10)
     # 只看**代码**，注释里当然会提到旧写法（说明"这里刻意不区分"）
-    seg = "\n".join(l for l in src[i:i + 2600].splitlines()
+    seg = "\n".join(l for l in src[i:nxt].splitlines()
                     if "//" not in l and not l.strip().startswith("*"))
     assert "AI 过" not in seg and "AI 打回" not in seg, "列表又开始区分谁审的了"
     assert ">通过<" in seg and ">打回<" in seg

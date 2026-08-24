@@ -24,7 +24,12 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "zzs0rvhash"
-down_revision = "zzr0aiusage"
+# 上一版这里写的是 zzr0aiusage —— 那个迁移当时**只在本地、没进版本库**，
+# 于是干净 clone 里这条链是断的（alembic upgrade head 直接 Can't locate revision，
+# 根目录 tests/unit/core/test_schema_invariants.py 两条封样正是为此）。
+# 接到真正已提交的 head 上。zzr0aiusage 进库时把它自己的 down_revision 改成
+# zzs0rvhash 接在后面即可，别再接 zzq0rvbatch，否则又是两个 head。
+down_revision = "zzq0rvbatch"
 branch_labels = None
 depends_on = None
 

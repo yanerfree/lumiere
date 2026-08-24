@@ -27,7 +27,17 @@ from app.models.user import Base
 
 # 类型 —— **报告里必须区分**（§4）。只有 module_full 能代表这个模块的情况；
 # 抽审、增量只能说"这几条过了"，否则挑三条好的一审就能宣布模块没问题。
-KINDS = ("module_full", "module_incremental", "sample", "single", "checkup")
+#
+# `cc_inline` 跟其余五种**不是一回事**：那五种都是队列拥有的批次（`queue.enqueue`
+# 排进去、worker 捡起来跑）；`cc_inline` 是 `tb_review_case` 在进程内直接跑的，
+# 账本上这一行只是"正在审"的标记 + 防重复的锁。两者混用会出两种事故：
+#   ① 队列 worker 把 CC 的内联行当待跑批次捡走，凭空多跑一遍（还固定真跑）；
+#   ② 重启收尾把它退回 queued，同样多跑一遍。
+# **特别注意别拿 `single` 当这个用** —— `single` 是详情页点"审这一条"发起的，
+# 那是**走队列的**（`api/case_review.py` 里 `len(case_ids)==1` 就推断成 single），
+# 排除它等于把人在页面上发起的单条审核判死。
+INLINE_KIND = "cc_inline"
+KINDS = ("module_full", "module_incremental", "sample", "single", "checkup", INLINE_KIND)
 
 # 状态五种（§6）。paused 是熔断专用：环境挂了、剩下的先停着等人确认，
 # **不是失败** —— 判成失败的话那些用例会被当成"审过了没过"。
