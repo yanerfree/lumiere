@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Card, Table, Tag, Button, Empty, Spin, Tooltip, Drawer, Switch, Progress, Popconfirm, message } from 'antd'
+import { Card, Table, Tag, Button, Empty, Spin, Tooltip, Drawer, Switch, Select, Progress, Popconfirm, message } from 'antd'
 import { ReloadOutlined, PauseCircleOutlined } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
@@ -64,16 +64,29 @@ export default function ReviewReport() {
   const [queue, setQueue] = useState({})
   const [loading, setLoading] = useState(false)
   const [includeCC, setIncludeCC] = useState(false)
+  const [kindFilter, setKindFilter] = useState()
+  const [statusFilter, setStatusFilter] = useState()
   const [detail, setDetail] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
 
   const base = `/projects/${projectId}/branches/${branchId}`
 
+  // 接口最多给 200 条，默认 50。**筛选是在已加载的这些行里筛的** ——
+  // 所以取到的正好是上限时要说一声，否则「按类型筛完只有 2 条」会被当成
+  // "这个项目只审过 2 次"，而实际是第 51 次之后的没在手里。
+  const LIMIT = 50
+
   const load = useCallback(async () => {
     if (!branchId) return
     setLoading(true)
     try {
-      const r = await api.get(`${base}/ai-review/batches`, { params: { mine: !includeCC } })
+      // 查询串**必须自己拼**：`api.get` 是 fetch 包的（utils/request.js），
+      // 第二个参数直接摊进 fetch config —— axios 那套 `{ params: {...} }`
+      // 会被 fetch 静默丢掉。这页原来就是这么写的，于是 mine 永远不发，
+      // 后端默认 mine=True，「包含 CC 自审」这个开关**从来没生效过**
+      // （实测：开关拨到 on，请求还是不带参数，8 条里只回 3 条）。
+      const q = new URLSearchParams({ mine: String(!includeCC), limit: String(LIMIT) })
+      const r = await api.get(`${base}/ai-review/batches?${q}`)
       setRows(r.data?.batches || [])
       setQueue(r.data?.queue || {})
     } catch { /* request.js 已提示 */ } finally { setLoading(false) }
@@ -112,20 +125,32 @@ export default function ReviewReport() {
       // hint 里带 `**…**`（「**只有这种能代表模块情况**」）—— 直接塞 Tooltip
       // 会把星号原样显示出来，正好显示在最该被看见的那句上
       render: v => <Tooltip title={mdBold(KIND[v]?.hint)}><Tag color={KIND[v]?.color} style={{ margin: 0 }}>{KIND[v]?.label || v}</Tag></Tooltip> },
-    { title: '范围', dataIndex: 'scopeLabel', width: 170,
+    // 这一列**故意不给宽度**：所有列都钉宽时，antd 的表格是 auto 布局，
+    // 富余宽度按比例摊到每一列上 —— 1920 屏上声明的 906px 被拉成 1642px，
+    // 92px 的类型格变成 167px，一个 60px 的 Tag 中间飘着，整张表看着是空的。
+    // 留一列不钉宽，富余全落在它身上（AuditLogs 的「对象名称」也是这么留的）。
+    { title: '范围', dataIndex: 'scopeLabel',
       render: (v, r) => <a onClick={() => openDetail(r.batchId)}>{v || '—'}</a> },
     { title: '环境', dataIndex: 'environment', width: 100,
       render: v => v || <span style={{ color: '#c9cdd4' }}>—</span> },
-    { title: '发起人', dataIndex: 'actor', width: 90,
-      render: (v, r) => <span style={{ fontSize: 12 }}>{v || '—'}
+    // 116 不是随手写的：`admin` + 「CC」标签在 90px 里正好折成两行，
+    // 整行跟着长到 60px（实测 UAG 那 5 行都是），一张表凭空高出三成。
+    { title: '发起人', dataIndex: 'actor', width: 116,
+      render: (v, r) => <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{v || '—'}
         {r.actorKind !== 'human' && <Tag style={{ marginLeft: 4, fontSize: 11 }}>CC</Tag>}</span> },
-    { title: '状态 / 结果', width: 250,
+    // 状态和结果**分两列**：合成一列时「已完成」和「打回 2」挤在同一格，
+    // 而这两件事是分开看的 —— 状态答"跑完了没"，结果答"这批得出了什么"。
+    { title: '状态', dataIndex: 'status', width: 100,
+      render: (v, r) => {
+        const st = STATUS[v] || {}
+        return <Tag color={st.color} style={{ margin: 0 }}>{st.label || v}
+          {(v === 'running' || v === 'queued') && r.total ? ` ${r.done}/${r.total}` : ''}</Tag>
+      } },
+    { title: '结果', width: 240,
       render: (_, r) => {
-        const st = STATUS[r.status] || {}
         if (r.status === 'running' || r.status === 'queued') {
           return (
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Tag color={st.color} style={{ margin: 0 }}>{st.label}</Tag>
               <Progress percent={r.total ? Math.round(r.done * 100 / r.total) : 0}
                 size="small" style={{ width: 90, margin: 0 }}
                 format={() => `${r.done}/${r.total}`} />
@@ -133,28 +158,37 @@ export default function ReviewReport() {
             </div>
           )
         }
+        const nums = [
+          r.approved > 0 && <span key="a" style={{ fontSize: 12, color: VERDICT.approved.color }}>通过 {r.approved}</span>,
+          r.rejected > 0 && <span key="r" style={{ fontSize: 12, color: VERDICT.rejected.color }}>打回 {r.rejected}</span>,
+          /* 「无法审核」单独一个数 —— 它既不是通过也不是打回，
+             藏进任何一边都会让这批结论的含金量看不出来 */
+          r.inconclusive > 0 && (
+            <Tooltip key="i" title="没真跑成功（缺环境 / 环境挂了 / 没有可跑的产物）—— 既不算通过也不算打回">
+              <span style={{ fontSize: 12, color: VERDICT.inconclusive.color }}>无法审核 {r.inconclusive}</span>
+            </Tooltip>
+          ),
+          r.failed > 0 && <span key="f" style={{ fontSize: 12, color: '#86909c' }}>异常 {r.failed}</span>,
+        ].filter(Boolean)
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <Tag color={st.color} style={{ margin: 0 }}>{st.label}</Tag>
-            {r.approved > 0 && <span style={{ fontSize: 12, color: VERDICT.approved.color }}>通过 {r.approved}</span>}
-            {r.rejected > 0 && <span style={{ fontSize: 12, color: VERDICT.rejected.color }}>打回 {r.rejected}</span>}
-            {/* 「无法审核」单独一列数字 —— 它既不是通过也不是打回，
-                藏进任何一边都会让这批结论的含金量看不出来 */}
-            {r.inconclusive > 0 && (
-              <Tooltip title="没真跑成功（缺环境 / 环境挂了 / 没有可跑的产物）—— 既不算通过也不算打回">
-                <span style={{ fontSize: 12, color: VERDICT.inconclusive.color }}>无法审核 {r.inconclusive}</span>
-              </Tooltip>
-            )}
-            {r.failed > 0 && <span style={{ fontSize: 12, color: '#86909c' }}>异常 {r.failed}</span>}
+            {/* 取消掉的那批一个数都没有 —— 空着会像"结果还没出"，明写一个横杠 */}
+            {nums.length ? nums : <span style={{ color: '#c9cdd4' }}>—</span>}
             {r.note && <Tooltip title={r.note}><PauseCircleOutlined style={{ color: '#faad14' }} /></Tooltip>}
           </div>
         )
       } },
     { title: '时间', dataIndex: 'createdAt', width: 96,
       render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{fmt(v)}</span> },
-    { title: '', width: 108, align: 'right',
+    // 操作列原来是个没标题的空列：只有排队中/在跑/暂停的行才长出按钮，
+    // 而报告页上绝大多数行都是跑完的 —— 于是整列常年空着，连表头都没有。
+    // 「查看」补进来：之前打开右侧抽屉的唯一办法是点「范围」那个链接，
+    // 链接看着像跳转，没人知道点它会出报告。
+    { title: '操作', width: 132,
       render: (_, r) => (
-        <span style={{ display: 'inline-flex', gap: 6 }}>
+        <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <Button size="small" type="link" style={{ padding: 0 }}
+            onClick={() => openDetail(r.batchId)}>查看</Button>
           {(r.status === 'queued' || r.status === 'running') && (
             <Popconfirm title="取消这一批？" description="正在跑的那条会做完再停" onConfirm={() => act(r.batchId, 'cancel')}>
               <Button size="small" type="text" danger>取消</Button>
@@ -171,31 +205,51 @@ export default function ReviewReport() {
 
   const waiting = (queue.queued || 0) + (queue.running || 0) + (queue.paused || 0)
 
+  // 筛选项从**已加载的这些行**里长出来（跟国际化词典那两个下拉一样）：
+  // 把 KIND/STATUS 六七种全列出来，选中一个没有的值就得到一张空表，
+  // 分不清是"这个项目没这么审过"还是"筛错了"。
+  const opts = (key, dict) => [...new Set((rows || []).map(r => r[key]).filter(Boolean))]
+    .map(v => ({ value: v, label: dict[v]?.label || v }))
+  const visible = (rows || []).filter(r =>
+    (!kindFilter || r.kind === kindFilter) && (!statusFilter || r.status === statusFilter))
+  const filtered = !!(kindFilter || statusFilter)
+
   return (
     <>
-      <Card
-        title={<span>审核报告
-          {/* 「还有多少在排队」只有几个数，不值一张表 —— 放标题右边那行字（§6） */}
-          <span style={{ fontSize: 12, color: '#86909c', marginLeft: 12, fontWeight: 400 }}>
-            {waiting ? `在跑/排队：${waiting} 批` : '当前没有在跑的审核'}
-            · 一行 = 一次审核；只有「模块全量」能代表这个模块的情况
+      {/* 页头跟全站一套：h2 18px + 一行 13px 灰字 + 右侧工具条。原来标题整个塞在
+          Card title 里（别的列表页都是页头在卡片外面），这页就矮别人一档。 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between',
+        alignItems: 'center', marginBottom: 10 }}>
+        <div>
+          <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0, color: '#1d2129' }}>审核报告</h2>
+          {/* 「还有多少在排队」只有几个数，不值一张表 —— 放标题底下那行字（§6） */}
+          <span style={{ fontSize: 13, color: '#86909c' }}>
+            一行 = 一次审核；只有「模块全量」能代表这个模块的情况
+            {waiting ? ` · 在跑/排队：${waiting} 批` : ' · 当前没有在跑的审核'}
+            {filtered ? ` · 筛出 ${visible.length}/${rows.length} 条` : ''}
+            {/* 到上限就明说：筛选只在这 50 条里筛 */}
+            {rows && rows.length >= LIMIT ? ` · 只列出最近 ${LIMIT} 次` : ''}
           </span>
-        </span>}
-        extra={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
-            {/* CC 每次回推都会自审，一天几十条 —— 全混在一起就找不到自己点的那次了 */}
-            <span style={{ fontSize: 12, color: '#86909c' }}>
-              包含 CC 自审 <Switch size="small" checked={includeCC} onChange={setIncludeCC} />
-            </span>
-            <Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        </div>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 12 }}>
+          <Select allowClear size="small" style={{ width: 122 }} placeholder="按类型筛选"
+            value={kindFilter} onChange={setKindFilter} options={opts('kind', KIND)} />
+          <Select allowClear size="small" style={{ width: 122 }} placeholder="按状态筛选"
+            value={statusFilter} onChange={setStatusFilter} options={opts('status', STATUS)} />
+          {/* CC 每次回推都会自审，一天几十条 —— 全混在一起就找不到自己点的那次了 */}
+          <span style={{ fontSize: 12, color: '#86909c' }}>
+            包含 CC 自审 <Switch size="small" checked={includeCC} onChange={setIncludeCC} />
           </span>
-        }
-        styles={{ body: { padding: rows?.length ? 0 : 24 } }}
-      >
+          <Button size="small" icon={<ReloadOutlined />} onClick={load}>刷新</Button>
+        </span>
+      </div>
+      <Card styles={{ body: { padding: visible.length ? 0 : 24 } }}>
         {loading && !rows ? <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div> : (
-          <Table size="small" rowKey="batchId" columns={columns} dataSource={rows || []}
+          <Table size="small" rowKey="batchId" columns={columns} dataSource={visible}
             pagination={false} loading={loading}
-            locale={{ emptyText: '还没审过 —— 去用例管理选中模块点「AI 审核」' }} />
+            locale={{ emptyText: filtered
+              ? '这个筛选条件下没有审核记录'
+              : '还没审过 —— 去用例管理选中模块点「AI 审核」' }} />
         )}
       </Card>
 
