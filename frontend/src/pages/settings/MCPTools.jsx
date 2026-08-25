@@ -514,9 +514,11 @@ export default function MCPTools() {
           <Space size={16}>
             {/* 页面到这儿本来是断的：用户看完 10 张卡片知道了"开放了哪些工具"，
                 然后合上页面、回到自己的终端，面对空白 prompt 还得自己想怎么说。
-                指令里带着地址、项目分支、这档要干的活、以及三条纪律（先查已有场景 /
-                报清单等确认 / 回推带证据）——**平台侧写好的防错知识，终于送到执行者手里**。 */}
-            <Tooltip title="复制一段可以直接粘给 Claude Code 的话：连接地址 + 这次要干的活 + 三条纪律">
+                指令解决的就是这一句开头 —— 地址、项目分支、这档要干的活，四行。
+                **纪律不在里面**（原来抄了三组八条，1075 字）：它们在 MCP
+                instructions 里，CC 一连上就读，不用人记得粘贴；细流程在各工具的
+                描述和返回值里（tb_next_duty 直接告诉它下一步调谁）。 */}
+            <Tooltip title="复制一段可以直接粘给 Claude Code 的话：连接地址 + 项目分支 + 这次要干的活">
               <Button size="small" type="primary" icon={<CopyOutlined />}
                 disabled={!fullloopPrompt}
                 onClick={() => copyPrompt(fullloopPrompt)}>复制接入指令</Button>
@@ -663,8 +665,9 @@ export default function MCPTools() {
                 { num: '1', title: '创建 API Key', desc: '在「连接管理」Tab 点击「创建 Key」，复制保存密钥。' },
                 { num: '2', title: '添加 .mcp.json 配置', desc: '将以下内容合并到项目根目录的 .mcp.json 文件：', code: mcpConfig },
                 { num: '3', title: '在 Claude Code 中使用', desc: '重启 Claude Code，然后直接用自然语言：', examples: [
-                  { hint: '从需求文档生成手工测试用例', cmd: '帮我为这份需求生成测试用例：用户可以登录系统...' },
-                  { hint: '查看生成进度', cmd: '查看最近的测试用例生成任务' },
+                  { hint: '接着上次没干完的活（工具会回 owes，说每条还欠哪一维）', cmd: '订阅管理这个模块还欠哪些用例？挑核心的补上，接口场景亲手跑通再回推' },
+                  { hint: '这一轮该干什么（归因 / 复跑 / 补场景 / 自证四个队列）', cmd: '看看这个分支现在该干什么' },
+                  { hint: '交付前自己过一遍门禁', cmd: '这个模块能交付了吗？有阻塞的话说清卡在哪一步' },
                 ] },
               ].map((step) => (
                 <div key={step.num} style={{ marginBottom: 28 }}>
