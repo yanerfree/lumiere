@@ -29,3 +29,6 @@ discover_test/
 
 # 后端运行时日志
 backend/.logs/
+
+# Claude Code 的临时 worktree（每个都是本仓库的一份 checkout，不该跟着提交）
+.claude/worktrees/
