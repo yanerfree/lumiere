@@ -28,12 +28,17 @@
   行上加归属不改变运行时冲突，两个项目配同一个 path 照样互相覆盖、还偶发。
   真正要做的是给 `path` 加 unique 约束 + 把「path 带前缀」变成服务端强制。
   实测数据和推理见下方文档「数据归属与隔离」的 §5。
+- **QA 仓永远只读**（项目编辑页配的那个 `qa_repo`）。那是别人维护的黑盒验收仓，
+  清单文件是他自己门禁（`check-coverage.sh`）的判据来源，平台往里写一笔，他那边就会
+  红在一个查不到原因的地方。`services/qa_catalog.py` 只允许 `show`/`ls-tree`/`rev-parse`/`log`，
+  有封样测试盯着；也**不要求对方仓库为我们加任何字段/文件/钩子**。要做回写先跟仓库主人谈，
+  别从这个模块长出来。
 - **别把项目 skill 放进 `app/skills/preset/`**。那个目录只放平台侧执行的 `tb-*`（会被当 prompt 喂后端 LLM、要绑模型档位）；客户端侧执行的 skill 走 DB，见下方文档。混了会让「AI 能力→模型」页冒出绑不上模型的空档位。
 
 ## 测试：**两套，都要跑**
 
 ```bash
-cd backend && .venv/bin/python -m pytest tests/ -q     # 单测/结构封样，~12s，1130 条
+cd backend && .venv/bin/python -m pytest tests/ -q     # 单测/结构封样，~12s，1337 条
 cd /home/dreamer/testBench && backend/.venv/bin/python -m pytest tests/ -q   # API/E2E，打 testbench_test 库，几分钟
 ```
 
@@ -58,6 +63,7 @@ cd /home/dreamer/testBench && backend/.venv/bin/python -m pytest tests/ -q   # A
 | **CC ↔ 平台闭环的边界规则、红线、Story 清单**（改这一块之前先读） | [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) |
 | **版本升级怎么复用上一版用例**：分支对账（端点反查）、三堆分法、状态流转、废弃审核 | [docs/version-upgrade-branch-diff.md](docs/version-upgrade-branch-diff.md) |
 | **数据归属与隔离**：MCP Key 为什么管不住数据、环境改项目级、哪些表该留全局（含一条「假隔离」陷阱） | [docs/data-scoping-and-isolation.md](docs/data-scoping-and-isolation.md) |
+| **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、顺带去掉的两个老字段 | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
 
 ## 长驻服务
 

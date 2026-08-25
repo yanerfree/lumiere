@@ -56,6 +56,11 @@ class Settings(BaseSettings):
     ui_agent_engine: str = "cli"
     ai_enabled: bool = False
 
+    # 只读 QA 仓的本地 bare 缓存目录。空 = backend/.qa-repos。
+    # 独立于 script_base_path：那是"项目自己的脚本库"，这是"别人的验收仓的只读镜像"，
+    # 混在一起会让"平台能往哪儿写"这件事变得说不清。
+    qa_repo_cache_dir: str = ""
+
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 

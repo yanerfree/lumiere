@@ -30,5 +30,8 @@ discover_test/
 # 后端运行时日志
 backend/.logs/
 
+# 只读 QA 仓的本地 bare 缓存（clone 下来的别人家仓库，不进版本库）
+backend/.qa-repos/
+
 # Claude Code 的临时 worktree（每个都是本仓库的一份 checkout，不该跟着提交）
 .claude/worktrees/
