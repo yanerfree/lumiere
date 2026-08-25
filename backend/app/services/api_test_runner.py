@@ -1115,6 +1115,7 @@ async def run_batch(
     base_env: dict | None = None,
     branch_id: uuid.UUID | None = None,
     env_name: str | None = None,
+    env_id: uuid.UUID | None = None,
     step_ids: set[str] | None = None,
 ) -> AsyncIterator[RunEvent]:
     """step_ids：**运行时**只跑这几步（页面上勾选的那些）。None = 全跑。
@@ -1199,7 +1200,8 @@ async def run_batch(
     # 批量执行统一生成报告（不区分草稿/已发布，单步调试走 run-step 不经过这里）
     if all_results and user_id:
         folder_name = await _resolve_common_folder_name(session, all_results)
-        report_id = await _create_report(session, all_results, user_id, project_id, report_name, folder_name, branch_id)
+        report_id = await _create_report(session, all_results, user_id, project_id, report_name,
+                                         folder_name, branch_id, env_id=env_id)
         yield RunEvent(type="report_created", data={"reportId": str(report_id)})
 
     yield RunEvent(type="run_done", data={"totalScenarios": len(scenario_ids)})
@@ -1361,6 +1363,7 @@ async def _create_report(
     folder_name: str | None = None,
     branch_id: uuid.UUID | None = None,
     run_mode: str | None = None,
+    env_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
     from datetime import datetime, timezone
     from app.models.report import TestReport, TestReportScenario, TestReportStep
@@ -1402,6 +1405,11 @@ async def _create_report(
         report_name=report_name,
         project_id=project_id,
         branch_id=branch_id,
+        # 环境**必须落库**：库里 24/24 条接口报告的 environment_id 都是 NULL，
+        # 报告列表那一列于是全是「-」。而"这次是打 staging 还是 prod"是复盘一份
+        # 报告时第一个要问的问题 —— 值一直在调用方手上（页面上选的那个环境），
+        # 只是从来没往下传。
+        environment_id=env_id,
         executed_by=user_id,
         executed_at=now,
         completed_at=now,

@@ -188,6 +188,7 @@ async def run_batch_scenarios(
     async def event_stream():
         try:
             async for event in run_batch(scenario_uuids, session, user_id=current_user.id, project_id=project_id, base_env=base_env, branch_id=branch_id, env_name=env_name,
+                                        env_id=uuid.UUID(body.env_id) if body.env_id else None,
                                         step_ids=set(body.step_ids) if body.step_ids is not None else None):
                 yield f"data: {json.dumps({'type': event.type, **event.data}, ensure_ascii=False)}\n\n"
         except Exception as e:

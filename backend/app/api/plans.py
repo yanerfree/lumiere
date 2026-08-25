@@ -623,6 +623,65 @@ async def _exec_kind_by_report(
     return kinds
 
 
+# 一份报告"完了没有"此前只看 completed_at 有没有值，没有就一律显示「执行中」。
+# 于是库里那条 8-12 的报告在页面上"执行了 12 天" —— 它其实是**手动计划在等人录结果**
+# （plan.status = pending_manual，两条场景都是 manual/pending）。
+# 「在跑」和「在等人」是两件完全不同的事：前者只能等，后者是**待办**，
+# 而混成一个词的代价是这条待办永远不会被认领。
+_STALE_AFTER_MIN = 30      # 自动化场景超过这么久还没动静，就不是"在跑"了
+
+
+async def _report_status_map(session: AsyncSession, reports: list) -> dict:
+    """report_id -> {status, pendingManual, pendingAuto}。只算没有 completed_at 的那些。"""
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import func, select
+
+    from app.models.report import TestReportScenario
+
+    open_ids = [r.id for r in reports if not r.completed_at]
+    if not open_ids:
+        return {}
+
+    rows = (await session.execute(
+        select(TestReportScenario.report_id, TestReportScenario.execution_type,
+               TestReportScenario.status, func.count())
+        .where(TestReportScenario.report_id.in_(open_ids),
+               TestReportScenario.status.in_(["pending", "running"]))
+        .group_by(TestReportScenario.report_id, TestReportScenario.execution_type,
+                  TestReportScenario.status)
+    )).all()
+
+    agg: dict = {}
+    for rid, exec_type, st, n in rows:
+        a = agg.setdefault(rid, {"manual": 0, "auto": 0, "running": 0})
+        if st == "running":
+            a["running"] += n
+        if exec_type == "manual":
+            a["manual"] += n
+        else:
+            a["auto"] += n
+
+    now = datetime.now(timezone.utc)
+    out = {}
+    for r in reports:
+        if r.completed_at:
+            continue
+        a = agg.get(r.id, {"manual": 0, "auto": 0, "running": 0})
+        fresh = r.executed_at and (now - r.executed_at) < timedelta(minutes=_STALE_AFTER_MIN)
+        if a["running"] or (a["auto"] and fresh):
+            status = "running"
+        elif a["manual"] and not a["auto"]:
+            status = "pending_manual"
+        elif a["auto"] or a["manual"]:
+            status = "stalled"          # 该自己跑完的没跑完，也没人在跑了
+        else:
+            # 一条待办都不剩却没盖 completed_at —— 结果是全的，只是收尾那一步没落
+            status = "done_unsealed"
+        out[r.id] = {"status": status, "pendingManual": a["manual"], "pendingAuto": a["auto"]}
+    return out
+
+
 @reports_router.get("")
 async def list_reports(
     project_id: uuid.UUID,
@@ -665,9 +724,16 @@ async def list_reports(
         {r[0].id: r[0].report_type for r in rows},
     )
 
+    status_map = await _report_status_map(session, [r[0] for r in rows])
+
     data = []
     for report, plan_name, plan_type, test_type, env_name in rows:
+        st = status_map.get(report.id)
         data.append({
+            # 「已完成 / 在跑 / 等人录 / 断了」四种，前端别再自己按 completedAt 猜
+            "status": "completed" if report.completed_at else (st or {}).get("status", "running"),
+            "pendingManual": (st or {}).get("pendingManual", 0),
+            "pendingAuto": (st or {}).get("pendingAuto", 0),
             # 「类型」说的是从哪个入口发起的，不是跑的什么 —— 两件事此前挤在一列里，
             # 结果报告页清一色「接口测试」，用例页清一色 UI，看着像在自相矛盾。
             "execKind": exec_kinds.get(report.id),
