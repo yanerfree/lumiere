@@ -801,6 +801,41 @@ async def rename_folder(
     return {"data": result}
 
 
+@folders_router.get("/splits")
+async def list_folder_splits(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    """同一个模块被摆到两处的（顶层一个、某模块下一个）。页面顶上那条提示读它。"""
+    return {"data": await folder_service.list_split_modules(session, branch_id)}
+
+
+@folders_router.patch("/{folder_id}/parent")
+async def move_folder(
+    project_id: uuid.UUID,
+    branch_id: uuid.UUID,
+    folder_id: uuid.UUID,
+    parent_id: uuid.UUID | None = Query(default=None, alias="parentId"),
+    merge: bool = Query(default=False),
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer")),
+):
+    """挪模块的位置（不传 parentId = 挪回顶层）。目标已有同名模块时要 `merge=true`。
+
+    合并是**改用例归属**的动作，所以第一次调用只回一句"会搬 N 条，确认？"
+    （HTTP 409 + code=FOLDER_MERGE_REQUIRED），人点过第二次才真搬。
+    """
+    result = await folder_service.move_folder(session, branch_id, folder_id, parent_id, merge=merge)
+    await write_audit_log(session, action="move", target_type="case_folder",
+                          target_id=folder_id, target_name=result["name"],
+                          changes={"path": result["path"], "mergedInto": result["mergedInto"],
+                                   "movedCases": result["movedCases"]})
+    await session.commit()
+    return {"data": result}
+
+
 @folders_router.delete("/{folder_id}")
 async def delete_folder(
     project_id: uuid.UUID,

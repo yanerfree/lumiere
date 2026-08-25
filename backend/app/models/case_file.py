@@ -27,7 +27,9 @@ class AIUsageLog(Base):
     __tablename__ = "ai_usage_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid())
-    project_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False)
+    # 可空 = 全局调用（工具箱的正则生成走 resolve_ai_config(None, ...)，不属于任何项目）。
+    # 见迁移 zzr0aiusage：不放开的话页面只能说"正则生成从没被调用过"，而那是错的。
+    project_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True)
     skill_name: Mapped[str] = mapped_column(String(50), nullable=False)
     model: Mapped[str | None] = mapped_column(String(100), nullable=True)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)

@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 from sqlalchemy import delete as sa_delete, func as sa_func, select, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, ValidationError
 from app.core.audit import audit_log
-from app.models.case import Case
+from app.models.case import Case, CaseFolder
 from app.models.plan import PlanCase
 from app.models.report import TestReportScenario
 from app.schemas.case import CreateCaseRequest, UpdateCaseRequest
@@ -212,8 +212,21 @@ async def update_case(
     if data.api_status is not None:
         case.api_status = data.api_status
 
-    # module 变更时更新 folder
-    if data.module is not None:
+    # 换模块。两条路，**folder_id 优先**：
+    #   · folder_id —— 人在页面上从目录树里挑的那个目录，精确、任意层级、不建新目录。
+    #   · module/submodule —— CC 回推走的名字路，目录不存在会顺手建（那是它要的行为）。
+    # 优先 id 的理由：详情页保存会把整份表单原样回传（含没动的 module/submodule），
+    # 按名字那条路会拿两层名字覆盖掉刚挑的三层目录，用例又跳回上一级。
+    if data.folder_id is not None:
+        folder = (await session.execute(
+            select(CaseFolder).where(CaseFolder.id == data.folder_id,
+                                     CaseFolder.branch_id == case.branch_id)
+        )).scalar_one_or_none()
+        if folder is None:
+            # 别静默忽略 —— 挪不动却回 200，人会以为挪好了
+            raise NotFoundError(code="FOLDER_NOT_FOUND", message="目标模块不存在或不在本分支")
+        case.folder_id = folder.id
+    elif data.module is not None:
         folder_id, _, _ = await _get_or_create_folder(
             session, case.branch_id, data.module, data.submodule
         )
@@ -444,6 +457,19 @@ async def batch_cases(
     succeeded = 0
     failed = 0
     errors = []
+
+    # move 必须带一个**本分支存在**的目录。不校验的话 folder_id=None 会把整批
+    # 用例的归属直接清空（页面上它们从模块树里集体消失，只能从「全部」里翻），
+    # 而调用方收到的是 200 + succeeded=N —— 一次手滑的代价是"用例不见了"。
+    if action == "move":
+        if folder_id is None:
+            raise ValidationError(code="FOLDER_REQUIRED", message="移动用例必须指定目标模块")
+        target = (await session.execute(
+            select(CaseFolder).where(CaseFolder.id == folder_id,
+                                     CaseFolder.branch_id == branch_id)
+        )).scalar_one_or_none()
+        if target is None:
+            raise NotFoundError(code="FOLDER_NOT_FOUND", message="目标模块不存在或不在本分支")
 
     for cid in case_ids:
         # 恢复操作要找的恰恰是**已软删**的行，别的操作只认活着的

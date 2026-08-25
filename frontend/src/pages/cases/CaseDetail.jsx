@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { Card, Tag, Button, Input, Select, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table, Alert } from 'antd'
+import { Card, Tag, Button, Input, Select, TreeSelect, Space, Modal, Drawer, message, Tabs, Switch, Popover, Tooltip, Spin, Empty, Table, Alert } from 'antd'
 import {
   ArrowLeftOutlined, PlayCircleOutlined, SaveOutlined,
   PlusOutlined, DeleteOutlined, HolderOutlined,
@@ -544,6 +544,17 @@ function DropdownList({ items, activeKey, onSelect }) {
       ))}
     </div>
   )
+}
+
+// 快照按 key 排序序列化。**不能用裸 JSON.stringify** —— 它按插入顺序出串，
+// 而"存下来的那份"和"当前这份"是两处分别手写的对象字面量：`targetLevel` 一个排在
+// lifecycleStatus 后面、一个排在末尾，两个串就永远不等 → 页面恒判「有未保存的修改」，
+// 点返回必弹确认框（本来就是为这个写的注释，最后还是被键序坑了一次）。
+function stableSnap(obj) {
+  return JSON.stringify(obj, (_k, v) =>
+    (v && typeof v === 'object' && !Array.isArray(v))
+      ? Object.keys(v).sort().reduce((a, k) => { a[k] = v[k]; return a }, {})
+      : v)
 }
 
 function findFolderPath(tree, targetId) {
@@ -2185,6 +2196,10 @@ export default function CaseDetail() {
   const [type, setType] = useState('api')
   const [priority, setPriority] = useState('P1')
   const [module, setModule] = useState('')
+  // 用例挂在哪个目录。**这是"换模块"真正的字段** —— 页面原来只把它渲染成一行灰字
+  // （ReadonlyProp），于是一条用例建错了模块就再也挪不动：改名改的是模块自己的名字，
+  // 批量里也没有"移动"，只能去数据库改 folder_id。
+  const [folderId, setFolderId] = useState(null)
   const [subModule, setSubModule] = useState('')
   const [automationStatus, setAutomationStatus] = useState('pending')
   const [lifecycleStatus, setLifecycleStatus] = useState('draft')
@@ -2302,6 +2317,7 @@ export default function CaseDetail() {
 
       const allFolders = folderRes.data || []
       setFolders(allFolders)
+      setFolderId(c.folderId || null)
       const folderPath = c.folderId ? findFolderPath(allFolders, c.folderId) : ''
       let newModule = '', newSubModule = ''
       if (folderPath) {
@@ -2323,6 +2339,7 @@ export default function CaseDetail() {
         uiScenario: c.uiScenario || null,
         isApiTemplate: c.isApiTemplate || false,
         isUiTemplate: c.isUiTemplate || false,
+        folderId: c.folderId || null,
         lifecycleStatus: c.lifecycleStatus || 'draft',
         targetLevel: c.targetLevel || 'spec',
         manualStatus: c.manualStatus || 'draft',
@@ -2355,7 +2372,7 @@ export default function CaseDetail() {
       setIsApiTemplate(vals.isApiTemplate); setIsUiTemplate(vals.isUiTemplate)
       setTags(vals.tags); setBugRefs(vals.bugRefs)
 
-      savedRef.current = JSON.stringify(vals)
+      savedRef.current = stableSnap(vals)
 
       // Check if there's an active script in the scripts table
       try {
@@ -2391,8 +2408,18 @@ export default function CaseDetail() {
     finally { setLoading(false) }
   }
 
-  const currentSnap = JSON.stringify({
-    title, type, priority, module, subModule, automationStatus, flaky,
+  // 目录树摊成 TreeSelect（title 带全路径，同名子模块才分得清是谁下面的那个）
+  const buildFolderSelect = (nodes, parentPath = '') => (nodes || []).map(n => {
+    const full = parentPath ? `${parentPath} / ${n.name}` : n.name
+    return {
+      value: n.id, title: full,
+      children: n.children?.length ? buildFolderSelect(n.children, full) : undefined,
+    }
+  })
+  const folderSelectData = buildFolderSelect(folders)
+
+  const currentSnap = stableSnap({
+    title, type, priority, module, subModule, folderId, automationStatus, flaky,
     preconditions, expectedResult, scriptRefFile, scriptRefFunc, remark,
     steps, variablesUsed, apiScenario, uiScenario,
     isApiTemplate, isUiTemplate,
@@ -2467,7 +2494,7 @@ export default function CaseDetail() {
   const handleSave = async () => {
     try {
       await api.put(`/projects/${projectId}/branches/${branchId}/cases/${caseId}`, {
-        title, type, priority, module, subModule, automationStatus,
+        title, type, priority, module, subModule, folderId, automationStatus,
         isFlaky: flaky, preconditions, expectedResult, scriptRefFile, scriptRefFunc,
         remark, steps, variablesUsed, apiScenario, uiScenario,
         isApiTemplate, isUiTemplate,
@@ -2475,7 +2502,7 @@ export default function CaseDetail() {
         tags, bugRefs,
       })
       savedRef.current = currentSnap
-      setCaseData(prev => ({ ...prev }))
+      setCaseData(prev => ({ ...prev, folderId }))
       message.success('保存成功')
     } catch { message.error('保存失败') }
   }
@@ -2530,7 +2557,37 @@ export default function CaseDetail() {
           <InlineProp icon={<ApiOutlined />} value={type?.toUpperCase()} color={type==='api'?'#0ea5a0':'#0ea5a0'} bg={type==='api'?'#e0f7f6':'#e0f7f6'}>
             <DropdownList activeKey={type} onSelect={setType} items={['api','e2e'].map(t => ({ key: t, label: t.toUpperCase() }))} />
           </InlineProp>
-          <ReadonlyProp icon={<AppstoreOutlined />} label="模块" value={[module, subModule].filter(Boolean).join(' / ') || '未分类'} />
+          {/* 模块**可改**。原来这里是 ReadonlyProp：一条用例建错了模块就再也挪不动
+              —— 改名改的是模块自己的名字，批量操作里也没有"移动"，只能去库里改
+              folder_id。用户的原话是"现在是模块A，我想调整到模块B中，无法修改"。
+              挑的是**目录树上已存在的节点**（任意层级），不按名字新建目录。 */}
+          <InlineProp icon={<AppstoreOutlined />}
+            value={`模块 ${[module, subModule].filter(Boolean).join(' / ') || '未分类'}`}>
+            <div style={{ width: 260 }}>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6 }}>把这条用例挪到：</div>
+              <TreeSelect
+                style={{ width: '100%' }}
+                size="small"
+                value={folderId || undefined}
+                placeholder="选择模块 / 子模块"
+                treeDefaultExpandAll
+                showSearch
+                treeNodeFilterProp="title"
+                treeData={folderSelectData}
+                onChange={(v) => {
+                  setFolderId(v || null)
+                  const path = v ? findFolderPath(folders, v) : ''
+                  const parts = (path || '').split('/')
+                  setModule(parts.slice(0, -1).join('/') || parts[0] || '')
+                  setSubModule(parts.length > 1 ? parts[parts.length - 1] : '')
+                }}
+              />
+              <div style={{ fontSize: 11, color: '#86909c', marginTop: 8, lineHeight: 1.6 }}>
+                挪动<b>不改用例编号</b>（TC-XXX 是回推/脚本/报告共用的锚点）。
+                点右上角「保存」才生效。
+              </div>
+            </div>
+          </InlineProp>
           <InlineProp icon={<ThunderboltOutlined />} value={lifecycleMap[lifecycleStatus]?.label || lifecycleStatus}
             color={lifecycleMap[lifecycleStatus]?.color} bg={lifecycleMap[lifecycleStatus]?.bg}>
             <DropdownList activeKey={lifecycleStatus} onSelect={setLifecycleStatus}

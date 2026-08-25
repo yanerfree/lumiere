@@ -109,8 +109,14 @@ export default function CaseManagement() {
   // 新建模块
   const [folderModalOpen, setFolderModalOpen] = useState(false)
   const [bugFilter, setBugFilter] = useState('')
-  const [renamingFolder, setRenamingFolder] = useState(null)   // {id, name}
+  // 「模块设置」= 改名 + 挪位置（含合并）。原来只有改名 —— 于是
+  // 「顶层一个、订阅管理下一个」这种裂口在界面上无解：改名解决不了归属，
+  // 删又只允许空目录（那个有 1 条用例），只能去数据库里改。
+  const [renamingFolder, setRenamingFolder] = useState(null)   // {id, name, parentId}
   const [renameValue, setRenameValue] = useState('')
+  const [moveParentId, setMoveParentId] = useState(undefined)  // undefined=不动，null=挪回顶层
+  const [splits, setSplits] = useState([])                     // 同名模块被摆到两处的
+  const [deprecatePending, setDeprecatePending] = useState(0)  // 本分支挂着几条待废审
   const [folderForm] = Form.useForm()
   const [savingFolder, setSavingFolder] = useState(false)
 
@@ -156,6 +162,22 @@ export default function CaseManagement() {
       const res = await api.get(`/projects/${projectId}/branches/${globalBranchId}/folders`)
       setFolderTree(res.data || [])
     } catch { /* */ }
+    // 存量裂口：新建那一侧已经拦住了，但**没人会想起来去搜一遍已经裂了的**
+    try {
+      const s = await api.get(`/projects/${projectId}/branches/${globalBranchId}/folders/splits`)
+      setSplits(s.data || [])
+    } catch { /* 拉不到就当没有，不挡页面 */ }
+  }, [projectId, globalBranchId])
+
+  // 「待废审」的数量。按**整个分支**查，不能拿当前页的行去数 ——
+  // 待办在第 2 页的话，这一列就永远不会自动出现。
+  const fetchDeprecatePending = useCallback(async () => {
+    if (!projectId || !globalBranchId) return
+    try {
+      const res = await api.get(
+        `/projects/${projectId}/branches/${globalBranchId}/deprecate-pending`, { silent: true })
+      setDeprecatePending((res.data || []).length)
+    } catch { setDeprecatePending(0) }
   }, [projectId, globalBranchId])
 
   const fetchCases = useCallback(async () => {
@@ -191,6 +213,7 @@ export default function CaseManagement() {
 
   useEffect(() => { fetchFolders() }, [fetchFolders])
   useEffect(() => { fetchCases() }, [fetchCases])
+  useEffect(() => { fetchDeprecatePending() }, [fetchDeprecatePending])
 
   // 「审核中」是派生的，从队列里查（§12 ④）。**队列空了就不轮询** ——
   // 没有活跃批次时每 5 秒打一次接口纯属白烧，而列表页是常驻页面。
@@ -346,6 +369,121 @@ export default function CaseManagement() {
     }
   })
   const parentTreeSelectData = buildParentTreeSelect(folderTree)
+
+  // 「模块设置」里可选的上级：剔掉自己和自己的子树（挪进去等于把这一支摘下来），
+  // 也剔掉同名的那个（挪进去只是多套一层空壳，合并要选它的上级）。
+  const buildMoveTargets = (nodes, parentPath = '') => nodes.reduce((acc, n) => {
+    if (!renamingFolder) return acc
+    if (n.id === renamingFolder.id) return acc                       // 自己（连同子树）
+    const norm = (x) => (x || '').replace(/[\s\-/_:：·|]/g, '').toUpperCase()
+    if (norm(n.name) === norm(renamingFolder.name)) return acc       // 同名那个
+    const fullPath = parentPath ? `${parentPath} / ${n.name}` : n.name
+    acc.push({
+      value: n.id,
+      title: fullPath,
+      children: n.children?.length > 0 ? buildMoveTargets(n.children, fullPath) : undefined,
+    })
+    return acc
+  }, [])
+  const moveTargetTreeData = buildMoveTargets(folderTree)
+
+  // ---- 模块设置：改名 + 挪位置（含合并）----
+  //
+  // 两个动作分两个请求，**改名先做**：先改名再挪，第二步撞同名时人看到的
+  // 提示里是新名字，说的和他刚做的事对得上。反过来先挪成功、改名失败，
+  // 人会以为整件事都没生效（而它挪了一半）。
+  const saveFolderSettings = async (confirmMerge) => {
+    if (!renamingFolder) return
+    const name = (renameValue || '').trim()
+    if (!name) { message.warning('名称不能为空'); return }
+    const wantMove = moveParentId !== undefined && moveParentId !== (renamingFolder.parentId || null)
+    const msgs = []
+
+    if (name !== renamingFolder.name) {
+      try {
+        const r = await api.patch(
+          `/projects/${projectId}/branches/${globalBranchId}/folders/${renamingFolder.id}?name=${encodeURIComponent(name)}`)
+        const d = r?.data || {}
+        msgs.push(`已改名为「${name}」`
+          + (d.childFoldersUpdated ? `，子模块 ${d.childFoldersUpdated} 个跟着改` : '')
+          + (d.apiTestFoldersRenamed ? `，接口场景目录 ${d.apiTestFoldersRenamed} 个跟着改` : ''))
+      } catch { fetchFolders(); return }   // request.js 已经把错误显示出来了
+    }
+
+    if (wantMove) {
+      const q = new URLSearchParams()
+      if (moveParentId) q.set('parentId', moveParentId)
+      if (confirmMerge) q.set('merge', 'true')
+      try {
+        // silent：目标已有同名时后端回的 409 是**一句待确认的话**，不是错误。
+        // 先弹红 toast 再弹确认框，人会以为已经失败了。
+        const r = await api.patch(
+          `/projects/${projectId}/branches/${globalBranchId}/folders/${renamingFolder.id}/parent?${q}`,
+          undefined, { silent: !confirmMerge })
+        const d = r?.data || {}
+        msgs.push(d.mergedInto
+          ? `已合并到「${d.mergedInto.path}」，搬过去 ${d.movedCases} 条用例`
+          : `已挪到「${d.path}」`)
+      } catch (e) {
+        // 目标已有同名 → 后端回 409 + 说清会搬几条，这里问一次再重发 merge=true。
+        // **不默默合并**：合并改的是用例归属，人得先看到数量。
+        if (e?.code === 'FOLDER_MERGE_REQUIRED') {
+          Modal.confirm({
+            title: '合并模块',
+            content: e.message,
+            okText: '确认合并',
+            cancelText: '取消',
+            onOk: () => saveFolderSettings(true),
+          })
+        } else if (!confirmMerge) {
+          message.error(e?.message || '挪动失败')
+        }
+        fetchFolders()
+        return
+      }
+    }
+
+    if (msgs.length) message.success(msgs.join('；'))
+    setRenamingFolder(null)
+    setMoveParentId(undefined)
+    fetchFolders()
+    fetchCases()
+  }
+
+  // 一键把裂开的那两处并回一处。**先问再做** —— 合并会改用例的归属目录。
+  const mergeSplit = (sp) => {
+    const target = (sp.under || [])[0]
+    if (!target) return
+    Modal.confirm({
+      title: `合并「${sp.name}」`,
+      content: (
+        <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+          把<b>顶层</b>的「{sp.name}」里那 {sp.top.caseCount} 条用例，
+          并到「{target.parent} / {sp.name}」（已有 {target.caseCount} 条）里。<br />
+          <span style={{ color: '#86909c', fontSize: 12 }}>
+            <b>不新建任何目录</b>：用例直接改挂到那个已有模块下，<b>编号不变</b>；
+            顶层那个空模块删掉。
+            以后 Claude Code 还按老模块名回推也会落到合并后的位置。
+          </span>
+        </div>
+      ),
+      okText: '确认合并',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          // parentId 要传**同名那个的上级**（订阅管理），不是同名那个自己 ——
+          // 传成它自己会挪成「订阅管理/跨租户订阅/跨租户订阅」，套一层空壳。
+          // 挪到上级、路径撞上同名，才会走合并（用例并过去、空模块删掉）。
+          const q = new URLSearchParams({ merge: 'true' })
+          if (target.parentId) q.set('parentId', target.parentId)
+          const r = await api.patch(
+            `/projects/${projectId}/branches/${globalBranchId}/folders/${sp.top.id}/parent?${q}`)
+          message.success(`已合并，搬过去 ${r?.data?.movedCases ?? 0} 条用例`)
+          fetchFolders(); fetchCases()
+        } catch { /* request.js 显示错误 */ }
+      },
+    })
+  }
 
   // ---- 新建用例 ----
   const handleCreateCase = async () => {
@@ -703,11 +841,12 @@ export default function CaseManagement() {
   }
 
   // ---- 目录树 ----
-  const buildTreeData = (nodes) => nodes.map(n => ({
+  const buildTreeData = (nodes, parentId = null) => nodes.map(n => ({
     title: `${n.name} (${n.caseCount})`,
     rawName: n.name,          // title 里拼了计数，改名弹窗要的是原名
+    parentId,                 // 模块设置弹窗要回显"它现在挂在谁下面"
     key: n.id,
-    children: n.children?.length > 0 ? buildTreeData(n.children) : undefined,
+    children: n.children?.length > 0 ? buildTreeData(n.children, n.id) : undefined,
   }))
 
   const treeData = buildTreeData(folderTree)
@@ -721,7 +860,9 @@ export default function CaseManagement() {
   const allColumns = [
     { key: 'caseCode', title: '用例ID', dataIndex: 'caseCode', width: 104, defaultVisible: true,
       render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c', whiteSpace: 'nowrap' }}>{v}</span> },
-    { key: 'title', title: '标题', dataIndex: 'title', width: 176, ellipsis: { showTitle: false }, defaultVisible: true, alwaysOn: true, render: (v, row) => (
+    // 标题吃掉「类型」腾出来的宽度：176 → 240。这一列是唯一"读内容"的列，
+    // 之前 14 个字就截断，一屏用例基本靠 hover 才知道在测什么。
+    { key: 'title', title: '标题', dataIndex: 'title', width: 240, ellipsis: { showTitle: false }, defaultVisible: true, alwaysOn: true, render: (v, row) => (
       <Tooltip title={v} placement="topLeft" mouseEnterDelay={0.3}><span
         // 必须 stopPropagation：行上 onRow 也挂了同一个 navigate，而它的放行判断只认
         // .ant-btn/.ant-checkbox-wrapper/a —— 这里是裸 span，两个 handler 都会跑，
@@ -741,7 +882,9 @@ export default function CaseManagement() {
     // 存储值 e2e/api 一直是这个意思，只是从没写清楚过，于是被当成
     // 「做不做 UI」在用（实测 6 条全是场景，3 条被标成了 api）。
     // 做不做 UI 是 target_level 的事，跟类型无关 —— 一条单接口用例也可能要验页面报错提示。
-    { key: 'type', title: '类型', dataIndex: 'type', width: 54, defaultVisible: true,
+    // **默认收起**（2026-08-24 用户裁定）：库里几乎清一色是「场景」——
+    // 一列里 23 行写着同一个词，它就不再是信息，只是宽度。要看的人在齿轮里开。
+    { key: 'type', title: '类型', dataIndex: 'type', width: 54, defaultVisible: false,
       render: v => (
         <Tooltip title={<span style={{ fontSize: 12 }}>
           场景：验证一个完整功能，多步编排。<br />
@@ -892,7 +1035,24 @@ export default function CaseManagement() {
     //
     // **一条一条点，不做批量。** 误废一条用例，那块功能就再没人测了，
     // 而且永远不报错 —— 批量按钮的存在本身就是在鼓励不看证据就点过去。
-    { key: 'deprecateStatus', title: '废审', dataIndex: 'deprecateStatus', width: 62, align: 'center', defaultVisible: true, render: (v, row) => {
+    // 列名原来只有「废审」两个字，没有任何地方解释它是什么（用户直接问了
+    // "废审是什么意思，干嘛用的"）。两处一起改：
+    //   ① 标题写全「废弃审核」+ 悬浮说清它问的是哪件事；
+    //   ② **没有待废审的时候默认不显示** —— 平时整列全是「—」，
+    //      纯占宽度；真有人/CC 提请废弃时自动出现（见 deprecatePending）。
+    { key: 'deprecateStatus', dataIndex: 'deprecateStatus', width: 76, align: 'center',
+      defaultVisible: false,
+      title: (
+        <Tooltip title={<span style={{ fontSize: 12 }}>
+          废弃审核：有人（或 Claude Code）提请「这个场景在新版本上已经不存在了，
+          这条用例该废掉」，等你拍板。<br />
+          审的是<b>「这个场景还存不存在」</b>，不是「这条用例写得对不对」（那是「审核」那一列）。<br />
+          有待办时这一列会自动出现；平时可以在右上角齿轮里打开。
+        </span>}>
+          <span style={{ borderBottom: '1px dotted #c9cdd4' }}>废弃审核</span>
+        </Tooltip>
+      ),
+      render: (v, row) => {
       if (row.lifecycleStatus === 'deprecated') return (
         <Tooltip title={<div style={{ fontSize: 12, maxWidth: 340 }}>
           <div>已废弃 · {(row.deprecateReason?.decidedBy === 'ai' ? 'AI 批准' : '人工批准')}</div>
@@ -1010,7 +1170,10 @@ export default function CaseManagement() {
 
     { ...timeColumn({ key: 'createdAt', title: '创建时间' }), defaultVisible: false },
     { ...timeColumn({ key: 'updatedAt', title: '更新时间' }), defaultVisible: true },
-    { key: 'actions', title: '操作', width: statusFilter === 'deleted' ? 128 : 80, align: 'center', defaultVisible: true, fixed: 'right', render: (_, row) => (
+    // 操作列。原来两个图标各带一块**实心色底**（青底 + 红底）——
+    // 一行里最扎眼的东西成了"复制/删除"，而它们是这一行最不常点的两个按钮，
+    // 还各占 30px。改成默认无底色的灰图标，hover 才上色：常态安静、要用时找得到。
+    { key: 'actions', title: '操作', width: statusFilter === 'deleted' ? 124 : 64, align: 'center', defaultVisible: true, fixed: 'right', render: (_, row) => (
       statusFilter === 'deleted' ? (
         <Space size={2}>
         {/* 误删一条就得整条重写，那这一步缓冲就白设了 */}
@@ -1034,7 +1197,7 @@ export default function CaseManagement() {
         </Popconfirm>
         </Space>
       ) : (
-        <Space size={6}>
+        <Space size={2}>
           <Tooltip title="复制用例">
             <span
               onClick={async (e) => {
@@ -1045,9 +1208,9 @@ export default function CaseManagement() {
                   fetchCases()
                 } catch { message.error('复制失败') }
               }}
-              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 26, borderRadius: 6, cursor: 'pointer', color: '#0ea5a0', background: 'rgba(14,165,160,0.08)', transition: 'all 0.2s' }}
-              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(14,165,160,0.18)'; e.currentTarget.style.transform = 'scale(1.08)' }}
-              onMouseLeave={e => { e.currentTarget.style.background = 'rgba(14,165,160,0.08)'; e.currentTarget.style.transform = 'scale(1)' }}
+              style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, cursor: 'pointer', color: '#a9b0bb', background: 'transparent', transition: 'all 0.15s' }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(14,165,160,0.12)'; e.currentTarget.style.color = '#0ea5a0' }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#a9b0bb' }}
             ><CopyOutlined style={{ fontSize: 13 }} /></span>
           </Tooltip>
           <Popconfirm title="确定删除此用例？" onConfirm={async () => {
@@ -1061,9 +1224,9 @@ export default function CaseManagement() {
             <Tooltip title="删除用例">
               <span
                 onClick={e => e.stopPropagation()}
-                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 26, borderRadius: 6, cursor: 'pointer', color: '#e8453c', background: 'rgba(232,69,60,0.06)', transition: 'all 0.2s' }}
-                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(232,69,60,0.15)'; e.currentTarget.style.transform = 'scale(1.08)' }}
-                onMouseLeave={e => { e.currentTarget.style.background = 'rgba(232,69,60,0.06)'; e.currentTarget.style.transform = 'scale(1)' }}
+                style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 6, cursor: 'pointer', color: '#a9b0bb', background: 'transparent', transition: 'all 0.15s' }}
+                onMouseEnter={e => { e.currentTarget.style.background = 'rgba(232,69,60,0.12)'; e.currentTarget.style.color = '#e8453c' }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = '#a9b0bb' }}
               ><DeleteOutlined style={{ fontSize: 13 }} /></span>
             </Tooltip>
           </Popconfirm>
@@ -1077,8 +1240,14 @@ export default function CaseManagement() {
   )
   const [columnSettingOpen, setColumnSettingOpen] = useState(false)
 
+  // 有待废审就自动把那一列显示出来。**没有它这个功能等于不存在** ——
+  // 默认收起 + 只有 CC 会提请，人永远不知道该去齿轮里打开哪一列。
+  const effectiveColumnKeys = (deprecatePending > 0 && !visibleColumnKeys.includes('deprecateStatus'))
+    ? [...visibleColumnKeys, 'deprecateStatus']
+    : visibleColumnKeys
+
   const columns = [
-    ...allColumns.filter(c => c.alwaysOn || visibleColumnKeys.includes(c.key)),
+    ...allColumns.filter(c => c.alwaysOn || effectiveColumnKeys.includes(c.key)),
     {
       title: (
         <Tooltip title="列设置">
@@ -1122,6 +1291,28 @@ export default function CaseManagement() {
                 </Tooltip>
               </Space>
             }>
+            {/* 「同一个模块摆在两处」的存量裂口。新建那一侧已经拦住了（后端会硬拒），
+                但**存量没人会想起来去搜一遍** —— 网关那个项目里顶层的「本租户订阅(0)」
+                和「订阅管理/本租户订阅(8)」并存了半个月，谁看导航都以为是两个模块。
+                点一下直接把用例少的那边并过去，不用人自己去想该怎么搬。 */}
+            {splits.length > 0 && (
+              <div style={{ margin: '0 4px 8px', padding: '8px 10px', borderRadius: 10,
+                            background: 'rgba(250,173,20,0.10)', border: '1px solid rgba(250,173,20,0.25)' }}>
+                <div style={{ fontSize: 12, color: '#d48806', fontWeight: 600, marginBottom: 4 }}>
+                  {splits.length} 个模块被摆到了两处
+                </div>
+                {splits.map(sp => {
+                  const target = (sp.under || [])[0]
+                  return (
+                    <div key={sp.name} style={{ fontSize: 12, color: '#4e5969', lineHeight: 1.6, marginTop: 4 }}>
+                      「{sp.name}」：顶层 {sp.top.caseCount} 条 · 「{target?.parent}」下 {target?.caseCount || 0} 条
+                      <Button type="link" size="small" style={{ padding: '0 4px', fontSize: 12 }}
+                        onClick={() => mergeSplit(sp)}>并到「{target?.parent}」下</Button>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
             {treeData.length > 0 ? (
               <Tree
                 treeData={treeData}
@@ -1134,9 +1325,14 @@ export default function CaseManagement() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={node.title}>{node.title}</span>
                     <span style={{ flexShrink: 0, whiteSpace: 'nowrap' }}>
-                    <Tooltip title="改名">
+                    <Tooltip title="模块设置（改名 / 挪位置 / 合并）">
                       <Button type="text" size="small" icon={<EditOutlined />}
-                        onClick={e => { e.stopPropagation(); setRenamingFolder({ id: node.key, name: node.rawName }); setRenameValue(node.rawName) }}
+                        onClick={e => {
+                          e.stopPropagation()
+                          setRenamingFolder({ id: node.key, name: node.rawName, parentId: node.parentId })
+                          setRenameValue(node.rawName)
+                          setMoveParentId(undefined)
+                        }}
                         style={{ color: '#c9cdd4', opacity: 0.5, fontSize: 11 }}
                         onMouseEnter={e => e.currentTarget.style.opacity = 1}
                         onMouseLeave={e => e.currentTarget.style.opacity = 0.5} />
@@ -1400,6 +1596,25 @@ export default function CaseManagement() {
                   }}
                   options={['P0','P1','P2','P3'].map(p => ({ value: p, label: p }))}
                 />
+                {/* 换模块。后端的 batch action=move 一直在，只是**页面从来没给过入口** ——
+                    于是"这条建错模块了，挪到 B 去"在界面上做不到（详情页那里也只是灰字）。
+                    整批一起挪比一条条开详情页现实：建错模块通常是一批一起错的。 */}
+                <TreeSelect size="small" placeholder="移动到模块" style={{ width: 150 }}
+                  value={null}
+                  treeData={parentTreeSelectData}
+                  treeDefaultExpandAll
+                  showSearch
+                  treeNodeFilterProp="title"
+                  onChange={async (val) => {
+                    if (!val) return
+                    try {
+                      await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/batch`,
+                        { caseIds: selectedRowKeys, action: 'move', folderId: val })
+                      message.success(`已移动 ${selectedRowKeys.length} 条用例（编号不变）`)
+                      setSelectedRowKeys([]); fetchCases(); fetchFolders()
+                    } catch { /* request.js 显示错误 */ }
+                  }}
+                />
                 <Popconfirm title={`确定删除 ${selectedRowKeys.length} 条用例？`} onConfirm={async () => {
                   try {
                     await api.post(`/projects/${projectId}/branches/${globalBranchId}/cases/batch`, {
@@ -1618,38 +1833,45 @@ export default function CaseManagement() {
         </Form>
       </Modal>
 
-      {/* 模块改名 */}
+      {/* 模块设置：改名 + 挪位置（目标已有同名 → 合并） */}
       <Modal
-        title={`模块改名 · ${renamingFolder?.name || ''}`}
+        title={`模块设置 · ${renamingFolder?.name || ''}`}
         open={!!renamingFolder}
-        onCancel={() => setRenamingFolder(null)}
+        onCancel={() => { setRenamingFolder(null); setMoveParentId(undefined) }}
         okText="保存"
         cancelText="取消"
-        width={420}
-        onOk={async () => {
-          const name = (renameValue || '').trim()
-          if (!name) { message.warning('名称不能为空'); return }
-          if (name === renamingFolder.name) { setRenamingFolder(null); return }
-          try {
-            const r = await api.patch(
-              `/projects/${projectId}/branches/${globalBranchId}/folders/${renamingFolder.id}?name=${encodeURIComponent(name)}`)
-            const d = r?.data || {}
-            message.success(`已改名为「${name}」`
-              + (d.childFoldersUpdated ? `，子模块 ${d.childFoldersUpdated} 个跟着改` : '')
-              + (d.apiTestFoldersRenamed ? `，接口场景目录 ${d.apiTestFoldersRenamed} 个跟着改` : ''))
-            setRenamingFolder(null)
-            fetchFolders()
-            fetchCases()
-          } catch { /* request.js 显示错误 */ }
-        }}
+        width={460}
+        onOk={() => saveFolderSettings(false)}
       >
-        <Input value={renameValue} onChange={e => setRenameValue(e.target.value)}
-          placeholder="如：LLM Providers、订阅管理" maxLength={100} autoFocus
-          onPressEnter={e => e.target.blur()} style={{ marginTop: 12 }} />
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>模块名称</div>
+          <Input value={renameValue} onChange={e => setRenameValue(e.target.value)}
+            placeholder="如：LLM Providers、订阅管理" maxLength={100} autoFocus
+            onPressEnter={e => e.target.blur()} />
+        </div>
+        <div style={{ marginTop: 14 }}>
+          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>
+            上级模块（清空 = 放到顶层）
+          </div>
+          <TreeSelect
+            style={{ width: '100%' }}
+            allowClear
+            placeholder="顶层"
+            value={(moveParentId === undefined ? renamingFolder?.parentId : moveParentId) || undefined}
+            onChange={(v) => setMoveParentId(v ?? null)}
+            // 自己、自己的子树、以及**同名的那个模块**都不能当上级：
+            // 前两个会把这一支从树上摘下来，最后一个只会套出一层空壳
+            // （想合并的话选它的上级，撞同名时会问你要不要并过去）。
+            treeData={moveTargetTreeData}
+            treeDefaultExpandAll
+          />
+        </div>
         {/* 编号不跟着改这件事必须写在这里 —— 人看到 TC-LLMPROVI- 还在，
             第一反应是"改漏了"，然后去手改编号，那才真出事。 */}
-        <div style={{ fontSize: 12, color: '#86909c', marginTop: 10, lineHeight: 1.7 }}>
-          子模块、列表模块列、导出、同名的接口场景目录都一起改。<br />
+        <div style={{ fontSize: 12, color: '#86909c', marginTop: 12, lineHeight: 1.7 }}>
+          改名：子模块、列表模块列、导出、同名的接口场景目录都一起改。<br />
+          挪位置：整支子模块跟着走；<b>目标位置已有同名模块时会先问你要不要合并</b>
+          （合并 = 用例改挂到那个模块下、空模块删掉）。<br />
           <b>用例编号不变</b>（如 TC-LLMPROVI-00001）—— 编号是 Claude Code 回推、
           脚本、报告共用的锚点，改了等于把已发出去的引用全断掉。
         </div>

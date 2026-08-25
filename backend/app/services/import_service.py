@@ -1,4 +1,5 @@
 """用例导入服务 — 解析 tea-cases.json 并导入到指定分支配置"""
+import logging
 import uuid
 from datetime import datetime, timezone
 
@@ -7,6 +8,8 @@ from app.core.audit import audit_log
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.case import Case, CaseFolder
+
+logger = logging.getLogger(__name__)
 
 
 async def _get_or_create_folder(
@@ -43,6 +46,15 @@ async def _get_or_create_folder(
         # 人在页面上把「LLM PROVIDERS」改成「模型供应商」之后，CC 手上还是旧词，
         # 直接建新目录的话同一个模块就裂成两个了。
         module_folder = await _by_former_name(session, branch_id, module_upper, None)
+    if module_folder is None:
+        # 顶层没有、别名也没有 → 看它是不是**已经被并到某个模块下面去了**。
+        #
+        # 没有这一步，合并等于白做：人在页面上把顶层的「跨租户订阅」并进
+        # 「订阅管理/跨租户订阅」，CC 手上还是 module="跨租户订阅"（写在它自己的
+        # 笔记和脚本里），下一次回推又在顶层建一个，裂口原地复活。
+        # **只认唯一命中**：两处以上叫这个名字时归属是真的说不清（规则 3 允许
+        # 不同父模块下同名），那就照旧在顶层建，让 intake_gate 的查重去提醒人。
+        module_folder = await _merged_elsewhere(session, branch_id, module_upper)
     if module_folder is None:
         module_folder = CaseFolder(
             branch_id=branch_id,
@@ -127,6 +139,29 @@ async def _by_former_name(session: AsyncSession, branch_id: uuid.UUID,
     )
     q = q.where(CaseFolder.parent_id == parent_id) if parent_id else q.where(CaseFolder.parent_id.is_(None))
     return (await session.execute(q)).scalars().first()
+
+
+async def _merged_elsewhere(session: AsyncSession, branch_id: uuid.UUID, name_upper: str):
+    """这个名字是不是已经作为**某个模块的子模块**存在了（唯一命中才认）。
+
+    命中的两种写法都要认：`path` 末段叫这个（正常合并后的样子），
+    或者别名里记着它（合并时 `_merge_into` 会把旧名挂到目标的 former_names 上）。
+    """
+    from sqlalchemy import or_
+
+    rows = (await session.execute(
+        select(CaseFolder).where(
+            CaseFolder.branch_id == branch_id,
+            CaseFolder.parent_id.isnot(None),
+            or_(CaseFolder.path.endswith("/" + name_upper),
+                CaseFolder.former_names.contains([name_upper])),
+        )
+    )).scalars().all()
+    if len(rows) != 1:
+        return None
+    logger.info("模块「%s」已并入「%s」，本次回推跟着并过去（不在顶层另建）",
+                name_upper, rows[0].path)
+    return rows[0]
 
 
 async def _next_case_code(

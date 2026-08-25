@@ -131,7 +131,13 @@ async function request(url, options = {}, _retried = false) {
     errMsg = errMsg || `请求失败 (${res.status})`
     // silent：常驻轮询用（顶栏服务状态等），失败别每隔几十秒弹一次 toast 刷屏
     if (!options.silent) message.error(errMsg)
-    return Promise.reject(new Error(errMsg))
+    // 业务错误码要带上。有些 409 不是"失败"而是"需要你确认一下"
+    // （模块合并会改用例归属，后端先回 FOLDER_MERGE_REQUIRED + 会搬几条），
+    // 调用方光有一句 message 没法分辨该弹确认框还是该报错。
+    const err = new Error(errMsg)
+    err.code = data?.error?.code
+    err.status = res.status
+    return Promise.reject(err)
   }
 
   return data
@@ -141,7 +147,7 @@ export const api = {
   get: (url, options) => request(url, options),
   post: (url, body) => request(url, { method: 'POST', body }),
   put: (url, body) => request(url, { method: 'PUT', body }),
-  patch: (url, body) => request(url, { method: 'PATCH', body }),
+  patch: (url, body, options) => request(url, { method: 'PATCH', body, ...options }),
   del: (url) => request(url, { method: 'DELETE' }),
   delete: (url) => request(url, { method: 'DELETE' }),
   download: async (url) => {

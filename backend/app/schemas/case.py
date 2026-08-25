@@ -36,6 +36,11 @@ class UpdateCaseRequest(BaseSchema):
     type: Literal["api", "e2e"] | None = None
     module: str | None = None
     submodule: str | None = None
+    # 直接指定目标目录。**用例换模块要的就是这个** —— module/submodule 只能表达两层，
+    # 而目录最深四层（「订阅管理/跨租户订阅/审批」这种挑不出来）；而且按名字走
+    # `_get_or_create_folder` 会**顺手建目录**，人在页面上挑的却是一个已经存在的目录，
+    # 建出个新的等于把用例挪到一个刚冒出来的空模块里。给 id 就没有这两个问题。
+    folder_id: uuid.UUID | None = None
     priority: Literal["P0", "P1", "P2", "P3"] | None = None
     preconditions: str | None = None
     steps: list[dict] | None = None
