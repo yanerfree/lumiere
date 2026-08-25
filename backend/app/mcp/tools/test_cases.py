@@ -436,8 +436,12 @@ async def update_case(
     `tags`：自由分拣词（`冒烟`、`需要真数据`、`等三方联调`），最多 20 个、每个 32 字内。
     别拿它表达状态或审核结论 —— 那两样有确定语义、驱动门禁，标签只用来筛。
 
-    `module` / `submodule`：**放错目录自己搬**，目录不存在会自动建。
-    只传 module 就搬到模块根下；两个都传就搬进子目录。
+    `module` / `submodule`：**放错目录自己搬**，目录不存在会自动建。三种写法都成立：
+      · 两个都传    → 搬进 `module/submodule`。**推荐一直这么写**，落点不依赖当前在哪。
+      · 只传 module → 搬到该模块根下（子目录那层去掉）。
+      · 只传 submodule → 留在**当前的一级模块**下，换一个子目录（同级平移，不会越钻越深）。
+    一个都不传就一个字都不动目录 —— 改标题不会顺带搬家。
+    搬完回 `folderPath`，照它确认落点，别靠猜。
     以前这两个参数没有，于是"这条该放二级目录、那条漏传了 submodule"只能人去界面上
     一条条拖 —— 而漏传本来就是常见笔误（实测一个模块 21 条里 3 条漏在了根目录）。
     **用例编号不跟着变**：TC-DYGL-00013 搬进「跨租户订阅」之后编号还是 TC-DYGL-00013 ——
@@ -461,12 +465,26 @@ async def update_case(
 
     # 同名检查按**搬过去之后**的模块判：同名只在同一模块内算重复，
     # 拿旧目录判会在"搬家顺带改标题"时判错（旧模块里不重名、新模块里重名）。
+    #
+    # 两个兜底不是一个东西，2026-08-25 拆开的：
+    # · `cur_module` —— 当前**所在目录**的名字。查重范围就是这一层（`check_one` 按
+    #   `CaseFolder.name == module` 扫），所以只能用叶子名。
+    # · `cur_top`    —— 当前所在目录的**顶级模块**。只传 submodule 时落点的父级得是它。
+    #   原来这儿也拿叶子名去写目录，于是「把 MCP HUB/内置工具 里的用例挪到 高危工具 下」
+    #   会走成 module="内置工具" → `_merged_elsewhere` 把它认回 MCP HUB/内置工具 →
+    #   建出 MCP HUB/内置工具/高危工具，一层一层往下套；再挪一次就撞 depth <= 4。
+    #   调用方要的是同级的 MCP HUB/高危工具。
     cur_module = None
+    cur_top = None
     if case.folder_id:
         from app.models.case import CaseFolder
-        cur_module = (await session.execute(
-            select(CaseFolder.name).where(CaseFolder.id == case.folder_id)
-        )).scalar_one_or_none()
+        row = (await session.execute(
+            select(CaseFolder.name, CaseFolder.path).where(CaseFolder.id == case.folder_id)
+        )).first()
+        if row:
+            cur_module, cur_path = row
+            # path 的段是大写的，喂回 `_get_or_create_folder` 正好按 path 精确命中
+            cur_top = (cur_path or "").split("/")[0] or None
     module = module if module is not None else cur_module
 
     new_title = title if title is not None else case.title
@@ -517,7 +535,12 @@ async def update_case(
         title=title, priority=priority, preconditions=preconditions,
         steps=steps, expected_result=expected_result,
         bug_refs=bug_refs, tags=tags,
-        module=module if (module is not None or submodule is not None) else None,
+        # 写目录用 `cur_top`（顶级模块），不是 `module` 那个叶子名兜底。
+        # 条件也换成**原始入参**：module / submodule 一个都没传时一个字都不该动目录。
+        # 用 `module`（有目录就永远非空）判会在「只改标题」时顺带搬一次家 —— 叶子名
+        # 恰好也是某个顶层模块名的话（规则 3 允许同名），用例会静静地飞出原来的模块。
+        module=(module_arg if module_arg is not None else cur_top)
+        if (module_arg is not None or submodule is not None) else None,
         submodule=submodule,
     )
     case = await case_service.update_case(session, cid, data)

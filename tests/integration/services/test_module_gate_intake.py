@@ -123,6 +123,73 @@ class TestUpdateCaseCanMove:
         assert await _path_of(db_session, b["id"]) == "MCP HUB"
 
 
+class TestSubmoduleOnlyStaysAtSameLevel:
+    """只传 submodule 的落点：**同级**，不是再往下套一层（2026-08-25 顺带修的）。
+
+    原来 `cur_module` 兜底取的是「当前所在目录的名字」（叶子名），既拿去查重、
+    又拿去写目录。用例在 `MCP HUB/内置工具` 里时，module 兜成 `内置工具`，
+    `_merged_elsewhere` 把它认回 `MCP HUB/内置工具`，于是新子目录建在它下面。
+    """
+
+    async def test_只传submodule_落在同一个顶级模块下(self, db_session):
+        bid = await _branch(db_session, "sublv")
+        c = await _create(db_session, bid, "内置工具清单-列出全部内置工具及其开关",
+                          submodule="内置工具")
+        assert "error" not in c
+        assert await _path_of(db_session, c["id"]) == "MCP HUB/内置工具"
+
+        moved = await mcp_cases.update_case(db_session, case_id=c["id"],
+                                            submodule="高危工具")
+        assert "error" not in moved, f"只传 submodule 被挡了：{moved.get('problems')}"
+        path = await _path_of(db_session, c["id"])
+        assert path == "MCP HUB/高危工具", f"套深了一层：{path}"
+        assert moved["folderPath"] == "MCP HUB/高危工具"
+
+    async def test_连挪两次不会一路套到depth上限(self, db_session):
+        bid = await _branch(db_session, "subdeep")
+        c = await _create(db_session, bid, "内置工具清单-列出全部内置工具及其开关",
+                          submodule="内置工具")
+        for sub in ("高危工具", "接入指引", "配额限制"):
+            r = await mcp_cases.update_case(db_session, case_id=c["id"], submodule=sub)
+            assert "error" not in r, f"挪到 {sub} 被挡了：{r.get('problems')}"
+            assert await _path_of(db_session, c["id"]) == f"MCP HUB/{sub}"
+
+    async def test_只改标题不搬目录(self, db_session):
+        """module / submodule 一个都没传 → 目录一个字都不该动。
+
+        叶子名恰好也是某个顶层模块名时，旧写法会按 path 命中那个顶层目录，
+        把用例静静搬出原模块。这个状态**门禁挡不住**：规则 4 只装在"建模块/放用例"
+        这两条路上，`rename_folder` 只查同级同路径 —— 页面上把 `MCP HUB/工具清单`
+        改名成「内置工具」就造出来了，而顶层本来就有一个「内置工具」。
+        """
+        from sqlalchemy import select
+
+        from app.models.case import Case
+        from app.services import folder_service
+
+        bid = await _branch(db_session, "notouch")
+        top = await _create(db_session, bid, "内置工具入口-未登录访问跳登录页",
+                            module="内置工具")
+        assert "error" not in top, top.get("problems")
+        c = await _create(db_session, bid, "工具清单-列出全部内置工具及其开关",
+                          submodule="工具清单")
+        assert "error" not in c, c.get("problems")
+
+        # 页面改名造出重名：MCP HUB/工具清单 → MCP HUB/内置工具
+        fid = (await db_session.execute(
+            select(Case.folder_id).where(Case.id == uuid.UUID(c["id"])))).scalar_one()
+        await folder_service.rename_folder(db_session, uuid.UUID(bid), fid, "内置工具")
+        await db_session.commit()
+        assert await _path_of(db_session, c["id"]) == "MCP HUB/内置工具"
+
+        r = await mcp_cases.update_case(
+            db_session, case_id=c["id"],
+            title="工具清单-列出全部内置工具及其开关状态")
+        assert "error" not in r, r.get("problems")
+        path = await _path_of(db_session, c["id"])
+        assert path == "MCP HUB/内置工具", f"只改标题却搬了家：{path}"
+
+
 class TestStillBlocksTheRealSplit:
     """修完不能把该拦的一起放掉 —— 规则 4 那个裂库的口子必须还在。"""
 

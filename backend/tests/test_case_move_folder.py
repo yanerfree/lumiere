@@ -24,8 +24,48 @@ def test_有module和submodule两个参数():
 def test_传下去给了service():
     """service 里已经有"module 变了就重新找/建目录"的逻辑，别在这儿另写一份。"""
     src = inspect.getsource(test_cases.update_case)
-    assert "module=module if (module is not None or submodule is not None) else None" in src
+    assert "module_arg if module_arg is not None else cur_top" in src
+    assert "if (module_arg is not None or submodule is not None) else None" in src
     assert "submodule=submodule" in src
+
+
+def test_写目录用顶级模块_不是当前目录的叶子名():
+    """2026-08-25：写目录的兜底和查重的兜底是两回事，混用会一层层往下套。
+
+    `cur_module` 是**当前所在目录**的名字（查重按这一层扫，只能是叶子名）。
+    拿它去写目录：用例在 `MCP HUB/内置工具` 里、只传 submodule="高危工具" 时，
+    module 兜成「内置工具」，`_merged_elsewhere` 把它认回 `MCP HUB/内置工具`，
+    于是新目录建成 `MCP HUB/内置工具/高危工具` —— 再挪一次就撞 depth <= 4。
+    """
+    src = inspect.getsource(test_cases.update_case)
+    assert "cur_top" in src, "顶级模块兜底整个没了"
+    assert "cur_module, cur_path = row" in src
+    # 落点必须走 cur_top；`module=module if` 那种叶子名兜底不能回来
+    assert "module=module if" not in src
+
+
+def test_没传module也没传submodule就不动目录():
+    """用 `module`（有目录就永远非空）判会在「只改标题」时顺带搬一次家 ——
+    叶子名恰好也是某个顶层模块名时（规则 3 允许同名），用例会静静地飞出原模块。"""
+    src = inspect.getsource(test_cases.update_case)
+    head = src[src.index("data = UpdateCaseRequest"):
+               src.index("case = await case_service.update_case")]
+    assert "module_arg is not None or submodule is not None" in head, \
+        "写目录的开关要看**原始入参**，不能看被兜底覆盖过的 module"
+
+
+def test_工具说明把三种写法都写清楚了():
+    """坑要长在工具说明里，不能靠人转达给 CC。
+
+    原来说明只写了"只传 module / 两个都传"两种，**只传 submodule 压根没提** ——
+    而那正是最容易踩的写法（漏传 module 是常见笔误）。说明里没有的语义，
+    调用方只能试，试出来的行为又没人保证下一版还在。
+    """
+    doc = test_cases.update_case.__doc__ or ""
+    assert "只传 submodule" in doc, "最容易踩的那种写法没写进说明"
+    assert "当前的一级模块" in doc and "同级" in doc, "只传 submodule 的落点要说明白"
+    assert "一个都不传" in doc, "「不传就不动目录」也是承诺，要写"
+    assert "folderPath" in doc, "落点回给调用方的字段要写，否则它只能猜搬对了没"
 
 
 def test_同名检查按搬过去之后的模块判():
