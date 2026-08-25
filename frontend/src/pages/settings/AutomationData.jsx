@@ -11,7 +11,7 @@ import {
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 
-const { Text, Paragraph } = Typography
+const { Text } = Typography
 
 // 「凭证概览」那张表 2026-08-21 去掉了：它聚合展示各环境的凭证类变量，
 // 跟「环境配置」页是同一份数据，两处显示只会让人不知道该改哪边。
@@ -43,7 +43,7 @@ export default function AutomationData() {
     try {
       const res = await api.get(base)
       setResources(res.data || [])
-    } catch (e) {
+    } catch {
       message.error('加载共享资源失败')
     } finally {
       setLoading(false)
@@ -136,6 +136,9 @@ export default function AutomationData() {
     {
       title: '存在性检查',
       dataIndex: 'existsCheck',
+      // 不给宽度时被「说明」列挤到 71px，URL 逐字折成十行、行高涨到 250px，
+      // 一张 6 行的表 900px 高。这一列内容是 method + URL，长度可预期，钉死。
+      width: 320,
       render: (v) => {
         if (!v || !Object.keys(v).length) return <Text type="secondary">—</Text>
         return <Text code style={{ fontSize: 12 }}>{v.method || 'GET'} {v.url || ''}</Text>
@@ -249,16 +252,23 @@ export default function AutomationData() {
   ]
 
   return (
-    <div style={{ padding: 24, maxWidth: 1100, margin: '0 auto' }}>
-      <Typography.Title level={4} style={{ marginBottom: 4 }}>
-        <DatabaseOutlined /> 自动化数据
-      </Typography.Title>
-      <Paragraph type="secondary" style={{ marginBottom: 20 }}>
-        项目级自动化测试所需的全局数据。<Text strong>共享资源</Text>由 Claude Code 活体验证时自动登记，跑自动化前平台会探它在当前环境存不存在——
-        <Text strong>探到就注入成变量（接口场景和 UI 脚本共用同一份）；确实没有、且登记过 createDef 的，平台会照它补建再复探一次</Text>
-        （401 / 超时算「没查成」，一律不动，免得在被测环境里造一堆没人清的重复底座）。<Text strong>本页只探不建</Text>，补建发生在跑场景/跑脚本之前。长期保留、绝不被用例删除；
-        <Text strong>凭证不在这里</Text>——多角色账号/密码/Token 一律是环境变量，去「项目配置 → 环境配置」维护，本页不再重复展示同一份数据。
-      </Paragraph>
+    <div>
+      {/* 页头按全站一套来：h2 18px + 一行 13px 灰字。原来这页是
+          Typography.Title + 四行 Paragraph，还套了 maxWidth:1100 居中 ——
+          同一个「项目配置」菜单组里，环境配置满宽、这页窄一截，切菜单像换了个系统。
+          删掉的那几句不是丢了：补建规则在「缺失时怎么办」列的 tooltip 里逐字写着，
+          「长期保留」在那一列的 Tag 上，登记入口在空表的提示里。 */}
+      <div style={{ marginBottom: 12 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0, color: '#1d2129' }}>
+          <DatabaseOutlined /> 自动化数据
+        </h2>
+        <span style={{ fontSize: 13, color: '#86909c' }}>
+          项目级自动化测试的共享底座。跑自动化前平台探它在当前环境存不存在，
+          <b>探到就注入成变量</b>（接口场景和 UI 脚本共用同一份）；<b>本页只探不建</b>，
+          补建发生在跑场景/跑脚本之前。<b>凭证不在这里</b> —— 多角色账号/密码/Token
+          一律是环境变量，去「项目配置 → 环境配置」维护。
+        </span>
+      </div>
 
       <Card
         title={<span><DatabaseOutlined /> 共享资源</span>}

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   Card, Table, Button, Modal, Form, Input, Select, Tag, Tooltip,
-  Popconfirm, message, Space, Typography, Empty, Alert, Statistic, Row, Col,
+  Popconfirm, message, Space, Typography, Empty, Alert,
 } from 'antd'
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, TranslationOutlined,
@@ -10,7 +10,7 @@ import {
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 
-const { Text, Paragraph } = Typography
+const { Text } = Typography
 
 // 分类选项（与采集器推断的分类对齐）
 // 分类要让人**一眼看出这条是什么**，尤其分出「校验错误」和「提示消息」——
@@ -329,30 +329,40 @@ export default function I18nMessages() {
   ]
 
   return (
-    <div style={{ padding: 24, maxWidth: 1400, margin: '0 auto' }}>
-      <Typography.Title level={4} style={{ marginBottom: 4 }}>
-        <TranslationOutlined /> 国际化词典
-      </Typography.Title>
-      <Paragraph type="secondary" style={{ marginBottom: 20 }}>
-        项目级文案词典。<Text strong>键是语言中立的</Text>（如 <Text code>services.form.nameRequired</Text>），
-        中文和英文都是它的值 —— 测试里引用键，切语种时取对应译文。
-        UI 脚本写 <Text code>t("services.form.nameRequired")</Text>，接口断言写
-        <Text code>{'${T:services.form.nameRequired}'}</Text>，
-        跑哪种语言由全局变量 <Text code>TEST_LANGUAGE=zh|en</Text> 决定（不填就是中文）。
-        <br />词典里查不到就原样返回，不会因为缺一条词让脚本挂掉。
-        主要来源是从被测系统的 locale 文件导入（键和译文一并带进来）；
-        点<Text strong>「扫描脚本检查」</Text>会扫所有 UI 脚本，
-        把里面硬编码的中文反查成键、并列出词典里找不到的那些
-        （<Text strong>那正是英文环境下会挂的地方</Text>）—— 只报告，不写词典。
-      </Paragraph>
+    <div>
+      {/* 页头按全站一套来：h2 + 一行 13px 灰字（原来是 Typography.Title + 五行
+          Paragraph + maxWidth:1400 居中，跟隔壁「环境配置」满宽不是一个系统）。
+          「键必须语言中立、别拿中文当键」那段没删 —— 它原来在这儿和表上的
+          Alert 里各说了一遍，现在只留 Alert 那一份（那儿才是要动手填的地方）。 */}
+      <div style={{ marginBottom: 12 }}>
+        <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0, color: '#1d2129' }}>
+          <TranslationOutlined /> 国际化词典
+        </h2>
+        <span style={{ fontSize: 13, color: '#86909c' }}>
+          项目级文案词典，中英文都是键的值。UI 脚本写 <Text code>t("键")</Text>、
+          接口断言写 <Text code>{'${T:键}'}</Text>，跑哪种语言由全局变量{' '}
+          <Text code>TEST_LANGUAGE=zh|en</Text> 决定（不填就是中文）；查不到原样返回，
+          不会因为缺词让脚本挂掉。<b>「扫描脚本检查」</b>把 UI 脚本里硬编码的中文反查成键、
+          列出词典里没有的那些（<b>那正是英文环境下会挂的地方</b>）—— 只报告，不写词典。
+        </span>
+      </div>
 
       {scanPanel}
-      <Card style={{ marginBottom: 16 }}>
-        <Row gutter={16}>
-          <Col span={8}><Statistic title="总词条" value={stats.total} /></Col>
-          <Col span={8}><Statistic title="已翻译 (en)" value={stats.translated} valueStyle={{ color: '#0ea5a0' }} /></Col>
-          <Col span={8}><Statistic title="待补" value={stats.untranslated} valueStyle={{ color: '#faad14' }} /></Col>
-        </Row>
+      {/* 三个数原来是三个 antd Statistic 摊在一张满宽卡上 —— 全站 48 个页面
+          只有这儿用 Statistic，一张 109px 高的卡片只为了放三个个位数。
+          换成 MCP 工具中心那种一行的写法（大数 + 灰字），数一个没少。 */}
+      <Card size="small" style={{ marginBottom: 12, background: 'rgba(14,165,160,0.035)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <span style={{ fontSize: 22, fontWeight: 700, color: '#0ea5a0' }}>{stats.translated}</span>
+            <span style={{ fontSize: 13, color: '#8c919e' }}> / {stats.total} 条有英文译文</span>
+          </div>
+          {/* 待补 0 也照样显示：这一格是"英文环境还差多少"的唯一读数，
+              藏起来会让人以为页面没算 */}
+          <span style={{ fontSize: 13, color: stats.untranslated ? '#faad14' : '#8c919e' }}>
+            待补 {stats.untranslated}
+          </span>
+        </div>
       </Card>
 
       <Card
