@@ -22,9 +22,11 @@ def _normalize_qa_repo(cfg: QaRepoConfig | None) -> dict | None:
     if not url:
         return None
     globs = [g.strip() for g in (cfg.case_globs or []) if g and g.strip()]
+    # 除 url 外都可以是空串：空 = 自动识别（分支跟 HEAD、清单按内容找、脚本按 @scenario 捞）。
+    # 别在这里补 "main" 之类的默认值——那是 uag-qa 一家的习惯，填进去等于替下一个仓库猜错。
     return {
         "url": url,
-        "branch": (cfg.branch or "main").strip() or "main",
+        "branch": (cfg.branch or "").strip(),
         "catalogPath": (cfg.catalog_path or "").strip(),
         "caseGlobs": globs,
     }
@@ -116,6 +118,22 @@ async def update_project(
     if data.qa_repo is not None:
         # url 传空串就是清空（见 _normalize_qa_repo）；整个字段不传才是"不动它"
         project.qa_repo = _normalize_qa_repo(data.qa_repo)
+    await session.flush()
+    await session.refresh(project)
+    return project
+
+
+async def set_qa_repo(
+    session: AsyncSession, project_id: uuid.UUID, cfg: QaRepoConfig
+) -> Project:
+    """只改 QA 仓配置。
+
+    单独开一条是因为 QA 仓在「QA 场景清单」页里维护，而整项目更新
+    （`PUT /api/projects/{id}`）要系统 admin —— 项目管理员接自己项目的 QA 仓
+    不该去求平台管理员。url 传空串 = 取消配置（见 _normalize_qa_repo）。
+    """
+    project = await get_project(session, project_id)
+    project.qa_repo = _normalize_qa_repo(cfg)
     await session.flush()
     await session.refresh(project)
     return project

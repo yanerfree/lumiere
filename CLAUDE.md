@@ -28,17 +28,18 @@
   行上加归属不改变运行时冲突，两个项目配同一个 path 照样互相覆盖、还偶发。
   真正要做的是给 `path` 加 unique 约束 + 把「path 带前缀」变成服务端强制。
   实测数据和推理见下方文档「数据归属与隔离」的 §5。
-- **QA 仓永远只读**（项目编辑页配的那个 `qa_repo`）。那是别人维护的黑盒验收仓，
+- **QA 仓永远只读**（项目上那份 `qa_repo` 配置）。那是别人维护的黑盒验收仓，
   清单文件是他自己门禁（`check-coverage.sh`）的判据来源，平台往里写一笔，他那边就会
-  红在一个查不到原因的地方。`services/qa_catalog.py` 只允许 `show`/`ls-tree`/`rev-parse`/`log`，
+  红在一个查不到原因的地方。`services/qa_catalog.py` 只允许 `show`/`ls-tree`/`rev-parse`/`log`/`grep`，
   有封样测试盯着；也**不要求对方仓库为我们加任何字段/文件/钩子**。要做回写先跟仓库主人谈，
-  别从这个模块长出来。
+  别从这个模块长出来。**配置在「QA 场景清单」页里配，不在编辑项目弹窗**；只有仓库地址必填，
+  分支/清单路径/脚本范围留空 = 自动识别，**别给它们塞 uag-qa 的默认值**（见文档 §3）。
 - **别把项目 skill 放进 `app/skills/preset/`**。那个目录只放平台侧执行的 `tb-*`（会被当 prompt 喂后端 LLM、要绑模型档位）；客户端侧执行的 skill 走 DB，见下方文档。混了会让「AI 能力→模型」页冒出绑不上模型的空档位。
 
 ## 测试：**两套，都要跑**
 
 ```bash
-cd backend && .venv/bin/python -m pytest tests/ -q     # 单测/结构封样，~12s，1337 条
+cd backend && .venv/bin/python -m pytest tests/ -q     # 单测/结构封样，~12s，1344 条
 cd /home/dreamer/testBench && backend/.venv/bin/python -m pytest tests/ -q   # API/E2E，打 testbench_test 库，几分钟
 ```
 

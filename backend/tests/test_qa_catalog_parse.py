@@ -4,14 +4,19 @@
 多 ID 声明、`//` 与 `#` 两种注释、状态列挂 `@known-bug`、已废弃行。
 """
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
 
+from app.services.git_service import GitError
 from app.services.qa_catalog import (
     _assemble,
     _glob_to_re,
     _match_globs,
+    _resolve_ref,
+    detect_catalog_path,
+    discover_case_files,
     parse_case_header,
     parse_catalog,
 )
@@ -109,6 +114,12 @@ def test_parse_case_header_playwright():
     assert h["ids"] == ["AUT-20"]
     assert h["tier"] == "ui"
     assert h["knownBugs"] == []
+
+
+def test_parse_case_header_stops_at_trailing_note():
+    # 行尾常跟着说明：整行 split() 会把「←」「覆盖哪些场景」也当成场景 ID
+    h = parse_case_header("# @scenario AUT-01 AUT-02  ← 覆盖哪些场景，第一个是主场景\n")
+    assert h["ids"] == ["AUT-01", "AUT-02"]
 
 
 def test_parse_case_header_only_scans_head():
@@ -226,3 +237,89 @@ def test_qa_catalog_api_only_reads():
     # refresh 端点只允许触发 fetch，不允许出现任何回写 QA 仓的动作
     assert "push" not in text
     assert "worktree" not in text
+
+
+# ---- 自动识别：清单路径 / 用例文件 / 分支。用真仓库跑，锁住 git grep 的参数写法
+#      （POSIX 字符类 [[:space:]] 那套和 Python 正则不通用，写错了只会静默捞不到东西）
+
+def _git(repo: Path, *args: str) -> str:
+    out = subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", *args],
+        cwd=str(repo), capture_output=True, text=True,
+    )
+    assert out.returncode == 0, out.stderr
+    return out.stdout.strip()
+
+
+@pytest.fixture
+def qa_repo(tmp_path: Path) -> Path:
+    """一个长得像 QA 仓的临时仓库：清单 + 两种注释风格的用例 + 干扰文件。"""
+    work = tmp_path / "work"
+    work.mkdir()
+    _git(work, "init", "-q", "-b", "qa-main")
+
+    rows = "\n".join(f"| SMK-{i:02d} | 场景 {i} | P0 | 5 | api | ⬜ |" for i in range(1, 11))
+    (work / "docs").mkdir()
+    (work / "docs" / "catalog.md").write_text("| ID | 场景 | P | R | 层 | 状 |\n" + rows + "\n")
+    # 干扰项 1：README 里举了两行例子，行数不够，不能被选成清单
+    (work / "README.md").write_text("举个例子：\n| SMK-01 | 场景 1 | P0 | 5 | api | ⬜ |\n| SMK-02 | 场景 2 | P1 | 3 | api | ⬜ |\n")
+
+    (work / "api").mkdir()
+    (work / "api" / "smoke.sh").write_text("#!/usr/bin/env bash\n# @scenario SMK-01 SMK-02\n# @tier smoke\n")
+    (work / "ui").mkdir()
+    (work / "ui" / "login.spec.ts").write_text("// @scenario SMK-03\nimport {test} from '@playwright/test'\n")
+    # 干扰项 2：没声明场景的支持库；干扰项 3：文档里原样引用了 @scenario
+    (work / "api" / "_lib.sh").write_text("#!/usr/bin/env bash\nhelper() { :; }\n")
+    (work / "docs" / "howto.md").write_text("文件头写 `# @scenario SMK-01` 就算覆盖。\n")
+    # 干扰项 4：新建用例的模板，占位 ID + 行尾中文说明（uag-qa 里真有这么一份）
+    tmpl = work / ".claude" / "skills" / "qa-module" / "templates"
+    tmpl.mkdir(parents=True)
+    (tmpl / "case.sh.tmpl").write_text("# @scenario XXX-01 XXX-02  ← 覆盖哪些场景，第一个是主场景\n")
+
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "init")
+    return work / ".git"
+
+
+def test_detect_catalog_path_picks_the_richest_markdown(qa_repo: Path):
+    # 不认文件名（别的仓不叫 test-scenario-catalog.md），只认哪份 .md 的场景行最多
+    assert detect_catalog_path(qa_repo, "HEAD") == "docs/catalog.md"
+
+
+def test_detect_catalog_path_errors_when_no_catalog(tmp_path: Path):
+    work = tmp_path / "plain"
+    work.mkdir()
+    _git(work, "init", "-q", "-b", "main")
+    (work / "README.md").write_text("没有清单表格\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "init")
+    with pytest.raises(GitError) as e:
+        detect_catalog_path(work / ".git", "HEAD")
+    assert "场景清单" in e.value.message
+
+
+def test_discover_case_files_finds_both_comment_styles(qa_repo: Path):
+    files = discover_case_files(qa_repo, "HEAD", "docs/catalog.md")
+    # .md、没声明 @scenario 的支持库、以及模板文件都不算用例
+    assert files == ["api/smoke.sh", "ui/login.spec.ts"]
+
+
+def test_discover_case_files_skips_templates(qa_repo: Path):
+    # 模板里的占位 ID（XXX-01）会变成假的"孤儿脚本"，页面上看着像 QA 写错了
+    assert not any(f.endswith(".tmpl") for f in discover_case_files(qa_repo, "HEAD", "docs/catalog.md"))
+
+
+def test_resolve_ref_empty_branch_follows_repo_default(qa_repo: Path):
+    # 分支留空不该猜 main —— 这个仓的默认分支叫 qa-main
+    ref, name = _resolve_ref(qa_repo, "")
+    assert ref == "HEAD"
+    assert name == "qa-main"
+
+
+def test_resolve_ref_named_branch_must_exist(qa_repo: Path):
+    ref, name = _resolve_ref(qa_repo, "qa-main")
+    assert ref == "refs/heads/qa-main" and name == "qa-main"
+    # 填错了要报错，不能悄悄回退 HEAD 拿别的分支的数据顶包
+    with pytest.raises(GitError) as e:
+        _resolve_ref(qa_repo, "nope")
+    assert "nope" in e.value.message

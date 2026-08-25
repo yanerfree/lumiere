@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Card, Table, Tag, Space, Button, Input, Select, Alert, message, Tooltip, Progress } from 'antd'
+import { Card, Table, Tag, Space, Button, Input, Select, Alert, message, Tooltip, Progress, Modal, Form, Collapse, Popconfirm } from 'antd'
 import { ReloadOutlined, SearchOutlined, BugOutlined, FileTextOutlined, SettingOutlined } from '@ant-design/icons'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
 
 const STATE_TAG = {
@@ -24,7 +24,6 @@ function StatCard({ label, value, sub, color }) {
 
 export default function QaCatalog() {
   const { projectId } = useParams()
-  const navigate = useNavigate()
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -33,6 +32,9 @@ export default function QaCatalog() {
   const [priority, setPriority] = useState()
   const [tier, setTier] = useState()
   const [state, setState] = useState()
+  const [cfgOpen, setCfgOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [form] = Form.useForm()
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -52,6 +54,41 @@ export default function QaCatalog() {
       if (res.data?.error) message.warning(res.data.error)
       else message.success('已从 QA 仓拉取最新清单')
     } catch { /* request.js 已展示错误 */ } finally { setRefreshing(false) }
+  }
+
+  const openConfig = () => {
+    const c = data?.config || {}
+    form.setFieldsValue({
+      url: c.url || '',
+      branch: c.branch || '',
+      catalogPath: c.catalogPath || '',
+      caseGlobs: (c.caseGlobs || []).join(', '),
+    })
+    setCfgOpen(true)
+  }
+
+  // 保存后端会顺手按新配置读一遍（自动识别认没认出来，当场就能看见）
+  const saveConfig = async (payload) => {
+    setSaving(true)
+    try {
+      const res = await api.put(`/projects/${projectId}/qa-catalog/config`, payload)
+      setData(res.data)
+      setCfgOpen(false)
+      if (!payload.url) message.success('已取消 QA 仓配置')
+      else if (res.data?.error) message.warning(res.data.error)
+      else message.success('已保存并读取 QA 仓')
+    } catch { /* request.js 已展示错误 */ } finally { setSaving(false) }
+  }
+
+  const handleSaveConfig = async () => {
+    let v
+    try { v = await form.validateFields() } catch { return }
+    await saveConfig({
+      url: (v.url || '').trim(),
+      branch: (v.branch || '').trim(),
+      catalogPath: (v.catalogPath || '').trim(),
+      caseGlobs: (v.caseGlobs || '').split(',').map(x => x.trim()).filter(Boolean),
+    })
   }
 
   const configured = data?.configured
@@ -158,7 +195,7 @@ export default function QaCatalog() {
           </div>
         </div>
         <Space>
-          <Button icon={<SettingOutlined />} onClick={() => navigate('/projects')}>配置 QA 仓</Button>
+          <Button icon={<SettingOutlined />} onClick={openConfig}>{configured ? '仓库配置' : '配置 QA 仓'}</Button>
           <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={refreshing} disabled={!configured}>
             拉取最新
           </Button>
@@ -171,15 +208,21 @@ export default function QaCatalog() {
           message="尚未配置 QA 仓"
           description={
             <span>
-              这个项目还没有配置 QA 仓，下面只显示表头。到「项目列表 → 编辑项目 → QA 仓（只读）」
-              填上仓库地址即可读取场景清单。平台对该仓库只读：只做 clone / fetch，不会写入任何内容。
+              这个项目还没有配置 QA 仓，下面只显示表头。点右上角
+              <Button type="link" size="small" style={{ padding: '0 4px' }} onClick={openConfig}>配置 QA 仓</Button>
+              填上仓库地址就行 —— 分支、清单路径、脚本范围都能自己认出来。
+              平台对该仓库只读：只做 clone / fetch，不会写入任何内容。
             </span>
           }
         />
       )}
 
       {data?.error && (
-        <Alert type="error" showIcon style={{ marginBottom: 16 }} message="读取 QA 仓失败" description={data.error} />
+        <Alert
+          type="error" showIcon style={{ marginBottom: 16 }}
+          message="读取 QA 仓失败" description={data.error}
+          action={<Button size="small" onClick={openConfig}>改配置</Button>}
+        />
       )}
 
       {configured && summary && (
@@ -211,12 +254,23 @@ export default function QaCatalog() {
       )}
 
       {configured && data?.repo?.commitShort && (
-        <div style={{ fontSize: 12, color: '#86909c', marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: '#86909c', marginBottom: 12, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4 }}>
           <Tag>{data.repo.url}</Tag>
-          <Tag>{data.repo.branch}</Tag>
+          <Tag>{data.repo.branch}{data.repo.branchAuto ? ' · 默认分支' : ''}</Tag>
           <Tag style={{ fontFamily: 'ui-monospace, monospace' }}>{data.repo.commitShort}</Tag>
           <span>{data.repo.commitSubject}</span>
           {data.repo.commitDate && <span style={{ marginLeft: 8 }}>{new Date(data.repo.commitDate).toLocaleString('zh-CN')}</span>}
+          {/* 自动识别的结果要看得见：认错了才知道要去「高级」里手填 */}
+          <span style={{ width: '100%', marginTop: 4 }}>
+            清单 <code>{data.repo.catalogPath}</code>
+            <Tag style={{ marginLeft: 4 }} color={data.repo.catalogAuto ? 'blue' : 'default'}>
+              {data.repo.catalogAuto ? '自动识别' : '配置指定'}
+            </Tag>
+            · 脚本 {summary?.scripts ?? 0} 个
+            <Tag style={{ marginLeft: 4 }} color={data.repo.caseDiscovery === 'grep' ? 'blue' : 'default'}>
+              {data.repo.caseDiscovery === 'grep' ? '按 @scenario 自动捞' : '按配置的 glob'}
+            </Tag>
+          </span>
         </div>
       )}
 
@@ -273,6 +327,64 @@ export default function QaCatalog() {
           />
         </Card>
       )}
+
+      {/* QA 仓配置：只在这一页维护 —— 它只影响这一页，认错了也只在这一页报错 */}
+      <Modal
+        title="QA 仓（只读）"
+        open={cfgOpen}
+        onCancel={() => setCfgOpen(false)}
+        width={560}
+        footer={[
+          data?.config?.url ? (
+            <Popconfirm
+              key="clear" title="取消配置后这一页只剩表头，确定？"
+              onConfirm={() => saveConfig({ url: '', branch: '', catalogPath: '', caseGlobs: [] })}
+            >
+              <Button danger type="text" style={{ float: 'left' }}>取消配置</Button>
+            </Popconfirm>
+          ) : null,
+          <Button key="cancel" onClick={() => setCfgOpen(false)}>取消</Button>,
+          <Button key="ok" type="primary" loading={saving} onClick={handleSaveConfig}>保存</Button>,
+        ]}
+      >
+        <Alert
+          type="info" showIcon style={{ marginBottom: 16 }}
+          message="平台对这个仓库永远只读"
+          description="只做 clone --bare / fetch / git show，不写入、不建分支、也不要求对方仓库为我们加任何文件。"
+        />
+        <Form form={form} layout="vertical">
+          <Form.Item
+            name="url" label="仓库地址"
+            rules={[{ required: true, message: '请输入 QA 仓地址' }]}
+            extra="服务器要能免密访问它（SSH key / 只读 token）"
+          >
+            <Input placeholder="git@gitlab.example.com:qa/uag-qa.git" />
+          </Form.Item>
+          <Collapse
+            ghost size="small"
+            items={[{
+              key: 'adv',
+              label: <span style={{ fontSize: 13 }}>高级 · 三项都留空 = 自动识别</span>,
+              children: (
+                <>
+                  <Form.Item name="branch" label="分支" extra="留空 = 跟仓库自己的默认分支走">
+                    <Input placeholder="留空即可" />
+                  </Form.Item>
+                  <Form.Item name="catalogPath" label="场景清单文件" extra="留空 = 找场景行最多的那份 .md">
+                    <Input placeholder="如 docs/test-scenario-catalog.md（留空即可）" />
+                  </Form.Item>
+                  <Form.Item
+                    name="caseGlobs" label="用例脚本范围"
+                    extra="留空 = 用 git grep 捞所有声明了 @scenario 的文件；填了就只认这些 glob（逗号分隔）"
+                  >
+                    <Input placeholder="如 api/**/*.sh, ui/tests/**/*.spec.ts（留空即可）" />
+                  </Form.Item>
+                </>
+              ),
+            }]}
+          />
+        </Form>
+      </Modal>
     </div>
   )
 }

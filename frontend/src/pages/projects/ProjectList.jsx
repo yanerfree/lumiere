@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Card, Row, Col, Button, Tag, Modal, Form, Input, Select, Space, message, Spin, Empty, Popconfirm, Pagination, Table, Avatar } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, RightOutlined, GitlabOutlined, FolderOpenOutlined, FileTextOutlined, ReloadOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, RightOutlined, FolderOpenOutlined, GitlabOutlined, ReloadOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../utils/request'
 
@@ -10,13 +10,6 @@ const PROJECT_ROLES = [
   { value: 'tester', label: '测试' },
   { value: 'guest', label: '访客' },
 ]
-
-// QA 仓默认约定（与 backend/app/schemas/project.py 的 QA_DEFAULT_* 对齐）。
-// 只是占位提示，留空由后端填默认值。
-const QA_DEFAULTS = {
-  catalogPath: 'docs/test-scenario-catalog.md',
-  caseGlobs: ['api/**/*.sh', 'scenarios/**/*.sh', 'ui/tests/**/*.spec.ts'],
-}
 
 const ROLE_TAG = {
   project_admin: { color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
@@ -194,9 +187,6 @@ export default function ProjectList() {
   const [memberProject, setMemberProject] = useState(null)
   const [memberOpen, setMemberOpen] = useState(false)
 
-  const user = JSON.parse(localStorage.getItem('user') || '{}')
-  const isAdmin = user.role === 'admin'
-
   const pagedProjects = useMemo(() => {
     const start = (page - 1) * pageSize
     return projects.slice(start, start + pageSize)
@@ -223,14 +213,9 @@ export default function ProjectList() {
   const openEdit = (e, project) => {
     e.stopPropagation()
     setEditingProject(project)
-    const qa = project.qaRepo || {}
     form.setFieldsValue({
       name: project.name,
       description: project.description,
-      qaRepoUrl: qa.url,
-      qaRepoBranch: qa.branch,
-      qaRepoCatalogPath: qa.catalogPath,
-      qaRepoCaseGlobs: (qa.caseGlobs || []).join(', '),
     })
     setModalOpen(true)
   }
@@ -245,29 +230,17 @@ export default function ProjectList() {
     let values
     try { values = await form.validateFields() } catch { return }
 
-    // url 留空就是"不启用/清空"——后端按空串把 qa_repo 置回 NULL，
-    // 不会存一个只有默认路径的空壳（否则页面判不出"没配"和"配错了"）
-    const qaRepo = {
-      url: (values.qaRepoUrl || '').trim(),
-      branch: (values.qaRepoBranch || '').trim() || 'main',
-      catalogPath: (values.qaRepoCatalogPath || '').trim() || QA_DEFAULTS.catalogPath,
-      caseGlobs: (values.qaRepoCaseGlobs || '').split(',').map(s => s.trim()).filter(Boolean),
-    }
-    if (!qaRepo.caseGlobs.length) qaRepo.caseGlobs = QA_DEFAULTS.caseGlobs
-
     setSaving(true)
     try {
       if (editingProject) {
         await api.put(`/projects/${editingProject.id}`, {
           description: values.description || null,
-          qaRepo,
         })
         message.success('项目已更新')
       } else {
         await api.post('/projects', {
           name: values.name,
           description: values.description || null,
-          qaRepo,
         })
         message.success('项目创建成功，已自动创建默认分支配置（main）')
       }
@@ -348,16 +321,11 @@ export default function ProjectList() {
                   borderTop: '1px solid rgba(0,0,0,0.04)', borderBottom: '1px solid rgba(0,0,0,0.04)',
                   fontSize: 12, color: '#86909c',
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+                  {/* QA 仓在「QA 场景清单」页里配，这里只显示配没配 */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <GitlabOutlined />
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {p.qaRepo?.url ? `QA 仓 ${p.qaRepo.url}` : '未配置 QA 仓'}
-                    </span>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <FileTextOutlined />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {p.qaRepo?.url ? `${p.qaRepo.branch || 'main'} · ${p.qaRepo.catalogPath || '—'}` : '配置后可看 QA 场景清单'}
+                      {p.qaRepo?.url ? `QA 仓 ${p.qaRepo.url}` : '未接 QA 仓'}
                     </span>
                   </div>
                 </div>
@@ -425,30 +393,6 @@ export default function ProjectList() {
           </Form.Item>
           <Form.Item name="description" label="项目描述">
             <Input placeholder="简要描述项目用途" />
-          </Form.Item>
-          <div style={{
-            marginTop: 4, marginBottom: 12, paddingTop: 12,
-            borderTop: '1px solid rgba(0,0,0,0.06)',
-          }}>
-            <div style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>QA 仓（只读，可选）</div>
-            <div style={{ fontSize: 12, color: '#86909c', marginTop: 2 }}>
-              配了才能看「QA 场景清单」页。平台只 clone / fetch 读取，不会往这个仓库写任何东西。
-            </div>
-          </div>
-          <Form.Item name="qaRepoUrl" label="仓库地址">
-            <Input prefix={<GitlabOutlined style={{ color: '#c9cdd4' }} />} placeholder="git@code.example.com:team/qa.git（留空 = 不启用）" />
-          </Form.Item>
-          <Form.Item name="qaRepoBranch" label="分支">
-            <Input placeholder="main" />
-          </Form.Item>
-          <Form.Item name="qaRepoCatalogPath" label="场景清单文件路径">
-            <Input prefix={<FileTextOutlined style={{ color: '#c9cdd4' }} />} placeholder={QA_DEFAULTS.catalogPath} />
-          </Form.Item>
-          <Form.Item
-            name="qaRepoCaseGlobs" label="用例脚本匹配"
-            extra="逗号分隔；从匹配到的文件头部读取 @scenario / @tier / @known-bug"
-          >
-            <Input placeholder={QA_DEFAULTS.caseGlobs.join(', ')} />
           </Form.Item>
           {!editingProject && (
             <div style={{ padding: '8px 12px', background: 'var(--green-bg)', borderRadius: 12, fontSize: 12, color: '#0ea5a0' }}>
