@@ -3021,9 +3021,11 @@ export default function CaseDetail() {
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 4 }}>
                         <Tag style={{ margin: 0 }} color={
                           r.kind === 'cc_resubmit' ? 'warning'
+                          : r.kind === 'cc_edit' ? 'default'
                           : r.verdict === 'approved' ? 'success'
                           : r.verdict === 'rejected' ? 'error' : undefined}>
                           {r.kind === 'cc_resubmit' ? 'CC 提交整改'
+                            : r.kind === 'cc_edit' ? 'CC 改了内容'
                             : r.kind === 'human_override' ? '人工判定'
                             : r.verdict === 'approved' ? 'AI 通过' : 'AI 打回'}
                         </Tag>
@@ -3064,9 +3066,20 @@ export default function CaseDetail() {
                         </div>
                       ))}
                       {r.changed && (
+                        /* **每一项都要判在不在**：`cc_edit` 那种只有 uiVersion、
+                           没有 stepCount，无脑拼会渲染成「步骤 undefined 步」。 */
                         <div style={{ fontSize: 12, color: '#4e5969' }}>
-                          {r.changed.note}（步骤 {r.changed.stepCount} 步
-                          {r.changed.pendingFindings ? `，上轮有 ${r.changed.pendingFindings} 条待改` : ''}）
+                          {r.changed.note}
+                          {(() => {
+                            const L = { title: '标题', preconditions: '前置', steps: '步骤', expectedResult: '预期' }
+                            const parts = []
+                            if (r.changed.fields?.length) parts.push(`改了${r.changed.fields.map(f => L[f] || f).join('/')}`)
+                            if (r.changed.stepCount != null) parts.push(`步骤 ${r.changed.stepCount} 步`)
+                            if (r.changed.uiVersion != null) parts.push(`UI 脚本 v${r.changed.uiVersion}`)
+                            if (r.changed.edits > 1) parts.push(`共 ${r.changed.edits} 次改动`)
+                            if (r.changed.pendingFindings) parts.push(`上轮有 ${r.changed.pendingFindings} 条待改`)
+                            return parts.length ? `（${parts.join('，')}）` : ''
+                          })()}
                         </div>
                       )}
                       {(r.coverageGaps || []).length > 0 && (

@@ -122,7 +122,11 @@ def _sc_step(sc_id, **kw):
 
 
 def _stale_map(hash_rows, steps=None, ui_version=1, case_id=None, extra_scenarios=0):
-    """hash_rows: [(case_id, round, content_hash), ...]"""
+    """hash_rows: [(case_id, round, content_hash), ...]，或带 kind 的四元组。
+
+    三元组按 `ai_review` 补全 —— 绝大多数用例只关心签名，不关心 kind。
+    """
+    hash_rows = [r if len(r) == 4 else (r[0], r[1], "ai_review", r[2]) for r in hash_rows]
     cid = case_id or uuid.uuid4()
     sc = uuid.uuid4()
     rows = steps if steps is not None else [_sc_step(sc)]

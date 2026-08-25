@@ -1236,15 +1236,22 @@ async def _reflect_block(session: AsyncSession, scid, norm: list, answers: dict 
     if case is None:
         return {}
     # 被打回之后又回推 = 一次**整改提交**。记下来，详情页那条时间线才连得起来
+    from app.services.review import rounds
     if case.review_status == "rejected":
         prev = (case.review_reason or {}).get("findings") or []
-        from app.services.review import rounds
         await rounds.record(session, case.id, "cc_resubmit", actor="cc",
                             changed={"stepCount": len(norm),
                                      "pendingFindings": len([f for f in prev
                                                              if f.get("severity") != "minor"]),
                                      "note": "打回后重新回推了接口场景"})
         await session.commit()
+    else:
+        # 没被打回时的回推**以前一条痕迹都不留**：一条 approved 的用例被换掉
+        # 整个接口场景，时间线上只有那枚旧的「通过」，看不出它审的还是不是这份东西。
+        # 用 `cc_edit` 不用 `cc_resubmit` —— 后者会把它跳成「整改待复审」。
+        if await rounds.record_edit(session, case.id, note="回推了接口场景",
+                                    step_count=len(norm)) is not None:
+            await session.commit()
 
     saved = reflect.normalize(answers)
     if saved:
@@ -2415,6 +2422,13 @@ async def sync_ui_script(
             for i, st in enumerate(manual)
         ] or [{"seq": 1, "phase": "action", "action": "见脚本", "expected": "", "uiTarget": ""}]
         case.ui_scenario = {"steps": steps, "variablesUsed": []}
+
+    # 换脚本也是一次内容改动 —— §15② 举的正是这个例子（approved 的用例被
+    # `tb_sync_ui_script` 换过脚本，列表上照旧一枚干净的「通过」）。
+    # 那条只给了个只读 ⚠，时间线上仍然什么都没有。
+    from app.services.review import rounds as _rounds
+    await _rounds.record_edit(session, cid, note="回推了 UI 脚本",
+                              ui_version=script.version)
     await session.commit()
 
     return {

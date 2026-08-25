@@ -20,6 +20,10 @@ class CaseReviewRound(Base):
     kind：
       · `ai_review`      —— AI 审了一轮（带 verdict + 分 + findings）
       · `cc_resubmit`    —— 被打回后 CC 改完重新回推（记改了什么，没有 verdict）
+      · `cc_edit`        —— CC 改了内容但不是「被打回后回推」（改步骤/预期、换 UI
+        脚本、非打回状态下回推场景）。**故意跟 `cc_resubmit` 分开**：那个 kind
+        驱动「整改待复审」派生状态，复用它会让一条 approved 的用例改一下就跳状态。
+        连续几次编辑合并成一行（带 `changed.edits` 次数），见 `rounds.record_edit`。
       · `human_override` —— 人直接置通过/打回（记理由）
     """
     __tablename__ = "case_review_rounds"

@@ -534,6 +534,16 @@ async def update_case(
          case.expected_confirmed_by) = prev_conf
         case.expected_confirmed_at = datetime.now(timezone.utc)
         reconfirmed = True
+
+    # 审过之后再改内容 → 审核时间线上留一条（`rounds.record_edit` 里写了为什么）。
+    # **只有评审真会读的那几个字段算数**：搬目录、加标签、改优先级、关联 bug
+    # 都不进六维判据，记下来只会把时间线冲成流水账。
+    substantive = [f for f in changed
+                   if f in ("title", "preconditions", "steps", "expectedResult")]
+    if substantive:
+        from app.services.review import rounds
+        await rounds.record_edit(session, cid, note="改了用例内容",
+                                 fields=substantive, step_count=len(case.steps or []))
     await session.commit()
 
     result = {**_case_to_dict(case), "targetLevel": case.target_level,

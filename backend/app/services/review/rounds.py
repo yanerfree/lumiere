@@ -10,6 +10,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.review_round import CaseReviewRound
 
+# CC 改了内容的轮次。**跟 `cc_resubmit` 分开**：那个 kind 驱动
+# 「整改待复审」派生状态（`display_status` / 模块报告的 resubmitted 桶），
+# 复用它会让一条 approved 的用例被改一下就跳成"待复审"。
+EDIT_KIND = "cc_edit"
+
 
 def _api_part(steps) -> str:
     """场景步骤摊平。**只摊定义不摊执行结果** —— 见 `content_signature` 的说明。"""
@@ -89,12 +94,20 @@ async def stale_map(session: AsyncSession, case_ids) -> dict[uuid.UUID, bool]:
 
     # ── 最新一轮的签名（一次查完，不是每条查一次）───────────────
     rows = (await session.execute(
-        select(CaseReviewRound.case_id, CaseReviewRound.round, CaseReviewRound.content_hash)
+        select(CaseReviewRound.case_id, CaseReviewRound.round, CaseReviewRound.kind,
+               CaseReviewRound.content_hash)
         .where(CaseReviewRound.case_id.in_(ids))
         .order_by(CaseReviewRound.case_id, CaseReviewRound.round)
     )).all()
     latest: dict[uuid.UUID, str | None] = {}
-    for cid, _rnd, chash in rows:            # 按 round 升序，后写的覆盖前面的
+    for cid, _rnd, kind, chash in rows:      # 按 round 升序，后写的覆盖前面的
+        # **编辑轮次跳过。** 它不带 verdict 也不带签名，落在尾巴上会把上一轮
+        # ai_review 的签名顶成 None，于是这条用例被当成"判不出来"整个漏出
+        # stale_map —— 结果正好相反：**内容刚被改过的那些反而不再报 ⚠**。
+        # 人工覆盖那种是**故意**顶掉的（人点之前还是之后改的，库里没依据），
+        # 编辑轮次不一样：它就是"改在 ai_review 之后"的证据本身。
+        if kind == EDIT_KIND:
+            continue
         latest[cid] = chash
     want = [cid for cid, chash in latest.items() if chash]
     if not want:
@@ -161,6 +174,65 @@ async def record(session: AsyncSession, case_id, kind: str, **kw) -> CaseReviewR
     session.add(row)
     await session.flush()
     return row
+
+
+async def record_edit(session: AsyncSession, case_id, *, note: str,
+                      fields: list[str] | None = None, step_count: int | None = None,
+                      ui_version: int | None = None, actor: str = "cc"):
+    """CC 改了用例内容 —— 在时间线上留一条痕迹。返回记下的那一行，没记则 None。
+
+    **为什么非要有它**：`cc_resubmit` 只在「被打回 + 回推接口场景」这一条路上记
+    （`sync._reflect_block`），而 CC 更常用的是 `tb_update_case` 改步骤/预期、
+    `tb_sync_ui_script` 换脚本 —— 那些一律不记。后果是同一条用例连审几轮，
+    时间线上只有几个分数在上下跳，**看不出中间到底改没改**：实测 TC-DYGL-00001
+    一天审了 8 轮（79→71→76→76→74→77→89 通过），中间 6 次 `tb_update_case`，
+    而"改了再审"和"原样再审"在库里长得一模一样。模型给的分本来就抖
+    （同一条 86 和 78 是常事，见 `score_and_verdict` 的注释），
+    分不开这两者，"改到过为止"和"刷到过为止"就既无法证实也无法证伪。
+
+    **审过之前不记。** 写用例的过程本来就是一路改，那时候没有"轮次之间"这回事，
+    记下来全是噪音。判据是有没有一轮 `ai_review`，不是 `review_status` ——
+    后者会被人工覆盖和分支复制清成 None，而"审过"这件事是不可逆的。
+
+    **连续几次编辑合并成一行。** 一次整改常常是好几次调用（改标题、补一步、
+    改预期），拆成三行会把时间线冲垮。合并时带一个 `edits` 次数；
+    下一轮 `ai_review` 落下之后，再改就是新的一行。
+
+    **不落 `content_hash`。** 那个字段的含义是「这份 verdict 是对着哪一版内容
+    算出来的」，只有带结论的轮次才有意义。给编辑轮次也落一个的话，
+    `stale_map` 取的"最新一轮签名"就成了编辑时那份，§15② 那个 ⚠ 会当场失灵。
+    """
+    cid = case_id if isinstance(case_id, uuid.UUID) else uuid.UUID(str(case_id))
+    rows = (await session.execute(
+        select(CaseReviewRound).where(CaseReviewRound.case_id == cid)
+        .order_by(CaseReviewRound.round.desc()).limit(1))).scalars().all()
+    latest = rows[0] if rows else None
+    reviewed = (await session.execute(
+        select(func.count()).select_from(CaseReviewRound)
+        .where(CaseReviewRound.case_id == cid,
+               CaseReviewRound.kind == "ai_review"))).scalar_one()
+    if not reviewed:
+        return None
+
+    payload = {"note": note}
+    if fields:
+        payload["fields"] = sorted(set(fields))
+    if step_count is not None:
+        payload["stepCount"] = step_count
+    if ui_version is not None:
+        payload["uiVersion"] = ui_version
+
+    if latest is not None and latest.kind == EDIT_KIND:
+        prev = dict(latest.changed or {})
+        merged = {**prev, **payload}
+        merged["edits"] = int(prev.get("edits") or 1) + 1
+        if prev.get("fields") or payload.get("fields"):
+            merged["fields"] = sorted(set(prev.get("fields") or []) | set(payload.get("fields") or []))
+        # JSONB 要整体换一个新 dict —— 原地改 key 不会被 SQLAlchemy 认成脏数据
+        latest.changed = merged
+        await session.flush()
+        return latest
+    return await record(session, cid, EDIT_KIND, actor=actor, changed=payload)
 
 
 async def list_rounds(session: AsyncSession, case_id) -> list[dict]:
