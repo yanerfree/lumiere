@@ -44,20 +44,31 @@ CAPABILITY_REGISTRY = [
     # ── 文本生成型 ──
     # where 原来写「AI 侧栏」—— AISidebar.jsx 早就没有任何页面引用了（已随本次删除）。
     # 真实入口是用例管理工具栏的「从接口生成」→ TestForgeModal → POST /ai/generate-cases。
-    {"key": "tb-case-generate",        "label": "AI 生成接口用例",      "category": "text",      "where": "用例管理 → 从接口生成"},
-    {"key": "tb-quality-review",       "label": "用例质量评审（单条·六维）", "category": "text",  "where": "用例管理 / 用例详情 / tb_review_case"},
+    # 入口 2026-08-19 下线（CaseManagement.jsx 里那段注释就是当时的裁定）：它建的是
+    # testforge task JSON，真正生成用例的是 CC 侧 /tf-forge。**页面上已经没有这个按钮**，
+    # 而这一行还写着"用例管理 → 从接口生成"—— 用户照着它去找，找不到。
+    # 端点和 skill 保留（tf-forge 还按老 task 文件跑），所以只下线入口、不删 key。
+    {"key": "tb-case-generate",        "label": "AI 生成接口用例",      "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "页面入口 2026-08-19 下线：改由外部 Claude Code 的 /tf-forge 生成后回推（它自己就能读接口树）。/testforge/* 端点保留"},
+    # 标签必须**和用户点的那个按钮同名**。页面上按钮叫「AI 审核」，这里原来只写
+    # 「用例质量评审（单条·六维）」—— 用户想改 AI 审核用的模型，在这一页里找不到它
+    # （原话：「可是我要改的是 AI 审核啊，没看到这个在哪改」）。术语对不上就等于没写。
+    {"key": "tb-quality-review",       "label": "AI 审核（用例质量评审·六维）", "category": "text",  "where": "用例管理「AI 审核」按钮 / 用例详情「审核」页 / MCP tb_review_case"},
     {"key": "tb-diagnose",             "label": "失败诊断",             "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "归因归外部 Claude Code（tb_submit_analysis），平台只按规则出现象、由人确认结论。前端从来没有调用入口"},
-    {"key": "scenario-gen",            "label": "功能场景测试生成",     "category": "text",      "where": "场景生成 Stage1-4"},
+    # 入口 2026-08-15 双下线：MCP 工具摘了（见 mcp/__init__.py 那段说明：8 个批次
+    # 3 个卡在半路、2 个 failed、一个月无人问津），页面也**没有任何路由和菜单**指向
+    # pages/scenario-gen —— 库里 111 条调用记录全是 8-09 之前的。
+    # 实现、7 张表、/api/scenario-gen/* 全部保留（49 条老用例还挂着 task id）。
+    {"key": "scenario-gen",            "label": "功能场景测试生成",     "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "2026-08-15 入口 + MCP 工具双下线（仪式太重，用户用脚投票）。实现和 7 张表保留，只是没有任何页面/工具能发起"},
     # 「接口测试」模块 2026-08-15 下线，但这条 key 还活着 —— 用例详情里
     # 「探索测试流量 → 编排为接口测试」走的是同一个 /generate 端点。
-    {"key": "api-test-generate",       "label": "接口场景编排生成",     "category": "text",      "where": "用例详情 → 编排为接口测试"},
+    {"key": "api-test-generate",       "label": "接口场景编排生成",     "category": "text",      "where": "用例详情 → 探索流量 →「编排为接口测试」"},
     {"key": "pytest-script",           "label": "pytest 脚本生成",      "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "入口是已删除的 AIScriptModal"},
-    {"key": "doc-generate",            "label": "文档生成",             "category": "text",      "where": "文档管理"},
-    {"key": "doc-generate-screenshots","label": "文档带截图生成",       "category": "text",      "where": "文档管理"},
+    {"key": "doc-generate",            "label": "文档生成",             "category": "text",      "where": "文档管理 →「新建文档」"},
+    {"key": "doc-generate-screenshots","label": "文档带截图生成",       "category": "text",      "where": "文档管理 →「新建文档」勾选自动截图"},
     # 2026-08-09 接上入口：原来只有「重新生成」（会重新登录重新截图），
     # 这条"保留截图只重写文字"的路没有任何调用方。现在两个按钮并列，各说各的代价。
     {"key": "doc-optimize",            "label": "文档优化",             "category": "text",      "where": "文档管理 → 优化文字"},
-    {"key": "exploratory-charter",     "label": "探索测试 Charter 生成","category": "text",      "where": "探索测试"},
+    {"key": "exploratory-charter",     "label": "探索测试 Charter 生成","category": "text",      "where": "探索测试 →「AI 生成章程」"},
     # 2026-08-09 实测：这条功能一直是通的（页面上「正则测试 → AI 生成」真能出结果），
     # 之前标成"已下线"是因为端点直接 complete() 没带 capability —— 档位绑了模型也不生效。
     # 现在走 resolve_ai_config，标签和现实对上了。
@@ -66,6 +77,35 @@ CAPABILITY_REGISTRY = [
     {"key": "ui-script",               "label": "AI 生成 UI 自动化脚本","category": "ui_script", "where": "已封存",            "deprecated": True, "deprecatedNote": "改由外部 Claude Code 写好回推，见 docs/cc-platform-loop-spec.md 红线 1"},
     {"key": "ui-script-repair",        "label": "UI 脚本自动修复",      "category": "ui_script", "where": "已封存",            "deprecated": True, "deprecatedNote": "自愈归 CC，平台只出证据"},
 ]
+
+# 用量记账的 skill_name 和注册表 key 不是一一对应的：场景生成是四个阶段各记一条
+# （extract/model/expand/health-check/…），它们同属「功能场景测试生成」这一个入口。
+# 不归并的话页面会冒出四个不在能力清单里的名字，而清单里那一项显示"从没被调用"。
+USAGE_ALIASES = {
+    "scenario-extract": "scenario-gen",
+    "scenario-model": "scenario-gen",
+    "scenario-expand": "scenario-gen",
+    "scenario-reflection": "scenario-gen",
+    "scenario-health-check": "scenario-gen",
+    "scenario-self-review": "scenario-gen",
+}
+
+# 这四条链路 2026-08-24 才补上记账（此前压根没写过 AIUsageLog）。
+# **必须在页面上标出来** —— 「没被数」和「没被用」在界面上长得一模一样，
+# 而用户已经照着旧页面得出过"其他 AI 都没用到"的结论，然后据此考虑砍功能。
+METERED_SINCE = {
+    "doc-generate": "2026-08-24",
+    "doc-generate-screenshots": "2026-08-24",
+    "doc-optimize": "2026-08-24",
+    "exploratory-charter": "2026-08-24",
+    "toolbox-regex": "2026-08-24",
+    "api-test-generate": "2026-08-24",
+}
+
+
+def normalize_usage_key(skill_name: str) -> str:
+    return USAGE_ALIASES.get(skill_name, skill_name)
+
 
 _KEY_TO_CATEGORY = {c["key"]: c["category"] for c in CAPABILITY_REGISTRY}
 

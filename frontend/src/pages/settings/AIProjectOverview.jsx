@@ -1,5 +1,5 @@
-import { Card, Table, Tag, Tooltip, Typography, Alert, Space, Button } from 'antd'
-import { ReloadOutlined, InfoCircleOutlined } from '@ant-design/icons'
+import { Card, Table, Tag, Tooltip, Typography, Space, Button } from 'antd'
+import { ReloadOutlined } from '@ant-design/icons'
 
 const { Text } = Typography
 
@@ -18,6 +18,9 @@ const modelOf = (row, category) =>
 export default function AIProjectOverview({ overview, loading, onReload }) {
   const rows = overview?.projects || []
   const customCount = overview?.customBindingCount || 0
+  // 「单入口覆盖」和「自定义档位」是两件事：前者是"这一行换个模型"，
+  // 说成档位会让人去找一张并不存在的卡片。
+  const overrides = overview?.perCapabilityOverrides || []
   // 表头动态跟随后端返回的内置档位，避免前端写死 text/ui_script
   const categories = (overview?.fallback?.resolved || []).map(r => ({ key: r.category, label: r.label }))
 
@@ -49,7 +52,13 @@ export default function AIProjectOverview({ overview, loading, onReload }) {
       },
     },
     ...categories.map(c => ({
-      title: `${c.label}模型`,
+      title: (
+        <Tooltip title={c.key === 'ui_script'
+          ? 'UI 脚本模型由全局档位统一覆盖 —— UI 生成必须强模型，项目级没有单独选择的概念'
+          : '项目自选/自建时，文本模型尊重项目自己选的连接；否则吃全局默认'}>
+          <span style={{ borderBottom: '1px dotted #c9cdd4' }}>{c.label}模型</span>
+        </Tooltip>
+      ),
       key: c.key,
       render: (_, r) => {
         const m = modelOf(r, c.key)
@@ -70,22 +79,14 @@ export default function AIProjectOverview({ overview, loading, onReload }) {
         </Space>
       }
     >
-      <Alert
-        type="info"
-        showIcon
-        icon={<InfoCircleOutlined />}
-        style={{ marginBottom: 12 }}
-        message={
-          <span style={{ fontSize: 12 }}>
-            每一行都是后端<b>真实解析</b>出来的结果（与实际调用同一套逻辑）。
-            注意：项目自选/自建时，<b>文本模型尊重项目自己选的连接</b>。
-            {categories.some(c => c.key === 'ui_script') && (
-              <> 而<b> UI 脚本模型由全局档位统一覆盖</b>（UI 生成必须强模型，项目级没有该概念）。</>
-            )}
-            {customCount > 0 && ` 另有 ${customCount} 个自定义档位按模块覆盖，未在此表展开。`}
-          </span>
-        }
-      />
+      {/* 每一行都是后端真实解析出来的结果（与实际调用同一套逻辑），细节挪进
+          表头 Tooltip —— 这里只留一句话，另外两条只在真有的时候才提一句。 */}
+      <div style={{ fontSize: 12, color: '#86909c', marginBottom: 10 }}>
+        每一行都是<b>真实解析</b>结果，不是配置项的复述。
+        {customCount > 0 && ` 另有 ${customCount} 个自定义档位按能力覆盖，未在此表展开。`}
+        {overrides.length > 0 && ` 另有 ${overrides.length} 处能力单独指定了模型（`
+          + overrides.map(o => `${o.label.replace('·专用', '')}→${o.model}`).join('、') + '）。'}
+      </div>
       <Table
         rowKey="projectId"
         size="small"

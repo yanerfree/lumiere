@@ -288,6 +288,9 @@ async def generate_summary(
     if exp.status != "completed":
         exp.status = "completed"
         exp.completed_at = datetime.now(timezone.utc)
+    from app.services.ai.usage import log_ai_call
+    await log_ai_call(session, project_id=project_id, capability="exploratory-charter",
+                      model=ai_config.model, est_chars=len(full or ""))
     await session.commit()
     return {"data": _session_to_dict(exp)}
 
@@ -371,6 +374,9 @@ async def generate_charter(
             exp.charter = charter
             exp.checkpoints = checkpoints
             exp.total_checkpoints = len(checkpoints)
+            from app.services.ai.usage import log_ai_call
+            await log_ai_call(session, project_id=project_id, capability="exploratory-charter",
+                              model=ai_config.model, est_chars=len(full or ""))
             await session.commit()
 
             yield f"data: {json.dumps({'type': 'done', 'charter': charter}, ensure_ascii=False)}\n\n"

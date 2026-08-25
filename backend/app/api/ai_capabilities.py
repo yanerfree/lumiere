@@ -278,6 +278,11 @@ async def get_overview(
             "id": str(sysdef.id),
             "name": sysdef.name,
             "provider": sysdef.provider,
+            # 连接自己的默认模型。**页面必须能拿到它** —— 连接名是人随便起的
+            # （「公司网关-Opus」），档位又可以覆盖成别的模型，于是首屏出现过
+            # 「claude-sonnet-5 经 公司网关-Opus」这种自相矛盾的写法。
+            # 名字骗人的时候，唯一的解释办法是把"名字/连接默认/档位覆盖"三件事摆开说。
+            "model": sysdef.model,
             "baseUrlMasked": _mask_url(sysdef.base_url),
             "isEnabled": sysdef.is_enabled,
             "status": sysdef.status,
@@ -324,10 +329,154 @@ async def get_overview(
             "candidates": candidates,
             "projects": rows,
             # 自定义档位按 module_keys 覆盖，不在总览两列里展开 → 给个数量提示，
-            # 免得用户以为这张表已经涵盖全部映射
-            "customBindingCount": sum(1 for b in bindings if not b.is_builtin),
+            # 免得用户以为这张表已经涵盖全部映射。
+            # **单入口覆盖（key 前缀 cap-）不算"自定义档位"** —— 那是"这一行换个模型"，
+            # 混进档位数里，人会去找一张并不存在的档位卡片。
+            "customBindingCount": sum(1 for b in bindings
+                                      if not b.is_builtin and not (b.key or "").startswith("cap-")),
+            # 哪几处入口单独指定了模型。首屏那句"一个模型负责全部 N 项"要减掉它们，
+            # 否则页面又开始说一句不成立的话。
+            "perCapabilityOverrides": [
+                {"key": (b.module_keys or [None])[0], "label": b.label, "model": b.model}
+                for b in bindings
+                if not b.is_builtin and (b.key or "").startswith("cap-")
+            ],
         }
     }
+
+
+# ── AI 到底用在哪儿:能力 → 入口 → 模型 → 真实用量 ─────
+
+@router.get("/usage")
+async def get_capability_usage(
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """每个 AI 入口:走哪个档位、解析出的模型是什么、**最近真的被调过没有**。
+
+    ## 为什么要有"真实用量"这一列
+
+    这一页原来只回答"配了什么",回答不了"用了什么"。用户自己的结论是
+    「系统里用到 AI 的好像只有 AI 审核」—— 而库里 `scenario-*` 有 111 条调用记录。
+    页面说不清,人就只能猜,猜完照着猜的结论砍功能。
+
+    `metered=false` 的行**不能读成"没用过"**,只能读成"这条链路以前不记账"
+    （见 ai_capabilities.METERED_SINCE）。两者在界面上必须分开写。
+    """
+    from sqlalchemy import func as sa_func
+
+    from app.models.case_file import AIUsageLog
+    from app.services.ai_capabilities import METERED_SINCE, normalize_usage_key
+    from app.services.ai_config_resolver import resolve_ai_config
+
+    rows = (await session.execute(
+        select(AIUsageLog.skill_name, sa_func.count(), sa_func.max(AIUsageLog.created_at),
+               sa_func.sum(AIUsageLog.total_tokens))
+        .group_by(AIUsageLog.skill_name)
+    )).all()
+
+    agg: dict[str, dict] = {}
+    for skill, calls, last, tokens in rows:
+        key = normalize_usage_key(skill)
+        a = agg.setdefault(key, {"calls": 0, "last": None, "tokens": 0, "rawNames": []})
+        a["calls"] += calls
+        a["tokens"] += int(tokens or 0)
+        a["rawNames"].append(skill)
+        if last and (a["last"] is None or last > a["last"]):
+            a["last"] = last
+
+    # 档位解析走 resolve_ai_config,和真实调用同一条路 —— 页面不自己重算优先级。
+    # **按 key 解析而不是按档位缓存**:单个入口可以有自己的专用档(见 PUT
+    # /capability-model),按 category 缓存会把它显示成档位的模型,页面又开始骗人。
+    bindings = (await session.execute(select(AICapabilityBinding))).scalars().all()
+    own_of = {k: b for b in bindings if not b.is_builtin
+              for k in [list(b.module_keys or [])[0]] if list(b.module_keys or []) == [k]}
+    items = []
+    for cap in CAPABILITY_REGISTRY:
+        if cap.get("deprecated"):
+            continue
+        cat = cap["category"]
+        cfg = await resolve_ai_config(None, session, capability=cap["key"])
+        model_cache = {cat: cfg.model if cfg else None}
+        u = agg.get(cap["key"], {})
+        items.append({
+            "key": cap["key"],
+            "label": cap["label"],
+            "category": cat,
+            "where": cap.get("where"),
+            "model": model_cache[cat],
+            # 这一行的模型是「跟着档位」还是「这个入口单独指定的」
+            "ownModel": own_of[cap["key"]].model if cap["key"] in own_of else None,
+            "calls": u.get("calls", 0),
+            "lastUsedAt": u["last"].isoformat() if u.get("last") else None,
+            "tokens": u.get("tokens", 0),
+            # 这条链路从什么时候开始记账。None = 一直有记账,0 次就是真的 0 次
+            "meteredSince": METERED_SINCE.get(cap["key"]),
+        })
+
+    # 记了账但对不上任何能力 key 的（历史 skill 名、已下线的能力）也要露出来，
+    # 否则"平台上跑过的 AI 调用"这本账和这张表永远差着数，而差多少没人说得出来
+    known = {i["key"] for i in items}
+    orphans = [{"key": k, "calls": v["calls"], "lastUsedAt": v["last"].isoformat() if v["last"] else None,
+                "tokens": v["tokens"]}
+               for k, v in agg.items() if k not in known]
+
+    return {"data": {"items": items, "orphans": sorted(orphans, key=lambda x: -x["calls"])}}
+
+
+class CapabilityModelUpdate(BaseModel):
+    key: str
+    # None / 空 = 取消单独指定,回到跟着档位走
+    model: str | None = None
+
+
+@router.put("/capability-model")
+async def set_capability_model(
+    body: CapabilityModelUpdate,
+    session: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_role("admin")),
+):
+    """给**单个 AI 入口**指定模型(或取消,回到跟着档位走)。
+
+    为什么要有这个:原来只能按"档位"配(文本生成 / UI 脚本生成两档),想让文档生成
+    用便宜模型、评审用强模型,得自己去「新增自定义档位」里建一个档、再勾模块 ——
+    三步操作、两个新概念,而用户要的只是"这一行换个模型"。
+
+    实现上仍然是自定义档位(一个入口一档,`module_keys=[key]`),只是把三步压成一步:
+    页面上每一行一个下拉。**不新造第二套优先级** —— 解析路径还是
+    ai_config_resolver 那一条,否则页面显示和实际调用早晚漂开。
+    """
+    cap = next((c for c in CAPABILITY_REGISTRY if c["key"] == body.key), None)
+    if cap is None:
+        raise NotFoundError(code="CAPABILITY_NOT_FOUND", message=f"没有这个 AI 入口:{body.key}")
+
+    bindings = (await session.execute(select(AICapabilityBinding))).scalars().all()
+    # 已有的"专用档"：非内置、且刚好只圈了这一个 key
+    own = next((b for b in bindings
+                if not b.is_builtin and list(b.module_keys or []) == [body.key]), None)
+
+    model = (body.model or "").strip()
+    if not model:
+        if own is not None:
+            await session.delete(own)
+            await session.commit()
+        return {"data": {"key": body.key, "model": None, "followsCategory": True}}
+
+    if own is None:
+        own = AICapabilityBinding(
+            key=f"cap-{body.key}",
+            label=f"{cap['label']}·专用",
+            category=cap["category"],
+            model=model,
+            is_builtin=False,
+            module_keys=[body.key],
+            sort_order=100,
+        )
+        session.add(own)
+    else:
+        own.model = model
+    await session.commit()
+    return {"data": {"key": body.key, "model": model, "followsCategory": False}}
 
 
 # ── 模型下拉:代理网关 /models ─────────────────────────

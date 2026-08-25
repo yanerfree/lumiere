@@ -8,7 +8,7 @@
 // 后端加一个 AI 调用点，这页自己就多一行；下线一个，这页自己就挪到"已下线"。手写清单
 // 和真相分家这件事不会再发生。
 import { useEffect, useState } from 'react'
-import { Card, Tag, Space, Typography, Table, Spin, Alert } from 'antd'
+import { Card, Tag, Space, Typography, Table, Spin, Alert, Tooltip, Select, message } from 'antd'
 import { RobotOutlined, ApiOutlined } from '@ant-design/icons'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
@@ -27,13 +27,38 @@ export default function AICapabilities() {
   const [toolCount, setToolCount] = useState(null)
   const [loading, setLoading] = useState(true)
 
+  const [usage, setUsage] = useState(null)
+  const [models, setModels] = useState([])
+  const [savingKey, setSavingKey] = useState(null)
+
+  const reloadUsage = async () => {
+    try { setUsage((await api.get('/ai-capabilities/usage')).data) } catch { /* */ }
+  }
+
+  // 给某一个入口单独指定模型（空 = 取消，回到跟着档位走）
+  const setCapabilityModel = async (key, model) => {
+    setSavingKey(key)
+    try {
+      await api.put('/ai-capabilities/capability-model', { key, model: model || null })
+      message.success(model ? `已指定为 ${model}` : '已改回跟着档位')
+      await reloadUsage()
+    } catch { /* request.js 已提示 */ } finally { setSavingKey(null) }
+  }
+
   useEffect(() => {
     Promise.all([
       api.get('/ai-capabilities').then(r => r.data).catch(() => null),
       api.get('/mcp-keys/tools').then(r => (r.data || []).length).catch(() => null),
-    ]).then(([caps, n]) => {
+      // 真实用量。**这一列是这一页最重要的东西**：用户看着旧版这一页得出的结论是
+      // 「系统里用到 AI 的好像只有 AI 审核吧」，而库里场景生成有 111 条调用记录。
+      // 只列"配了什么"回答不了"用了什么"，人就只能猜，猜完照着猜的结论砍功能。
+      api.get('/ai-capabilities/usage').then(r => r.data).catch(() => null),
+      api.get('/ai-capabilities/models').then(r => (r.data?.models || []).map(m => typeof m === 'string' ? m : m.id)).catch(() => []),
+    ]).then(([caps, n, u, ms]) => {
       setData(caps)
       setToolCount(n)
+      setUsage(u)
+      setModels(ms || [])
     }).finally(() => setLoading(false))
   }, [])
 
@@ -47,6 +72,11 @@ export default function AICapabilities() {
 
   const live = registry.filter(c => !c.deprecated)
   const gone = registry.filter(c => c.deprecated)
+
+  const usageOf = (key) => (usage?.items || []).find(i => i.key === key)
+  const usedCount = (usage?.items || []).filter(i => i.calls > 0).length
+  const totalCalls = (usage?.items || []).reduce((a, i) => a + i.calls, 0)
+  const fmtDay = (iso) => (iso ? String(iso).slice(5, 10) : '')
 
   const columns = [
     {
@@ -64,8 +94,64 @@ export default function AICapabilities() {
       render: v => <Tag>{labelOf(v)}</Tag>,
     },
     {
-      title: '当前模型', dataIndex: 'category', key: 'model', width: 190,
-      render: v => <Text code style={{ fontSize: 12 }}>{modelOf(v)}</Text>,
+      // 每一行都能单独换模型。原来只能按"档位"配（文本 / UI 脚本两档），
+      // 想让文档生成用便宜的、评审用强的，得去「新增自定义档位」建档再勾模块 ——
+      // 三步操作、两个新概念，而人要的只是"这一行换个模型"。
+      title: (
+        <Tooltip title="每个入口都可以单独指定模型；不指定就跟着档位走（档位在 AI 服务配置页改）。">
+          <span style={{ borderBottom: '1px dotted #c9cdd4' }}>用哪个模型（可改）</span>
+        </Tooltip>
+      ),
+      dataIndex: 'key', key: 'model', width: 250,
+      render: (key, r) => {
+        const u = usageOf(key)
+        const own = u?.ownModel || null
+        return (
+          <div>
+            <Select
+              size="small"
+              style={{ width: 228 }}
+              value={own || ''}
+              loading={savingKey === key}
+              disabled={savingKey === key}
+              onChange={(v) => setCapabilityModel(key, v)}
+              options={[
+                { value: '', label: `跟着档位（${modelOf(r.category)}）` },
+                ...models.map(m => ({ value: m, label: m })),
+              ]}
+            />
+            {own && (
+              <div style={{ fontSize: 11, color: '#0ea5a0', marginTop: 2 }}>这一项单独指定</div>
+            )}
+          </div>
+        )
+      },
+    },
+    {
+      title: (
+        <Tooltip title="按调用记录数的真实用量。「没记录」和「没用过」是两件事，这一列分开写 —— 混着说会误删还在用的功能。">
+          <span style={{ borderBottom: '1px dotted #c9cdd4' }}>真实用量</span>
+        </Tooltip>
+      ),
+      dataIndex: 'key', key: 'usage', width: 200,
+      render: (key) => {
+        const u = usageOf(key)
+        if (!u) return <Text type="secondary" style={{ fontSize: 12 }}>—</Text>
+        if (u.calls > 0) return (
+          <span style={{ fontSize: 12 }}>
+            <b style={{ color: '#0ea5a0' }}>{u.calls}</b> 次
+            <span style={{ color: '#86909c', marginLeft: 8 }}>最近 {fmtDay(u.lastUsedAt)}</span>
+          </span>
+        )
+        // 0 次分两种，说法必须不一样
+        return u.meteredSince ? (
+          <Tooltip title={`这条链路从 ${u.meteredSince} 才开始记调用（之前压根没写记录），所以"0 次"只代表这之后没人用过，不代表功能没用过。`}>
+            <span style={{ fontSize: 12, color: '#d48806', borderBottom: '1px dotted currentColor' }}>
+              暂无记录（{u.meteredSince} 起记）
+            </span>
+          </Tooltip>
+        ) : <span style={{ fontSize: 12, color: '#c9cdd4' }}>从未调用</span>
+      },
     },
   ]
 
@@ -80,6 +166,26 @@ export default function AICapabilities() {
           平台上会调 AI 的地方，一共 {live.length} 处，全在下面。改模型去
           {' '}<Link to="/settings/ai-providers">AI 服务配置 → AI 能力→模型</Link>。
         </span>
+        {usage && (
+          <div style={{ fontSize: 13, color: '#4e5969', marginTop: 6, lineHeight: 1.9 }}>
+            这 {live.length} 处入口<b>现在都点得到</b>（路径见「在哪用」那一列），
+            其中<b>真的被调用过</b>的有 <b>{usedCount}</b> 处、累计 <b>{totalCalls}</b> 次。
+            每一行的模型都可以单独改。
+            <br />
+            {gone.length > 0 && (
+              <span style={{ color: '#86909c' }}>
+                另有 {gone.length} 处<b>入口已下线</b>（下面单列，说明为什么不做了）。
+              </span>
+            )}
+            {(usage.orphans || []).length > 0 && (
+              <span style={{ color: '#86909c', marginLeft: 6 }}>
+                已下线的那几处历史上跑过：
+                {usage.orphans.slice(0, 3).map(o => `${o.key} ${o.calls} 次`).join('、')}
+                —— 记录留着，但现在没有任何页面/工具能发起它。
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* 边界：哪些活是平台干的，哪些活平台不干 */}

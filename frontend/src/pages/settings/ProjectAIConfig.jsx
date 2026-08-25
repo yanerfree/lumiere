@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import {
   Card, Radio, Button, Tag, Space, message, Empty, Spin, Typography, Divider,
   Modal, Form, Input, Select, InputNumber, Popconfirm, Tooltip,
@@ -32,6 +32,18 @@ export default function ProjectAIConfig() {
     if (!projectId) return
     api.get(`/projects/${projectId}/ai-usage`).then(res => setUsage(res.data)).catch(() => {})
   }, [projectId])
+
+  // 能力清单从后端注册表拉，不手写。
+  // 这一段以前是写死的 HTML：AI 用例生成/AI 脚本生成标 ✅（其实入口早下线了），
+  // 质量评审/失败诊断标"即将上线"（其实质量评审就是「AI 审核」，全平台唯一
+  // 被真实高频调用的能力）。手写文案不会跟着后端改，迟早说反 —— 这里跟全局
+  // 「AI 服务配置」页用同一个接口、同一句收尾，两页不会各说各话。
+  const [capLabels, setCapLabels] = useState([])
+  useEffect(() => {
+    api.get('/ai-capabilities').then(res => {
+      setCapLabels((res.data?.registry || []).filter(c => !c.deprecated).map(c => c.label))
+    }).catch(() => {})
+  }, [])
 
   const fetchConfig = useCallback(async () => {
     setLoading(true)
@@ -176,19 +188,22 @@ export default function ProjectAIConfig() {
         </span>
       </div>
 
-      {/* 功能说明 */}
+      {/* 功能说明 —— 数字和清单都来自后端注册表,不再手写。
+          「有哪些能力」和「能不能调 AI」是两件事：前者是静态的功能清单,
+          后者（aiUsable）取决于这个项目有没有可用的 AI 连接。分开说,
+          不再用同一个布尔值去驱动一份写死的功能状态表。 */}
       <Card size="small" style={{ marginBottom: 16, background: 'rgba(0,0,0,0.02)' }}>
-        <div style={{ fontSize: 13, lineHeight: 2 }}>
-          <b>配置 AI 后可用的功能：</b>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 24px', marginTop: 4 }}>
-            <span>{aiUsable ? '✅' : '❌'} <b>AI 用例生成</b> — 从接口定义自动生成多维度测试用例</span>
-            <span>{aiUsable ? '✅' : '❌'} <b>AI 脚本生成</b> — 根据用例自动生成 pytest 测试脚本</span>
-            <span style={{ color: '#86909c' }}>{'⏳'} <b>质量评审</b> — AI 评审用例质量并打分（即将上线）</span>
-            <span style={{ color: '#86909c' }}>{'⏳'} <b>失败诊断</b> — AI 分析测试失败原因（即将上线）</span>
-          </div>
+        <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+          本项目可用的 AI 能力共 <b>{capLabels.length || '—'}</b> 处：
+          {capLabels.slice(0, 4).join(' · ')}
+          {capLabels.length > 4 && ` 等 ${capLabels.length} 项`}
+          <span style={{ color: '#86909c', marginLeft: 8 }}>
+            完整清单和各自真被调过多少次：
+          </span>
+          <Link to={`/projects/${projectId}/settings/ai-capabilities`}>AI 能力 → 能力总览</Link>
           {!aiUsable && (
             <div style={{ marginTop: 8, color: '#ff7d00' }}>
-              {'⚠️'} 当前无可用 AI 配置（本项目未选择，且管理员的全局兜底已关闭），以上功能不可用。
+              {'⚠️'} 当前无可用 AI 配置（本项目未选择，且管理员的全局兜底已关闭），以上能力都调不了 AI。
               手动管理用例、执行测试、API Mock 等功能不受影响。
             </div>
           )}

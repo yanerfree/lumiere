@@ -7,7 +7,7 @@ import {
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, CheckCircleOutlined,
   CloseCircleOutlined, StarOutlined, StarFilled, ThunderboltOutlined,
-  ApiOutlined, EyeOutlined, EyeInvisibleOutlined, LoadingOutlined,
+  ApiOutlined, EyeOutlined, EyeInvisibleOutlined, LoadingOutlined, WarningOutlined,
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import AIProjectOverview from './AIProjectOverview'
@@ -32,6 +32,10 @@ export default function AIProviderConfig() {
   const [modelOptions, setModelOptions] = useState([])
   const [overview, setOverview] = useState(null)
   const [overviewLoading, setOverviewLoading] = useState(false)
+  // 档位（内置 text 那条就是"实际调用用哪个模型"的真身）
+  const [bindings, setBindings] = useState([])
+  const [syncBinding, setSyncBinding] = useState(false)
+  const effectiveTextModel = (bindings.find(b => b.isBuiltin && b.category === 'text') || {}).model || null
   const [form] = Form.useForm()
 
   const fetchConfigs = useCallback(async () => {
@@ -48,6 +52,14 @@ export default function AIProviderConfig() {
       setProjects(res.data || [])
     } catch { /* */ }
   }, [])
+
+  const fetchCapabilities = useCallback(async () => {
+    try {
+      const res = await api.get('/ai-capabilities')
+      setBindings(res.data?.bindings || [])
+    } catch { /* 拉不到就不显示同步开关，别在页面上编一份清单 */ }
+  }, [])
+  const fetchBindings = fetchCapabilities
 
   // 兜底链 + 项目总览共用这一份数据（子组件不再各自请求）
   const fetchOverview = useCallback(async () => {
@@ -71,7 +83,8 @@ export default function AIProviderConfig() {
     } catch { /* */ }
   }, [])
 
-  useEffect(() => { fetchConfigs(); fetchProjects(); fetchModels(); fetchOverview() }, [fetchConfigs, fetchProjects, fetchModels, fetchOverview])
+  useEffect(() => { fetchConfigs(); fetchProjects(); fetchModels(); fetchOverview(); fetchCapabilities() },
+    [fetchConfigs, fetchProjects, fetchModels, fetchOverview, fetchCapabilities])
 
   const openCreate = () => {
     setEditingId(null)
@@ -130,8 +143,22 @@ export default function AIProviderConfig() {
         await api.post('/ai-providers', body)
         message.success('创建成功')
       }
+      // 勾了「同时改实际调用的模型」就把档位一起改掉。
+      // **这一步是"我配什么就是什么"的落点** —— 只改连接那一层是不会生效的。
+      if (syncBinding && values.model && values.model !== effectiveTextModel) {
+        const textBinding = (bindings || []).find(b => b.isBuiltin && b.category === 'text')
+        if (textBinding) {
+          try {
+            await api.put(`/ai-capabilities/bindings/${textBinding.id}`, { model: values.model })
+            message.success(`实际调用的模型已改为 ${values.model}`)
+          } catch { message.warning('连接已保存，但档位模型没改成功，去下面「AI 能力 → 模型」手动改一下') }
+        }
+      }
+      setSyncBinding(false)
       setModalOpen(false)
       fetchConfigs()
+      fetchOverview()
+      fetchBindings()
     } catch { /* */ }
   }
 
@@ -233,13 +260,30 @@ export default function AIProviderConfig() {
       // 「AI 能力 → 模型」决定。原来标题就叫「模型」，和下面的「实际生效」并排
       // 摆着两个不同的数字谁也不解释谁，用户看表格以为平台还在用 4.6。
       title: (
-        <Tooltip title="连接自带的默认模型，一般用于测试连通性。实际调用用哪个模型，由下面的「AI 能力 → 模型」决定。">
-          <span style={{ borderBottom: '1px dashed #c9cdd4', cursor: 'help' }}>默认模型</span>
+        <Tooltip title="只用于点「测试连接」。实际调用用哪个模型，由下面的「AI 能力 → 模型」决定 —— 原来这一列叫「默认模型」，人以为改它就换了模型。">
+          <span style={{ borderBottom: '1px dashed #c9cdd4', cursor: 'help' }}>测试用模型</span>
         </Tooltip>
       ),
       dataIndex: 'model',
       width: 220,
-      render: (m) => <Tag style={{ color: '#86909c' }}>{m}</Tag>,
+      // 名字里的模型词和它自己的默认模型对不上就当场说出来。
+      // 「公司网关-Sonnet」的默认模型是 claude-opus-4-8、「公司网关-Opus」是
+      // claude-opus-5 而档位覆盖成 sonnet-5 —— 用户看首屏第一句话就是"自相矛盾"。
+      // 名字是标签、模型才是事实，这件事必须在**名字旁边**说，不能只在下面说。
+      render: (m, r) => {
+        const fam = (String(r.name || '').match(/opus|sonnet|haiku|fable/i) || [])[0]
+        const mismatch = fam && !String(m || '').toLowerCase().includes(fam.toLowerCase())
+        return (
+          <Space size={4}>
+            <Tag style={{ color: '#86909c' }}>{m}</Tag>
+            {mismatch && (
+              <Tooltip title={`这条连接的名字里写着 ${fam}，但它的默认模型是 ${m}。名字只是个标签，不影响实际调用；容易看错的话把名字改中性一点。`}>
+                <WarningOutlined style={{ color: '#faad14' }} />
+              </Tooltip>
+            )}
+          </Space>
+        )
+      },
     },
     {
       title: '状态',
@@ -294,19 +338,14 @@ export default function AIProviderConfig() {
           AI 服务配置
         </h2>
         <span style={{ fontSize: 13, color: '#86909c' }}>
-          管理 AI 服务连接。创建配置后需要<b>分配给项目</b>，项目内才能使用 AI 功能。
+          AI 服务的连接方式（地址、密钥）。创建后需要<b>分配给项目</b>才能用。
+          实际调哪个模型看下面「能力 → 模型」——这里的「测试用模型」只影响点「测试连接」那一下。
         </span>
       </div>
 
-      <Card size="small" style={{ marginBottom: 12, background: 'rgba(0,0,0,0.02)' }}>
-        <div style={{ fontSize: 13, lineHeight: 2 }}>
-          <b>AI 服务为以下功能提供支持：</b>
-          <span style={{ marginLeft: 12 }}>AI 用例生成 · 功能场景生成 · 质量评审 · 失败诊断 · 文档生成</span>
-          <br/>
-          <b>配置步骤：</b>
-          <span style={{ marginLeft: 12 }}>① 新增 AI 服务 → ② 测试连接 → ③ 分配给项目 → ④ 项目内选择使用</span>
-        </div>
-      </Card>
+      {/* 原来这里是一张说明卡片：写死的功能清单（跟真相分过家）+ 四步配置流程
+          （常识，不产生决策价值）。删掉——连接是什么、模型用哪个，各自在下面
+          自己的板块里一眼说清，不需要一段前情提要。 */}
 
       <div style={{ marginBottom: 12 }}>
         <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
@@ -365,13 +404,44 @@ export default function AIProviderConfig() {
             <Input.Password placeholder={editingId ? '留空则不修改' : 'gw-...'} />
           </Form.Item>
 
-          <Form.Item name="model" label="模型名称" rules={[{ required: true, message: '请选择模型' }]}>
+          {/* 这个字段**不决定实际调用**：解析顺序是「按入口指定的模型 → 档位 → 这里」，
+              而档位（文本生成）永远有值，所以这里填什么在全局兜底路径上都用不上。
+              用户在这儿把它改成 opus-5、以为平台就换了模型，实际跑的还是档位里的
+              sonnet-5 —— 「我配什么就是什么」在这儿是不成立的，那就把话说清楚，
+              并且给一个勾选框让它**真的**成立。 */}
+          <Form.Item name="model" label="测试连接用的模型" rules={[{ required: true, message: '请选择模型' }]}
+            extra={
+              <span style={{ fontSize: 12 }}>
+                这个值只用于点「测试连接」那一下{effectiveTextModel ? <>；<b>实际调用</b>现在用的是
+                  {' '}<Text code style={{ fontSize: 11 }}>{effectiveTextModel}</Text>（下面「AI 能力 → 模型」里的档位）</> : null}
+              </span>
+            }>
             <AutoComplete
               options={modelOptions}
               filterOption={(input, option) =>
                 (option?.value || '').toLowerCase().includes(input.toLowerCase())}
               placeholder="选择或输入模型名（如 claude-haiku-4-5-20251001）"
             />
+          </Form.Item>
+
+          {/* 勾上 = 保存连接的同时把档位也改成同一个模型。
+              没有这一步的话，人只能先在这儿改一遍、再滚到下面档位里改第二遍，
+              而"改了没生效"是不会有任何提示的。 */}
+          <Form.Item shouldUpdate noStyle>
+            {({ getFieldValue }) => {
+              const m = getFieldValue('model')
+              if (!m || !effectiveTextModel || m === effectiveTextModel) return null
+              return (
+                <div style={{ margin: '-8px 0 12px', padding: '8px 10px', borderRadius: 8,
+                              background: 'rgba(250,173,20,0.10)', border: '1px solid rgba(250,173,20,0.25)' }}>
+                  <Switch size="small" checked={syncBinding} onChange={setSyncBinding} />
+                  <span style={{ fontSize: 12, marginLeft: 8, color: '#8a6212' }}>
+                    同时把<b>实际调用</b>的模型也改成 <Text code style={{ fontSize: 11 }}>{m}</Text>
+                    （不勾的话，实际跑的仍然是 {effectiveTextModel}）
+                  </span>
+                </div>
+              )
+            }}
           </Form.Item>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>

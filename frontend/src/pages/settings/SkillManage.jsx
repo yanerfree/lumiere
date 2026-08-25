@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, Tag, Space, Typography, Alert, Steps, Collapse, Button, Drawer, Input, message } from 'antd'
+import { Card, Tag, Space, Typography, Alert, Steps, Collapse, Button, Drawer, Input, message, Tooltip } from 'antd'
 import {
   ThunderboltOutlined, FileTextOutlined, CodeOutlined, SearchOutlined,
   BugOutlined, FileSearchOutlined, BookOutlined, CheckCircleOutlined,
@@ -15,12 +15,15 @@ const SKILLS = [
   {
     name: 'tb-case-generate',
     title: 'AI 用例生成',
-    icon: <FileTextOutlined style={{ fontSize: 20, color: '#0ea5a0' }} />,
-    status: 'available',
+    icon: <FileTextOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
+    // 页面入口 2026-08-19 下线：建的是 testforge task JSON,真正生成用例的是
+    // CC 侧 /tf-forge（它自己就能读接口树）。这条 skill 文件还在,但已经没有
+    // 按钮能触发它 —— 之前这里标"可用"还带编辑按钮,跟事实反了。
+    status: 'retired',
     description: '从 API 接口定义和业务规则出发，自动生成覆盖 6 个维度的测试用例',
     input: '接口信息（选择或手动输入） + 业务规则 + 目标模块',
     output: '测试用例（标题 + 手动步骤 + 预期结果），自动入库',
-    where: '用例管理页 → 工具栏「AI 生成用例」按钮',
+    where: '入口 2026-08-19 下线，改由外部 Claude Code 的 /tf-forge 生成后回推',
     dimensions: ['正向流程', '参数验证', '业务规则', '边界值', '异常场景', '安全'],
     steps: [
       '收集上下文 — 读取项目 API 接口定义 + 查询已有用例（去重）',
@@ -33,12 +36,14 @@ const SKILLS = [
   {
     name: 'tb-script-generate',
     title: 'AI 脚本生成',
-    icon: <CodeOutlined style={{ fontSize: 20, color: '#0ea5a0' }} />,
-    status: 'available',
+    icon: <CodeOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
+    // 入口（AIScriptModal）已删除，而且这条从来没有对应的 skill 文件——
+    // 之前标"可用"还带编辑按钮，点了会 404（GET /skills/tb-script-generate 查无此文件）。
+    status: 'retired',
     description: '根据已有测试用例，自动生成 pytest + httpx 可执行的自动化测试脚本',
     input: '选中的测试用例（勾选一条或多条）',
     output: 'pytest 测试脚本代码',
-    where: '用例管理页 → 勾选用例 → 工具栏「AI 生成脚本」按钮',
+    where: '入口（AIScriptModal）已删除，无对应 skill 文件',
     steps: [
       '读取用例 — 获取选中用例的步骤、前置条件、预期结果',
       'AI 生成 — 将用例转化为 pytest + httpx 代码',
@@ -48,26 +53,31 @@ const SKILLS = [
   },
   {
     name: 'tb-quality-review',
-    title: '质量评审',
-    icon: <SearchOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
-    status: 'planned',
-    phase: 'Phase 2',
-    description: 'AI 从完整性、准确性、有效性、可执行性 4 个维度评审用例质量',
-    input: '一个模块下的所有用例 + 对应的 API 接口定义',
-    output: '质量评分（0-100）+ 问题清单 + 覆盖矩阵 + 改进建议',
-    where: '计划入口：用例管理 → 选模块 → AI 评审',
+    title: '质量评审（AI 审核）',
+    icon: <SearchOutlined style={{ fontSize: 20, color: '#0ea5a0' }} />,
+    // 这条早就是"可用"了，标"规划中 Phase 2"是最反的一条——它是全平台唯一
+    // 被真实高频调用的能力（9 次调用，最近一次 08-18）。用例管理页的
+    // 「AI 审核」按钮点的就是它。
+    status: 'available',
+    description: '按六维逐条评审用例质量：场景合理性/验证点到位/接口必要性/UI脚本/覆盖遗漏/纪律',
+    input: '一条或若干条用例 + 对应的 API 接口定义',
+    output: '六维评分 + 问题清单（致命/重要/次要）+ 结论落库到审核标签',
+    where: '用例管理「AI 审核」按钮 / 用例详情「审核」页 / MCP tb_review_case',
     mcpTools: ['tb_list_cases', 'tb_get_case', 'tb_list_api_tree'],
   },
   {
     name: 'tb-explore',
     title: '探索测试',
-    icon: <BugOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
-    status: 'planned',
-    phase: 'Phase 2',
+    icon: <BugOutlined style={{ fontSize: 20, color: '#4e8af0' }} />,
+    // 不是"规划中"：生成章程 → 记录检查点 → 生成总结报告这条链路在
+    // app/api/exploratory.py 里已经跑得通，项目菜单也已经有「探索测试」了。
+    // 但它是内联 prompt，不是独立的 skill 文件——GET/PUT /skills/tb-explore
+    // 会 404，所以不能标"可用"（那会露出一个点了就 404 的编辑按钮）。
+    status: 'inline',
     description: 'AI 辅助人工探索测试：生成章程 → 引导逐项检查 → 记录发现 → 输出报告',
     input: '目标模块 + API 接口 + 已有用例覆盖情况',
-    output: '探索测试报告（Bug / 风险 / 改进建议 + 覆盖热力图）',
-    where: '计划入口：项目菜单新增「探索测试」',
+    output: '探索测试报告（结论 + 检查点覆盖情况）',
+    where: '探索测试 →「AI 生成章程」',
     mcpTools: ['tb_list_api_tree', 'tb_list_cases'],
   },
   {
@@ -155,7 +165,8 @@ export default function SkillManage() {
             key={skill.name}
             size="small"
             style={{
-              borderLeft: skill.status === 'available' ? '3px solid #0ea5a0' : '3px solid rgba(0,0,0,0.15)',
+              borderLeft: skill.status === 'available' ? '3px solid #0ea5a0'
+                : skill.status === 'inline' ? '3px solid #4e8af0' : '3px solid rgba(0,0,0,0.15)',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -177,7 +188,13 @@ export default function SkillManage() {
                   ? <Tag color="cyan" icon={<CheckCircleOutlined />}>可用</Tag>
                   : skill.status === 'retired'
                     ? <Tag color="default">已下线</Tag>
-                    : <Tag icon={<ClockCircleOutlined />}>{skill.phase} 规划中</Tag>
+                    : skill.status === 'inline'
+                      // 功能是活的，但走的是内联 prompt，不是这页管的独立 skill 文件——
+                      // 标"可用"会露出一个点了 404 的编辑按钮，标"规划中"又是撒谎。
+                      ? <Tooltip title="功能已经上线在跑，只是没有做成这页能编辑的独立 skill 文件（走的是接口里的内联 prompt）">
+                          <Tag color="blue">已上线（无独立 Skill 文件）</Tag>
+                        </Tooltip>
+                      : <Tag icon={<ClockCircleOutlined />}>{skill.phase} 规划中</Tag>
                 }
               </Space>
             </div>

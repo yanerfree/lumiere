@@ -180,6 +180,9 @@ async def generate_document(
 
             doc.content = full
             doc.status = "published"
+            from app.services.ai.usage import log_ai_call
+            await log_ai_call(session, project_id=project_id, capability="doc-generate",
+                              model=ai_config.model, est_chars=len(full))
             await session.commit()
 
             yield f"data: {json.dumps({'type': 'done', 'docId': str(doc_id), 'title': body.title}, ensure_ascii=False)}\n\n"
@@ -287,6 +290,10 @@ async def generate_with_screenshots(
                         session.add(doc)
                         await session.flush()
                         created_doc_ids.append(str(doc.id))
+                    from app.services.ai.usage import log_ai_call
+                    await log_ai_call(session, project_id=project_id,
+                                      capability="doc-generate-screenshots",
+                                      model=ai_config.model, est_chars=len(first_content or ""))
                     await session.commit()
                 else:
                     if event.type == "chunk":
@@ -436,6 +443,9 @@ async def optimize_document(
             doc.previous_content = original_content
             doc.content = full_content
             doc.status = "published"
+            from app.services.ai.usage import log_ai_call
+            await log_ai_call(session, project_id=project_id, capability="doc-optimize",
+                              model=ai_config.model, est_chars=len(full_content))
             await session.commit()
 
             after = _count_images(full_content)

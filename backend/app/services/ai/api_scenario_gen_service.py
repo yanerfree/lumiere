@@ -396,6 +396,14 @@ async def generate_api_test(
                 "names": extracted_names,
             })
 
+    # 记账：这条链路（用例详情 →「编排为接口测试」）此前一次都没记过，
+    # 于是「AI 能力→模型」页面上它和"从没被用过的功能"长得一模一样。
+    from app.services.ai.usage import log_ai_call
+    await log_ai_call(session, project_id=project_id, capability="api-test-generate",
+                      model=(ai_config.model if ai_config else None),
+                      est_chars=len(full_content or ""))
+    await session.commit()
+
     yield GenEvent(type="done", data={
         "scenarioIds": created_ids,
         "totalScenarios": len(created_ids),

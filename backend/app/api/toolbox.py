@@ -114,6 +114,12 @@ async def generate_regex(
             ],
             max_tokens=200,
         )
+        from app.services.ai.usage import log_ai_call
+        # 工具箱是全局页面 → project_id=None（迁移 zzr0aiusage 为此放开了 NOT NULL）。
+        # 不记的话「AI 能力→模型」页会说"正则生成从没被调用过"，而它一直是通的。
+        await log_ai_call(session, project_id=None, capability="toolbox-regex",
+                          model=(ai_config.model if ai_config else None), resp=resp)
+        await session.commit()
         data = parse_regex_payload(resp.content)
         if data is None:
             logger.warning("正则生成：模型回的内容解不出正则 —— %r", (resp.content or "")[:200])
