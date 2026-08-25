@@ -1,0 +1,670 @@
+<title>testBench 审核机制</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;700&family=Noto+Serif+SC:wght@600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+
+<style>
+:root{
+  --ground:#F5F7F4; --surface:#FFFFFF; --surface-2:#EDF1ED;
+  --ink:#182019; --ink-2:#3D4A41; --muted:#66756B;
+  --line:#DCE3DC; --line-strong:#C1CCC3;
+  --accent:#14584B; --accent-ink:#0E3F36; --accent-soft:#E1EEE8;
+  --pass:#2E7A55; --pass-soft:#E4F0E8;
+  --reject:#A63229; --reject-soft:#F6E5E2;
+  --hold:#7B6A4F; --hold-soft:#F0EBE1;
+  --shadow:0 1px 2px rgba(24,32,25,.05), 0 10px 28px -20px rgba(24,32,25,.35);
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0F1412; --surface:#161D19; --surface-2:#1C251F;
+    --ink:#E3E9E3; --ink-2:#BFCCC2; --muted:#94A398;
+    --line:#26302A; --line-strong:#3A483D;
+    --accent:#5CC0A6; --accent-ink:#8FD8C4; --accent-soft:#15302A;
+    --pass:#63BC8D; --pass-soft:#152A20;
+    --reject:#E0796E; --reject-soft:#2D1B18;
+    --hold:#C0A87F; --hold-soft:#272117;
+    --shadow:0 1px 2px rgba(0,0,0,.45), 0 10px 28px -20px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0F1412; --surface:#161D19; --surface-2:#1C251F;
+  --ink:#E3E9E3; --ink-2:#BFCCC2; --muted:#94A398;
+  --line:#26302A; --line-strong:#3A483D;
+  --accent:#5CC0A6; --accent-ink:#8FD8C4; --accent-soft:#15302A;
+  --pass:#63BC8D; --pass-soft:#152A20;
+  --reject:#E0796E; --reject-soft:#2D1B18;
+  --hold:#C0A87F; --hold-soft:#272117;
+  --shadow:0 1px 2px rgba(0,0,0,.45), 0 10px 28px -20px rgba(0,0,0,.8);
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:"Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;
+  font-size:16px; line-height:1.85; -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1180px; margin:0 auto; padding:0 28px}
+.col{max-width:720px}
+
+/* ── top bar ───────────────────────────── */
+.bar{
+  position:sticky; top:0; z-index:20; background:var(--ground);
+  background:color-mix(in srgb, var(--ground) 88%, transparent);
+  backdrop-filter:blur(10px); border-bottom:1px solid var(--line);
+}
+.bar-in{display:flex; align-items:center; gap:22px; height:52px; overflow-x:auto; scrollbar-width:none}
+.bar-in::-webkit-scrollbar{display:none}
+.bar-mark{font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:600;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--accent); white-space:nowrap}
+.bar a{font-size:13.5px; color:var(--muted); text-decoration:none; white-space:nowrap; padding:2px 0;
+  border-bottom:1.5px solid transparent}
+.bar a:hover,.bar a:focus-visible{color:var(--ink); border-bottom-color:var(--accent)}
+
+/* ── hero ──────────────────────────────── */
+.hero{padding:76px 0 52px; border-bottom:1px solid var(--line)}
+.eyebrow{font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:600;
+  letter-spacing:.16em; text-transform:uppercase; color:var(--accent); margin:0 0 18px}
+h1{font-family:"Noto Serif SC",Georgia,serif; font-weight:700; font-size:clamp(32px,4.6vw,50px);
+  line-height:1.28; letter-spacing:-.01em; margin:0 0 22px; text-wrap:balance}
+.lede{font-size:19px; line-height:1.8; color:var(--ink-2); margin:0 0 14px}
+.lede strong{color:var(--ink); font-weight:700}
+.sig{margin-top:30px; padding-top:18px; border-top:1px solid var(--line);
+  font-family:"JetBrains Mono",monospace; font-size:12.5px; color:var(--muted); line-height:2}
+
+/* ── sections ──────────────────────────── */
+section{padding:66px 0; border-bottom:1px solid var(--line)}
+section:last-of-type{border-bottom:0}
+h2{font-family:"Noto Serif SC",Georgia,serif; font-weight:700; font-size:clamp(24px,3vw,32px);
+  line-height:1.4; margin:0 0 10px; text-wrap:balance}
+h3{font-size:17.5px; font-weight:700; margin:38px 0 12px; line-height:1.6}
+h4{font-size:15px; font-weight:700; margin:24px 0 8px; color:var(--ink-2)}
+p{margin:0 0 16px}
+.sub{color:var(--muted); font-size:15.5px; margin:0 0 26px}
+strong{font-weight:700}
+em{font-style:normal; background:var(--accent-soft); color:var(--accent-ink);
+  padding:.1em .3em; border-radius:2px; font-weight:500}
+:root[data-theme="dark"] em{color:var(--accent-ink)}
+code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace; font-size:.88em}
+code{background:var(--surface-2); padding:.12em .38em; border-radius:3px; color:var(--ink-2)}
+ul{margin:0 0 18px; padding-left:20px}
+li{margin:0 0 9px}
+a{color:var(--accent-ink)}
+:root[data-theme="dark"] a{color:var(--accent)}
+
+/* ── cards ─────────────────────────────── */
+.grid{display:grid; gap:16px}
+.g3{grid-template-columns:repeat(auto-fit,minmax(250px,1fr))}
+.g2{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:6px;
+  padding:20px 22px; box-shadow:var(--shadow)}
+.card h4{margin:0 0 8px}
+.card p{margin:0; font-size:14.5px; line-height:1.75; color:var(--ink-2)}
+.card p + p{margin-top:10px}
+
+.verdict{border-top:3px solid var(--line-strong)}
+.verdict .tag{font-family:"JetBrains Mono",monospace; font-size:11.5px; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase; display:block; margin-bottom:6px}
+.v-pass{border-top-color:var(--pass)} .v-pass .tag{color:var(--pass)}
+.v-rej{border-top-color:var(--reject)} .v-rej .tag{color:var(--reject)}
+.v-hold{border-top-color:var(--hold)} .v-hold .tag{color:var(--hold)}
+.verdict .name{font-family:"Noto Serif SC",serif; font-size:20px; font-weight:700; display:block; margin-bottom:10px}
+
+/* ── rule blocks ───────────────────────── */
+.rule{border-left:3px solid var(--accent); background:var(--surface); padding:16px 20px;
+  margin:0 0 14px; border-radius:0 5px 5px 0}
+.rule .n{font-family:"JetBrains Mono",monospace; font-size:12px; font-weight:600;
+  color:var(--accent); letter-spacing:.08em}
+.rule h4{margin:2px 0 6px}
+.rule p{margin:0; font-size:14.5px; color:var(--ink-2); line-height:1.75}
+
+.escape{background:var(--hold-soft); border-left:3px solid var(--hold);
+  padding:14px 18px; border-radius:0 5px 5px 0; margin:0 0 18px}
+.escape .lbl{font-family:"JetBrains Mono",monospace; font-size:11.5px; font-weight:600;
+  letter-spacing:.1em; text-transform:uppercase; color:var(--hold); display:block; margin-bottom:5px}
+.escape p{margin:0; font-size:14.5px; color:var(--ink-2); line-height:1.75}
+
+.note{background:var(--surface-2); border:1px solid var(--line); border-radius:5px;
+  padding:16px 20px; margin:0 0 18px; font-size:14.5px; color:var(--ink-2); line-height:1.75}
+.note p{margin:0} .note p+p{margin-top:10px}
+
+/* ── tables ────────────────────────────── */
+.scroll{overflow-x:auto; margin:0 0 20px; border:1px solid var(--line); border-radius:6px; background:var(--surface)}
+table{border-collapse:collapse; width:100%; min-width:560px; font-size:14.5px}
+th{text-align:left; font-weight:700; font-size:12.5px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--muted); padding:12px 16px; border-bottom:1px solid var(--line-strong); white-space:nowrap;
+  font-family:"JetBrains Mono",monospace}
+td{padding:12px 16px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.7}
+tr:last-child td{border-bottom:0}
+td.k{font-family:"JetBrains Mono",monospace; font-size:12.5px; white-space:nowrap; color:var(--ink-2)}
+td.num{font-variant-numeric:tabular-nums; text-align:right; white-space:nowrap}
+
+.sev{font-family:"JetBrains Mono",monospace; font-size:11px; font-weight:600; letter-spacing:.06em;
+  padding:2px 7px; border-radius:3px; white-space:nowrap; text-transform:uppercase}
+.s-b{background:var(--reject-soft); color:var(--reject)}
+.s-m{background:var(--hold-soft); color:var(--hold)}
+.s-n{background:var(--surface-2); color:var(--muted)}
+
+/* ── pipeline ──────────────────────────── */
+.pipe{display:grid; gap:0; margin:8px 0 26px}
+.step{display:grid; grid-template-columns:60px 1fr; gap:20px; padding:20px 0;
+  border-top:1px solid var(--line)}
+.step:last-child{border-bottom:1px solid var(--line)}
+.step .idx{font-family:"JetBrains Mono",monospace; font-size:13px; font-weight:600; color:var(--accent);
+  padding-top:3px; font-variant-numeric:tabular-nums}
+.step h4{margin:0 0 6px}
+.step p{margin:0; font-size:14.5px; color:var(--ink-2); line-height:1.75}
+.step p+p{margin-top:8px}
+
+/* ── code / mock ───────────────────────── */
+pre{background:var(--surface); border:1px solid var(--line); border-radius:6px;
+  padding:18px 20px; overflow-x:auto; margin:0 0 20px; font-size:13px; line-height:1.75;
+  font-family:"JetBrains Mono",monospace; color:var(--ink-2)}
+pre b{color:var(--ink); font-weight:600}
+pre .c{color:var(--muted)}
+pre .a{color:var(--accent-ink)}
+:root[data-theme="dark"] pre .a{color:var(--accent)}
+
+/* ── takeaways ─────────────────────────── */
+.takeaway{counter-reset:t; display:grid; gap:14px; margin:0 0 8px}
+.takeaway li{list-style:none; display:grid; grid-template-columns:36px 1fr; gap:14px; margin:0;
+  padding-bottom:14px; border-bottom:1px solid var(--line)}
+.takeaway li:last-child{border-bottom:0; padding-bottom:0}
+.takeaway li::before{counter-increment:t; content:counter(t,decimal-leading-zero);
+  font-family:"JetBrains Mono",monospace; font-size:12.5px; font-weight:600; color:var(--accent);
+  padding-top:4px}
+.takeaway ul{padding:0; margin:0}
+.takeaway b{display:block; font-size:16px; margin-bottom:3px}
+.takeaway span{font-size:14.5px; color:var(--ink-2)}
+
+footer{padding:44px 0 70px; color:var(--muted); font-size:13.5px; line-height:1.9}
+footer .mono{font-size:12.5px}
+
+:focus-visible{outline:2px solid var(--accent); outline-offset:3px; border-radius:2px}
+@media (max-width:640px){
+  .wrap{padding:0 20px}
+  section{padding:48px 0}
+  .step{grid-template-columns:40px 1fr; gap:12px}
+}
+</style>
+
+<div class="bar"><div class="wrap"><nav class="bar-in">
+  <span class="bar-mark">审核机制</span>
+  <a href="#split">三层分工</a>
+  <a href="#verdict">三种结论</a>
+  <a href="#meta">判据元规则</a>
+  <a href="#machine">确定性判据</a>
+  <a href="#run">为什么必须真跑</a>
+  <a href="#flow">发起与排队</a>
+  <a href="#module">模块审核</a>
+  <a href="#traps">踩过的坑</a>
+  <a href="#borrow">可借鉴的十条</a>
+</nav></div></div>
+
+<header class="hero"><div class="wrap"><div class="col">
+  <p class="eyebrow">testBench · 用例审核 / 模块审核</p>
+  <h1>用例审核这道闸，怎么才能让人一直信它</h1>
+  <p class="lede">这套机制要替掉的是人工「待审」那道闸。核心不是「让 AI 打个分」——恰恰相反：
+    <strong>模型只出意见，判定权全部收在代码里</strong>；
+    <strong>没在真环境上跑成功的结论，一律不算通过</strong>。</p>
+  <p class="lede">下面是这套东西的全部判据、流程、以及每一条判据「什么时候会冤枉人」。
+    反例和出口写得比规则本身还长，是故意的——一条没有出口的硬规则，
+    会让人在第三次被冤枉之后整体不看这个结论，那时候闸门就等于不存在了。</p>
+  <div class="sig">
+    判定：代码 · 意见：模型 · 情报：给人<br>
+    实现：<span class="mono">backend/app/services/review/</span> · 流程：<span class="mono">docs/review-spec.md</span>
+  </div>
+</div></div></header>
+
+<!-- ══════════════ 三层分工 ══════════════ -->
+<section id="split"><div class="wrap"><div class="col">
+  <p class="eyebrow">分工</p>
+  <h2>人工待审要干三件事，只有一件真的需要人</h2>
+  <p class="sub">看场景合不合理、看验证点到不到位、看漏了什么——前两件是有判据的活，第三件才需要业务背景。</p>
+</div>
+<div class="grid g3" style="margin-bottom:26px">
+  <div class="card">
+    <h4>平台代码 · 判事实</h4>
+    <p>恒真断言、写完没读回、只打控制面、只断状态码、UI 脚本硬伤、步骤↔脚本缺口、真实流量对不上、跑完留残留、按承诺还欠哪几维。</p>
+    <p><strong>这些都能证明</strong>，所以它们是「事实」——模型不许推翻，只能引用和归类。</p>
+  </div>
+  <div class="card">
+    <h4>模型 · 判判断题</h4>
+    <p>场景本身合不合理、这一条自己的承诺验全了没有、预期是不是照着实现抄的、UI 脚本验的是不是该验的东西。</p>
+    <p>需要判断力，但<strong>不需要业务背景</strong>——判据都在用例自身里。</p>
+  </div>
+  <div class="card">
+    <h4>人 · 收情报</h4>
+    <p>模块级还缺哪些场景。只有他知道业务上还有什么没测。</p>
+    <p>所以模块缺口走 <code>coverageGaps</code>，是<strong>情报，不是闸门</strong>，不参与任何一条用例过不过。</p>
+  </div>
+</div>
+<div class="col">
+  <h3>模型能标 blocker，但必须点名是哪一类</h3>
+  <p>不设这道闸的话，「能更强」的意见迟早也会被标成致命——而闸门一旦变成「什么都打回」，
+    人就开始整体无视它。<em>说了等于没说</em>，和上一版评审输出「缺少安全测试场景」是同一种失效。</p>
+  <p>所以模型标 blocker 必须同时给 <code>kind</code>，且只能从这四类里选，点不出类别的最重只能标 major：</p>
+  <div class="scroll"><table>
+    <thead><tr><th>kind</th><th>含义</th></tr></thead>
+    <tbody>
+      <tr><td class="k">expectation_copied_from_impl</td><td>预期照着实现抄——把 bug 固化成「预期」</td></tr>
+      <tr><td class="k">assertion_cannot_fail</td><td>这条断言无论系统怎么坏都不会红</td></tr>
+      <tr><td class="k">no_real_verification</td><td>通篇没有验证该功能的动作，只走了一遍流程</td></tr>
+      <tr><td class="k">script_cannot_run</td><td>脚本必挂：语法错、API 用错、依赖不存在的东西</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note">
+    <p>另外三条给模型的硬性约束，每条都是被真实失效逼出来的：</p>
+    <p><strong>① 不许输出任何统计数字。</strong>平台会算，模型会数错——上一版评审说「50 条没有预期结果」，库里真实是 5 条。</p>
+    <p><strong>② 每条意见必须指到具体位置</strong>（步骤名、断言、脚本里的那一行）。指不到位置的意见对每条用例都成立，等于没说。</p>
+    <p><strong>③ 别把「还没做」当质量问题。</strong>按 <code>target_level</code> 还欠哪几维是<strong>进度</strong>，不是质量；只有「承诺要做却没做」才提。</p>
+  </div>
+</div></div></section>
+
+<!-- ══════════════ 三种结论 ══════════════ -->
+<section id="verdict"><div class="wrap"><div class="col">
+  <p class="eyebrow">判定</p>
+  <h2>判定写在代码里，不写在 prompt 里</h2>
+  <p class="sub">让模型自己下 approved／rejected，一句「整体不错」就能把 blocker 盖过去。分数可以商量，闸门不行。</p>
+</div>
+<div class="col">
+<pre><span class="c"># app/services/review/reviewer.py :: score_and_verdict()</span>
+有 blocker                  → <b>rejected</b>   <span class="c">哪怕体检分 95</span>
+major ≥ 2 处                → <b>rejected</b>   <span class="c">一处不打回，两处叠加就该打回</span>
+没真跑成功（三种情形）      → <b>inconclusive</b> <span class="c">既不算通过也不算打回</span>
+其余                        → <b>approved</b>
+<span class="c">
+# 分数（六维加权）只做排序和体检，<b>不参与判定</b>。</span></pre>
+  <h3>为什么分数不当闸门</h3>
+  <p>每一维的分是模型给的，同一条用例两次评审拿 86 和 78 是常事——评测里实测过，
+    一条写得很规范的 UI 用例被 78 分打回过一次。拿抖动的数当闸门有两个坏处：</p>
+  <ul>
+    <li>结论不稳定，人就不信它了；</li>
+    <li>「78 分低于 80 分线」这句话<strong>没法照着改</strong>，而「这两条必须改」可以。</li>
+  </ul>
+  <p>但分数也不能白给：模型没给某个适用维度的分时，<strong>按该维度上最重的 finding 兜一个</strong>
+    （blocker 40 / major 65 / minor 85 / 无 80），而不是当满分——缺分数默认满分等于漏评就白送。
+    另外每一维<strong>按最重的 finding 压顶</strong>（blocker 封顶 45、major 封顶 70）：
+    不压的话会出现「平台明明判出一条 major，模型却给这一维 85 分，加权照样过线」——机器事实等于白判。</p>
+</div>
+<div class="grid g3" style="margin:30px 0 26px">
+  <div class="card verdict v-pass"><span class="tag">approved</span><span class="name">通过</span>
+    <p>没有致命问题。最多允许一处「还能更强」的 major 列在报告里。</p></div>
+  <div class="card verdict v-rej"><span class="tag">rejected</span><span class="name">打回</span>
+    <p>放进回归就是<strong>假绿</strong>或者根本跑不了。附 <code>mustFix</code> 清单，能照着改。</p></div>
+  <div class="card verdict v-hold"><span class="tag">inconclusive</span><span class="name">无法审核</span>
+    <p>没环境 / 既没 UI 脚本也没接口场景 / 环境本身挂了。<strong>既不算通过也不算打回。</strong></p></div>
+</div>
+<div class="col">
+  <h3>第三种结论是这套设计里最容易被省掉、也最不能省的一个</h3>
+  <p>早期「没跑成功」只是一条 minor finding，不阻断结论。于是「全批 16 条通过」里混着 4 条根本没跑过的，
+    而报告上它们和真跑过的<strong>长得一模一样</strong>。</p>
+  <div class="escape"><span class="lbl">为什么也不能判成 rejected</span>
+    <p>用例可能完全没问题，是环境没配或者挂了。打回它等于让人去改一条没毛病的用例，改完还是跑不了。</p></div>
+  <p><em>含金量看不出来的通过，比不审更坏</em>——它发了一张假凭据。</p>
+</div></div></section>
+
+<!-- ══════════════ 元规则 ══════════════ -->
+<section id="meta"><div class="wrap"><div class="col">
+  <p class="eyebrow">判据规范</p>
+  <h2>什么样的判据配得上硬拦</h2>
+  <p class="sub">起因是一条真规则写坏了：<code>no_readback</code> 原来照「有没有 GET 回读」判，
+    而「发布服务 → 打一下服务，通了」是比回读更强的验证。那条规则在逼人写冗余接口。</p>
+</div>
+<div class="col">
+  <div class="rule"><span class="n">①</span><h4>硬拦只给「必然出错」</h4>
+    <p>放进去 100% 会挂，或 100% 是假绿，<strong>且不存在任何合法写法能长成这样</strong>。
+      写得出「合法写法」这三个字的，就不配硬拦。</p></div>
+  <div class="rule"><span class="n">②</span><h4>判据要对着「想防的后果」，不是对着「我讨厌的写法」</h4>
+    <p>想防「写完没验效果」，判据就该是「有没有任何一步验了效果」——而不是「有没有 GET」。
+      前者换个更强的验法照样过，后者逼人加冗余请求。</p></div>
+  <div class="rule"><span class="n">③</span><h4>「通常不对但存在合法写法」的，只能是警告，而且必须给忽略出口</h4>
+    <p>提示里要写清「如果 X，忽略这条」。没有出口的提示等于逼人照做，
+      而人照做完发现更糟，下次就整体不看提示了。</p></div>
+  <div class="rule"><span class="n">④</span><h4>严重度由后果定，不由把握度定</h4>
+    <p>判据靠猜意图（自然语言、命名习惯）的，<strong>最重只能到 minor</strong>——
+      它的错误率不来自「这件事严不严重」，而来自「我可能理解错了」。</p></div>
+  <div class="note">
+    <p><strong>附则：能证明的才硬拦。</strong>同一条判据，有证据时可以硬拦，没证据时只能警告。</p>
+    <p>例：「断言期望值写成字符串 <code>"true"</code>」——如果历史执行记录里那个字段确实是布尔，
+      那是必然假红，可以硬拦；没跑过的时候平台并不知道那个接口返回的是不是字符串
+      （有些老接口真的返回 <code>"enabled": "true"</code>），这时只能提醒。</p>
+  </div>
+  <p style="margin-top:22px"><strong>工程纪律：每条规则的注释里必须写出反例</strong>——什么情况下它会冤枉人。
+    <em>写不出反例的规则不许上线。</em>对应地，判据的反例测试里
+    <strong>每条判据都有一条「应该沉默」的用例</strong>，那些比「应该报」的更重要。</p>
+</div></div></section>
+
+<!-- ══════════════ 确定性判据 ══════════════ -->
+<section id="machine"><div class="wrap"><div class="col">
+  <p class="eyebrow">判据清单</p>
+  <h2>平台代码判出来的事实</h2>
+  <p class="sub">这些检查器都是从真实事故里长出来的，各自有测试封样。模型看到它们时被告知「一律为真」，
+    任务是归类和说清后果，不是复核对不对。</p>
+</div>
+<div class="scroll"><table>
+  <thead><tr><th>kind</th><th>判什么</th><th>严重度</th><th>反例 / 出口</th></tr></thead>
+  <tbody>
+    <tr><td class="k">tautology_assertion</td><td>断言恒真：系统怎么坏它都不会红</td>
+      <td><span class="sev s-b">blocker</span></td><td>恒真的定义就是假绿本身，不存在合法写法</td></tr>
+    <tr><td class="k">vague_expectation</td><td>预期写着「功能正常 / 无报错 / 显示正常」</td>
+      <td><span class="sev s-b">blocker</span></td><td>这类词跑起来永远是绿的</td></tr>
+    <tr><td class="k">ui_script_hard_error</td><td>UI 脚本必挂：<code>sync_playwright</code>、写死地址、清 storage 换角色</td>
+      <td><span class="sev s-b">blocker</span></td><td>确定信号，不需要理解业务</td></tr>
+    <tr><td class="k">step_action_not_in_script</td><td>「操作:」步骤在脚本里找不到对应动作</td>
+      <td><span class="sev s-b">blocker</span></td><td>脚本里<strong>一个中文字符都没有</strong>时整条判据不生效（纯 i18n key 写法）</td></tr>
+    <tr><td class="k">expectation_not_asserted</td><td>「验证:」步骤在脚本里找不到对应断言</td>
+      <td><span class="sev s-b">blocker</span></td><td>预期里没有引号锚点也没有数字时不参与判定（隐式验证）</td></tr>
+    <tr><td class="k">endpoint_not_used_by_page</td><td>接口场景验的端点，页面执行一次都没发过</td>
+      <td><span class="sev s-b">blocker</span></td><td>整条 URL 全是变量、归一后对不上任何真实流量的，<strong>跳过不比</strong></td></tr>
+    <tr><td class="k">no_readback</td><td>写完没读回来确认真改了</td>
+      <td><span class="sev s-m">major</span></td><td>判的是「有没有任何一步验了效果」，不是「有没有 GET」</td></tr>
+    <tr><td class="k">control_plane_only</td><td>只断控制面状态就当生效了</td>
+      <td><span class="sev s-m">major</span></td><td><strong>纯控制面系统</strong>没有数据面可打；触发靠步骤名里的「生效」，是在猜意图</td></tr>
+    <tr><td class="k">residue_not_cleaned</td><td>造了数据、一次删都没试过</td>
+      <td><span class="sev s-m">major</span></td><td>这条用例就是在验「建完要能留下」；清理走后台 API；共享夹具</td></tr>
+    <tr><td class="k">i18n_key_not_in_dict</td><td>文案占位符的键在项目词典里查不到</td>
+      <td><span class="sev s-m">major</span></td><td><strong>只在项目真有多语种词条时才报</strong>，只测中文的项目报了纯属噪音</td></tr>
+    <tr><td class="k">status_only_assertion</td><td>读操作只断了状态码，没断响应内容</td>
+      <td><span class="sev s-n">minor</span></td><td>验的就是「能不能调通」（放行、可达、健康检查）时 200 就是结论；<strong>断错误码不算弱</strong></td></tr>
+    <tr><td class="k">control_group_in_one</td><td>对照组塞在同一条用例里</td>
+      <td><span class="sev s-n">minor</span></td><td>权限矩阵类用例「两种角色各看到应有范围」是正常写法</td></tr>
+    <tr><td class="k">cleanup_failed</td><td>删了但没删掉（DELETE 非 2xx）</td>
+      <td><span class="sev s-n">minor</span></td><td>删不掉是被测系统的 bug，<strong>不打回用例</strong>，开单</td></tr>
+  </tbody>
+</table></div>
+<div class="col">
+  <div class="note">
+    <p><strong>严重度是会往下调的。</strong><code>control_plane_only</code> 从 blocker 降成 major，
+      理由就是元规则 ①④：反例是纯控制面系统（这个测试平台自己就是——「建用例 → 列表能查到」，
+      那个「生效」本来就发生在同一个域里）。</p>
+    <p>也会往上调：<code>tautology_assertion</code> 从 major 升成 blocker，
+      因为「恒真」的定义就是假绿本身，标成 major 意味着要凑够两处才打回。</p>
+  </div>
+  <h3>去重要三道判据，缺一个都会漏</h3>
+  <p>机器判出来一批、模型用自己的话又说了一遍同一处，报告上就会把一处问题写成两处，
+    <code>verdictReason</code> 还会写「有 2 处重要问题」——直接影响判定。</p>
+  <ul>
+    <li><strong>同维度 + 两边声明的步骤号撞上</strong>（<code>stepRef</code>，最准的一道，双方都填结构化字段）；</li>
+    <li><strong>措辞前缀重合</strong>——模型抄机器原话时命中；</li>
+    <li><strong>同维度 + 散文里提到同一个位置数字</strong>——模型换了说法但带着步骤号时命中。</li>
+  </ul>
+  <div class="escape"><span class="lbl">新判据够不着的地方</span>
+    <p>接口侧那批机器判据（<code>tautology_assertion</code>、<code>no_readback</code>…）是<strong>按步骤名</strong>定位的，
+      压根没拿到序号，填不出 <code>stepRef</code>。所以旧的两道一条都没删——
+      拿一个模型可能不写的字段去换掉两道已经在跑的判据，是净亏。</p></div>
+</div></div></section>
+
+<!-- ══════════════ 必须真跑 ══════════════ -->
+<section id="run"><div class="wrap"><div class="col">
+  <p class="eyebrow">执行式审核</p>
+  <h2>没真跑过的结论不算通过</h2>
+  <p class="sub">原本打算「批量默认静态审核」，作废了。静态查得出一批问题，查不出的恰好是最贵的那一类。</p>
+</div>
+<div class="scroll"><table>
+  <thead><tr><th>只有真跑才查得出</th><th>静态会怎么误判</th></tr></thead>
+  <tbody>
+    <tr><td>接口场景验的端点，页面根本不调</td><td>「写得挺完整」，照样给 80 多分通过</td></tr>
+    <tr><td>步骤里写的动作，脚本里压根没做</td><td>靠读文本比对，模型会被脚本里相近的代码骗过去</td></tr>
+    <tr><td>选择器早就失效、脚本跑不起来</td><td>从没跑过的脚本，静态看不出它跑不跑得动</td></tr>
+    <tr><td>跑完留了一堆垃圾数据</td><td>完全看不见</td></tr>
+  </tbody>
+</table></div>
+<div class="col">
+  <div class="note">
+    <p><strong>实测的量级差：</strong>同一条用例，静态审 <span class="mono">84 分通过</span>，
+      真跑审 <span class="mono">56 分打回</span>。</p>
+    <p>页面打开时调的是 <code>/api/v1/subscriptions/provider-unified</code>，
+      而那 22 条接口场景全用 <code>/api/v1/subscriptions/provider</code>。
+      后者确实存在、返回 200，所以<strong>用例一直是绿的</strong>；
+      但 <code>provider-unified</code> 坏掉、少给字段、跨租户条目漏掉，那批用例一条都不会红。</p>
+    <p>这种错静态审核永远看不出来——两个 URL 都合法、都能通。判据是 <strong>URL 集合比对，不问模型</strong>。</p>
+  </div>
+  <h3>四方对账：步骤 ↔ 脚本 ↔ 真实流量 ↔ 接口场景</h3>
+  <p><strong>锚点比对，不是数数。</strong>原来那条是数数（手工 N 步、脚本 M 个动作，M &lt; N/2 就报），
+    两头都犯错：一步「进入详情页并展开更多下拉」在脚本里是两个动作（少报），
+    两步「点确认」「点提交」可能被一句链式调用覆盖（误报）。</p>
+  <p>改成对<strong>锚点</strong>：中文用例的步骤里几乎必然带引号标签——<code>点击「弃用服务」</code>、
+    <code>状态徽标变为「已弃用」</code>。这些标签在脚本里要么以文本选择器出现，
+    要么以断言期望值出现。<em>一个都找不到 = 这一步脚本里没有</em>，这是确定判断，不需要理解业务。</p>
+  <h3>跑挂了 ≠ 用例不合格</h3>
+  <p>被测系统真有 bug 时脚本必然跑红。直接打回用例的后果是
+    <strong>用例被判死刑、bug 没人管</strong>，而且被测系统一出问题整批全红。所以先归因，三分：</p>
+</div>
+<div class="scroll"><table>
+  <thead><tr><th>归因</th><th>怎么认</th><th>结论</th><th>后续</th></tr></thead>
+  <tbody>
+    <tr><td>脚本 / 断言写错</td><td class="k">SyntaxError、NameError、选择器语法错</td>
+      <td><strong>打回用例</strong></td><td>整改后再审</td></tr>
+    <tr><td>被测系统 bug</td><td>断言没过、接口返业务错误码</td>
+      <td><strong>用例照样可以通过</strong></td><td>开失败单 + 挂 <code>bug_refs</code>，永不清除</td></tr>
+    <tr><td>环境 / 数据问题</td><td class="k">ECONNREFUSED、502/503/504、DNS、证书</td>
+      <td><strong>无法审核</strong></td><td>环境就绪后重审</td></tr>
+  </tbody>
+</table></div>
+<div class="col">
+  <div class="escape"><span class="lbl">归因用后果分档，不用把握度分档</span>
+    <p>环境类和脚本类都只认<strong>确定信号</strong>；剩下的（断言没过、返业务错误码）<strong>一律不算脚本的错</strong>——
+      把「没判出来」默认成「用例的错」，正好制造那个最坏后果。真正写错的断言由别的判据
+      （恒真、只断状态码、写完没读回）去抓，那些不需要真跑就成立，不会因为归因保守而漏掉。</p>
+    <p><strong>已知会冤枉人的情况：</strong>被测系统返回 500 且恰好是脚本传了非法参数导致的，
+      会被归成 system_bug——代价是多开一张单，不是错误打回。可以接受。</p></div>
+</div></div></section>
+
+<!-- ══════════════ 流程 ══════════════ -->
+<section id="flow"><div class="wrap"><div class="col">
+  <p class="eyebrow">流程</p>
+  <h2>发起、排队、结果看哪里</h2>
+  <h3>入口即类型：不额外问「你这次要审模块还是审单条」</h3>
+</div>
+<div class="scroll"><table>
+  <thead><tr><th>你的动作</th><th>平台理解成</th><th>类型</th></tr></thead>
+  <tbody>
+    <tr><td>点中某模块，一条都没勾，点「AI 审核」</td><td>审这个模块</td><td>模块全量 / 模块增量</td></tr>
+    <tr><td>列表里勾了 N 条</td><td>只审这 N 条</td><td>抽审</td></tr>
+    <tr><td>进用例详情点「AI 审核」</td><td>只审这一条</td><td>单条</td></tr>
+    <tr><td>报告页选「只做体检」</td><td>不跑用例，只看模块覆盖</td><td>体检</td></tr>
+  </tbody>
+</table></div>
+<div class="col">
+  <div class="note"><p><strong>类型必须进报告。</strong>一眼看不出是审了整个模块还是抽了三条，
+    这份报告过两周就没人信。<em>只有「模块全量」能代表这个模块的情况</em>——
+    否则挑三条好的一审，就能宣布模块没问题。抽审的报告顶上明写「不能代表整个模块」。</p></div>
+  <h3>确认框：能选的只有三样</h3>
+  <p>范围（全部 / 只审没审过的和被打回的 / 只做体检）、环境、要不要顺带体检。
+    <strong>九项检查故意不做成可勾选</strong>——能勾就能放水：今天嫌某项烦关掉，
+    以后这批「通过」就没法解释含金量。检查项只展示，不给开关。</p>
+  <h3>一个环境一条队列，串行</h3>
+  <p>并行换来的不是快，是<strong>假打回</strong>。两条踩过的：</p>
+  <ul>
+    <li>两条脚本用同一个租户、同一个账号，A 跑到一半 B 把数据删了 → A 莫名报错 → 审核判 A「脚本有问题」，其实是被踩的。</li>
+    <li>被测系统那边「关闭本租户审批开关」是个<strong>全局开关</strong>，一条脚本把它关了，另一条正好在测开关开着的行为——两边结果都不可信。</li>
+  </ul>
+  <p>假打回出过几次，这套审核就没人信了。所以同环境串行，不同环境可以同时跑。</p>
+</div>
+<div class="pipe">
+  <div class="step"><span class="idx">01</span><div>
+    <h4>发起 · 没配环境的项目直接拦下</h4>
+    <p>弹窗说「先去项目设置加一个」，<strong>而不是跑起来然后 16 条全标「无法审核」</strong>。
+      环境要记进报告——「在哪套环境上审过」是结论的一部分，测试环境过了不等于预发也过。</p></div></div>
+  <div class="step"><span class="idx">02</span><div>
+    <h4>排队 · 人工发起的插到自动自审前面</h4>
+    <p>人在等结果，自动化不在等。同一条用例被重复发起 → <strong>合并</strong>，不跑两遍。
+      体检不占队列（它只读用例库，不碰被测系统）。</p></div></div>
+  <div class="step"><span class="idx">03</span><div>
+    <h4>熔断 · 连续 3 条环境类失败就暂停整个队列</h4>
+    <p>环境一挂，队列会一条接一条全失败，16 条全标「无法审核」，看起来像用例集体坏了。
+      页面上说「环境好像挂了，剩下 13 条先停着」，等人确认后继续。</p>
+    <p><strong>熔断状态是 paused 不是 failed</strong>——判成失败，那些用例会被当成「审过了没过」。
+      阈值 3 不是拍的：1 会被单条用例的偶发网络抖动误触发，5 的话 16 条里已经白跑三分之一。</p></div></div>
+  <div class="step"><span class="idx">04</span><div>
+    <h4>取证 · 事实先出，模型后判</h4>
+    <p>步骤原文 + 接口场景每步的 URL/断言 + UI 脚本正文 + 最近几次执行记录 + 真实流量 + 同模块邻居标题。</p>
+    <p><strong>喂给模型的证据可以截断，代码判据一律用全文。</strong>混用过一次，代价见「踩过的坑 ②」。</p></div></div>
+  <div class="step"><span class="idx">05</span><div>
+    <h4>判定 · 合并事实与意见，代码下结论</h4>
+    <p>机器那份原样进结果（模型可能漏掉它，也可能把 blocker 说成 minor）；
+      模型复述的那条被去重丢掉，保留机器那条——<strong>它的严重度才是权威</strong>。</p></div></div>
+  <div class="step"><span class="idx">06</span><div>
+    <h4>落库 · 一次审核一行，进度不丢</h4>
+    <p>批次实体记类型/范围/环境/发起人/状态/进度，刷新、关页面、重启都不丢。
+      进程被 kill 时有收尾逻辑，否则正在跑的那批永远停在 running，页面上转到天荒地老。</p></div></div>
+</div>
+<div class="col">
+  <h3>报告页：一行一次审核，默认只看「我」发起的</h3>
+  <p>自动化每次回推都会自审，一天几十条，全混在一起就找不到自己点的那次了。
+    行上的动作是「看报告」，<strong>不是「再审一次」</strong>——审核在用例管理页发起，这页只看结果。</p>
+  <h3>结论会过期，列表上要看得见</h3>
+  <p>用例的场景步骤和 UI 脚本版本摊平成一个签名存进审核轮次。内容改了签名就变，
+    列表和详情带一个只读派生字段 <code>reviewStale</code>，在原标签旁叠一个 ⚠。</p>
+  <div class="escape"><span class="lbl">两个刻意的取舍</span>
+    <p><strong>没有新增状态枚举值。</strong>过期的用例<strong>仍然是 approved</strong>，按 approved 照样筛得到——
+      它说的是「这个结论可能对不上现在的内容」，不是「这条没通过」。动那个字段会牵连门禁、筛选、批量操作一大片。</p>
+    <p><strong>存量轮次没有签名的不给这个字段，而不是给 false</strong>——判不出来就不猜。
+      给 false 等于断言「没过期」。</p></div>
+  <div class="note"><p>签名只摊<strong>场景的定义</strong>（url/method/断言/body）和脚本版本号，<strong>不摊执行结果</strong>。
+    否则每次重跑都会把上一轮的 approved 标成「过期」，而内容其实一个字都没改。
+    而且单条和批量必须走同一段哈希——两处各写一遍，任何一处漂移都会让整库的 approved 全被标成过期，
+    <em>一个假警报比不报警更贵</em>。</p></div>
+</div></div></section>
+
+<!-- ══════════════ 模块审核 ══════════════ -->
+<section id="module"><div class="wrap"><div class="col">
+  <p class="eyebrow">模块审核</p>
+  <h2>逐条只知道「这条不行」，看模块才知道「这一整片都犯同一个错」</h2>
+  <p class="sub">模块体检一两分钟，不占队列、不用环境。三块输出，来源完全不同——这是它最值得抄的地方。</p>
+</div>
+<div class="grid g3" style="margin-bottom:24px">
+  <div class="card"><h4>共性问题</h4>
+    <p>把逐条 findings 按 <code>kind</code> 归类。<strong>纯汇总，不问模型</strong>——它就是个 group by。</p>
+    <p>塞模型调用既慢又不稳，而「同一份报告两次打开长得不一样」比不聚合更糟。</p></div>
+  <div class="card"><h4>覆盖缺口</h4>
+    <p>额外一次模型调用。「这个模块没测到什么」只有读过全部标题才答得上，代码判不了。</p>
+    <p>最多 8 条，按「不补会漏掉真 bug」排序。</p></div>
+  <div class="card"><h4>覆盖分布</h4>
+    <p><strong>纯代码数个数</strong>：P0 占比、六类操作各几条、缺哪一类。</p>
+    <p>模型读 60 条标题时不会去算比例，而<em>比例恰恰是最刺眼的信号</em>。</p></div>
+</div>
+<div class="col">
+  <div class="note"><p><strong>覆盖缺口是情报，不是闸门</strong>——不参与任何一条用例过不过。</p>
+    <p>早期的结论是「模块级遗漏判不了，该由人看」。现在敢让它出缺口，
+      是因为多了<strong>在页面上探测到的实际可操作项</strong>做对账，不再是纯凭用例标题猜。
+      但定位没变：它只负责告诉你「还该补什么」。</p></div>
+  <h3>缺口按话题归并，不按字面</h3>
+  <p>原来的去重键是「去掉前缀后的头 12 个字」，而模型每轮措辞都不一样——
+    实测某模块 8 条缺口全是 <span class="mono">1×</span>，其中三条讲的是同一件事（越权）。
+    <em>这一页存在的理由就是那个 count 列</em>，1× 一片等于这页没有信息。</p>
+  <p>改成关键词 → 话题标签（权限与越权 / 并发与竞态 / 幂等 / 边界 / 分页 / 清理残留 / 多语言 / 性能…），
+    命中不了的退回实词签名。<strong>判据在代码里不问模型</strong>：这页每次打开都要算。
+    每桶保留各条原话——合并了得能核对是不是一件事。</p>
+
+  <h3>模块审核的另一半：命名与归位</h3>
+  <p>「模块」这个容器本身也要被审。事故现场：顶层有「本租户订阅(0)」「跨租户订阅(1)」，
+    同时「订阅管理」下面又有「本租户订阅(8)」「跨租户订阅(7)」——
+    <strong>同一个东西摆在两处，用例被劈成两半</strong>，顶层那两个还是空的。</p>
+  <div class="escape"><span class="lbl">根因不在规则，在给的信息</span>
+    <p>建模块时平台只告诉调用方「现在有哪些一级模块」，<strong>没给完整模块树</strong>。
+      它看不见「订阅管理」下已经有这个子模块，就在顶层又建了一个。
+      原来那句「一级模块按功能域分」只是<strong>警告</strong>，被无视了——
+      而无视一条无害的警告是完全理性的行为。</p></div>
+</div>
+<div class="scroll"><table>
+  <thead><tr><th>#</th><th>规则</th><th>处置</th></tr></thead>
+  <tbody>
+    <tr><td class="num">1</td><td>建之前先<strong>全项目搜这个名字</strong>，不分层级</td><td>判据的前提，不给全树后面三条都判不出来</td></tr>
+    <tr><td class="num">2</td><td>同一位置已有同名</td><td><strong>硬拒</strong>，让它用现成的</td></tr>
+    <tr><td class="num">3</td><td>不同父模块下的同名子模块</td><td><strong>允许</strong>，但平台回一句「注意：X 下也有同名的」</td></tr>
+    <tr><td class="num">4</td><td>一个在顶层、一个要挂到模块下</td><td><strong>硬拒</strong>——这就是事故现场那种，必须先合并</td></tr>
+    <tr><td class="num">5</td><td>范围词 / 自指词：平台自身、系统、通用、其他、公共…</td><td><strong>硬拒</strong>，可枚举、判断确定、无合法反例</td></tr>
+  </tbody>
+</table></div>
+<div class="col">
+  <div class="note">
+    <p><strong>三个连带的实现细节，缺一条这五条闸就白装：</strong></p>
+    <p>① <strong>闸要装在两侧。</strong>规则原来只挂在程序化回推口，页面上的「+ 新建模块」压根不过闸——
+      而事故现场那两个空模块<strong>就是人在页面上建的</strong>。</p>
+    <p>② <strong>规则 4 只拦得住「再建一个」，拦不住已经裂了的那两处。</strong>
+      得补一个「挪位置 / 合并」动作：目标已有同名时先回一句「会搬 N 条，确认？」，点第二次才真搬。
+      踩过的真错：第一版合并把父模块传成了<strong>同名那个模块自己的 id</strong>，
+      于是挪出「订阅管理/跨租户订阅/跨租户订阅」——套了一层空壳，比裂着更难懂。</p>
+    <p>③ <strong>合并之后不能被回推复活。</strong>调用方手上还是老模块名，没有回落规则它下次又在顶层建一个，
+      合并等于白做。</p>
+  </div>
+  <div class="escape"><span class="lbl">为什么命名值这么多力气</span>
+    <p>用例编号前缀由模块名生成，而且<strong>改名刻意不变</strong>（历史名单就是为这个做的）。
+      所以一个建错的模块名会一直挂在那批用例上，洗不掉。</p></div>
+</div></div></section>
+
+<!-- ══════════════ 踩过的坑 ══════════════ -->
+<section id="traps"><div class="wrap"><div class="col">
+  <p class="eyebrow">活体验证</p>
+  <h2>跑起来才暴露的六个真问题</h2>
+  <p class="sub">全部判据实现完、单测全绿之后，在真环境上跑一轮链路（建模块 → 审核真跑 → 组计划执行 → 归因待办）查出来的。
+    六条里有一条是「这套审核里最值钱的判据，此前从来没生效过」。</p>
+</div>
+<div class="col">
+  <h3>① 流量对账空转，而空转和「端点都对」在报告上长得一模一样 ★</h3>
+  <p>现象：真跑模式、脚本 55 步全执行，<code>trafficSeen</code> 却<strong>恒为 0</strong>。</p>
+  <p>根因：多角色脚本必须自己开浏览器 context，而参数里带着同一个 <code>record_har_path</code>——
+    每个 context 关闭时把 HAR <strong>整份重写</strong>，后关的直接覆盖先关的。
+    实测：测试内打印 <span class="mono">28MB</span>，进程退出后只剩 <span class="mono">324 字节</span>、0 条记录。</p>
+  <p>修法是给每个 context 分独立 HAR、读取时合并。修完同一条用例 <code>trafficSeen</code>
+    <span class="mono">0 → 51</span>，当场抓出一条真的端点不符。</p>
+  <div class="escape"><span class="lbl">这条的普遍教训</span>
+    <p><em>一个「什么都没查到」的判据，和一个「查过了都没问题」的判据，在报告上必须长得不一样。</em>
+      否则它空转多久都没人知道。</p></div>
+
+  <h3>② 脚本截断制造假 blocker，而且专挑写得用心的打</h3>
+  <p>评审证据只喂脚本前 6000 字，而 UI 脚本开头是大段 docstring——某条用例的
+    <code>def test_</code> 在第 10361 字符、第一个 <code>expect()</code> 在第 6534 字符，
+    <strong>全在截断点之后</strong>。于是判出「没有测试函数」「一个断言都没有」两个假 blocker
+    （实际各有 1 个和 11 个）。</p>
+  <p><strong>错的方向是固定的：注释写得越足越容易被打回。</strong>
+    修法是代码侧判据一律用全文，喂模型的截断改成头 + 尾。修完那条用例 <span class="mono">46 → 68 分</span>，两个假 blocker 消失。</p>
+
+  <h3>③ 幽灵端点误报</h3>
+  <p>接口场景里整条 URL 全是变量的步骤，归一后是 <code>/api/{id}{id}</code>，跟任何真实流量都对不上，
+    每次都被报成「页面一次都没发过的端点」。<em>这条判据一旦开始喊狼来了，真的那条也没人信了</em>——所以跳过不比。</p>
+
+  <h3>④ 模块体检把父模块算成 0 条</h3>
+  <p>16 条用例全在子模块下，直属是 0 条。体检、批量范围、确认框条数三处都只查了直属——
+    体检报告一片空白，<strong>看起来像「这个模块很干净」，实际一条都没看</strong>。改成连子树一起。</p>
+
+  <h3>⑤ 裂口提示变噪音</h3>
+  <p>命名裂口检查原来无条件追加，于是<strong>每建一条用例</strong>都收到同样两句提示——
+    跟「我现在要往另一个模块加一条」毫无关系。<em>每次都出现的提示等于没有提示。</em>
+    改成只提跟本次模块相关的那一处。</p>
+
+  <h3>⑥ 共性问题最大的一桶写着「other」</h3>
+  <p>模型产出的 finding 只有维度没有 <code>kind</code>，全落进兜底桶。这一块存在的理由是
+    「改一处能修一片」，而「5× other」说不清是哪一处。改成没 kind 就按维度分桶，并给每个 kind 配人话标签。</p>
+
+  <div class="note"><p><strong>还没在活体里跑到的，也照实记着：</strong>
+    熔断（环境一直是好的，没造出连挂三条的现场，判据有单测但没在真环境触发过）；
+    被测系统 bug 开单那条路（那轮执行 3 条全绿，没有失败可归因）。</p></div>
+</div></div></section>
+
+<!-- ══════════════ 可借鉴 ══════════════ -->
+<section id="borrow"><div class="wrap"><div class="col">
+  <p class="eyebrow">拿走用</p>
+  <h2>不依赖这个平台的十条</h2>
+  <p class="sub">如果你要给自己的用例库做一道 AI 审核闸，这十条是从上面所有踩坑里剩下的通则。</p>
+  <ol class="takeaway">
+    <li><b>判定权收在代码里，模型只出意见。</b><span>让模型自己下结论，一句「整体不错」就能把致命问题盖过去。</span></li>
+    <li><b>分数不当闸门。</b><span>模型给的分会抖，抖的数当闸门有两个坏处：结论不稳定、没法照着改。「这两条必须改」可以照着改。</span></li>
+    <li><b>写得出「合法写法」的判据，就不配硬拦。</b><span>硬拦只给 100% 假绿或 100% 跑不了、且不存在合法写法的那些。</span></li>
+    <li><b>每条规则必须写出反例，写不出的不许上线。</b><span>反例测试里「应该沉默」的用例比「应该报」的更重要。</span></li>
+    <li><b>猜意图的判据最重只能到 minor。</b><span>严重度由后果定，不由把握度定——它的错误率来自「我可能理解错了」。</span></li>
+    <li><b>没有出口的提示等于逼人照做。</b><span>人照做完发现更糟，下次就整体不看提示了。出口要写在提示正文里。</span></li>
+    <li><b>「没查成」必须是第三种结论。</b><span>不是通过也不是打回。含金量看不出来的通过，比不审更坏——它发了一张假凭据。</span></li>
+    <li><b>跑挂了先归因再定责。</b><span>被测系统有 bug 时脚本必然红。直接打回等于「用例判死刑、bug 没人管」。</span></li>
+    <li><b>并行换来的不是快，是假打回。</b><span>共享数据、全局开关，一次串台就够毁掉这套审核的信誉。</span></li>
+    <li><b>报告要能区分「审了什么范围」。</b><span>否则挑三条好的一审，就能宣布整个模块没问题。</span></li>
+  </ol>
+</div></div></section>
+
+<footer><div class="wrap"><div class="col">
+  <p>判据实现 <span class="mono">backend/app/services/review/</span>（evidence · reviewer · step_coverage · traffic_diff · residue · run_outcome · queue · checkup · gap_merge）<br>
+    元规则 <span class="mono">services/review/RULES.md</span> · 流程与交互 <span class="mono">docs/review-spec.md</span> ·
+    模块命名闸 <span class="mono">services/intake_gate.py</span></p>
+  <p>本页描述的是已经在跑的行为，不是计划。所有实测数字来自真实环境上的活体验证。</p>
+</div></div></footer>
