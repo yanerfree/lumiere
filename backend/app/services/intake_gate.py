@@ -122,10 +122,29 @@ def is_scope_word(name: str) -> bool:
     return _norm_module(name) in {_norm_module(w) for w in _SCOPE_WORDS}
 
 
-def check_module_placement(name: str, tree: list[dict], parent_name: str | None
-                           ) -> tuple[list[str], list[str]]:
+def check_module_placement(name: str, tree: list[dict], parent_name: str | None,
+                           creating: bool = True) -> tuple[list[str], list[str]]:
     """**全树查重**（review-spec §11 规则 1-4）。`tree` 是全项目的模块清单，
     每项 `{"name": ..., "parent": 父模块名或 None}`。
+
+    `creating` 说的是**这次到底在干什么**，规则 2、4 的判法全看它：
+
+    · `True`  —— 在**建一个模块**（页面「+ 新建模块」）。"同一位置已经有了"是冲突。
+    · `False` —— 只是**指着一个模块放用例**（`tb_create_case` / `tb_update_case`
+      的 module+submodule）。"同一位置已经有了"是**要的结果**，不是冲突。
+
+    ## 为什么必须分开（2026-08-25 修的 bug）
+
+    原来没有这个参数，两条路共用"建"的判法，于是回推路上：模块目录一旦存在，
+    用**完全相同**的 module+submodule 再传就被规则 2 硬拒，提示还是
+    「直接往它里面加用例，别再建一个」—— 而那正是调用方刚刚做的事，
+    参数上也没有第二种写法能表达"往里面加"。结果是**每个目录只装得下第一条用例**，
+    第二条起只能另起一个模块名才进得来：实测 4 条用例被迫散在「MCP Hub」
+    「MCP Hub 内置工具」「MCP Hub 高危工具」「MCP Hub 接入指引」四个目录里。
+    `tb_update_case` 搬家撞同一堵墙 —— 目标目录存在才叫搬家，于是搬不动。
+
+    按 `RULES.md` ①，硬拦要求"不存在任何合法写法能长成这样"；而往已有模块里放用例
+    是**唯一**的合法写法，规则 2 用在这条路上从根上就不成立。
 
     ## 事故现场
 
@@ -152,7 +171,12 @@ def check_module_placement(name: str, tree: list[dict], parent_name: str | None
 
     here = [n for n in same if _norm_module(n.get("parent") or "") == _norm_module(parent_name or "")]
     if here:
-        # 规则 2：同一位置已有 → 硬拒，用现成的
+        if not creating:
+            # 放用例：命中现成目录就是**成功**，一个字都不用说。
+            # 写法不同的重名（`llm_providers` vs `LLM Providers`）不从这儿漏 ——
+            # `check_module_name` 先判过了，而且它给的是能照做的话（"用现成的那个名字"）。
+            return errors, warns
+        # 规则 2：同一位置已有 → 硬拒，用现成的。**只对"建模块"成立。**
         errors.append(
             f"「{here[0]['name']}」已经在"
             f"{('「' + parent_name + '」下') if parent_name else '顶层'}了 —— "
@@ -162,6 +186,18 @@ def check_module_placement(name: str, tree: list[dict], parent_name: str | None
     tops = [n for n in same if not n.get("parent")]
     subs = [n for n in same if n.get("parent")]
 
+    if not creating and subs and not parent_name and len(subs) == 1:
+        # 放用例、只给了一级名字，而这个模块**已经被并到某个模块下面去了**。
+        # `import_service._merged_elsewhere` 唯一命中时会跟着并过去，落点是对的 ——
+        # 拦它等于把合并的成果推回裂开的状态（合并之后 CC 手上还是老模块名，
+        # 这条回落就是为它做的，见 review-spec §11 的 2026-08-24 补记）。
+        # 只报落点，让它下次直接写全。
+        # 反例：两处以上同名时归属真说不清，那条路不走这里，照旧按规则 4 硬拒。
+        warns.append(
+            f"「{name}」已经并到「{subs[0]['parent']}」下了，这条用例跟着放进那儿。"
+            f"下次直接传 module=\"{subs[0]['parent']}\" + submodule=\"{name}\"。")
+        return errors, warns
+
     if (tops and parent_name) or (subs and not parent_name):
         # 规则 4：一个在顶层、一个要挂到模块下 → **硬拒**。这就是事故现场那种，
         # 放行就会把同一个东西劈成两处，而且两边都不完整。
@@ -169,7 +205,8 @@ def check_module_placement(name: str, tree: list[dict], parent_name: str | None
                  else f"「{subs[0]['parent']}」下已经有「{subs[0]['name']}」")
         want = (f"「{parent_name}」下" if parent_name else "顶层")
         errors.append(
-            f"{where}，你这次要建在{want} —— **同一个东西会被摆到两处，"
+            f"{where}，你这次要{'建' if creating else '放'}在{want} —— "
+            f"**同一个东西会被摆到两处，"
             f"用例劈成两半，两边都不完整**（网关那边的「跨租户订阅」就是这么裂的）。"
             f"先决定它归谁：要挂到模块下就把顶层那个搬进去，"
             f"要放顶层就别在模块下再建。")

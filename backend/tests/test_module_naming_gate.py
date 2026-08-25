@@ -179,3 +179,67 @@ def test_建目录不再把显示名存成大写():
     from app.services.import_service import _get_or_create_folder
     src = inspect.getsource(_get_or_create_folder)
     assert "name=module," in src and "name=submodule," in src
+
+
+# ── creating=False：放用例 ≠ 建模块（2026-08-25 的 bug）────────────────
+# 规则 2「同一位置已有 → 硬拒」是**建模块**的判据。它原来也接在
+# tb_create_case / tb_update_case 上，于是目录一旦存在，用完全相同的
+# module+submodule 再传就被拒，提示还是「直接往它里面加用例，别再建一个」——
+# 而那正是调用方刚做的事，参数上无从表达。后果：每个目录只装得下第一条用例。
+# 打真库的复现在 tests/integration/services/test_module_gate_intake.py。
+
+def test_放用例进已有模块不算冲突():
+    from app.services.intake_gate import check_module_placement
+    tree = [{"name": "MCP Hub", "parent": None}, {"name": "内置工具", "parent": "MCP Hub"}]
+    assert check_module_placement("MCP Hub", tree, None, creating=False) == ([], [])
+    assert check_module_placement("内置工具", tree, "MCP Hub", creating=False) == ([], [])
+
+
+def test_建模块时同一位置已有还是硬拒():
+    """creating 默认 True —— 页面「+ 新建模块」那条路一个字都没变。"""
+    from app.services.intake_gate import check_module_placement
+    tree = [{"name": "MCP Hub", "parent": None}, {"name": "内置工具", "parent": "MCP Hub"}]
+    assert check_module_placement("内置工具", tree, "MCP Hub")[0], "建模块的闸被一起放掉了"
+
+
+def test_放用例也拦得住裂库那一刀():
+    """规则 4 不受 creating 影响：顶层已有同名、还要挂到模块下 → 真会劈成两半。
+    出口是能照做的（把顶层那个搬进去，或者别传 submodule），所以配得上硬拦。"""
+    from app.services.intake_gate import check_module_placement
+    tree = [{"name": "内置工具", "parent": None}, {"name": "MCP Hub", "parent": None}]
+    errors, _ = check_module_placement("内置工具", tree, "MCP Hub", creating=False)
+    assert errors and "劈成两半" in errors[0]
+
+
+def test_已并到别处的模块名_放用例时跟着并过去而不是被拒():
+    """合并之后 CC 手上还是老模块名（写在它的笔记和脚本里）。
+    `import_service._merged_elsewhere` 唯一命中时会跟着并过去，落点是对的 ——
+    拦它等于把合并的成果推回裂开的状态。"""
+    from app.services.intake_gate import check_module_placement
+    tree = [{"name": "订阅管理", "parent": None}, {"name": "跨租户订阅", "parent": "订阅管理"}]
+    errors, warns = check_module_placement("跨租户订阅", tree, None, creating=False)
+    assert errors == [], "合并过的模块名被拒了 —— 合并等于白做"
+    assert warns and "订阅管理" in warns[0], "落点得说出来，不然它不知道去哪儿了"
+    # 反例：两处以上同名时归属真说不清，那就照旧按规则 4 拦
+    tree2 = tree + [{"name": "跨租户订阅", "parent": "服务管理"},
+                    {"name": "服务管理", "parent": None}]
+    assert check_module_placement("跨租户订阅", tree2, None, creating=False)[0]
+
+
+def test_门禁在放用例这条路上一律传creating_False():
+    """封样：`_check_module` 里任何一个 `check_module_placement(...)` 漏了
+    `creating=False`，就是这个 bug 本身。数源码里的字符串会把注释一起数进去，
+    所以照 AST 数**真的调用**。"""
+    import ast
+    import textwrap
+
+    from app.mcp.tools import test_cases
+    tree = ast.parse(textwrap.dedent(inspect.getsource(test_cases._check_module)))
+    calls = [c for c in ast.walk(tree)
+             if isinstance(c, ast.Call)
+             and getattr(c.func, "attr", None) == "check_module_placement"]
+    assert calls, "位置查重整个没接上"
+    for c in calls:
+        kw = {k.arg: getattr(k.value, "value", None) for k in c.keywords}
+        assert kw.get("creating") is False, \
+            f"第 {c.lineno} 行那个调用还在按「建模块」判"

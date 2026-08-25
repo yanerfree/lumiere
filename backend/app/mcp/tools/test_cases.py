@@ -49,8 +49,13 @@ async def _check_module(session: AsyncSession, branch_id, module: str | None,
 
     两件事分开做：
     · **名字本身**（范围词、重名写法、看着像两级）→ `check_module_name`，跟同级比。
-    · **摆放位置**（同一处已有 / 顶层和子模块下各一个）→ `check_module_placement`，
-      跟**全树**比。后者原来根本没有，是「同一个东西摆两处」那个事故的根因。
+    · **摆放位置**（顶层和子模块下各一个）→ `check_module_placement`，跟**全树**比。
+      后者原来根本没有，是「同一个东西摆两处」那个事故的根因。
+
+    **这条路一律 `creating=False`**：module/submodule 在这里是"用例放哪儿"，
+    不是"建什么模块" —— 目录不存在会由 `_get_or_create_folder` 顺手建，存在就用现成的，
+    两种都正常。判成"建模块"就会把"用现成的"也拒掉，见 `check_module_placement`
+    文档里那段 2026-08-25 的 bug。
     """
     from sqlalchemy import select
 
@@ -68,8 +73,11 @@ async def _check_module(session: AsyncSession, branch_id, module: str | None,
         errors += e
         warns += w
         if not e and not submodule:
-            # 只建一级模块时，位置就是顶层
-            e2, w2 = intake_gate.check_module_placement(module, tree, None)
+            # 只给一级名字时，落点就是顶层。
+            # **creating=False** —— 这条路是"往模块里放用例"，不是"建模块"。
+            # 少了它，目录一旦存在就被规则 2 硬拒（"直接往它里面加用例"），
+            # 而那正是这次要做的事，参数上无从表达 → 每个目录只装得下第一条用例。
+            e2, w2 = intake_gate.check_module_placement(module, tree, None, creating=False)
             errors += e2
             warns += w2
 
@@ -88,7 +96,8 @@ async def _check_module(session: AsyncSession, branch_id, module: str | None,
         errors += e
         warns += w
         if not e:
-            e2, w2 = intake_gate.check_module_placement(submodule, tree, module)
+            e2, w2 = intake_gate.check_module_placement(submodule, tree, module,
+                                                       creating=False)
             errors += e2
             warns += w2
 
