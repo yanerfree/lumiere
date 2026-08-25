@@ -70,11 +70,13 @@ _LIVE = _LOCATE + _NOTES_READ + ["tb_add_project_note"] + [
     # 产出完自己先跑一遍交付门禁，别再自己宣布"这条可以交付了"
     "tb_check_deliverable", "tb_check_branch",
     # 六维评审，回推完自己先过一遍（blocker 一条都不许留着交上去）。
-    # **两个必须同档**：tb_review_case 超时中止时唯一正确的下一步就是调
-    # tb_review_check 查（评审是跑完就落库）—— 只发前者不发后者的话，
-    # 超时之后 CC 手上没有任何只读查询手段，只能重调 tb_review_case，
-    # 而那正是要防的重复真跑。
+    # **tb_review_case 和 tb_review_check 必须同档**：前者超时中止时唯一正确的
+    # 下一步就是调后者查（评审是跑完就落库）—— 只发前者不发后者的话，超时之后
+    # CC 手上没有任何只读查询手段，只能重调 tb_review_case，而那正是要防的重复真跑。
     "tb_review_case", "tb_review_check",
+    # 推一批就送一批进队列 —— 别自己 for 循环调上面那个，那样并发真跑打同一个
+    # 环境，同环境串行和熔断两道保护一条都吃不到（假打回就是这么来的）
+    "tb_review_batch", "tb_review_batch_status",
     # 写完一批自己问一句「这个模块还缺什么」，拿到清单接着补，不用人催
     "tb_module_checkup",
     # 版本升级对账：新分支复制完，拿本机 git diff 跟平台的端点表求交集，
@@ -103,7 +105,8 @@ _UISCRIPT = _LOCATE + _NOTES_READ + [
     # 文案纪律要求走 t()，那就得有地方登记词条 —— 缺这个通道，纪律就只能靠人工转抄
     "tb_upsert_i18n_terms",
     "tb_check_deliverable", "tb_check_branch",
-    "tb_review_case", "tb_review_check", "tb_module_checkup",
+    "tb_review_case", "tb_review_check",
+    "tb_review_batch", "tb_review_batch_status", "tb_module_checkup",
 ]
 
 _TRIAGE = _LOCATE + _NOTES_READ + [

@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -50,6 +51,36 @@ CAUSES = {
 # 交付门禁照旧算「卡在产品缺陷」——不是通过。所以甩锅没收益。
 SELF_SERVE = {"test_defect", "case_expired", "env_issue", "data_issue", "flaky"}
 NEEDS_HUMAN = {"requirement_unclear", "unknown"}
+
+# ── 抽检：自动化会把体温计一起收走 ────────────────────────────────
+#
+# §2.4 上线的反向指标 `CC归因 vs 人确认` 一致率（agreement_stats）是平台**唯一**
+# 能量出"CC 有没有系统性把测试缺陷说成产品缺陷"的东西。它的分母是
+# `confirmed_cause` —— 只有人确认过的才进。
+#
+# 而自证放行（SELF_SERVE）压根不经过人。所以**自证比例越高，这个指标越测不出来**：
+# 不是"少做了个功能"，是**把人从确认里拿掉，同时也就拿掉了度量它准不准的手段**。
+#
+# 所以自证的也抽一部分送人复核。**不阻塞 CC** —— 它照旧自己改，只是这几条人会
+# 另外看一眼，用来校准。
+SAMPLE_EVERY = 10          # 每 10 条抽 1 条
+# **写死，不做成可配置**：又一个能被调成 0 的开关，和「检查项不做成可勾选」同一条纪律。
+
+# 真正在等人的两种去向。`tb_list_pending_confirm` 默认只列这些 ——
+# 此前它列的是"所有还没确认的"，于是自证放行的也混在里面（CC 明明被告知
+# "你自己改不用等"），队列里绝大多数是不需要人动的东西，人就不看了。
+WAITING_ON_HUMAN = ("needs_human", "self_serve_sampled")
+
+
+def sampled(case_id) -> bool:
+    """这条自证归因要不要抽出来送人复核。
+
+    **按哈希不按随机**：同一条用例反复提交归因，抽中与否必须每次一样。
+    随机的话 CC 会看到"同样的归因这次要等人、上次不用等"，像是平台行为不稳定 ——
+    而它没法从返回里分辨这是抽检还是判据变了。
+    """
+    h = hashlib.sha1(str(case_id).encode("utf-8")).hexdigest()
+    return int(h[:8], 16) % SAMPLE_EVERY == 0
 # 产品缺陷自证要齐的三样
 DEFECT_EVIDENCE = {
     "liveVerified": "活体复现记录：你**真的**又调/点了一遍，写清怎么复现、看到什么",
@@ -245,9 +276,14 @@ async def submit(session: AsyncSession, run_id: str, payload: dict, author: str 
         "phenomenonAtSubmit": run.failure_phenomenon,
     }
     where, missing = route(payload)
+    # 自证放行的抽一部分仍然送人复核 —— 见 SAMPLE_EVERY 那段的理由。
+    # 抽中不改变"CC 自己处置"这件事，只是让它同时留在人的待确认队列里。
+    if where == "self_serve" and sampled(run.case_id):
+        where = "self_serve_sampled"
     run.cc_analysis["route"] = where
     if missing:
         run.cc_analysis["missingEvidence"] = missing
+    self_serving = where in ("self_serve", "self_serve_sampled")
 
     # 同步失败跟进单 —— 不同步的话单子永远停在「待分析」，中间几步是断的
     ticket_status = None
@@ -261,7 +297,7 @@ async def submit(session: AsyncSession, run_id: str, payload: dict, author: str 
             ).order_by(FailureTicket.created_at.desc()))).scalars().first()
         if t is not None:
             t.cc_analysis = run.cc_analysis
-            if where == "self_serve":
+            if self_serving:
                 if payload["cause"] == "product_defect":
                     # 挂了单号的产品缺陷：回归不再刷红，但**交付门禁照旧算卡住**
                     t.status = "known"
@@ -277,12 +313,15 @@ async def submit(session: AsyncSession, run_id: str, payload: dict, author: str 
         logger.exception("同步失败跟进单出错（不影响归因入库）")
 
     await session.commit()
-    if where == "self_serve":
+    if self_serving:
         msg = ("归因已记录，**你自己处置**，不用等人：" + (
             "产品缺陷已挂单号，这条回归不再刷红；但交付门禁照旧算「卡在产品缺陷」——"
             "不是通过。等缺陷修好后复跑，绿了跟进单自动关。"
             if payload["cause"] == "product_defect" else
             "改完**必须复跑跑绿**，跟进单才会关 —— 跑不绿它会一直挂在「处置中」。"))
+        if where == "self_serve_sampled":
+            msg += ("（这条被**抽中复核**：自证的每 10 条抽 1 条另外送人看一眼，"
+                    "用来校准归因准不准。**不影响你** —— 照旧自己改，不用等。）")
     else:
         msg = "归因已记录，进入**待确认**队列 —— 它不改用例状态、不进通过率、不改报告结论。"
         if missing:
@@ -367,17 +406,29 @@ async def agreement_stats(session: AsyncSession, project_id: uuid.UUID | None = 
 
     buckets: dict[str, dict] = {}
     confirmed_total = agreed_total = 0
+    # **抽检样本和人主动确认的必须分开算。** 人主动去看的那批有选择偏差 ——
+    # 往往正是他已经觉得可疑的那些，算出来的一致率天然偏低，混在一起会误报成
+    # 「CC 在系统性甩锅」。抽检是按哈希均匀抽的，**只有它能代表总体**。
+    by_source: dict[str, dict] = {
+        "sampled": {"label": "抽检（按哈希均匀抽，可代表总体）",
+                    "confirmed": 0, "agreed": 0},
+        "other":   {"label": "人主动确认（有选择偏差，别当总体看）",
+                    "confirmed": 0, "agreed": 0},
+    }
     for cc, confirmed, _phen in rows:
         cause = (cc or {}).get("cause") or "unknown"
+        src = "sampled" if (cc or {}).get("route") == "self_serve_sampled" else "other"
         b = buckets.setdefault(cause, {"submitted": 0, "confirmed": 0, "agreed": 0, "overturnedTo": {}})
         b["submitted"] += 1
         if not confirmed:
             continue
         b["confirmed"] += 1
         confirmed_total += 1
+        by_source[src]["confirmed"] += 1
         if confirmed == cause:
             b["agreed"] += 1
             agreed_total += 1
+            by_source[src]["agreed"] += 1
         else:
             b["overturnedTo"][confirmed] = b["overturnedTo"].get(confirmed, 0) + 1
 
@@ -408,12 +459,19 @@ async def agreement_stats(session: AsyncSession, project_id: uuid.UUID | None = 
         }
         for cause, b in sorted(buckets.items(), key=lambda kv: -kv[1]["submitted"])
     ]
+    for v in by_source.values():
+        v["agreementRate"] = (round(v["agreed"] / v["confirmed"] * 100, 1)
+                              if v["confirmed"] >= 5 else None)
     return {
         "totalAnalyses": len(rows),
         "confirmed": confirmed_total,
         "pending": len(rows) - confirmed_total,
         "agreementRate": round(agreed_total / confirmed_total * 100, 1) if confirmed_total else None,
         "byCause": by_cause,
+        # 同样用数组不用字典：响应过 camelCase 中间件会把字典键一起转
+        "bySource": [{"source": k, **v} for k, v in by_source.items()],
         "alerts": alerts,
-        "note": "样本 <5 的桶不给推翻率 —— 小样本的百分比会被当成结论，那比没有数字更糟。",
+        "note": ("样本 <5 的桶不给推翻率 —— 小样本的百分比会被当成结论，那比没有数字更糟。"
+                 "**看总体准不准要看 bySource 里的抽检那一行**：人主动确认的那批"
+                 "有选择偏差（他挑的本来就是可疑的），不能代表全部归因的水平。"),
     }

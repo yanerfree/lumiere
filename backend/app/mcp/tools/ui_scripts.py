@@ -49,7 +49,10 @@ async def run_ui_script(
     cid = uuid.UUID(case_id)
     script = await script_service.get_active_script(session, cid, "ui")
     if not script:
-        return {"status": "error", "message": "没有可执行的 UI 脚本，请先调用 tb_generate_ui_script 生成"}
+        return {"status": "error",
+                "message": "没有可执行的 UI 脚本 —— 先用 tb_sync_ui_script 把你本地"
+                           "写好并跑通的脚本回推上来。（平台侧生成已封存，"
+                           "**没有 tb_generate_ui_script 这个工具**。）"}
 
     # 全局变量 + 环境变量（同名以环境为准）。见 variable_service.build_run_env ——
     # 四条执行路径原来各写一份 select，全局变量一条都没被注入过。
@@ -289,20 +292,62 @@ async def run_ui_scripts_batch(
 
 async def get_ui_script_result(
     case_id: str,
+    script_type: str | None = None,
+    run_id: str | None = None,
     session: AsyncSession = None,
 ) -> dict:
-    """获取最近一次 UI 脚本执行结果"""
+    """最近一次执行的**证据包** —— UI 和接口场景都收。
+
+    原来这里硬过滤 `script_type == "ui"`，于是**接口场景的失败拿不到证据包**：
+    没有 run_id、没有 error_summary、没有现象初判。而 `tb_submit_analysis` 必须带
+    run_id、evidence 还要能对上这次执行 —— 等于接口那半边的归因链是断的。
+    偏偏 `tb_get_failed_scenarios` 对 api 计划照样把人指到这里来（它按
+    report_scenario_id 取 run，不分维度），所以这个断口是走得到的。
+
+    接口执行没有截图和浏览器流量（那是浏览器才有的），但 error_summary、
+    stdout 的逐步轨迹、failure_phenomenon 都落了库（见 api_test_runner 里的
+    record_run）—— 够 evidence 的 error_summary / stdout / phenomenon 三种指针用。
+
+    `script_type` 不传 = 取这条用例**最近的一次**执行，不管哪一维。
+
+    **要归因就把 `run_id` 传上**（`tb_get_failed_scenarios` 给的那个）。不传只能拿到
+    「最近一次」，而这条用例可能已经被复跑过 —— 活体自测就撞到了：
+    TC-DYGL-00013 有 6 次接口执行，最近一次是 passed，于是证据包里
+    error_summary/stdout 全空，什么指针都写不出来，而 `tb_submit_analysis`
+    又明确拒收 passed 的执行。**报告里指着失败那一次，这里却给最新那一次** ——
+    中间这个错位不补上，复跑过的用例就永远归不了因。
+    """
     cid = uuid.UUID(case_id)
 
-    script = await script_service.get_active_script(session, cid, "ui")
+    st = (script_type or "").strip().lower() or None
+    if st and st not in ("ui", "api"):
+        return {"error": f"script_type 只支持 ui / api，收到 {script_type}"}
 
-    result = await session.execute(
-        select(ScriptRun)
-        .where(ScriptRun.case_id == cid, ScriptRun.script_type == "ui")
-        .order_by(ScriptRun.created_at.desc())
-        .limit(1)
-    )
-    run = result.scalar_one_or_none()
+    if run_id:
+        try:
+            rid = uuid.UUID(run_id)
+        except (ValueError, AttributeError):
+            return {"error": f"run_id 不是合法 UUID: {run_id}"}
+        run = (await session.execute(
+            select(ScriptRun).where(ScriptRun.id == rid))).scalar_one_or_none()
+        if run is None:
+            return {"error": f"找不到这次执行: {run_id}"}
+        # 张冠李戴要拦住 —— 拿 A 用例的证据去给 B 用例归因，evidence 校验那边
+        # 反而会通过（它只核"这次执行里有没有这条请求"），错得很难看出来
+        if str(run.case_id) != str(cid):
+            return {"error": f"这次执行不属于用例 {case_id}，它属于 {run.case_id}"}
+    else:
+        cond = [ScriptRun.case_id == cid]
+        if st:
+            cond.append(ScriptRun.script_type == st)
+        run = (await session.execute(
+            select(ScriptRun).where(*cond)
+            .order_by(ScriptRun.created_at.desc()).limit(1))).scalar_one_or_none()
+
+    # 活跃脚本按**这次执行的那一维**取，没跑过才退回 ui ——
+    # 固定取 ui 的话，接口场景会报 has_script=false，看着像"脚本没了"。
+    script = await script_service.get_active_script(
+        session, cid, run.script_type if run is not None else (st or "ui"))
 
     if not run:
         return {
@@ -321,6 +366,8 @@ async def get_ui_script_result(
         "script_source": script.source if script else None,
         "last_run": {
             "run_id": str(run.id),
+            # 哪一维跑的 —— 接口执行没有截图/流量，不说清会被当成"证据丢了"
+            "script_type": run.script_type,
             "status": run.status,
             "run_mode": run.run_mode,
             "attempt": run.attempt,
@@ -329,6 +376,11 @@ async def get_ui_script_result(
             "created_at": run.created_at.isoformat() if run.created_at else None,
             # 平台的初判：只判「是什么」（现象），「为什么」（归因）归你
             "failure_phenomenon": run.failure_phenomenon,
+            # 这次是通过的就说一句 —— 通过的执行没有失败证据，
+            # 而 tb_submit_analysis 会直接拒收它，早点说清省一趟
+            "note": ("这次执行是**通过**的，没有失败证据可归因。要看失败那次，"
+                     "把 tb_get_failed_scenarios 给的 runId 传进来。"
+                     if (run.status or "") == "passed" else None),
             **evidence,
         },
     }

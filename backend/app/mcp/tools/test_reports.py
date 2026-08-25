@@ -91,6 +91,7 @@ async def get_failed_scenarios(session: AsyncSession, plan_id: str | None = None
     return {
         "total": len(failed),
         "failed": failed,
-        "usage": "拿 runId 调 tb_get_ui_script_result 看证据包（截图路径/流量/现象初判），"
-                 "判完再调 tb_submit_analysis 回填归因。",
+        "usage": "拿 **caseId** 调 tb_get_ui_script_result 看证据包（截图路径/流量/现象初判）"
+                 "—— 那个工具的入参是 case_id，不是 runId；**runId 是下一步 "
+                 "tb_submit_analysis 用的**。判完再调 tb_submit_analysis 回填归因。",
     }
