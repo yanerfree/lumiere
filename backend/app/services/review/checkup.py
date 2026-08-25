@@ -3,12 +3,17 @@
 跟逐条审核是两件事：一条一条看只知道"这条不行"；看模块才知道
 "这一整片都犯同一个错"和"这个模块压根没测到的地方"。
 
-## 两块输出，来源完全不同
+## 三块输出，来源完全不同
 
 | 块 | 怎么来的 | 为什么这么定 |
 |---|---|---|
 | **共性问题** | 把逐条 findings 按 kind 归类，**纯汇总，不问 LLM** | 它就是个 group by。塞模型调用既慢又不稳，而"同一份报告两次打开长得不一样"比不聚合更糟 |
 | **覆盖缺口** | 额外一次模型调用 | 「这个模块没测到什么」只有读过全部标题才答得上，代码判不了 |
+| **覆盖分布** | `intake_gate.check_coverage`，**纯代码数个数** | P0 占比、六类操作各几条、缺哪一类 —— 这种问题模型答得又慢又飘，`re` 一遍就完。它原来在入库门禁里，可回推一条一条来、手里永远没有"一批"，2026-08-25 挪到这里 |
+
+缺口和分布看的是同一件事的两面：缺口靠模型看**内容**（"页面上有这个操作、用例
+里一条都没覆盖"），分布靠代码数**个数**（"18/22 都是创建类，一条删除都没有"）。
+模型会漏掉后者 —— 它读 60 条标题时不会去算比例，而比例恰恰是最刺眼的信号。
 
 ## 覆盖缺口是**情报，不是闸门**
 
@@ -205,7 +210,8 @@ async def run(session, branch_id, *, folder_id=None, module: str | None = None,
         .order_by(Case.case_code))).scalars().all()
     if not cases:
         return {"module": folder.name, "total": 0, "commonIssues": [],
-                "coverageGaps": [], "note": "这个模块还没有用例"}
+                "coverageGaps": [], "coverageSkew": {"total": 0, "notes": []},
+                "note": "这个模块还没有用例"}
 
     if ai_config is None:
         from app.models.project import Branch
@@ -217,6 +223,16 @@ async def run(session, branch_id, *, folder_id=None, module: str | None = None,
     issues = await common_issues(session, [c.id for c in cases])
     gaps, gaps_total = await coverage_gaps(session, cases, ai_config, observed_actions)
 
+    # 第三块：**分布**。跟共性问题一样是纯代码算的（同一份报告两次打开必须一样），
+    # 但问的是另一件事 —— 共性问题看"这些用例各自写得对不对"，分布看
+    # "这些用例合起来偏不偏"。判据在 intake_gate.check_coverage，那里写着
+    # 它为什么从入库门禁挪过来。
+    from app.services.intake_gate import check_coverage
+    skew = check_coverage([
+        {"title": c.title, "priority": c.priority,
+         "expected_result": c.expected_result or ""} for c in cases
+    ])
+
     reviewed = sum(1 for c in cases if c.review_status in ("approved", "rejected"))
     return {
         "module": folder.name,
@@ -225,11 +241,15 @@ async def run(session, branch_id, *, folder_id=None, module: str | None = None,
         "commonIssues": issues,
         "coverageGaps": gaps,
         "coverageGapsTotal": gaps_total,
+        "coverageSkew": skew,
         # 缺口是**情报不是闸门**，这句话要跟着结果走 —— 不写的话
         # 迟早有人拿它当"这个模块没通过"的依据。
         "usage": ("覆盖缺口是建议清单，**不参与任何一条用例过不过**。"
                   "共性问题是逐条 findings 的汇总（改一处能修一片），"
                   "只数 blocker 和 major。"
+                  "覆盖分布（coverageSkew）是纯代码算的：P0 占比、六类操作"
+                  "（创建/查询/修改/删除/异常/权限）各几条、缺哪一类 —— "
+                  "缺口靠模型看内容，分布靠代码数个数，两个都不是门禁。"
                   + ("" if observed_actions else
                      " 传 observed_actions（你在页面上探到的可操作项）能让缺口准得多 —— "
                      "不传的话它只能凭用例标题猜。")),

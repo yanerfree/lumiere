@@ -10,9 +10,14 @@
 批量化之后，入库后发现等于人肉从 300 条里捞。
 
 全部作用在 MCP 回推入口 —— 那是唯一入口，这是架构上最大的便宜，一定要占。
+
+**但"暗面的"那半判不了**：回推一条一条来，`check_one` 手里永远只有一条，
+覆盖倾斜要一批才看得出来。那半判据（`check_coverage`）2026-08-25 挪去了
+模块评审 —— 模块体检拿的就是这个模块全部用例，那才是手里真有一批的时刻。
 """
 from __future__ import annotations
 
+import math
 import re
 import uuid
 
@@ -358,23 +363,48 @@ async def check_one(
     return errors, warns
 
 
-def check_batch(items: list[dict]) -> tuple[list[str], list[str]]:
-    """整批校验：P0 配额 + 覆盖倾斜。items 至少含 title / priority。"""
-    errors: list[str] = []
-    warns: list[str] = []
-    n = len(items)
-    if n == 0:
-        return errors, warns
+def check_coverage(items: list[dict]) -> dict:
+    """**一批用例合起来**有没有毛病：P0 配额 + 操作类型倾斜。items 至少含 title / priority。
 
-    # 闸 3 P0 配额 —— 硬拒，整批打回重新分级
+    这两条判据只有"一批"才成立，逐条看每条都合理 —— 那正是 `intake_gate` 开头
+    说的暗面淹法：20 条都在测创建的参数组合、零条测删除的级联影响，总量涨了、
+    通过率好看，风险覆盖没涨。
+
+    ## 它原来叫 check_batch，写在这里但**从来没有调用点**
+
+    2026-08-08 出生时的想法是"整批入库时拦一次"，可回推是**一条一条**来的
+    （tb_create_case 一次一条），n=1 时两道闸恒不触发。判据没错，错的是家。
+    真正手里有一批的时刻是**模块评审**：模块体检拿的就是这个模块全部用例
+    （连子模块），"这个模块覆盖全不全、有没有遗漏"问的就是这件事。
+    2026-08-25 挪过去了，见 `review/checkup.py`。
+
+    ## 返回情报，不返回闸门
+
+    原来 P0 超配额是**硬拒**（"整批打回重新分级"）。现在不拦：体检的定位是情报，
+    覆盖缺口都不参与一条用例过不过，P0 分布更没理由比它硬。而且到评审那一刻
+    用例早就入库了，"打回"无处可打 —— 拦不住的东西写成硬拒只会让人学会忽略它。
+
+    门槛（P0 看 ≥5 条、倾斜看 ≥8 条）是防误报：三条用例的模块里一条 P0 就是 33%，
+    报出来只是噪音。
+    """
+    n = len(items)
+    out: dict = {"total": n, "notes": []}
+    if n == 0:
+        return out
+
     p0 = sum(1 for it in items if (it.get("priority") or "").upper() == "P0")
-    if n >= 5 and p0 / n > P0_QUOTA:
-        errors.append(
-            f"这批 {n} 条里有 {p0} 条 P0（{p0 / n:.0%} > {P0_QUOTA:.0%}）。"
-            "P0 是挂了就得立刻停下来查的那一档，什么都 P0 等于没分级。重新分一遍再传。"
+    # 配额**向上取整**再比个数，不比小数。`p0/n > 0.15` 在小模块上全是噪音：
+    # 实测「登录」13 条 2 条 P0 = 15.4%，就这 0.4 个百分点被报成"什么都 P0"，
+    # 而 13 条里 2 条 P0 是完全正常的分级。取整后 13 条的配额是 2，放它过。
+    # 下限也从 5 提到 10 —— 5 条的模块配额只有 1，第 2 条 P0 就报，同样是噪音。
+    quota = math.ceil(n * P0_QUOTA)
+    out["p0"] = {"count": p0, "ratio": round(p0 / n, 3), "cap": P0_QUOTA, "quota": quota}
+    if n >= 10 and p0 > quota:
+        out["notes"].append(
+            f"这个模块 {n} 条里有 {p0} 条 P0（{p0 / n:.0%}，按 {P0_QUOTA:.0%} 算最多 {quota} 条）。"
+            "P0 是挂了就得立刻停下来查的那一档，什么都 P0 等于没分级 —— 重新分一遍。"
         )
 
-    # 闸 4 覆盖倾斜 —— 只告警，不拦
     if n >= 8:
         hit = {k: 0 for k in _OP_KINDS}
         for it in items:
@@ -382,19 +412,33 @@ def check_batch(items: list[dict]) -> tuple[list[str], list[str]]:
             for k, pat in _OP_KINDS.items():
                 if pat.search(text):
                     hit[k] += 1
+        # 六类各几条只放 `ops`，**不拼进 notes 的话里** —— 拼进去的是 Python 的
+        # dict repr（`{'创建': 0, ...}`），页面上原样显示；而 `ops` 已经被摊成
+        # 六个格子摆在这句话上面，同一份数据说两遍，其中一遍还是代码长相。
+        out["ops"] = hit
         top = max(hit, key=hit.get)
         if hit[top] / n > 0.7:
-            warns.append(
-                f"⚠ 覆盖倾斜：{hit[top]}/{n} 条都是「{top}」类操作。"
-                f"总量涨了但风险覆盖没涨 —— 补几条别的类型再传。当前分布：{hit}"
+            out["notes"].append(
+                f"覆盖倾斜：{hit[top]}/{n} 条都是「{top}」类操作。"
+                "总量涨了但风险覆盖没涨 —— 补几条别的类型。"
             )
-        for miss in ("删除", "权限"):
-            if hit[miss] == 0:
-                warns.append(
-                    f"⚠ 这批一条「{miss}」相关的都没有。{miss}路径是最容易漏、"
-                    f"出事又最贵的地方。"
-                )
-    return errors, warns
+        # 缺哪一类**要看模块是不是干那个的**，不能无条件点名。
+        # 实测「登录」13 条被报「一条删除都没有」—— 登录模块本来就没有"删除"这回事，
+        # 这种话跟体检自己禁止 LLM 说的"建议补充异常场景"是同一个毛病：
+        # 放到哪个模块都成立，于是说了等于没说，几次之后整块没人看。
+        # 判据改成"有前半截、缺后半截"：
+        #   建了不删 → 真缺口（删除的级联影响是最容易漏、出事最贵的地方）
+        #   既不建也不删 → 这个模块不管对象生命周期，别拿 CRUD 的模子套它
+        if hit["创建"] > 0 and hit["删除"] == 0:
+            out["notes"].append(
+                "这个模块有创建、一条「删除」都没有。删除的级联影响是最容易漏、"
+                "出事又最贵的地方。"
+            )
+        if (hit["创建"] + hit["修改"] + hit["删除"]) > 0 and hit["权限"] == 0:
+            out["notes"].append(
+                "这个模块会改数据、却一条「权限」相关的用例都没有（越权/未授权/租户隔离）。"
+            )
+    return out
 
 def p0_confirmation_hint(priority: str, target_level: str, confirmed_note: str | None) -> list[str]:
     """P0 一次性出三件套时的**提醒**，不是拦截。

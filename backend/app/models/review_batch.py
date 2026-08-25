@@ -82,7 +82,7 @@ class ReviewBatch(Base):
     current_case_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     with_checkup: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # 模块报告的两块内容（§7）：共性问题 + 覆盖缺口。审完算一次存下来 ——
+    # 模块报告的三块内容（§7）：共性问题 + 覆盖缺口 + 覆盖分布。审完算一次存下来 ——
     # 每次打开报告页重算的话，LLM 每轮措辞不同，同一份报告两次打开长得不一样。
     report: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     # 熔断/取消/异常的原因。**要能说出来**，否则页面上「暂停了」和「卡住了」一样。

@@ -340,10 +340,11 @@ async def review_batch_detail(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
 ):
-    """模块报告（§7）：结论 + 共性问题 + 覆盖缺口 + 逐条结果。
+    """模块报告（§7）：结论 + 共性问题 + 覆盖缺口 + 覆盖分布 + 逐条结果。
 
-    **价值在共性问题和覆盖缺口**：一条一条看只知道"这条不行"；
-    看模块才知道"这一整片都犯同一个错"和"这个模块压根没测到的地方"。
+    **价值在这三块**：一条一条看只知道"这条不行"；看模块才知道
+    "这一整片都犯同一个错"、"这个模块压根没测到的地方"，
+    以及"这些用例合起来偏在哪"（覆盖分布是代码数的，不问模型）。
     """
     from app.models.review_batch import ReviewBatch, ReviewBatchItem
     b = await session.get(ReviewBatch, batch_id)

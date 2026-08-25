@@ -329,12 +329,14 @@ async def _finalize(batch_id: str, status: str | None = None, note: str | None =
 
 
 async def _build_report(batch_id: str) -> None:
-    """模块报告的两块内容（§7）：共性问题 + 覆盖缺口。
+    """模块报告的三块内容（§7）：共性问题 + 覆盖缺口 + 覆盖分布。
 
-    **价值在这两块**：一条一条看只知道"这条不行"；看模块才知道
-    "这一整片都犯同一个错"和"这个模块压根没测到的地方"。
+    **价值在这三块**：一条一条看只知道"这条不行"；看模块才知道
+    "这一整片都犯同一个错"、"这个模块压根没测到的地方"，
+    以及"这些用例合起来偏在哪"。
     审完算一次存下来 —— 每次打开重算的话，LLM 每轮措辞不同，
-    同一份报告两次打开长得不一样。
+    同一份报告两次打开长得不一样。（覆盖分布是代码数的，本来每次都一样，
+    但它跟另外两块存在同一份 JSON 里，一起存最省事。）
     """
     from app.services.review import checkup
 
@@ -346,7 +348,8 @@ async def _build_report(batch_id: str) -> None:
         if out.get("error"):
             return
         b.report = {k: out[k] for k in
-                    ("commonIssues", "coverageGaps", "coverageGapsTotal", "total", "reviewed")
+                    ("commonIssues", "coverageGaps", "coverageGapsTotal",
+                     "coverageSkew", "total", "reviewed")
                     if k in out}
         await s.commit()
 

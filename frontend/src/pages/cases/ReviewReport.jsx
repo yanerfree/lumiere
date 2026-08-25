@@ -23,6 +23,10 @@ const KIND = {
   cc_inline:          { label: 'CC 自审', color: 'default', hint: 'CC 调 tb_review_case 自己过的一遍，不占队列' },
 }
 
+// 覆盖分布六格的显示顺序（增删改查 + 异常 + 权限）。后端算的时候是这个顺序，
+// 但存进 JSONB 就被重排了，所以这里再定一次。
+const OP_ORDER = ['创建', '查询', '修改', '删除', '异常', '权限']
+
 const STATUS = {
   queued:    { label: '排队中', color: 'default' },
   running:   { label: '进行中', color: 'processing' },
@@ -105,7 +109,9 @@ export default function ReviewReport() {
 
   const columns = [
     { title: '类型', dataIndex: 'kind', width: 92,
-      render: v => <Tooltip title={KIND[v]?.hint}><Tag color={KIND[v]?.color} style={{ margin: 0 }}>{KIND[v]?.label || v}</Tag></Tooltip> },
+      // hint 里带 `**…**`（「**只有这种能代表模块情况**」）—— 直接塞 Tooltip
+      // 会把星号原样显示出来，正好显示在最该被看见的那句上
+      render: v => <Tooltip title={mdBold(KIND[v]?.hint)}><Tag color={KIND[v]?.color} style={{ margin: 0 }}>{KIND[v]?.label || v}</Tag></Tooltip> },
     { title: '范围', dataIndex: 'scopeLabel', width: 170,
       render: (v, r) => <a onClick={() => openDetail(r.batchId)}>{v || '—'}</a> },
     { title: '环境', dataIndex: 'environment', width: 100,
@@ -203,8 +209,9 @@ export default function ReviewReport() {
   )
 }
 
-// 模块报告（§7）。**价值在共性问题和覆盖缺口**：一条一条看只知道"这条不行"；
-// 看模块才知道"这一整片都犯同一个错"和"这个模块压根没测到的地方"。
+// 模块报告（§7）三块：共性问题 + 覆盖缺口 + 覆盖分布。一条一条看只知道"这条不行"；
+// 看模块才知道"这一整片都犯同一个错"、"这个模块压根没测到的地方"，
+// 以及"这些用例合起来偏在哪"。
 function ModuleReport({ d, projectId, navigate }) {
   const r = d.report || {}
   return (
@@ -250,7 +257,7 @@ function ModuleReport({ d, projectId, navigate }) {
       {!!(r.coverageGaps || []).length && (
         <section style={{ marginBottom: 18 }}>
           <b>覆盖缺口</b> <span style={{ color: '#86909c', fontSize: 12 }}>
-            —— 这个模块还缺什么。**建议清单，不参与任何一条用例过不过**</span>
+            —— 这个模块还缺什么。<b>建议清单，不参与任何一条用例过不过</b></span>
           <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
             {r.coverageGaps.map((g, i) => (
               <Tooltip key={i} title={(g.phrasings || []).length > 1
@@ -268,6 +275,45 @@ function ModuleReport({ d, projectId, navigate }) {
             <div style={{ fontSize: 11, color: '#86909c' }}>
               还有 {r.coverageGapsTotal - r.coverageGaps.length} 类没显示
             </div>
+          )}
+        </section>
+      )}
+
+      {r.coverageSkew && (!!(r.coverageSkew.notes || []).length || r.coverageSkew.ops) && (
+        <section style={{ marginBottom: 18 }}>
+          <b>覆盖分布</b> <span style={{ color: '#86909c', fontSize: 12 }}>
+            —— 这些用例合起来偏不偏。代码数的个数，不问模型，同一份报告每次打开都一样</span>
+          {/* 六类各几条摊开摆着，而不是只报"倾斜了"：0 那一格是这一块最有用的东西 ——
+              「删除 0」比任何一句"建议补充异常场景"都具体，而它只有摆在旁边的
+              非零格子衬着才刺眼 */}
+          {r.coverageSkew.ops && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '8px 0 0' }}>
+              {/* 按 OP_ORDER 摆，**不用 Object.entries 的顺序** —— 这份 ops 存在
+                  JSONB 里，Postgres 不保留插入顺序（按键长度+字典序重排），
+                  页面上就成了「修改 创建 删除 异常 权限 查询」：增删改查读起来
+                  是乱的，而这一块全靠横着扫一眼看出哪格是 0 */}
+              {OP_ORDER.filter(k => k in r.coverageSkew.ops)
+                .concat(Object.keys(r.coverageSkew.ops).filter(k => !OP_ORDER.includes(k)))
+                .map(k => [k, r.coverageSkew.ops[k]]).map(([k, v]) => (
+                <Tag key={k} color={v === 0 ? 'error' : undefined} style={{ fontSize: 12, margin: 0 }}>
+                  {k} {v}
+                </Tag>
+              ))}
+              {r.coverageSkew.p0 && (
+                <Tag color={r.coverageSkew.p0.ratio > (r.coverageSkew.p0.cap ?? 0.15) ? 'warning' : undefined}
+                  style={{ fontSize: 12, margin: 0 }}>
+                  P0 {r.coverageSkew.p0.count}/{r.coverageSkew.total}
+                  （{Math.round(r.coverageSkew.p0.ratio * 100)}%）
+                </Tag>
+              )}
+            </div>
+          )}
+          {!!(r.coverageSkew.notes || []).length && (
+            <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+              {r.coverageSkew.notes.map((n, i) => (
+                <li key={i} style={{ marginBottom: 4, color: '#4e5969' }}>{n}</li>
+              ))}
+            </ul>
           )}
         </section>
       )}
