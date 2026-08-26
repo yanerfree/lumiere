@@ -4,7 +4,7 @@
       "type": "streamable-http",
       "url": "http://192.168.51.108:18800/mcp/",
       "headers": {
-        "Authorization": "Bearer ${LUMIERE_MCP_KEY}"
+        "Authorization": "Bearer lum_E_0De29R_J1R1dE9S7ipswAuLl89AYVDvPJS2snrh28"
       }
     }
   }

@@ -237,6 +237,49 @@ cd /home/dreamer/lumiere/backend && rm -rf .venv && python3 -m venv .venv \
 
 挪完重开会话，剩下的路径和封样白名单我来改。
 
+### Key 重发：08-26 已换完
+
+3 把在用的 Key 全是 `lum_` 前缀、全绑了项目，在用的 `tb_` 前缀 **0 把**：
+
+| Key | 项目 |
+|---|---|
+| `uag-new-key` | UAG |
+| `stoa-cc-key` | 网关管理系统 |
+| `测评-key` | 测试平台 |
+
+**`key_prefix` 那一列改不动** —— 前缀是从明文派生的，只改列等于让前缀变成假的、哈希
+还是旧的。所以这件事只有一条路：发新的 + 吊销旧的（页面上做的）。
+
+**还差一步：`export LUMIERE_MCP_KEY=<测评-key 的明文>`**（加到 `~/.bashrc`）。
+`.mcp.json` 里写的是这个变量，现在它没值 —— 本机 CC 连 MCP 会 401，而 401 长得像
+「Key 不对」，其实是变量空的（`MCPAuthMiddleware` 是 fail-closed，任何异常都回 401）。
+
+### 目录要不要挪：代价比看起来大
+
+一句 `mv` 之外还得连带四件事，缺一件就是「昨天还好的东西今天报一个查不到原因的错」：
+
+1. **venv 得重建。** editable 安装的 `.pth` 里写的是绝对路径 `…/testBench/backend`，
+   `.venv/bin/*` 那些脚本的 shebang 也是。挪完 `import app` 直接失败。
+2. **`.claude/worktrees/` 里的 worktree 会断** —— 每个 worktree 的 `gitdir` 是绝对路径。
+   现在还有别的窗口在用（`wt/branch-diff`）。
+3. **Claude 的会话历史和自动记忆是按工作目录压平命名的**（`-home-dreamer-testBench`），
+   仓库一挪就成孤儿，得一起 `mv`。
+4. `deploy/playwright-mcp.service` 的 `%h/testBench/...`、`CLAUDE.md` / `tests/README.md`
+   里的路径、封样那三条路径豁免，跟着一起改。
+
+**目录名对平台使用者不可见**（页面、接口、包名、库名、仓库名都已经是 Lumiere），
+所以这一条是纯洁癖收益。真要挪，命令是：
+
+```bash
+pkill -f 'uvicorn app.main:app'
+mv /home/dreamer/testBench /home/dreamer/lumiere
+mv ~/.claude/projects/-home-dreamer-testBench ~/.claude/projects/-home-dreamer-lumiere
+cd /home/dreamer/lumiere/backend && rm -rf .venv && python3 -m venv .venv \
+  && .venv/bin/pip install -e . && .venv/bin/pip install -r requirements.txt
+```
+
+挪完重开会话，剩下的路径和封样白名单我来改。
+
 ### Key 重发：得你在页面上做
 
 2 把在用的 Key 还是 `tb_` 前缀（`ai-admin项目使用` → 网关管理系统、`uag-cc使用` → UAG），
