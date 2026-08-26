@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { Card, Row, Col, Button, Tag, Modal, Form, Input, Select, Space, message, Spin, Empty, Popconfirm, Pagination, Table, Avatar } from 'antd'
-import { PlusOutlined, EditOutlined, DeleteOutlined, RightOutlined, GitlabOutlined, FolderOpenOutlined, ReloadOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined, RightOutlined, FolderOpenOutlined, GitlabOutlined, ReloadOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../utils/request'
 
@@ -187,9 +187,6 @@ export default function ProjectList() {
   const [memberProject, setMemberProject] = useState(null)
   const [memberOpen, setMemberOpen] = useState(false)
 
-  const user = JSON.parse(localStorage.getItem('user') || '{}')
-  const isAdmin = user.role === 'admin'
-
   const pagedProjects = useMemo(() => {
     const start = (page - 1) * pageSize
     return projects.slice(start, start + pageSize)
@@ -219,8 +216,6 @@ export default function ProjectList() {
     form.setFieldsValue({
       name: project.name,
       description: project.description,
-      gitUrl: project.gitUrl,
-      scriptBasePath: project.scriptBasePath,
     })
     setModalOpen(true)
   }
@@ -240,16 +235,12 @@ export default function ProjectList() {
       if (editingProject) {
         await api.put(`/projects/${editingProject.id}`, {
           description: values.description || null,
-          gitUrl: values.gitUrl,
-          scriptBasePath: values.scriptBasePath,
         })
         message.success('项目已更新')
       } else {
         await api.post('/projects', {
           name: values.name,
           description: values.description || null,
-          gitUrl: values.gitUrl,
-          scriptBasePath: values.scriptBasePath,
         })
         message.success('项目创建成功，已自动创建默认分支配置（main）')
       }
@@ -330,13 +321,12 @@ export default function ProjectList() {
                   borderTop: '1px solid rgba(0,0,0,0.04)', borderBottom: '1px solid rgba(0,0,0,0.04)',
                   fontSize: 12, color: '#86909c',
                 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                    <GitlabOutlined />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.gitUrl || '未配置 Git 仓库'}</span>
-                  </div>
+                  {/* QA 仓在「QA 场景清单」页里配，这里只显示配没配 */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <FolderOpenOutlined />
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.scriptBasePath || '未配置脚本路径'}</span>
+                    <GitlabOutlined />
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {p.qaRepo?.url ? `QA 仓 ${p.qaRepo.url}` : '未接 QA 仓'}
+                    </span>
                   </div>
                 </div>
 
@@ -403,12 +393,6 @@ export default function ProjectList() {
           </Form.Item>
           <Form.Item name="description" label="项目描述">
             <Input placeholder="简要描述项目用途" />
-          </Form.Item>
-          <Form.Item name="gitUrl" label="Git 仓库地址（可选）">
-            <Input prefix={<GitlabOutlined style={{ color: '#c9cdd4' }} />} placeholder="git@code.example.com:team/repo.git（不填则为纯手动用例项目）" />
-          </Form.Item>
-          <Form.Item name="scriptBasePath" label="脚本基础路径（可选）">
-            <Input prefix={<FolderOpenOutlined style={{ color: '#c9cdd4' }} />} placeholder="/workspace/repos/project-name（不填则不支持脚本同步）" />
           </Form.Item>
           {!editingProject && (
             <div style={{ padding: '8px 12px', background: 'var(--green-bg)', borderRadius: 12, fontSize: 12, color: '#0ea5a0' }}>

@@ -31,6 +31,10 @@ class Project(Base):
     # 该项目下的**所有** Key 都按它生效 —— 范围是"这个项目允许 CC 干哪些活"，
     # 不是"这一把钥匙允许干哪些活"，同一个项目发五把 Key 范围本来就该一样。
     mcp_allowed_tools: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # 只读 QA 仓（黑盒验收仓，产品代码不在里面）。存的是"去哪儿读"，不是"往哪儿写"——
+    # 平台对这个仓永远只读，见 services/qa_catalog.py 开头的说明。
+    # {"url": str, "branch": str, "catalogPath": str, "caseGlobs": [str, ...]}
+    qa_repo: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

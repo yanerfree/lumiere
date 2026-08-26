@@ -47,6 +47,7 @@ from app.api.http_client import router as http_client_router
 from app.api.scenario_gen import router as scenario_gen_router
 from app.api.mcp_keys import router as mcp_keys_router
 from app.api.mcp_keys import project_scope_router as mcp_scope_router
+from app.api.qa_catalog import router as qa_catalog_router
 from app.api.system_services import router as system_services_router
 from app.core.middleware import CamelCaseResponse, TraceIdMiddleware
 from app.deps.auth import get_current_user, require_project_role
@@ -366,6 +367,8 @@ app.include_router(http_client_router, dependencies=_AUTHED)
 app.include_router(mcp_keys_router)
 # 项目级 MCP 工具范围（角色校验挂在各 handler 上，不在这里加 dependencies）
 app.include_router(mcp_scope_router)
+# QA 场景清单：只读别人的验收仓，成员校验挂在各 handler 上
+app.include_router(qa_catalog_router)
 app.include_router(system_services_router, dependencies=_AUTHED)
 
 # --- MCP Server ---

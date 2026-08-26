@@ -29,6 +29,7 @@ import UserManagement from './pages/settings/UserManagement'
 import AuditLogs from './pages/settings/AuditLogs'
 import ChannelConfig from './pages/settings/ChannelConfig'
 import ApiManagement from './pages/apis/ApiManagement'
+import QaCatalog from './pages/qa/QaCatalog'
 import LlmMock from './pages/llm-mock/LlmMock'
 import ApiMock from './pages/api-mock/ApiMock'
 import ProxyProbe from './pages/proxy-probe/ProxyProbe'
@@ -112,6 +113,7 @@ function AppLayout() {
       children: [
         { key: `/projects/${projectId}/cases`, icon: <FileTextOutlined />, label: t('menu.cases') },
         { key: `/projects/${projectId}/apis`, icon: <ApiOutlined />, label: t('menu.apis') },
+        { key: `/projects/${projectId}/qa-catalog`, icon: <FileSearchOutlined />, label: t('menu.qaCatalog') },
       ],
     },
     {
@@ -316,6 +318,7 @@ function AppLayout() {
             <Route path="/projects/:projectId/review-report" element={<ReviewReport />} />
             <Route path="/projects/:projectId/cases/:caseId" element={<CaseDetail />} />
             <Route path="/projects/:projectId/apis" element={<ApiManagement />} />
+            <Route path="/projects/:projectId/qa-catalog" element={<QaCatalog />} />
             <Route path="/projects/:projectId/plans" element={<PlanList />} />
             <Route path="/projects/:projectId/plans/:planId" element={<PlanDetail />} />
             <Route path="/projects/:projectId/plans/:planId/manual-record" element={<ManualRecord />} />
