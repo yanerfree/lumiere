@@ -121,7 +121,15 @@ export default function CaseManagement() {
   const [savingFolder, setSavingFolder] = useState(false)
 
   // 导航面板折叠 & 拖拽调宽
-  const [navCollapsed, setNavCollapsed] = useState(false)
+  // 默认收起：列表自己有「模块」列和筛选，导航是找东西时才用的；一进来就占掉 220px，
+  // 13 列的表格反而先被挤到要横向滚。手动展开/收起过就记在本地，下次进来沿用。
+  const [navCollapsed, setNavCollapsed] = useState(
+    () => localStorage.getItem('caseNavCollapsed') !== '0')
+  const toggleNav = useCallback((collapsed) => {
+    setNavCollapsed(collapsed)
+    // 只在手动开合时写 —— 「有没有这个键」就是「用户表过态没有」，下面那条自动展开靠它
+    localStorage.setItem('caseNavCollapsed', collapsed ? '1' : '0')
+  }, [])
   const [navWidth, setNavWidth] = useState(220)
   const resizingRef = useRef(false)
   const startXRef = useRef(0)
@@ -150,6 +158,12 @@ export default function CaseManagement() {
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
   }, [navWidth])
+
+  // 「模块摆到两处」那条提示只长在导航面板里，默认收起就等于永远看不到。
+  // 用户自己没表过态时（本地没存过）自动展开一次，表过态的尊重用户的选择。
+  useEffect(() => {
+    if (splits.length > 0 && localStorage.getItem('caseNavCollapsed') === null) setNavCollapsed(false)
+  }, [splits.length])
 
   // ---- 数据加载 ----
   useEffect(() => {
@@ -1287,7 +1301,7 @@ export default function CaseManagement() {
                   <Button type="text" size="small" icon={<ClearOutlined />} onClick={openEmptyFolders} style={{ color: '#c9cdd4' }} />
                 </Tooltip>
                 <Tooltip title="收起导航">
-                  <Button type="text" size="small" icon={<MenuFoldOutlined />} onClick={() => setNavCollapsed(true)} style={{ color: '#c9cdd4' }} />
+                  <Button type="text" size="small" icon={<MenuFoldOutlined />} onClick={() => toggleNav(true)} style={{ color: '#c9cdd4' }} />
                 </Tooltip>
               </Space>
             }>
@@ -1374,7 +1388,7 @@ export default function CaseManagement() {
         {navCollapsed ? (
           <Tooltip title="展开导航" placement="right">
             <div
-              onClick={() => setNavCollapsed(false)}
+              onClick={() => toggleNav(false)}
               style={{
                 width: 20, flexShrink: 0, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
                 background: 'rgba(255,255,255,0.35)', borderRadius: '12px 0 0 12px', transition: 'background 0.2s',

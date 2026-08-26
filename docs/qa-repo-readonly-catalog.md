@@ -3,7 +3,7 @@
 > 平台读别人家的黑盒验收仓，把「场景清单 + 每个场景规划了哪些脚本」画成一页。
 > **对该仓库永远只读**：只做 `clone --bare` / `fetch` / `git show` / `git grep`。
 
-页面：项目内「测试设计 → QA 场景清单」（`/projects/:projectId/qa-catalog`）
+页面：项目内「测试设计 → QA 对账」（`/projects/:projectId/qa-catalog`）
 配置：**就在这一页**，右上角「配置 QA 仓」。只填仓库地址，其余自动识别。
 
 ---

@@ -533,3 +533,23 @@ def test_readable_paths_只放清单引用到的文件():
 
 def test_readable_paths_没配置时是空集():
     assert readable_paths({}) == set()
+
+
+def test_parse_catalog_treats_dash_tier_as_no_tier():
+    """已废弃的行「执行层」填的是占位破折号 —— 存成空串，别让它变成一个可筛的「层」。
+
+    实测 uag-qa 有 8 条这样的行（全是 ❌）。原样存下来，筛选下拉里就会多出一个
+    「— （—）」的选项，看着像脏数据。
+    """
+    md = """
+| ID | 场景 | P | R | 层 | 状 |
+|---|---|---|---|---|---|
+| SMK-01 | 正常的 | P0 | 9 | smoke | ✅ |
+| SMK-02 | 废弃的 | P2 | 1 | — | ❌ |
+| SMK-03 | 也废弃 | P2 | 1 | `-` | ❌ |
+"""
+    scenarios, _domains, _issues = parse_catalog(md)
+    by_id = {s["id"]: s for s in scenarios}
+    assert by_id["SMK-01"]["tier"] == "smoke"
+    assert by_id["SMK-02"]["tier"] == ""
+    assert by_id["SMK-03"]["tier"] == ""

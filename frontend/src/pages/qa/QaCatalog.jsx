@@ -47,7 +47,7 @@ function Rich({ text }) {
     if (p.length > 2 && p.startsWith('`') && p.endsWith('`')) {
       return (
         <code key={i} style={{
-          fontFamily: 'ui-monospace, monospace', fontSize: 12, padding: '0 4px',
+          fontFamily: 'var(--font-mono)', fontSize: 12, padding: '0 4px',
           background: 'rgba(0,0,0,0.04)', borderRadius: 3, color: '#476582',
         }}>{p.slice(1, -1)}</code>
       )
@@ -133,6 +133,7 @@ export default function QaCatalog() {
   const [showDeprecated, setShowDeprecated] = useState(false)
   const [sorter, setSorter] = useState({})
   const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
   const [cfgOpen, setCfgOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
@@ -321,7 +322,9 @@ export default function QaCatalog() {
       title: 'ID', dataIndex: 'id', width: 92, fixed: 'left',
       render: (v, r) => (
         <Tooltip title={r.domainName ? `${r.domain} — ${r.domainName}` : r.domain}>
-          <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 600 }}>{v}</span>
+          <span style={{
+            fontFamily: 'var(--font-mono)', fontSize: 12, color: C.gray, whiteSpace: 'nowrap',
+          }}>{v}</span>
         </Tooltip>
       ),
     },
@@ -400,7 +403,7 @@ export default function QaCatalog() {
               <span
                 onClick={() => openFile(s.path)}
                 style={{
-                  fontSize: 12, fontFamily: 'ui-monospace, monospace', cursor: 'pointer',
+                  fontSize: 12, fontFamily: 'var(--font-mono)', cursor: 'pointer',
                   color: s.primary ? C.teal : C.gray, textDecoration: 'underline dotted',
                 }}
               >
@@ -472,7 +475,7 @@ export default function QaCatalog() {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
-          <h2 style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: 0 }}>QA 场景清单</h2>
+          <h2 style={{ fontSize: 20, fontWeight: 600, color: C.ink, margin: 0 }}>QA 对账</h2>
           <div style={{ fontSize: 12, color: C.gray, marginTop: 2 }}>
             QA 维护的验收场景分母 + 仓库里真实存在的脚本分子，两边对照着看。平台只读，不回写。
           </div>
@@ -712,7 +715,7 @@ export default function QaCatalog() {
                   const rv = reviews[d.code]
                   return (
                     <Hit key={d.code} active={domain === d.code} onClick={() => jump({ domain: domain === d.code ? undefined : d.code })}>
-                      <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 600, width: 40 }}>{d.code}</span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, width: 40 }}>{d.code}</span>
                       <span style={{ width: 110, color: C.gray, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
                       <Progress
                         percent={d.total ? Math.round((d.covered / d.total) * 100) : 0}
@@ -762,6 +765,8 @@ export default function QaCatalog() {
           />
           <Select
             placeholder="域" allowClear value={domain} onChange={setDomain} style={{ width: 200 }}
+            // 24 个域，翻着找太慢。label 里域码和中文名都在，打 MCP 或「能力」都能命中
+            showSearch optionFilterProp="label"
             options={(data?.domains || []).map(d => ({
               value: d.code,
               label: `${d.code}${d.name ? ' · ' + d.name : ''}（${d.covered}/${d.total}）`,
@@ -802,8 +807,9 @@ export default function QaCatalog() {
           scroll={{ x: 1180 }}
           onChange={(_p, _f, s) => setSorter({ columnKey: s?.columnKey, order: s?.order })}
           pagination={{
-            current: page, onChange: setPage,
-            pageSize: 50, showSizeChanger: true, showTotal: t => `共 ${t} 条`,
+            current: page, pageSize, showSizeChanger: true, showTotal: t => `共 ${t} 条`,
+            // 两个都得收：只接 page 的话，换每页条数会被受控的 pageSize 按回原值
+            onChange: (p, s) => { setPage(p); setPageSize(s) },
           }}
         />
       </Card>
@@ -824,7 +830,7 @@ export default function QaCatalog() {
               {
                 title: '脚本', dataIndex: 'path',
                 render: p => (
-                  <a onClick={() => openFile(p)} style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+                  <a onClick={() => openFile(p)} style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                     <FileTextOutlined style={{ marginRight: 4 }} />{p}
                   </a>
                 ),
@@ -912,7 +918,7 @@ export default function QaCatalog() {
 
       {/* 脚本原文：git show 出来的那份，只读 */}
       <Drawer
-        title={<span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13 }}>{file?.path}</span>}
+        title={<span style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }}>{file?.path}</span>}
         open={!!file} onClose={() => setFile(null)} width={860}
         extra={file?.commitSha && <span style={{ fontSize: 12, color: C.gray }}>
           {file.lines} 行 · {(file.bytes / 1024).toFixed(1)} KB · <code>{file.commitSha.slice(0, 10)}</code>
@@ -938,7 +944,7 @@ export default function QaCatalog() {
             <pre style={{
               margin: 0, padding: 12, background: '#0f1720', color: '#d8e0ea', borderRadius: 6,
               fontSize: 12, lineHeight: 1.7, overflow: 'auto', maxHeight: 'calc(100vh - 220px)',
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              fontFamily: 'var(--font-mono)',
             }}>{file?.content}</pre>
           </>
         )}
@@ -1041,7 +1047,7 @@ function ReviewBody({ r, onOpenFile }) {
                                   style={{ margin: 0, color: SEVERITY[g.severity], borderColor: SEVERITY[g.severity] }}>
                 {g.severity}</Tag>}
               {g.path && (
-                <a onClick={() => onOpenFile(g.path)} style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+                <a onClick={() => onOpenFile(g.path)} style={{ fontFamily: 'var(--font-mono)', fontSize: 12 }}>
                   {g.path}
                 </a>
               )}
@@ -1057,7 +1063,7 @@ function ReviewBody({ r, onOpenFile }) {
           <Space direction="vertical" size={4} style={{ width: '100%' }}>
             {res.envMissing.map(v => (
               <div key={v.name}>
-                <Tag color="warning" style={{ fontFamily: 'ui-monospace, monospace' }}>{v.name}</Tag>
+                <Tag color="warning" style={{ fontFamily: 'var(--font-mono)' }}>{v.name}</Tag>
                 <Tooltip title={(v.scripts || []).join('\n')}>
                   <span style={{ fontSize: 12, color: C.gray }}>
                     {(v.scripts || []).map(p => p.split('/').pop()).join('、')}

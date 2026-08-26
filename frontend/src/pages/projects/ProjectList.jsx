@@ -321,7 +321,7 @@ export default function ProjectList() {
                   borderTop: '1px solid rgba(0,0,0,0.04)', borderBottom: '1px solid rgba(0,0,0,0.04)',
                   fontSize: 12, color: '#86909c',
                 }}>
-                  {/* QA 仓在「QA 场景清单」页里配，这里只显示配没配 */}
+                  {/* QA 仓在「QA 对账」页里配，这里只显示配没配 */}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <GitlabOutlined />
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>

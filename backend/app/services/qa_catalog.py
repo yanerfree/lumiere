@@ -121,6 +121,10 @@ def parse_catalog(text: str) -> tuple[list[dict], dict[str, str], dict]:
         priority = cols[1] if len(cols) > 1 else ""
         risk_raw = cols[2] if len(cols) > 2 else ""
         tier = cols[3] if len(cols) > 3 else ""
+        # 已废弃的行「执行层」填的是占位破折号（实测 8 条，全是 ❌）。原样留着，
+        # 筛选下拉里就会多出一个「— （—）」的选项 —— 看着像脏数据，其实是"没有层"。
+        if tier.strip("`").strip() in {"—", "–", "-", "/", "N/A", "n/a", "无"}:
+            tier = ""
         state_raw = cols[4] if len(cols) > 4 else ""
 
         if "❌" in state_raw:

@@ -77,7 +77,11 @@
   --shadow-card: 0 2px 8px 0 rgba(0, 0, 0, 0.04);
 
   --font-family: 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', sans-serif;
-  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', Monaco, Menlo, Consolas, monospace;
+  /* 末尾那个裸 monospace 在 Linux 上会解析成 WenQuanYi Zen Hei Mono（中文字体的
+     等宽变体），Latin 渲染又宽又怪 —— 就是下面那段注释想避开的情况。
+     'Liberation Mono' / 'DejaVu Sans Mono' 是发行版基本必装的真等宽，兜在前面。 */
+  --font-mono: 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'SF Mono', Monaco, Menlo,
+               Consolas, 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', monospace;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -632,30 +636,55 @@ textarea.ant-input-disabled {
       `.ant-table-tbody > tr > td { background: transparent !important }`
       特异性比裸类名高，只写单类名会被压回透明，于是滚到固定列下面的那一列
       文字整个透上来（用例管理实测：操作列和「审核 / 更新时间」糊成一团）。 */
+/* 3) 但**只在真的盖住东西的时候**才变实。宽屏放得下全部列时根本没有横向滚动，
+      固定列底下什么都没有，那块近乎纯白就成了一条突兀的白带 —— 旁边的单元格是
+      半透的（表头 0.42 白、表体透明），它比邻居白一大截，行 hover 也照不进去
+      （用例管理实测：「操作」列白成一条，鼠标划过整行只有它不变色）。
+      antd v6 会在右边确实还有没露出来的列时挂上 .ant-table-fix-end-shadow-show
+      （v5 的旧名是 ping-right），拿它当开关：没滚动就跟着邻居透明。 */
 .ant-table-tbody > tr > td.ant-table-cell-fix-start,
 .ant-table-tbody > tr > td.ant-table-cell-fix-end,
 .ant-table-tbody > tr > td.ant-table-cell-fix-left,
-.ant-table-tbody > tr > td.ant-table-cell-fix-right,
-.ant-table-tbody > tr:hover > td.ant-table-cell-fix-start,
-.ant-table-tbody > tr:hover > td.ant-table-cell-fix-end,
-.ant-table-tbody > tr:hover > td.ant-table-cell-fix-left,
-.ant-table-tbody > tr:hover > td.ant-table-cell-fix-right {
-  background: rgba(252, 253, 253, 0.97) !important;
-  backdrop-filter: blur(10px) !important;
+.ant-table-tbody > tr > td.ant-table-cell-fix-right {
+  background: transparent !important;
+  backdrop-filter: none !important;
 }
 .ant-table-thead > tr > th.ant-table-cell-fix-start,
 .ant-table-thead > tr > th.ant-table-cell-fix-end,
 .ant-table-thead > tr > th.ant-table-cell-fix-left,
 .ant-table-thead > tr > th.ant-table-cell-fix-right {
+  background: rgba(255, 255, 255, 0.42) !important;
+}
+.ant-table-fix-end-shadow-show .ant-table-tbody > tr > td.ant-table-cell-fix-end,
+.ant-table-fix-end-shadow-show .ant-table-tbody > tr:hover > td.ant-table-cell-fix-end,
+.ant-table-fix-start-shadow-show .ant-table-tbody > tr > td.ant-table-cell-fix-start,
+.ant-table-fix-start-shadow-show .ant-table-tbody > tr:hover > td.ant-table-cell-fix-start,
+.ant-table-ping-right .ant-table-tbody > tr > td.ant-table-cell-fix-right,
+.ant-table-ping-right .ant-table-tbody > tr:hover > td.ant-table-cell-fix-right,
+.ant-table-ping-left .ant-table-tbody > tr > td.ant-table-cell-fix-left,
+.ant-table-ping-left .ant-table-tbody > tr:hover > td.ant-table-cell-fix-left {
+  background: rgba(252, 253, 253, 0.97) !important;
+  backdrop-filter: blur(10px) !important;
+}
+.ant-table-fix-end-shadow-show .ant-table-thead > tr > th.ant-table-cell-fix-end,
+.ant-table-fix-start-shadow-show .ant-table-thead > tr > th.ant-table-cell-fix-start,
+.ant-table-ping-right .ant-table-thead > tr > th.ant-table-cell-fix-right,
+.ant-table-ping-left .ant-table-thead > tr > th.ant-table-cell-fix-left {
   background: rgba(250, 252, 252, 0.98) !important;
 }
-/* 固定列边缘给一道细阴影，让"这里盖住了后面的内容"看得出来 */
+/* 固定列边缘那道细阴影同理：盖住东西了才画，否则就是一条没来由的竖线 */
 .ant-table-cell-fix-end::after,
-.ant-table-cell-fix-right::after {
-  box-shadow: inset -10px 0 8px -8px rgba(0, 0, 0, 0.08) !important;
-}
+.ant-table-cell-fix-right::after,
 .ant-table-cell-fix-start::after,
 .ant-table-cell-fix-left::after {
+  box-shadow: none !important;
+}
+.ant-table-fix-end-shadow-show .ant-table-cell-fix-end::after,
+.ant-table-ping-right .ant-table-cell-fix-right::after {
+  box-shadow: inset -10px 0 8px -8px rgba(0, 0, 0, 0.08) !important;
+}
+.ant-table-fix-start-shadow-show .ant-table-cell-fix-start::after,
+.ant-table-ping-left .ant-table-cell-fix-left::after {
   box-shadow: inset 10px 0 8px -8px rgba(0, 0, 0, 0.08) !important;
 }
 .ant-table-placeholder .ant-table-cell {
