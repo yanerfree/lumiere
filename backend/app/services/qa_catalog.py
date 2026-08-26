@@ -28,6 +28,10 @@ from app.services.git_service import GitError, _run_git, ensure_bare_repo, fetch
 
 logger = logging.getLogger(__name__)
 
+# 风险分 R = 概率(1–3) × 影响(1–3)，取值 1–9（口径来自 QA 清单自己的「列的含义」一节）。
+# ≥6 算高风险：实测 uag-qa 的取值只落在 {2,4,6,9} 上，6 正好是"概率或影响有一头拉满"。
+HIGH_RISK = 6
+
 # 场景 ID 的形状：两到六位大写字母 + 短横 + 两三位数字。清单行和文件头共用这一套。
 _ID_RE = re.compile(r"[A-Z][A-Z0-9]{1,5}-\d{2,3}")
 # 清单行：| SMK-01 | 场景描述 | P0 | 6 | smoke | ✅ |
@@ -422,15 +426,28 @@ def _assemble(scenarios: list[dict], domain_names: dict[str, str], cases: list[d
     domains: list[dict] = []
     for code in sorted({s["domain"] for s in scenarios}):
         rows = [s for s in scenarios if s["domain"] == code and s["state"] != "deprecated"]
+        gaps = [s for s in rows if s["state"] == "gap"]
         domains.append({
             "code": code,
             "name": domain_names.get(code, ""),
             "total": len(rows),
             "covered": len([s for s in rows if s["state"] == "covered"]),
+            # 页面按缺口排序找「黑洞域」，P0 缺口决定先啃哪个
+            "gap": len(gaps),
+            "p0Gap": len([s for s in gaps if s["priority"] == "P0"]),
         })
 
     known_bug_scenarios = [s["id"] for s in scenarios if s["knownBugs"]]
     lying = [s["id"] for s in scenarios if s["claimedButUncovered"]]
+    # 「已覆盖」里有一批是明知跑出来是红的 —— 不点出来的话覆盖率是虚高的
+    covered_with_bugs = [s["id"] for s in scenarios if s["state"] == "covered" and s["knownBugs"]]
+    # QA 清单 §1.1：「P 和 R 是两条独立的轴。一条 P3 场景评出 R=8，
+    # 那是『回去重新审优先级』的信号」——把这条体检替他做了
+    risk_mismatch = [
+        s["id"] for s in scenarios
+        if s["state"] != "deprecated" and (s["risk"] or 0) >= HIGH_RISK
+        and s["priority"] in ("P2", "P3")
+    ]
 
     return {
         "repo": repo_meta,
@@ -441,8 +458,10 @@ def _assemble(scenarios: list[dict], domain_names: dict[str, str], cases: list[d
             "deprecated": deprecated,
             "scripts": len(cases),
             "knownBugScenarios": len(known_bug_scenarios),
+            "coveredWithBugs": len(covered_with_bugs),
             "claimedButUncovered": len(lying),
             "orphanScripts": len(orphan_scripts),
+            "riskMismatch": len(risk_mismatch),
             "byPriority": by_priority,
         },
         "domains": domains,

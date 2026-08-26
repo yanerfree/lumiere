@@ -39,9 +39,17 @@
 ## 测试：**两套，都要跑**
 
 ```bash
-cd backend && .venv/bin/python -m pytest tests/ -q     # 单测/结构封样，~12s，1344 条
-cd /home/dreamer/testBench && backend/.venv/bin/python -m pytest tests/ -q   # API/E2E，打 testbench_test 库，几分钟
+cd backend && .venv/bin/python -m pytest tests/ -q     # 单测/结构封样，~12s，1350+ 条
+# API/E2E，几分钟；DATABASE_URL 换成你自己那个库，别用默认的 testbench_test
+cd /home/dreamer/testBench && DATABASE_URL='postgresql+asyncpg://postgres:postgres@localhost:5432/testbench_test_<你的名字>' \
+  backend/.venv/bin/python -m pytest tests/ -q
 ```
+
+**根目录那套必须用独占的 `DATABASE_URL`。** 它的 `db_session` 收尾会 `drop_all`，
+两个人（或两个 Claude 会话）同时打 `testbench_test` 就会互相把表删掉 —— 报出来是几十上百条
+"relation does not exist" 的假 red，而代码一行没错。库不存在先 `createdb`：
+`psql -h localhost -U postgres -c 'CREATE DATABASE testbench_test_<你的名字>'`。
+（2026-08-26 就这么撞出过 148 条假 red。）
 
 两个目录都叫 `tests/`，很容易只跑前一套就以为绿了 —— **根目录那套打的是真接口**，
 改路由/改路径必须跑它，否则「后端全绿、页面全 404」。
@@ -64,7 +72,7 @@ cd /home/dreamer/testBench && backend/.venv/bin/python -m pytest tests/ -q   # A
 | **CC ↔ 平台闭环的边界规则、红线、Story 清单**（改这一块之前先读） | [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) |
 | **版本升级怎么复用上一版用例**：分支对账（端点反查）、三堆分法、状态流转、废弃审核 | [docs/version-upgrade-branch-diff.md](docs/version-upgrade-branch-diff.md) |
 | **数据归属与隔离**：MCP Key 为什么管不住数据、环境改项目级、哪些表该留全局（含一条「假隔离」陷阱） | [docs/data-scoping-and-isolation.md](docs/data-scoping-and-isolation.md) |
-| **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、顺带去掉的两个老字段 | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
+| **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、页面为什么这么排（P/R 口径照抄对方定义） | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
 
 ## 长驻服务
 

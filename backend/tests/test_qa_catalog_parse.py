@@ -206,7 +206,48 @@ def test_domain_rollup():
     doms = {d["code"]: d for d in data["domains"]}
     assert doms["SMK"]["total"] == 2  # SMK-09 已废弃，不计
     assert doms["SMK"]["covered"] == 1
+    assert doms["SMK"]["gap"] == 1
     assert doms["MCP"]["name"] == "MCP 能力"
+    assert doms["MCP"]["gap"] == 0
+
+
+def test_summary_separates_covered_with_bugs_from_all_bug_scenarios():
+    """「已覆盖 N 条」里有一批是明知跑出来红的，页面要能把这批单独点出来。
+
+    夹具里那个脚本同时声明了 MCP-38(✅) 和 SMK-08(⬜)，@known-bug 记在两条上：
+    带缺陷的场景有 2 条，但"覆盖率虚高"只该算已覆盖的那 1 条。
+    """
+    s = _assembled()["summary"]
+    assert s["knownBugScenarios"] == 2
+    assert s["coveredWithBugs"] == 1
+
+
+# 清单 §1.1：P 和 R 是独立的两条轴，R 高 P 低是「回去重新审优先级」的信号
+_RISK_CATALOG = """
+| 域码 | 名称 |
+|---|---|
+| `SEC` | 安全边界 |
+
+| ID | 场景 | P | R | 层 | 状 |
+|---|---|---|---|---|---|
+| SEC-01 | 越权访问被拒 | P0 | 9 | api | ⬜ |
+| SEC-02 | 审计链完整 | P2 | 9 | api | ⬜ |
+| SEC-03 | 冷门开关 | P2 | 2 | api | ✅ |
+| SEC-04 | 早年的探针 | P3 | 9 | api | ❌ 已废弃 |
+"""
+
+
+def test_summary_flags_high_risk_low_priority():
+    scen, domains = parse_catalog(_RISK_CATALOG)
+    cases = [{"path": "api/sec/toggle.sh", "ids": ["SEC-03"], "tier": "api", "knownBugs": []}]
+    data = _assemble(scen, domains, cases, {"url": "git@x:qa.git", "branch": "main"})
+
+    # SEC-02 一条：R9 却排在 P2。SEC-01 是 P0（本来就该先做，不算背离），
+    # SEC-04 已废弃（不该再提醒人回去审它的优先级）
+    assert data["summary"]["riskMismatch"] == 1
+
+    sec = {d["code"]: d for d in data["domains"]}["SEC"]
+    assert (sec["total"], sec["covered"], sec["gap"], sec["p0Gap"]) == (3, 1, 2, 1)
 
 
 # ---- 只读约束 ----

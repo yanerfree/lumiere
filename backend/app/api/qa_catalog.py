@@ -25,8 +25,8 @@ _EMPTY = {
     "repo": None,
     "summary": {
         "total": 0, "covered": 0, "gap": 0, "deprecated": 0, "scripts": 0,
-        "knownBugScenarios": 0, "claimedButUncovered": 0, "orphanScripts": 0,
-        "byPriority": {},
+        "knownBugScenarios": 0, "coveredWithBugs": 0, "claimedButUncovered": 0,
+        "orphanScripts": 0, "riskMismatch": 0, "byPriority": {},
     },
     "domains": [],
     "scenarios": [],
