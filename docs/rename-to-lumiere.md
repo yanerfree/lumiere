@@ -1,8 +1,8 @@
 # 改名：testBench → Lumiere（窗口作业）
 
-> **状态：八步 2026-08-26 全做完。** 剩的都不是改名作业本身了 ——
-> 内网 GitLab 那个远端（还叫 `liyan001/testBench`）、`User-Agent: testBench/1.0`
-> （等 UAG 回话）、项目名 `tb-self-shared-project`、2 把在用的 `tb_` Key。见 §8。
+> **状态：八步 2026-08-26 全做完，尾巴也清了**（`User-Agent`、项目名、两把 `tb_` Key）。
+> 只剩两条，都不是我能做的：内网 GitLab 那个远端（还叫 `liyan001/testBench`，
+> 你说不用管）、本地工作目录还叫 `testBench`。见 §8。
 > 盘点数据是 2026-08-26 实测的，隔久了先重跑 §2 的命令再动手。
 >
 > 第 1 步能提前做是因为它**对活体 MCP 客户端零影响**：后端起的时候没带 `--reload`，
@@ -73,7 +73,7 @@ grep -c 'name="tb_' backend/app/mcp/__init__.py                            # 59 
 | 位置 | 为什么留 |
 |---|---|
 | `/home/dreamer/testBench` 路径（`CLAUDE.md:44`、`tests/README.md:7,111`、`scan_overflow.py:17`） | 目录真名。要么不改，要么跟仓库改名一起改（第 7 步） |
-| `User-Agent: testBench/1.0` 两处 | 等 UAG 回话，见 §7 |
+| ~~`User-Agent: testBench/1.0` 两处~~ **08-26 已改** | 当时想「等 UAG 回话」，其实那是补全提示的灰字，不是发出去的报文头。见 §7 |
 | `deploy/*`、`DEPLOY.md`（约 25 处）、`pyproject.toml` 的 `name = "testbench-backend"` | 第 6 步一起改。pyproject 改名要重装 venv（editable 安装），别单独动 |
 | 带日期的史述：`alembic/versions/zz9orph1_*.py:13`、`docs/cc-platform-loop-spec.md:1850` | 讲的是"2026-07 那时候"，改了是篡改。第 8 步封样要按文件白名单放过这两个 |
 | `.mcp.json:3` 的 server key `testbench`、`MCPTools.jsx:493` 里给用户复制的同一个 key | 跟第 2 步的工具改名一起走（同一次重连生效） |
@@ -123,7 +123,7 @@ grep -c 'name="tb_' backend/app/mcp/__init__.py                            # 59 
 | ~~5~~ | ~~库名 + `.env` + compose + conftest + config 默认值~~ **已做（08-26）** | 已验：三个库都是 `lumiere*`，`settings.database_url` 库名 = `lumiere`，登录 200、6 个项目 3 把 Key 都在（不是空库），两套测试 1411 + 498 全过 |
 | ~~6~~ | ~~部署命名（systemd / nginx / `/opt` / 离线包名）+ `pyproject.toml` 包名~~ **已做（08-26）** | 已验：venv 按新包名重装（`lumiere-backend 0.1.0`），`import app.main` 通，后端起在 8756、登录 200、6 个项目都在，`:18800/mcp/` 匿名 401（挂着且拦得住） |
 | ~~7~~ | ~~仓库改名 + 远端 `git remote set-url`~~ **GitHub 已做（08-26）** | 已验：`github` 指 `git@github.com:yanerfree/lumiere.git`，`git fetch github` 通、推送正常。`origin`（内网 GitLab `liyan001/testBench`）**没改** —— 那边没有 `liyan001/lumiere`，改了就断；本地目录也没挪，见 §8 |
-| ~~8~~ | ~~加封样测试~~ **已做（08-26）** | `backend/tests/test_name_seal.py`，20 条；故意往 `config.py` 塞一行旧名，两堵墙都红，删掉就绿 |
+| ~~8~~ | ~~加封样测试~~ **已做（08-26）** | `backend/tests/test_name_seal.py`，17 条；故意往 `config.py` 塞一行旧名，两堵墙都红，删掉就绿 |
 
 ## 4. 做完必须全量回归
 
@@ -133,19 +133,18 @@ DATABASE_URL=…/lumiere_test_2 backend/.venv/bin/python -m pytest tests/ -q   #
 cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库里没有漂移
 ```
 
-**08-26 八步全做完再跑：** backend `1410 passed`；根目录 `498 passed`
+**08-26 八步全做完再跑：** backend `1407 passed`；根目录 `498 passed`
 （比基线 482 多的 11 条是别的窗口补的模块闸门用例，不是改名带来的）；
-`check_name_drift.py --strict` 退出 0。封样 20 条 + MCP 端点 5 条，全绿。
+`check_name_drift.py --strict` 退出 0。封样 17 条 + MCP 端点 5 条，全绿。
 
-封样一度是 21 条，第 7 步之后变 20 —— 少的那条正是下面说的「不响的洞」：
-GitHub 仓库改名以后 `yanerfree/testBench` 全仓一处都不命中了，盯白名单那族用例
-当场红出来，删掉豁免就绿。这一族用例上线当天就自己抓到了一条。
-
-封样那 20 条里有两族是**盯白名单自己**的：除了「白名单指的文件还在不在」，还加了
-「这条豁免是不是已经一处都不命中了」。加它的直接原因就是这次 —— 第 5、6 步做完之后
+封样那 17 条里有两族是**盯白名单自己**的：除了「白名单指的文件还在不在」，还加了
+「这条豁免是不是已经一处都不命中了」。加它的直接原因就是第 5、6 步做完之后
 `testbench_test`、`testbench-backend`、`DEPLOY.md` 那几条豁免其实全空了，而两堵墙
 照样全绿，没人会发现。**洞留着不响，下次真有人写回旧名字就从这个洞放过去了。**
-补完这一族，白名单从 10 条路径缩到 4 条。
+
+**这一族上线当天就抓了四条**：仓库改名之后 `yanerfree/testBench` 空了；
+`User-Agent` 和项目名改完之后那三条也空了。封样条数 21 → 20 → 17，
+每次都是用例先红、删掉豁免才绿 —— 白名单是被这族用例一条条逼掉的，不是谁记得去清。
 
 跑完还要**手工验三样**（自动化覆盖不到）：
 
@@ -185,24 +184,50 @@ GitHub 仓库改名以后 `yanerfree/testBench` 全仓一处都不命中了，�
 代码是一个 PR，revert 就回去了；迁移写了 downgrade 反向映射；库名改回来；
 仓库名改回来重定向照样在。**只要不动 `key_prefix`，整套作业没有不可逆的一步。**
 
-## 7. 一件要先问的
+## 7. `User-Agent` 那个问题：问错了对象
 
-`User-Agent: testBench/1.0`（`ApiManagement.jsx:32`、`ApiStepList.jsx:161`）改之前
-先问 UAG 那边 —— 被测系统的日志或白名单可能认这个串，这个我验证不了。
+原来这里写着「改之前先问 UAG，被测系统的日志或白名单可能认这个串」。**这个顾虑是空的** ——
+看了一眼上下文：那两处不是我们发出去的报文头，是请求头输入框的**补全提示**
+（`commonHeaders` 里的 `desc`，只当灰字显示在选项旁边，落进请求的只有 `value` 也就是
+`User-Agent` 这个名字本身）。所以改它跟被测系统一点关系都没有。08-26 已改成 `Lumiere/1.0`。
 
-## 8. 八步做完了；下面这些是**故意留着**的
+**教训是别把"我验证不了"当结论。** 真去读那两行只要一分钟，而挂在那儿等回话，
+等的是一件根本不会发生的事。
 
-改名作业本身（1~8 步）2026-08-26 全部完成。剩的每一条都不是"忘了"，
-是各有一个不该顺手动的理由 —— 谁要动，先看这一列。
+## 8. 收尾：改掉的 / 还留着的
+
+08-26 把原来挂着的尾巴清了三条：
+
+| 收的 | 怎么收的 |
+|---|---|
+| `User-Agent: testBench/1.0` 两处 | 改成 `Lumiere/1.0`。**顾虑是空的**：那不是发出去的报文头，是请求头输入框的补全提示灰字，见 §7 |
+| 项目名 `tb-self-shared-project` | 改成 `lum-self-shared-project`。**按 id 改那一行**，不做全表 replace —— 库里绝大多数 `tb` 是被测系统 UAG 的数据（§坑 1）。脚本先断言「这一行现在确实叫旧名」「新名字没被占」再改 |
+| 封样白名单跟着缩 | 上面两件事一做完，`tb-self-shared-project` 和那两个前端文件的豁免就全空了 —— 盯白名单那族用例当场红。封样 20 → 17 条 |
+
+还留着两条，都不是我能做的：
 
 | 留着的 | 为什么 |
 |---|---|
-| `origin` 远端（内网 GitLab `liyan001/testBench`） | 只读探过：那边**没有** `liyan001/lumiere`，`git remote set-url` 改上去就是一个连不通的远端，而 `origin` 现在 `fetch` 是通的。要改得先在 GitLab 上真改仓库名（跟 GitHub 那步一样，只有你能做），改完再 `git remote set-url origin`。`github` 已经指新地址 |
-| 本地工作目录还叫 `/home/dreamer/testBench` | 挪它要重开会话，还会撞上别的窗口正在跑的东西。封样里那几条豁免（`/home/dreamer/testBench`、`%h/testBench`、`cd testBench`）指的就是这个**真路径**，不是漏改的品牌名 |
-| `.mcp.json` 里的 `${LUMIERE_MCP_KEY}` 还没有对应的 Key | 明文 Key 已经从文件里拿掉了（那把 `活体全流程-0821` 你也注销了，库里 `is_active=false`）。现在这个变量没值 —— 本机要连 MCP 得**新发一把**并 `export`。新 Key 必须绑项目（CLAUDE.md 的硬规则），绑哪个项目得你定 |
-| `User-Agent: testBench/1.0`（`ApiManagement.jsx:32`、`ApiStepList.jsx:161`） | 等 UAG 回话，见 §7。这是发给被测系统的报文头，对方日志/白名单可能认这个串，我验证不了 |
-| 项目名 `tb-self-shared-project` | 项目列表卡片上看得见，但它是**数据行的标识**不是品牌名（描述已经改成「Lumiere 自测链共用的长期项目」）。要改是改一条业务数据，跟改名作业不是一回事 |
-| 2 把在用的 Key 还是 `tb_` 前缀（`ai-admin项目使用`、`uag-cc使用`） | 改 `key_prefix` = 吊销已经发出去的 Key。两把都绑了项目、都还在用。新发的已经是 `lum_` |
+| `origin` 远端（内网 GitLab `liyan001/testBench`）——**你说不用管** | 只读探过：那边没有 `liyan001/lumiere`，`git remote set-url` 改上去就是个连不通的远端，而 `origin` 现在 `fetch` 是通的。`github` 已经指新地址 |
+| 本地工作目录还叫 `/home/dreamer/testBench` | 挪它要重开会话、会撞别的窗口，而且 Claude 的会话目录和自动记忆是按工作目录压平命名的（`-home-dreamer-testBench`），仓库一挪那些就成了孤儿。封样里那三条豁免（`/home/dreamer/testBench`、`%h/testBench`、`cd testBench`）指的是这个**真路径**，不是漏改的品牌名 |
+
+### Key 重发：得你在页面上做
+
+2 把在用的 Key 还是 `tb_` 前缀（`ai-admin项目使用` → 网关管理系统、`uag-cc使用` → UAG），
+外加 `.mcp.json` 里的 `${LUMIERE_MCP_KEY}` 现在**没有值**（明文已经从文件里拿掉、那把
+`活体全流程-0821` 也注销了）。
+
+**`key_prefix` 那一列改不动** —— 前缀是从明文派生的，只改列等于让前缀变成假的，
+哈希还是旧的。所以只有一条路：**发新的 + 吊销旧的**。
+
+我写好了脚本走真实接口做这三件事，但**发 Key / 吊销 Key 被 auto 模式的分类器拦下了**
+（这类动作只能你批），所以没执行。页面上做同样的事：
+
+1. 「MCP 工具中心」→ 新建 Key，**必须绑项目**（硬规则）：`网关管理系统`、`UAG`
+   各一把，再来一把绑 `测试平台` 给本机活体用（之前那把 `活体全流程-0821` 就绑它）。
+2. 明文只显示一次，存好；把活体那把写成 `export LUMIERE_MCP_KEY=...`
+   （加到 `~/.bashrc`，或放一个不进版本库的文件 `source` 它）。
+3. 新 Key 发下去、对方换上之后，再吊销那两把 `tb_` 的 —— 顺序反了中间会有一段谁都连不上。
 
 ### 第 5 步的库名是怎么改的（08-26 已执行，留作记录）
 

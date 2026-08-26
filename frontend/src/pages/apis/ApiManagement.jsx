@@ -29,7 +29,7 @@ const commonHeaders = [
   { value: 'Authorization', desc: 'Bearer <token>' },
   { value: 'X-Request-ID', desc: 'UUID 追踪' },
   { value: 'Cache-Control', desc: 'no-cache' },
-  { value: 'User-Agent', desc: 'testBench/1.0' },
+  { value: 'User-Agent', desc: 'Lumiere/1.0' },
 ]
 const headerOptions = commonHeaders.map(h => ({ value: h.value, label: <span>{h.value} <span style={{ fontSize: 11, color: '#86909c' }}>{h.desc}</span></span> }))
 

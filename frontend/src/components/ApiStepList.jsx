@@ -158,7 +158,7 @@ const commonHeaders = [
   { value: 'X-Request-ID', desc: 'UUID 追踪' },
   { value: 'Cache-Control', desc: 'no-cache' },
   { value: 'Accept-Language', desc: 'zh-CN,en' },
-  { value: 'User-Agent', desc: 'testBench/1.0' },
+  { value: 'User-Agent', desc: 'Lumiere/1.0' },
   { value: 'X-API-Key', desc: 'API 密钥' },
   { value: 'Origin', desc: 'CORS 来源' },
   { value: 'Referer', desc: '来源页面' },

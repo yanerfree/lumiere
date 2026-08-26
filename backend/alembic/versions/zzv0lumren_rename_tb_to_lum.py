@@ -95,7 +95,8 @@ def _swap(old: str, new: str) -> None:
 
 def upgrade() -> None:
     _swap("tb", "lum")
-    # 项目列表卡片上看得见的那条旧名（项目名 tb-self-shared-project 是标识，不动）
+    # 项目列表卡片上看得见的那条旧名。这一版只改描述、没动项目名（名字是数据行的标识）；
+    # 那个名字 08-26 后来单独改成了 lum-self-shared-project，是一条数据更新，不在迁移里。
     op.execute("""
         update projects set description = replace(description, 'testBench', 'Lumiere')
          where description like '%testBench%'

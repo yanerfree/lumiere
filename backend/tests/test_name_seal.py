@@ -44,7 +44,6 @@ ALLOWED_SUBSTRINGS = {
     # 还会撞上别的窗口），所以下面这几条指的都是**本地真路径**，不是品牌名。
     "/home/dreamer/testBench": "本地工作目录真名，目录没挪",
     "%h/testBench": "systemd 单元里的仓库路径（%h=HOME），指本地目录",
-    "tb-self-shared-project": "自测链那个长期项目的标识，标识故意不动",
     "tb-fwgl": "被测系统 UAG 的模块域码，不是我们的名字",
     "tb-zcgl": "被测系统 UAG 的模块域码，不是我们的名字",
     "tb-dup-": "被测系统返回的租户名，抄在注释里当反例",
@@ -65,9 +64,6 @@ ALLOWED_PATHS = {
     "backend/tests/test_name_seal.py": "就是这堵墙自己",
     # 判据本身就是「工具名里不许出现 tb_」，写不出旧前缀就没法钉这件事
     "tests/integration/mcp/test_mcp_endpoint.py": "钉 tools/list 里没有漏改的 tb_，判据要写出旧前缀",
-    # User-Agent 是发给被测方的报文头，改之前要等 UAG 那边确认没有依赖
-    "frontend/src/components/ApiStepList.jsx": "User-Agent: testBench/1.0，等 UAG 回话",
-    "frontend/src/pages/apis/ApiManagement.jsx": "User-Agent: testBench/1.0，等 UAG 回话",
 }
 ALLOWED_PATH_PREFIXES = {
     # BMAD 规划归档：带日期的历史文档，记的是当时叫这个名字。改了等于改档案。
