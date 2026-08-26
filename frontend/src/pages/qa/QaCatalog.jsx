@@ -259,6 +259,8 @@ export default function QaCatalog() {
   const scenarios = useMemo(() => data?.scenarios || [], [data])
   const summary = data?.summary
   const repo = data?.repo
+  const bugRefs = useMemo(() => data?.knownBugRefList || [], [data])
+  const catalogIssues = data?.catalogIssues
 
   const tiers = useMemo(
     () => [...new Set(scenarios.map(s => s.tier).filter(Boolean))].sort(),
@@ -438,7 +440,10 @@ export default function QaCatalog() {
     if (hours < 24) return { stale: hours >= 6, text: `${hours} 小时前` }
     return { stale: true, text: `${Math.round(hours / 24)} 天前` }
   }, [repo?.fetchedAt])
+  // 「读不进来的行」也算不可信：那不是"对不上"，是我们根本没读到，比对不上更该先看
   const healthy = summary && !summary.claimedButUncovered && !summary.orphanScripts
+    && !summary.unparsedRows && !summary.duplicateIds
+  const parseLoss = (summary?.unparsedRows || 0) + (summary?.duplicateIds || 0)
 
   const sourceDetail = repo && (
     <div style={{ maxWidth: 480, fontSize: 12, lineHeight: 2 }}>
@@ -533,17 +538,49 @@ export default function QaCatalog() {
                 </Hit>
               )
             })}
+            {/* 「N 条挂着缺陷」和「几个缺陷单」是两个数：一个单子常压住好几条场景
+                （实测 F-5 一个号压住 8 条）。只给前一个数，会被读成"有 12 个缺陷要修" */}
             {summary.coveredWithBugs > 0 && (
-              <Hit
-                active={quick === 'bugs'} onClick={() => jump({ quick: 'bugs' })}
-                style={{ marginTop: 8, color: C.red }}
-              >
-                <WarningFilled />
-                <span>
-                  其中 <b>{summary.coveredWithBugs}</b> 条挂着已知缺陷 ——
+              <div style={{ marginTop: 8 }}>
+                <Hit active={quick === 'bugs'} onClick={() => jump({ quick: 'bugs' })} style={{ color: C.red }}>
+                  <WarningFilled />
+                  <span style={{ flex: 1 }}>
+                    <b>{summary.coveredWithBugs}</b> 条挂着已知缺陷，归到
+                    {bugRefs.length > 0 ? (
+                      <Popover
+                        placement="bottomLeft"
+                        title={<span style={{ fontSize: 12 }}>这些红在等 {bugRefs.length} 个缺陷单</span>}
+                        content={
+                          <div style={{ maxWidth: 360, fontSize: 12, lineHeight: 1.9 }}>
+                            {bugRefs.map(b => (
+                              <div key={b.ref}>
+                                <code style={{ color: C.red }}>{b.ref}</code>
+                                <span style={{ color: C.gray }}> 压住 {b.scenarios.length} 条 · </span>
+                                {b.scenarios.join(' ')}
+                              </div>
+                            ))}
+                            <div style={{ color: C.gray, marginTop: 8, lineHeight: 1.6 }}>
+                              缺陷号取自脚本头的 <code>@known-bug</code>。修掉一个单子，
+                              上面对应的那几条一起转绿 —— 所以要排期的是这 {bugRefs.length} 个，
+                              不是 {summary.coveredWithBugs} 个。
+                            </div>
+                          </div>
+                        }
+                      >
+                        <span
+                          onClick={e => e.stopPropagation()}
+                          style={{ cursor: 'help', borderBottom: `1px dotted ${C.red}`, margin: '0 2px' }}
+                        >
+                          <b>{bugRefs.length}</b> 个缺陷单
+                        </span>
+                      </Popover>
+                    ) : <b> —</b>}
+                  </span>
+                </Hit>
+                <div style={{ fontSize: 11, color: C.gray, paddingLeft: 20, lineHeight: 1.5 }}>
                   有脚本，但结论已知是红的
-                </span>
-              </Hit>
+                </div>
+              </div>
             )}
           </Panel>
 
@@ -606,9 +643,54 @@ export default function QaCatalog() {
               <span style={{ flex: 1 }}>风险 ≥{HIGH_RISK} 却排在 P2/P3</span>
               <b style={{ color: summary.riskMismatch ? C.orange : C.gray }}>{summary.riskMismatch}</b>
             </Hit>
+            {/* 这一行 0 也要显示：只在出问题时才冒出来的指标，跟"没算过"长得一模一样，
+                而这里少读一行的后果是那条场景在页面上根本不存在 —— 覆盖率不掉、缺口不涨 */}
+            <Popover
+              placement="bottomLeft"
+              title={<span style={{ fontSize: 12 }}>解析这份清单时丢掉的行</span>}
+              content={
+                <div style={{ maxWidth: 460, fontSize: 12, lineHeight: 1.8 }}>
+                  {parseLoss === 0 && (
+                    <div style={{ color: C.teal }}>
+                      <CheckCircleFilled /> 清单里每一行都读进来了，
+                      上面的 {summary.total} 条就是清单的全部。
+                    </div>
+                  )}
+                  {catalogIssues?.unparsedRows?.map(r => (
+                    <div key={r.line} style={{ marginBottom: 4 }}>
+                      <span style={{ color: C.gray }}>第 {r.line} 行 </span>
+                      <code style={{ fontSize: 11, wordBreak: 'break-all' }}>{r.raw}</code>
+                    </div>
+                  ))}
+                  {catalogIssues?.duplicateIds?.length > 0 && (
+                    <div style={{ marginTop: 6 }}>
+                      同一个 ID 出现了两次（只留了第一条）：
+                      <b style={{ color: C.orange }}> {catalogIssues.duplicateIds.join(' ')}</b>
+                    </div>
+                  )}
+                  <div style={{ color: C.gray, marginTop: 8, lineHeight: 1.6 }}>
+                    首列像场景 ID、整行却没解析成 —— 常见是行尾少一根 <code>|</code>、
+                    短横打成了中文破折号、域码写成小写。丢掉一行不会让覆盖率变低，
+                    只会让那条场景「不存在」，所以这里必须自己报出来。
+                  </div>
+                </div>
+              }
+            >
+              {/* Popover 靠 cloneElement 往 child 上挂 onMouseEnter/ref，而 Hit 自己就用了
+                  这两个名字、也不透传 ref —— 直接把 Hit 当 child 会一辈子弹不出来 */}
+              <div>
+                <Hit style={{ cursor: 'help' }}>
+                  {parseLoss
+                    ? <WarningFilled style={{ color: C.red }} />
+                    : <CheckCircleFilled style={{ color: C.teal }} />}
+                  <span style={{ flex: 1 }}>清单里读不进来的行</span>
+                  <b style={{ color: parseLoss ? C.red : C.gray }}>{parseLoss}</b>
+                </Hit>
+              </div>
+            </Popover>
             <div style={{ fontSize: 11, color: C.gray, marginTop: 8, lineHeight: 1.6 }}>
               前两项是 QA 自己门禁（<code>check-coverage.sh</code>）会直接 BLOCK 的；
-              第三项是「回去重新审优先级」的信号，不阻断。
+              第三项是「回去重新审优先级」的信号，不阻断；最后一项是我们自己的解析漏没漏。
             </div>
           </Panel>
         </div>

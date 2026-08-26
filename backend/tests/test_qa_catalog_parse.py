@@ -58,11 +58,13 @@ CATALOG = """\
 
 
 def test_parse_catalog_rows():
-    scen, domains = parse_catalog(CATALOG)
+    scen, domains, issues = parse_catalog(CATALOG)
     ids = [s["id"] for s in scen]
     # §4 统计段那张表首列是层级不是 ID，不能被当成场景行读进来
     assert ids == ["SMK-01", "SMK-08", "SMK-09", "MCP-38", "MCP-99"]
     assert domains == {"SMK": "冒烟", "MCP": "MCP 能力"}
+    # 这份夹具是干净的：一行都没漏读，页面上那两个"少读了多少"必须是 0
+    assert issues == {"unparsedRows": [], "duplicateIds": []}
 
     first = scen[0]
     assert first["domain"] == "SMK"
@@ -73,7 +75,7 @@ def test_parse_catalog_rows():
 
 
 def test_parse_catalog_states_and_note():
-    scen, _ = parse_catalog(CATALOG)
+    scen, _, _ = parse_catalog(CATALOG)
     by_id = {s["id"]: s for s in scen}
     assert by_id["SMK-08"]["state"] == "gap"
     assert by_id["SMK-09"]["state"] == "deprecated"
@@ -85,9 +87,35 @@ def test_parse_catalog_states_and_note():
 
 def test_parse_catalog_dedup_keeps_first():
     dup = CATALOG + "\n| SMK-01 | 重复行 | P3 | 1 | api | ⬜ |\n"
-    scen, _ = parse_catalog(dup)
+    scen, _, issues = parse_catalog(dup)
     assert [s["id"] for s in scen].count("SMK-01") == 1
     assert next(s for s in scen if s["id"] == "SMK-01")["state"] == "covered"
+    # 丢掉的那一整行必须报出来：静默保留第一条，页面上就看不出清单里有两条 SMK-01
+    assert issues["duplicateIds"] == ["SMK-01"]
+
+
+# 每一行都"看着像场景行"，但一行都进不去 _ROW_RE：漏读一行 = 那条场景在页面上不存在，
+# 覆盖率不掉、缺口不涨、门禁不红，所以必须自己报出来
+_BROKEN_CATALOG = """\
+| ID | 场景 | P | R | 层 | 状 |
+|---|---|---|---|---|---|
+| SMK-01 | 好行 | P0 | 6 | smoke | ✅ |
+| SMK-02 | 尾巴上少一根竖线 | P1 | 3 | api | ⬜
+| SMK–03 | 短横打成了中文破折号 | P1 | 3 | api | ⬜ |
+| smk-04 | 域码写成了小写 | P2 | 2 | api | ⬜ |
+| **SMK-05** | 首列加粗了 | P2 | 2 | api | ⬜ |
+"""
+
+
+def test_parse_catalog_reports_rows_it_could_not_read():
+    scen, _, issues = parse_catalog(_BROKEN_CATALOG)
+    assert [s["id"] for s in scen] == ["SMK-01"]
+
+    lines = [r["line"] for r in issues["unparsedRows"]]
+    # 第 4~7 行那四种写法各漏一条；表头和分隔行不算（首列不带「短横 + 数字」）
+    assert lines == [4, 5, 6, 7]
+    assert "少一根竖线" in issues["unparsedRows"][0]["raw"]
+    assert issues["duplicateIds"] == []
 
 
 SH_CASE = """\
@@ -156,7 +184,7 @@ def test_match_globs_any():
 
 
 def _assembled():
-    scen, domains = parse_catalog(CATALOG)
+    scen, domains, issues = parse_catalog(CATALOG)
     cases = [
         {"path": "api/smk/health.sh", "ids": ["SMK-01"], "tier": "smoke", "knownBugs": []},
         {
@@ -168,7 +196,7 @@ def _assembled():
         },
         {"path": "api/xxx/ghost.sh", "ids": ["GHOST-01"], "tier": "api", "knownBugs": []},
     ]
-    return _assemble(scen, domains, cases, {"url": "git@x:qa.git", "branch": "main"})
+    return _assemble(scen, domains, cases, issues, {"url": "git@x:qa.git", "branch": "main"})
 
 
 def test_assemble_links_scripts_and_primary_flag():
@@ -225,6 +253,41 @@ def test_summary_separates_covered_with_bugs_from_all_bug_scenarios():
     assert s["coveredWithBugs"] == 1
 
 
+def test_summary_counts_bug_tickets_apart_from_scenarios():
+    """「几条场景挂着缺陷」和「一共几个缺陷单」是两个数，别让人把 3 读成 12。
+
+    一个号压住多条场景是常态（实测 uag-qa 的 F-5 挂在 4 个文件上），而同一个号
+    在不同文件里跟的说明还常常不一样 —— 去重只认第一个 token。
+    """
+    scen, domains, issues = parse_catalog(CATALOG)
+    cases = [
+        {"path": "a.sh", "ids": ["SMK-01"], "tier": "api",
+         "knownBugs": ["GL#531 审计缺一半"]},
+        # 同一个号、不同说明：算一个缺陷单
+        {"path": "b.sh", "ids": ["SMK-08"], "tier": "api",
+         "knownBugs": ["GL#531 这边也缺", "GL#777 另一个单子"]},
+    ]
+    data = _assemble(scen, domains, cases, issues, {"url": "git@x:qa.git", "branch": "main"})
+
+    assert data["summary"]["knownBugScenarios"] == 2
+    assert data["summary"]["knownBugRefs"] == 2
+    # 光给个总数不够：页面要能回答「那几条到底在等哪一个单子」
+    assert data["knownBugRefList"] == [
+        {"ref": "GL#531", "scenarios": ["SMK-01", "SMK-08"]},
+        {"ref": "GL#777", "scenarios": ["SMK-08"]},
+    ]
+
+
+def test_assemble_carries_catalog_issues_to_payload():
+    """漏读的行要一路带到 payload：只留在日志里 = 页面上永远看不见。"""
+    scen, domains, issues = parse_catalog(_BROKEN_CATALOG)
+    data = _assemble(scen, domains, [], issues, {"url": "git@x:qa.git", "branch": "main"})
+
+    assert data["summary"]["unparsedRows"] == 4
+    assert data["summary"]["duplicateIds"] == 0
+    assert [r["line"] for r in data["catalogIssues"]["unparsedRows"]] == [4, 5, 6, 7]
+
+
 # 清单 §1.1：P 和 R 是独立的两条轴，R 高 P 低是「回去重新审优先级」的信号
 _RISK_CATALOG = """
 | 域码 | 名称 |
@@ -241,9 +304,9 @@ _RISK_CATALOG = """
 
 
 def test_summary_flags_high_risk_low_priority():
-    scen, domains = parse_catalog(_RISK_CATALOG)
+    scen, domains, issues = parse_catalog(_RISK_CATALOG)
     cases = [{"path": "api/sec/toggle.sh", "ids": ["SEC-03"], "tier": "api", "knownBugs": []}]
-    data = _assemble(scen, domains, cases, {"url": "git@x:qa.git", "branch": "main"})
+    data = _assemble(scen, domains, cases, issues, {"url": "git@x:qa.git", "branch": "main"})
 
     # SEC-02 一条：R9 却排在 P2。SEC-01 是 P0（本来就该先做，不算背离），
     # SEC-04 已废弃（不该再提醒人回去审它的优先级）

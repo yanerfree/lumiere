@@ -42,6 +42,11 @@ _ROW_RE = re.compile(
 )
 # 域码表行：| `SMK` | 冒烟 | Health, Docs, System |
 _DOMAIN_RE = re.compile(r"^\|\s*`(?P<code>[A-Z][A-Z0-9]{1,5})`\s*\|\s*(?P<name>[^|]+?)\s*\|")
+# 「看着像场景行、却没解析成」的首列形状。故意放宽（小写、一位数字、下划线、
+# 中文破折号都算），因为漏一行 = 少一条场景**而且永远不报错**；多报一行只是
+# 让人回清单里瞄一眼。域码表（`SMK`）、统计表（层级名）、分隔行（---）都不带
+# 「短横 + 数字」，不会被它捞进来。
+_LOOSE_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]{1,5}\s*[-–—_]\s*\d{1,3}$")
 # 文件头声明，兼容 `#` 和 `//` 两种注释符（bash 用例 / Playwright 用例）
 _HEADER_LINES = 25
 
@@ -69,17 +74,30 @@ def _repo_dir(project_id: str) -> Path:
 
 # ---- 解析 ----
 
-def parse_catalog(text: str) -> tuple[list[dict], dict[str, str]]:
-    """解析清单 markdown。返回 (场景行, 域码->域名)。
+def _first_cell(line: str) -> str:
+    """表格行的首列，剥掉反引号和加粗号。`| **AUT-01** |` → `AUT-01`。"""
+    parts = line.split("|")
+    return parts[1].strip().strip("`*").strip() if len(parts) > 1 else ""
+
+
+def parse_catalog(text: str) -> tuple[list[dict], dict[str, str], dict]:
+    """解析清单 markdown。返回 (场景行, 域码->域名, 读不进来的行)。
 
     只认「场景清单」正文里的行；统计段里那张"已实现清单"表首列是层级不是 ID，
     天然不会命中 _ROW_RE，所以不需要额外切段。
+
+    ⚠ 第三个返回值是**这次悄悄少读了什么**，必须一路带到页面上。少一行的后果是
+    「那条场景不存在」—— 覆盖率不会掉、缺口不会涨、门禁不会红，谁都发现不了。
+    两类：首列像 ID 但整行没解析成（漏了尾部的 `|`、破折号打成 `–`、大小写写错），
+    以及同一个 ID 出现两次（保留第一条，第二条的内容整行丢掉）。
     """
     scenarios: list[dict] = []
     domains: dict[str, str] = {}
     seen: set[str] = set()
+    unparsed: list[dict] = []
+    duplicates: list[str] = []
 
-    for line in text.splitlines():
+    for lineno, line in enumerate(text.splitlines(), 1):
         dm = _DOMAIN_RE.match(line)
         if dm:
             domains.setdefault(dm.group("code"), dm.group("name").strip())
@@ -87,10 +105,14 @@ def parse_catalog(text: str) -> tuple[list[dict], dict[str, str]]:
 
         m = _ROW_RE.match(line)
         if not m:
+            if line.lstrip().startswith("|") and _LOOSE_ID_RE.match(_first_cell(line)):
+                unparsed.append({"line": lineno, "raw": line.strip()[:160]})
             continue
         sid = m.group("id")
         if sid in seen:
             # 同一个 ID 在清单里出现两次是清单自己的问题，这里保留第一条、不静默合并
+            if sid not in duplicates:
+                duplicates.append(sid)
             continue
         seen.add(sid)
         cols = [c.strip() for c in m.group("rest").split("|")]
@@ -122,7 +144,7 @@ def parse_catalog(text: str) -> tuple[list[dict], dict[str, str]]:
             "stateNote": state_note,
         })
 
-    return scenarios, domains
+    return scenarios, domains, {"unparsedRows": unparsed, "duplicateIds": duplicates}
 
 
 def _scenario_ids(value: str) -> list[str]:
@@ -386,7 +408,7 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
     if catalog_text is None:
         raise GitError(f"QA 仓的 {branch_name} 分支上没有 {catalog_path}")
 
-    scenarios, domain_names = parse_catalog(catalog_text)
+    scenarios, domain_names, catalog_issues = parse_catalog(catalog_text)
 
     globs = cfg.get("caseGlobs") or []
     if globs:
@@ -404,7 +426,7 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
             continue  # 没声明 ID 的文件不是用例（支持库/夹具）
         cases.append({"path": path, **header})
 
-    return _assemble(scenarios, domain_names, cases, {
+    return _assemble(scenarios, domain_names, cases, catalog_issues, {
         "url": url,
         "branch": branch_name,
         "branchAuto": not (cfg.get("branch") or ""),
@@ -420,7 +442,8 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
     })
 
 
-def _assemble(scenarios: list[dict], domain_names: dict[str, str], cases: list[dict], repo_meta: dict) -> dict:
+def _assemble(scenarios: list[dict], domain_names: dict[str, str], cases: list[dict],
+              catalog_issues: dict, repo_meta: dict) -> dict:
     by_id = {s["id"]: s for s in scenarios}
     for s in scenarios:
         s["scripts"] = []
@@ -480,6 +503,23 @@ def _assemble(scenarios: list[dict], domain_names: dict[str, str], cases: list[d
         })
 
     known_bug_scenarios = [s["id"] for s in scenarios if s["knownBugs"]]
+    # 「N 条场景挂着缺陷」和「一共几个缺陷单」是两个数：一个缺陷能压住好几条场景
+    # （实测 uag-qa 的 F-5 一个号挂在 4 个文件上）。只报前者会让人以为缺陷有 N 个，
+    # 把「等 3 个 bug 修完」误读成「等 12 个 bug 修完」。
+    # 取值规则不写死任何仓库的号段：`@known-bug <号> <说明>`，第一个 token 就是号。
+    # 顺手按缺陷号归一遍：页面要能回答「那 8 条到底在等哪一个单子」，
+    # 光给个总数还是得回仓里 grep
+    bug_index: dict[str, list[str]] = {}
+    for s in scenarios:
+        for b in s["knownBugs"]:
+            parts = b.split()
+            ref = parts[0].strip("`") if parts else ""
+            if not ref:
+                continue
+            holds = bug_index.setdefault(ref, [])
+            if s["id"] not in holds:
+                holds.append(s["id"])
+    bug_refs = [{"ref": r, "scenarios": ids} for r, ids in bug_index.items()]
     lying = [s["id"] for s in scenarios if s["claimedButUncovered"]]
     # 「已覆盖」里有一批是明知跑出来是红的 —— 不点出来的话覆盖率是虚高的
     covered_with_bugs = [s["id"] for s in scenarios if s["state"] == "covered" and s["knownBugs"]]
@@ -500,15 +540,22 @@ def _assemble(scenarios: list[dict], domain_names: dict[str, str], cases: list[d
             "deprecated": deprecated,
             "scripts": len(cases),
             "knownBugScenarios": len(known_bug_scenarios),
+            "knownBugRefs": len(bug_refs),
             "coveredWithBugs": len(covered_with_bugs),
             "claimedButUncovered": len(lying),
             "orphanScripts": len(orphan_scripts),
             "riskMismatch": len(risk_mismatch),
+            # 这两个是「这次少读了多少」，0 也要出现在页面上：只在非 0 时冒出来的指标，
+            # 跟「没算过」长得一模一样
+            "unparsedRows": len(catalog_issues.get("unparsedRows") or []),
+            "duplicateIds": len(catalog_issues.get("duplicateIds") or []),
             "byPriority": by_priority,
         },
         "domains": domains,
         "scenarios": scenarios,
         "orphanScriptList": orphan_scripts,
+        "knownBugRefList": bug_refs,
+        "catalogIssues": catalog_issues,
     }
 
 
