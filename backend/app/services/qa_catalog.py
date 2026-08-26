@@ -20,6 +20,7 @@ QA 仓是别人的仓库（黑盒验收仓：只有用例脚本，没有产品�
 import logging
 import re
 import shutil
+from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
 
@@ -278,6 +279,23 @@ def discover_case_files(repo: Path, ref: str, catalog_path: str) -> list[str]:
     return sorted(set(files))
 
 
+def _pick_ref(repo: Path, branch: str) -> str | None:
+    """同一个分支名的两个 ref，按新鲜度取：`refs/remotes/origin/*` 优先。
+
+    `refs/heads/*` 只是 clone 那一刻的快照 —— fetch 的 refspec 是
+    `+refs/heads/*:refs/remotes/origin/*`，只写 remotes，永远碰不到它。
+    留着它兜底是因为第一次 clone 之后不 fetch（`sync_and_read` 会跳过），
+    那一趟 remotes 还是空的。
+    """
+    for candidate in (f"refs/remotes/origin/{branch}", f"refs/heads/{branch}"):
+        try:
+            _run_git(["--git-dir", str(repo), "rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}"])
+            return candidate
+        except GitError:
+            continue
+    return None
+
+
 def _resolve_ref(repo: Path, branch: str) -> tuple[str, str]:
     """分支名 → (ref, 实际读的分支名)。
 
@@ -286,21 +304,44 @@ def _resolve_ref(repo: Path, branch: str) -> tuple[str, str]:
 
     填了分支就必须命中：找不到就报错，不再悄悄回退 HEAD —— 回退等于拿别的分支的数据
     挂着你填的分支名显示，比报错难查得多。
+
+    ⚠ **留空这条路也必须走 `_pick_ref`，不能直接读 HEAD。** bare 仓的 HEAD 指向
+    `refs/heads/<默认分支>`，而 fetch 只写 `refs/remotes/origin/*` —— 读 HEAD 拿到的
+    永远是第一次 clone 那一刻的快照：fetch 成功了、页面数字一动不动，"拉取最新"还报成功。
+    偏偏"分支留空"是文档推荐的用法，等于默认踩坑（填了分支名反而躲过去了）。
+    2026-08-26 实测：uag-qa 缓存里 refs/heads/main 落后 origin/main 16 个提交，
+    覆盖率少算 6 个点（47% vs 53%）、缺口多报 26 条。
     """
     if not branch:
         try:
             name = _run_git(["--git-dir", str(repo), "symbolic-ref", "--short", "HEAD"])
         except GitError:
-            name = "HEAD"          # 游离 HEAD：能读，只是没名字
-        return "HEAD", name or "HEAD"
+            name = ""              # 游离 HEAD：能读，只是没名字
+        if not name:
+            return "HEAD", "HEAD"
+        return _pick_ref(repo, name) or "HEAD", name
 
-    for candidate in (f"refs/remotes/origin/{branch}", f"refs/heads/{branch}"):
+    ref = _pick_ref(repo, branch)
+    if ref is None:
+        raise GitError(f"QA 仓里没有分支 {branch}（分支留空就跟仓库默认分支走）")
+    return ref, branch
+
+
+def _last_fetch_at(repo: Path) -> str | None:
+    """上一次真从远端抓过是什么时候。**不是提交时间** —— 两个都要有，缺一个就没法判新鲜度：
+    提交时间旧可能是 QA 那边本来就没动，拉取时间旧才是"这页过期了"。
+
+    不额外存状态：`FETCH_HEAD` 是 git 每次 fetch 都重写的文件（哪怕这次没有新提交），
+    它的 mtime 就是答案；还没 fetch 过就退回 `HEAD` 的 mtime（= clone 时间）。
+    **别用 config 的 mtime**：`ensure_bare_repo` 每次都会写一遍 config，那个时间永远是"刚刚"。
+    """
+    for name in ("FETCH_HEAD", "HEAD"):
         try:
-            _run_git(["--git-dir", str(repo), "rev-parse", "--verify", "--quiet", f"{candidate}^{{commit}}"])
-            return candidate, branch
-        except GitError:
+            ts = (repo / name).stat().st_mtime
+        except OSError:
             continue
-    raise GitError(f"QA 仓里没有分支 {branch}（分支留空就跟仓库默认分支走）")
+        return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone().isoformat(timespec="seconds")
+    return None
 
 
 def _drop_stale_cache(repo: Path, url: str) -> None:
@@ -374,6 +415,7 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
         "commitShort": commit_sha[:9],
         "commitDate": commit_date,
         "commitSubject": commit_subject,
+        "fetchedAt": _last_fetch_at(repo),
         "caseFiles": len(files),
     })
 

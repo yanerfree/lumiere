@@ -427,6 +427,17 @@ export default function QaCatalog() {
   ]
 
   const coverRate = summary?.total ? Math.round((summary.covered / summary.total) * 100) : 0
+  // 「落后 N 个提交」算不出来（要每次开页面打一次网络），但「多久没拉过」是本地就有的，
+  // 而且过期的页恰恰是没人点过「拉取最新」的那种 —— 超过 6 小时标黄，别让人拿着旧数字做判断。
+  const fetchAge = useMemo(() => {
+    if (!repo?.fetchedAt) return null
+    const mins = Math.round((Date.now() - new Date(repo.fetchedAt).getTime()) / 60000)
+    if (mins < 1) return { stale: false, text: '刚刚' }
+    if (mins < 60) return { stale: false, text: `${mins} 分钟前` }
+    const hours = Math.round(mins / 60)
+    if (hours < 24) return { stale: hours >= 6, text: `${hours} 小时前` }
+    return { stale: true, text: `${Math.round(hours / 24)} 天前` }
+  }, [repo?.fetchedAt])
   const healthy = summary && !summary.claimedButUncovered && !summary.orphanScripts
 
   const sourceDetail = repo && (
@@ -442,6 +453,10 @@ export default function QaCatalog() {
         </Tag>
       </div>
       <div>commit <code>{repo.commitShort}</code> {repo.commitSubject}</div>
+      <div>提交于 {repo.commitDate ? new Date(repo.commitDate).toLocaleString('zh-CN') : '—'}</div>
+      <div>拉取于 {repo.fetchedAt ? new Date(repo.fetchedAt).toLocaleString('zh-CN') : '—'}
+        {fetchAge && <Tag color={fetchAge.stale ? 'orange' : 'green'} style={{ marginLeft: 4 }}>{fetchAge.text}</Tag>}
+      </div>
       <div style={{ color: C.gray, marginTop: 6 }}>
         平台对这个仓库只读：clone --bare / fetch / git show，不写一个字。
       </div>
@@ -747,7 +762,11 @@ export default function QaCatalog() {
               {repo.url} · {repo.branch} · <code>{repo.commitShort}</code>
             </span>
           </Popover>
-          {repo.commitDate && <span>拉取于 {new Date(repo.commitDate).toLocaleString('zh-CN')}</span>}
+          {repo.fetchedAt && (
+            <span style={fetchAge?.stale ? { color: C.orange } : undefined}>
+              拉取于 {new Date(repo.fetchedAt).toLocaleString('zh-CN')}{fetchAge ? `（${fetchAge.text}）` : ''}
+            </span>
+          )}
         </div>
       )}
 

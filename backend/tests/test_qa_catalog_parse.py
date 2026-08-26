@@ -5,14 +5,16 @@
 """
 import re
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
-from app.services.git_service import GitError
+from app.services.git_service import GitError, ensure_bare_repo, fetch_origin
 from app.services.qa_catalog import (
     _assemble,
     _glob_to_re,
+    _last_fetch_at,
     _match_globs,
     _resolve_ref,
     detect_catalog_path,
@@ -354,8 +356,9 @@ def test_discover_case_files_skips_templates(qa_repo: Path):
 def test_resolve_ref_empty_branch_follows_repo_default(qa_repo: Path):
     # 分支留空不该猜 main —— 这个仓的默认分支叫 qa-main
     ref, name = _resolve_ref(qa_repo, "")
-    assert ref == "HEAD"
     assert name == "qa-main"
+    # 这个仓没有 origin/qa-main，所以退到 refs/heads/qa-main（不是 HEAD，见下面那条封样）
+    assert ref == "refs/heads/qa-main"
 
 
 def test_resolve_ref_named_branch_must_exist(qa_repo: Path):
@@ -365,6 +368,82 @@ def test_resolve_ref_named_branch_must_exist(qa_repo: Path):
     with pytest.raises(GitError) as e:
         _resolve_ref(qa_repo, "nope")
     assert "nope" in e.value.message
+
+
+# ── 新鲜度：fetch 完了页面数字必须跟着动 ──────────────────────────
+# 这是 2026-08-26 撞到的真 bug 的封样。当时点「拉取最新」报成功、数字一动不动：
+# `clone --bare` 铺了 refs/heads/*，而 fetch 的 refspec 是 +refs/heads/*:refs/remotes/origin/*，
+# 只写 remotes 碰不到 heads —— 读 HEAD（分支留空那条路）永远拿 clone 那一刻的快照。
+# 实测缓存里 refs/heads/main 落后 origin/main 16 个提交，覆盖率少算 6 个点。
+# **必须用「远端动了」来验**：只查 ref 字符串或只跑一次 clone 都看不出这个 bug。
+
+@pytest.fixture
+def qa_bare_clone(qa_repo: Path, tmp_path: Path) -> tuple[Path, Path]:
+    """(bare 缓存, 上游工作区) —— 走真的 ensure_bare_repo，refspec 跟线上一致。"""
+    bare = tmp_path / "cache.git"
+    ensure_bare_repo(str(qa_repo.parent), bare)
+    return bare, qa_repo.parent
+
+
+def _advance_upstream(work: Path) -> str:
+    (work / "docs" / "catalog.md").write_text(
+        "| ID | 场景 | P | R | 层 | 状 |\n| SMK-99 | 新加的场景 | P0 | 9 | api | ⬜ |\n"
+    )
+    _git(work, "add", "-A")
+    _git(work, "commit", "-q", "-m", "上游又提交了")
+    return _git(work, "rev-parse", "HEAD")
+
+
+def test_empty_branch_sees_new_commits_after_fetch(qa_bare_clone, tmp_path: Path):
+    bare, work = qa_bare_clone
+    head = _advance_upstream(work)
+
+    fetch_origin(bare, tmp_path / "lock")
+
+    ref, name = _resolve_ref(bare, "")
+    assert name == "qa-main"
+    # 关键断言：解析出来的 ref 必须指到上游的新提交上
+    got = subprocess.run(["git", "--git-dir", str(bare), "rev-parse", ref],
+                         capture_output=True, text=True).stdout.strip()
+    assert got == head, "分支留空时 fetch 白拉了：读到的还是 clone 那一刻的快照"
+
+
+def test_named_branch_sees_new_commits_after_fetch(qa_bare_clone, tmp_path: Path):
+    bare, work = qa_bare_clone
+    head = _advance_upstream(work)
+    fetch_origin(bare, tmp_path / "lock")
+
+    ref, _ = _resolve_ref(bare, "qa-main")
+    assert ref == "refs/remotes/origin/qa-main"
+    got = subprocess.run(["git", "--git-dir", str(bare), "rev-parse", ref],
+                         capture_output=True, text=True).stdout.strip()
+    assert got == head
+
+
+def test_first_read_before_any_fetch_still_works(qa_bare_clone):
+    """第一次 clone 之后 sync_and_read 会跳过 fetch，那一趟 remotes 是空的 —— 得退回 heads。"""
+    bare, _ = qa_bare_clone
+    ref, name = _resolve_ref(bare, "")
+    assert name == "qa-main" and ref == "refs/heads/qa-main"
+
+
+def test_last_fetch_at_is_fetch_time_not_commit_time(qa_bare_clone, tmp_path: Path):
+    """页脚那行「拉取于」以前打的是 commitDate —— 提交时间冒充拉取时间，
+    于是 QA 那边不提交，它就一直显示同一个时间，「这页是不是最新的」永远看不出来。"""
+    bare, work = qa_bare_clone
+    before = _last_fetch_at(bare)
+    assert before, "clone 之后就该有个时间（退回 HEAD 的 mtime = clone 时间）"
+
+    _advance_upstream(work)
+    time.sleep(1.1)                      # mtime 是秒级的，不睡就分不出前后
+    fetch_origin(bare, tmp_path / "lock")
+
+    after = _last_fetch_at(bare)
+    assert after > before, "fetch 过一次，拉取时间必须往前走"
+    # 哪怕这次没有新提交，fetch 也会重写 FETCH_HEAD —— 「刚拉过」和「拉到了新东西」是两件事
+    time.sleep(1.1)
+    fetch_origin(bare, tmp_path / "lock")
+    assert _last_fetch_at(bare) > after
 
 
 # ── 「点开看内容」那个接口的白名单 ────────────────────────────────

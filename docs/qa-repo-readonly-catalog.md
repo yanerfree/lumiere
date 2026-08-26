@@ -75,7 +75,7 @@ QA 仓（如 uag-qa）是**别人维护的仓库**，里面只有验收脚本，
 | 字段 | 留空时 | 说明 |
 |---|---|---|
 | `url` | — | 唯一必填。**清空 url 并保存 = 取消配置**（服务端把整个 `qa_repo` 置 NULL） |
-| `branch` | 跟仓库自己的默认分支（bare 仓的 HEAD） | 填了就必须命中，找不到直接报错 —— 悄悄回退 HEAD 等于拿别的分支的数据顶着你填的分支名显示 |
+| `branch` | 跟仓库自己的默认分支（bare 仓 HEAD 指的那个**名字**，取的是 `origin/<它>`，见下方那个坑） | 填了就必须命中，找不到直接报错 —— 悄悄回退 HEAD 等于拿别的分支的数据顶着你填的分支名显示 |
 | `catalogPath` | 找**场景行最多**的那份 `.md`（≥5 行才算） | 不认文件名：别的 QA 仓不会也叫 `test-scenario-catalog.md`。README 里举两行例子不会被选中 |
 | `caseGlobs` | `git grep -l @scenario` 捞所有声明了场景的文件 | 比配目录 glob 准：脚本挪目录不用改配置，也不会把没声明场景的支持库当用例。填了就只认这些 glob（`**` 跨目录、`*` 不跨） |
 
@@ -94,6 +94,47 @@ QA 仓（如 uag-qa）是**别人维护的仓库**，里面只有验收脚本，
 `GET` 只读本地缓存不打远端；点「拉取最新」或刚保存完配置才 `fetch`。同一个 commit 不重复解析。
 缓存按项目建，**换了仓库地址会先把旧缓存整个删掉**（不删的话 `ensure_bare_repo` 见 HEAD 还在
 就直接复用，页面上地址已经改了、数据还是旧那家的）。
+
+### 又一个坑（更毒）：fetch 成功了，但页面读的还是 clone 那一刻
+
+**症状**：点「拉取最新」，提示"已拉取"，数字一个都不动。查 `FETCH_HEAD` 的时间是刚刚，
+`refs/remotes/origin/main` 也确实前进了 —— fetch 没问题，**是读的时候读错了 ref**。
+
+`clone --bare` 会把 `refs/heads/*` 铺出来并让 HEAD 指向默认分支；而之后每次 fetch 的
+refspec 是 `+refs/heads/*:refs/remotes/origin/*`（`ensure_bare_repo` 写死的，另一个消费方
+`sync_branch_first_time` 靠它），**只写 remotes，永远碰不到 `refs/heads/*`**。
+于是 `_resolve_ref` 里「分支留空 → 读 HEAD」这条路拿到的永远是第一次 clone 的快照。
+
+**为什么这么久没发现**：填了分支名的那条路本来就先试 `refs/remotes/origin/<branch>`，是对的；
+只有留空那条错 —— 而"留空"正是上面这张表推荐的用法。**推荐路径踩坑，替代路径没事**，
+所以谁去填一下分支名就"好了"，看起来像玄学。
+
+**实测代价**（uag-qa，2026-08-26）：`refs/heads/main` = 263594daf（8/25）落后
+`refs/remotes/origin/main` = 2189f8662（8/26）**16 个提交**，页面差出：
+
+| | 旧（clone 快照） | 真实 | 差 |
+|---|---|---|---|
+| 覆盖率 | 47% | 53% | 少算 6 个点 |
+| 已覆盖 / 待补 | 172 / 197 | 193 / 171 | 缺口**多报 26 条** |
+| 脚本数 | 90 | 106 | 少 16 个 |
+| 挂已知缺陷的场景 | 9 | 12 | 少 3 |
+
+**修法**：两条路都走 `_pick_ref()` —— `refs/remotes/origin/<b>` 优先，`refs/heads/<b>` 兜底
+（第一次 clone 之后 `sync_and_read` 会跳过 fetch，那一趟 remotes 还是空的），最后才 HEAD（游离头）。
+封样在 `test_empty_branch_sees_new_commits_after_fetch`：**必须用「上游动了 + fetch 一次」来验**，
+只断 ref 字符串或只跑一次 clone 都看不出这个 bug。
+
+### 「拉取于」以前打的是提交时间
+
+同一次排查里发现的第二个：页脚那行「拉取于 …」取的是 `commitDate`（`git log -1 --format=%cI`），
+也就是**提交时间冒充拉取时间**。后果是这行字**恰好在最需要它的时候骗人**——QA 那边几天不提交，
+它就一直显示同一个时间，而"这页多久没拉过"永远看不出来；反过来 fetch 到一个旧提交时它还会往后跳。
+
+现在 `repo_meta` 里两个都给：`commitDate`（提交于）和 `fetchedAt`（拉取于），页脚显示后者
+并带「N 小时前」，超 6 小时标黄。`fetchedAt` **不新存状态** —— `FETCH_HEAD` 是 git 每次
+fetch 都重写的文件（哪怕这次没有新提交），它的 mtime 就是答案；还没 fetch 过退回 `HEAD` 的
+mtime（= clone 时间）。**别用 config 的 mtime**：`ensure_bare_repo` 每次都写一遍 config，
+那个时间永远是"刚刚"。
 
 ### 一个踩过的坑：`git grep` 的 ref 位置
 
