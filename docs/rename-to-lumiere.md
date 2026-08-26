@@ -73,7 +73,7 @@ grep -c 'name="tb_' backend/app/mcp/__init__.py                            # 59 
 
 | 位置 | 为什么留 |
 |---|---|
-| `/home/dreamer/testBench` 路径（`CLAUDE.md:44`、`tests/README.md:7,111`、`scan_overflow.py:17`） | 目录真名。要么不改，要么跟仓库改名一起改（第 7 步） |
+| ~~`/home/dreamer/testBench` 路径（`CLAUDE.md:44`、`tests/README.md:7,111`、`scan_overflow.py:17`、`deploy/playwright-mcp.service`）~~ **08-26 已改** | 当时是目录真名，只能跟目录一起动。目录 08-26 挪成了 `/home/dreamer/lumiere`，这几处一并改掉，封样白名单里对应的三条豁免全空。见 §8 |
 | ~~`User-Agent: testBench/1.0` 两处~~ **08-26 已改** | 当时想「等 UAG 回话」，其实那是补全提示的灰字，不是发出去的报文头。见 §7 |
 | `deploy/*`、`DEPLOY.md`（约 25 处）、`pyproject.toml` 的 `name = "testbench-backend"` | 第 6 步一起改。pyproject 改名要重装 venv（editable 安装），别单独动 |
 | 带日期的史述：`alembic/versions/zz9orph1_*.py:13`、`docs/cc-platform-loop-spec.md:1850` | 讲的是"2026-07 那时候"，改了是篡改。第 8 步封样要按文件白名单放过这两个 |
@@ -222,9 +222,15 @@ cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库�
    `mcp-prompt-fix`/`qa-catalog`/`review-followups`）全都干净、全都已并入 main
    （`git rev-list --count main..HEAD` 全 0、`git stash list` 空），是没清的空壳。
    它们的 `gitdir` 是绝对路径，留着就得挪完再 `git worktree repair`；删掉更省事。
-2. **venv 不用重建，但有 37 处绝对路径要改** —— editable 安装的 `.pth` / finder
-   加上 `.venv/bin/*` 的 shebang。`grep -rlI | xargs sed` 就行（`-I` 跳过二进制）。
-   重建 venv 要连外网，能不重建就别重建。
+2. **venv 不用重建，但有 38 处绝对路径要改** —— editable 安装的 `.pth` / finder
+   加上 `.venv/bin/*` 的 shebang、`pyvenv.cfg`、`direct_url.json`。
+   `command grep -rlI | xargs sed` 就行（`-I` 跳过二进制）。重建 venv 要连外网，
+   能不重建就别重建。
+   **这里踩了一脚**：直接写 `grep -rlI ... backend/.venv` 报 0 命中，看着像「venv 里
+   干干净净不用改」。实际是这个 shell 里 `grep` 是个带 `--ignore-files` 的包装函数，
+   会照 `.gitignore` 跳过 —— 而 `.venv` 正是被 ignore 的。要扫 gitignore 里的东西
+   得写 `command grep`。**「扫出 0 条」和「扫的地方不对」长得一模一样**，
+   这一条和 §7 那个 `User-Agent` 是同一个错。
 3. **Claude 的会话历史和自动记忆是按工作目录压平命名的**（`-home-dreamer-testBench`），
    仓库一挪不跟着 `mv` 就成孤儿 —— 这个项目的记忆全丢。
 4. 从旧目录起的四个进程要重启：后端（8756/18800）、claude-proxy（38210）、
@@ -233,6 +239,13 @@ cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库�
    `deploy/playwright-mcp.service` 的 `%h/testBench/`、`scan_overflow.py:17`。
    改完封样白名单里那三条「指真路径」的豁免全空了 —— **盯白名单那族用例当场红**，
    删掉即可（封样 17 → 14 条，`ALLOWED_LINE_REGEXES` 整个空掉）。
+
+**做完的验证（从新路径跑）**：backend `1404 passed`；根目录 `498 passed`
+（`DATABASE_URL=…/lumiere_test_2`）；`check_name_drift.py --strict` exit 0；
+`npm run build` 通过；后端 `/proc/<pid>/cwd` → `/home/dreamer/lumiere/backend`、
+`openapi.json` 200、`/api/projects` 401（要鉴权，对）；claude-proxy 38210、vite 5173 都在听。
+`mv` 的同时留了一条 `testBench -> lumiere` 软链让当前会话能干完活，收尾时删掉了 ——
+**别把它留着**，留着就等于旧名字还能用，下一个人照着旧路径写东西照样能跑。
 
 **这一步的收益只是洁癖**：页面、接口、包名、库名、仓库名早就都是 Lumiere，
 目录名只有开发自己看得见。真正的理由是别让「路径里还写着旧名」变成下一个抄袭源。
