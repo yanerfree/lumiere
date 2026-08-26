@@ -40,23 +40,19 @@ SKIP_FILES = {
 MAX_BYTES = 512 * 1024  # 再大的基本是产物/数据，不是人写的源码
 
 ALLOWED_SUBSTRINGS = {
-    # GitHub 仓库 08-26 已改名 lumiere，但本地工作目录还叫 testBench（挪它要重开会话、
-    # 还会撞上别的窗口），所以下面这几条指的都是**本地真路径**，不是品牌名。
-    "/home/dreamer/testBench": "本地工作目录真名，目录没挪",
-    "%h/testBench": "systemd 单元里的仓库路径（%h=HOME），指本地目录",
+    # 本地工作目录 08-26 也挪成了 /home/dreamer/lumiere，所以「那是真路径不是品牌名」
+    # 这一类豁免全都不需要了 —— 现在留下的只有被测系统 UAG 自己的数据。
     "tb-fwgl": "被测系统 UAG 的模块域码，不是我们的名字",
     "tb-zcgl": "被测系统 UAG 的模块域码，不是我们的名字",
     "tb-dup-": "被测系统返回的租户名，抄在注释里当反例",
     "tb-shared-": "mock 上游主机名，被测侧的配置",
     "faketoken": "测试假 Key 字面量，跟工具前缀无关",
-    "-home-dreamer-testBench": "Claude 会话目录名（工作目录压平来的），同上",
 }
 
 # 全仓通用的行级放过：给的不是「某个文件的例外」，而是「这种写法本身指的不是品牌名」。
-ALLOWED_LINE_REGEXES = {
-    re.compile(r"(?:^|cd )testBench/?\s*$"):
-        "本地工作目录真名（`cd testBench` / 目录树里那一行），目录没挪",
-}
+# 现在一条都不需要了（目录挪完之后仓库里再没有「指真路径的旧名字」）。留着这个字典
+# 和下面两族「豁免还命中吗」的用例，是因为它们才是白名单不长草的原因。
+ALLOWED_LINE_REGEXES = {}
 
 ALLOWED_PATHS = {
     "docs/rename-to-lumiere.md": "改名作业本身的记录，通篇都是新旧对照",
@@ -188,10 +184,13 @@ def test_allowed_substring_still_matches(literal):
     )
 
 
-@pytest.mark.parametrize("pattern", sorted(r.pattern for r in ALLOWED_LINE_REGEXES))
-def test_allowed_regex_still_matches(pattern):
-    """行级正则豁免同上：不命中就删，别让墙上留着不响的洞。"""
-    assert pattern in _still_matching(), (
-        f"白名单里这条正则已经一处都不命中了：{pattern!r} —— 请从 "
-        "ALLOWED_LINE_REGEXES 里删掉。"
+def test_allowed_regexes_still_match():
+    """行级正则豁免同上：不命中就删，别让墙上留着不响的洞。
+
+    这条不用 parametrize —— `ALLOWED_LINE_REGEXES` 现在是空的（目录挪完就一条都不需要
+    了），空的参数集会让 pytest 报一条 skip，而 skip 混在结果里跟"漏跑了"分不开。
+    """
+    dead = sorted(r.pattern for r in ALLOWED_LINE_REGEXES if r.pattern not in _still_matching())
+    assert not dead, (
+        f"白名单里这些正则已经一处都不命中了：{dead} —— 请从 ALLOWED_LINE_REGEXES 里删掉。"
     )

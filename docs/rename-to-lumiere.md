@@ -1,8 +1,9 @@
 # 改名：testBench → Lumiere（窗口作业）
 
-> **状态：八步 2026-08-26 全做完，尾巴也清了**（`User-Agent`、项目名、两把 `tb_` Key）。
-> 只剩两条，都不是我能做的：内网 GitLab 那个远端（还叫 `liyan001/testBench`，
-> 你说不用管）、本地工作目录还叫 `testBench`。见 §8。
+> **状态：全部改完（2026-08-26）。** 八步 + 三条尾巴（`User-Agent`、项目名、Key）
+> + 目录挪到 `/home/dreamer/lumiere`。只剩内网 GitLab 那个远端（`liyan001/testBench`，
+> 你说不用管）。见 §8。
+>
 > 盘点数据是 2026-08-26 实测的，隔久了先重跑 §2 的命令再动手。
 >
 > 第 1 步能提前做是因为它**对活体 MCP 客户端零影响**：后端起的时候没带 `--reload`，
@@ -123,7 +124,7 @@ grep -c 'name="tb_' backend/app/mcp/__init__.py                            # 59 
 | ~~5~~ | ~~库名 + `.env` + compose + conftest + config 默认值~~ **已做（08-26）** | 已验：三个库都是 `lumiere*`，`settings.database_url` 库名 = `lumiere`，登录 200、6 个项目 3 把 Key 都在（不是空库），两套测试 1411 + 498 全过 |
 | ~~6~~ | ~~部署命名（systemd / nginx / `/opt` / 离线包名）+ `pyproject.toml` 包名~~ **已做（08-26）** | 已验：venv 按新包名重装（`lumiere-backend 0.1.0`），`import app.main` 通，后端起在 8756、登录 200、6 个项目都在，`:18800/mcp/` 匿名 401（挂着且拦得住） |
 | ~~7~~ | ~~仓库改名 + 远端 `git remote set-url`~~ **GitHub 已做（08-26）** | 已验：`github` 指 `git@github.com:yanerfree/lumiere.git`，`git fetch github` 通、推送正常。`origin`（内网 GitLab `liyan001/testBench`）**没改** —— 那边没有 `liyan001/lumiere`，改了就断；本地目录也没挪，见 §8 |
-| ~~8~~ | ~~加封样测试~~ **已做（08-26）** | `backend/tests/test_name_seal.py`，17 条；故意往 `config.py` 塞一行旧名，两堵墙都红，删掉就绿 |
+| ~~8~~ | ~~加封样测试~~ **已做（08-26）** | `backend/tests/test_name_seal.py`，14 条；故意往 `config.py` 塞一行旧名，两堵墙都红，删掉就绿 |
 
 ## 4. 做完必须全量回归
 
@@ -135,16 +136,18 @@ cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库�
 
 **08-26 八步全做完再跑：** backend `1407 passed`；根目录 `498 passed`
 （比基线 482 多的 11 条是别的窗口补的模块闸门用例，不是改名带来的）；
-`check_name_drift.py --strict` 退出 0。封样 17 条 + MCP 端点 5 条，全绿。
+`check_name_drift.py --strict` 退出 0。封样 14 条 + MCP 端点 5 条，全绿。
 
-封样那 17 条里有两族是**盯白名单自己**的：除了「白名单指的文件还在不在」，还加了
+封样那 14 条里有两族是**盯白名单自己**的：除了「白名单指的文件还在不在」，还加了
 「这条豁免是不是已经一处都不命中了」。加它的直接原因就是第 5、6 步做完之后
 `testbench_test`、`testbench-backend`、`DEPLOY.md` 那几条豁免其实全空了，而两堵墙
 照样全绿，没人会发现。**洞留着不响，下次真有人写回旧名字就从这个洞放过去了。**
 
-**这一族上线当天就抓了四条**：仓库改名之后 `yanerfree/testBench` 空了；
-`User-Agent` 和项目名改完之后那三条也空了。封样条数 21 → 20 → 17，
-每次都是用例先红、删掉豁免才绿 —— 白名单是被这族用例一条条逼掉的，不是谁记得去清。
+**这一族上线当天就抓了七条**：仓库改名之后 `yanerfree/testBench` 空了；`User-Agent`
+和项目名改完之后那三条也空了；目录挪完之后「指真路径」那三条又空了。封样条数
+21 → 20 → 17 → 14，每次都是用例先红、删掉豁免才绿 —— **白名单是被这族用例一条条
+逼掉的，不是谁记得去清。** 现在 `ALLOWED_LINE_REGEXES` 整个是空的，白名单只剩
+被测系统 UAG 自己的数据（`tb-fwgl` 那几条）和四个讲改名这件事的文件。
 
 跑完还要**手工验三样**（自动化覆盖不到）：
 
@@ -209,94 +212,30 @@ cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库�
 | 留着的 | 为什么 |
 |---|---|
 | `origin` 远端（内网 GitLab `liyan001/testBench`）——**你说不用管** | 只读探过：那边没有 `liyan001/lumiere`，`git remote set-url` 改上去就是个连不通的远端，而 `origin` 现在 `fetch` 是通的。`github` 已经指新地址 |
-| 本地工作目录还叫 `/home/dreamer/testBench` | 见下 |
+| ~~本地工作目录~~ **08-26 已挪到 `/home/dreamer/lumiere`** | 见下 |
 
-### 目录要不要挪：代价比看起来大
+### 目录：08-26 挪到 `/home/dreamer/lumiere`
 
-一句 `mv` 之外还得连带四件事，缺一件就是「昨天还好的东西今天报一个查不到原因的错」：
+一句 `mv` 之外有五件连带的事，缺一件就是「昨天还好的东西今天报一个查不到原因的错」：
 
-1. **venv 得重建。** editable 安装的 `.pth` 里写的是绝对路径 `…/testBench/backend`，
-   `.venv/bin/*` 那些脚本的 shebang 也是。挪完 `import app` 直接失败。
-2. **`.claude/worktrees/` 里的 worktree 会断** —— 每个 worktree 的 `gitdir` 是绝对路径。
-   现在还有别的窗口在用（`wt/branch-diff`）。
+1. **5 个 worktree 先删掉。** `.claude/worktrees/` 下那五个（`ai-review-batch`/`bdiff`/
+   `mcp-prompt-fix`/`qa-catalog`/`review-followups`）全都干净、全都已并入 main
+   （`git rev-list --count main..HEAD` 全 0、`git stash list` 空），是没清的空壳。
+   它们的 `gitdir` 是绝对路径，留着就得挪完再 `git worktree repair`；删掉更省事。
+2. **venv 不用重建，但有 37 处绝对路径要改** —— editable 安装的 `.pth` / finder
+   加上 `.venv/bin/*` 的 shebang。`grep -rlI | xargs sed` 就行（`-I` 跳过二进制）。
+   重建 venv 要连外网，能不重建就别重建。
 3. **Claude 的会话历史和自动记忆是按工作目录压平命名的**（`-home-dreamer-testBench`），
-   仓库一挪就成孤儿，得一起 `mv`。
-4. `deploy/playwright-mcp.service` 的 `%h/testBench/...`、`CLAUDE.md` / `tests/README.md`
-   里的路径、封样那三条路径豁免，跟着一起改。
+   仓库一挪不跟着 `mv` 就成孤儿 —— 这个项目的记忆全丢。
+4. 从旧目录起的四个进程要重启：后端（8756/18800）、claude-proxy（38210）、
+   两个 vite。它们的 cwd 指着旧 inode，不重启就还在旧路径上跑。
+5. 仓库里的路径引用跟着改：`CLAUDE.md:44`、`tests/README.md:7,111`、
+   `deploy/playwright-mcp.service` 的 `%h/testBench/`、`scan_overflow.py:17`。
+   改完封样白名单里那三条「指真路径」的豁免全空了 —— **盯白名单那族用例当场红**，
+   删掉即可（封样 17 → 14 条，`ALLOWED_LINE_REGEXES` 整个空掉）。
 
-**目录名对平台使用者不可见**（页面、接口、包名、库名、仓库名都已经是 Lumiere），
-所以这一条是纯洁癖收益。真要挪，命令是：
-
-```bash
-pkill -f 'uvicorn app.main:app'
-mv /home/dreamer/testBench /home/dreamer/lumiere
-mv ~/.claude/projects/-home-dreamer-testBench ~/.claude/projects/-home-dreamer-lumiere
-cd /home/dreamer/lumiere/backend && rm -rf .venv && python3 -m venv .venv \
-  && .venv/bin/pip install -e . && .venv/bin/pip install -r requirements.txt
-```
-
-挪完重开会话，剩下的路径和封样白名单我来改。
-
-### Key 重发：08-26 已换完
-
-3 把在用的 Key 全是 `lum_` 前缀、全绑了项目，在用的 `tb_` 前缀 **0 把**：
-
-| Key | 项目 |
-|---|---|
-| `uag-new-key` | UAG |
-| `stoa-cc-key` | 网关管理系统 |
-| `测评-key` | 测试平台 |
-
-**`key_prefix` 那一列改不动** —— 前缀是从明文派生的，只改列等于让前缀变成假的、哈希
-还是旧的。所以这件事只有一条路：发新的 + 吊销旧的（页面上做的）。
-
-**还差一步：`export LUMIERE_MCP_KEY=<测评-key 的明文>`**（加到 `~/.bashrc`）。
-`.mcp.json` 里写的是这个变量，现在它没值 —— 本机 CC 连 MCP 会 401，而 401 长得像
-「Key 不对」，其实是变量空的（`MCPAuthMiddleware` 是 fail-closed，任何异常都回 401）。
-
-### 目录要不要挪：代价比看起来大
-
-一句 `mv` 之外还得连带四件事，缺一件就是「昨天还好的东西今天报一个查不到原因的错」：
-
-1. **venv 得重建。** editable 安装的 `.pth` 里写的是绝对路径 `…/testBench/backend`，
-   `.venv/bin/*` 那些脚本的 shebang 也是。挪完 `import app` 直接失败。
-2. **`.claude/worktrees/` 里的 worktree 会断** —— 每个 worktree 的 `gitdir` 是绝对路径。
-   现在还有别的窗口在用（`wt/branch-diff`）。
-3. **Claude 的会话历史和自动记忆是按工作目录压平命名的**（`-home-dreamer-testBench`），
-   仓库一挪就成孤儿，得一起 `mv`。
-4. `deploy/playwright-mcp.service` 的 `%h/testBench/...`、`CLAUDE.md` / `tests/README.md`
-   里的路径、封样那三条路径豁免，跟着一起改。
-
-**目录名对平台使用者不可见**（页面、接口、包名、库名、仓库名都已经是 Lumiere），
-所以这一条是纯洁癖收益。真要挪，命令是：
-
-```bash
-pkill -f 'uvicorn app.main:app'
-mv /home/dreamer/testBench /home/dreamer/lumiere
-mv ~/.claude/projects/-home-dreamer-testBench ~/.claude/projects/-home-dreamer-lumiere
-cd /home/dreamer/lumiere/backend && rm -rf .venv && python3 -m venv .venv \
-  && .venv/bin/pip install -e . && .venv/bin/pip install -r requirements.txt
-```
-
-挪完重开会话，剩下的路径和封样白名单我来改。
-
-### Key 重发：得你在页面上做
-
-2 把在用的 Key 还是 `tb_` 前缀（`ai-admin项目使用` → 网关管理系统、`uag-cc使用` → UAG），
-外加 `.mcp.json` 里的 `${LUMIERE_MCP_KEY}` 现在**没有值**（明文已经从文件里拿掉、那把
-`活体全流程-0821` 也注销了）。
-
-**`key_prefix` 那一列改不动** —— 前缀是从明文派生的，只改列等于让前缀变成假的，
-哈希还是旧的。所以只有一条路：**发新的 + 吊销旧的**。
-
-我写好了脚本走真实接口做这三件事，但**发 Key / 吊销 Key 被 auto 模式的分类器拦下了**
-（这类动作只能你批），所以没执行。页面上做同样的事：
-
-1. 「MCP 工具中心」→ 新建 Key，**必须绑项目**（硬规则）：`网关管理系统`、`UAG`
-   各一把，再来一把绑 `测试平台` 给本机活体用（之前那把 `活体全流程-0821` 就绑它）。
-2. 明文只显示一次，存好；把活体那把写成 `export LUMIERE_MCP_KEY=...`
-   （加到 `~/.bashrc`，或放一个不进版本库的文件 `source` 它）。
-3. 新 Key 发下去、对方换上之后，再吊销那两把 `tb_` 的 —— 顺序反了中间会有一段谁都连不上。
+**这一步的收益只是洁癖**：页面、接口、包名、库名、仓库名早就都是 Lumiere，
+目录名只有开发自己看得见。真正的理由是别让「路径里还写着旧名」变成下一个抄袭源。
 
 ### 第 5 步的库名是怎么改的（08-26 已执行，留作记录）
 

@@ -14,7 +14,7 @@ BASE = "http://localhost:5173"
 PROJ = "35804052-f08e-4775-be0a-66ba0775618e"
 BR = "738a5170-4138-4b5b-abd8-4dc80532c483"
 CASE = "6e16ab76-d6b8-4d73-a662-389da1563af8"
-OUT = "/tmp/claude-1000/-home-dreamer-testBench/702e0056-ce16-4f34-b04c-0ae355a0cba3/scratchpad"
+OUT = "/tmp/claude-1000/-home-dreamer-lumiere/scratchpad"
 
 ROUTES = [
     ("项目列表", "/projects"),

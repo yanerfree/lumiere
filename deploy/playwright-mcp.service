@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 # 长驻 Playwright MCP，供 UI 生成 CLI 引擎经 SSE(localhost:38931) 原生驱动浏览器。
 # 注意：服务 host 校验只认 localhost；后端 .env 用 PLAYWRIGHT_MCP_URL=http://localhost:38931/sse。
-ExecStart=/usr/bin/env npx --yes @playwright/mcp@latest --port 38931 --host 127.0.0.1 --headless --browser chromium --no-sandbox --isolated --caps devtools --config %h/testBench/backend/playwright-mcp-config.json
+ExecStart=/usr/bin/env npx --yes @playwright/mcp@latest --port 38931 --host 127.0.0.1 --headless --browser chromium --no-sandbox --isolated --caps devtools --config %h/lumiere/backend/playwright-mcp-config.json
 Restart=always
 RestartSec=3
 Environment=NODE_NO_WARNINGS=1

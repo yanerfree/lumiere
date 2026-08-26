@@ -4,7 +4,7 @@
 
 ```bash
 # 在项目根目录执行
-cd testBench
+cd lumiere
 pip install -e "backend/.[dev]"
 ```
 
@@ -108,7 +108,7 @@ headers, _ = make_auth_headers(user)
 ## 目录结构
 
 ```
-testBench/
+lumiere/
 ├── tests/                          # 项目根目录下（不在 backend/ 内）
 │   ├── conftest.py                 # 全局 fixtures（db_session, client）+ 双模式切换
 │   ├── factories.py                # 数据工厂（make_user, make_project）

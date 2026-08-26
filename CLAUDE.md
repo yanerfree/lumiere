@@ -41,7 +41,7 @@
 ```bash
 cd backend && .venv/bin/python -m pytest tests/ -q     # 单测/结构封样，~12s，1350+ 条
 # API/E2E，几分钟；DATABASE_URL 换成你自己那个库，别用默认的 lumiere_test
-cd /home/dreamer/testBench && DATABASE_URL='postgresql+asyncpg://postgres:postgres@localhost:5432/lumiere_test_<你的名字>' \
+cd /home/dreamer/lumiere && DATABASE_URL='postgresql+asyncpg://postgres:postgres@localhost:5432/lumiere_test_<你的名字>' \
   backend/.venv/bin/python -m pytest tests/ -q
 ```
 
