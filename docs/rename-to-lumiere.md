@@ -209,7 +209,33 @@ cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库�
 | 留着的 | 为什么 |
 |---|---|
 | `origin` 远端（内网 GitLab `liyan001/testBench`）——**你说不用管** | 只读探过：那边没有 `liyan001/lumiere`，`git remote set-url` 改上去就是个连不通的远端，而 `origin` 现在 `fetch` 是通的。`github` 已经指新地址 |
-| 本地工作目录还叫 `/home/dreamer/testBench` | 挪它要重开会话、会撞别的窗口，而且 Claude 的会话目录和自动记忆是按工作目录压平命名的（`-home-dreamer-testBench`），仓库一挪那些就成了孤儿。封样里那三条豁免（`/home/dreamer/testBench`、`%h/testBench`、`cd testBench`）指的是这个**真路径**，不是漏改的品牌名 |
+| 本地工作目录还叫 `/home/dreamer/testBench` | 见下 |
+
+### 目录要不要挪：代价比看起来大
+
+一句 `mv` 之外还得连带四件事，缺一件就是「昨天还好的东西今天报一个查不到原因的错」：
+
+1. **venv 得重建。** editable 安装的 `.pth` 里写的是绝对路径 `…/testBench/backend`，
+   `.venv/bin/*` 那些脚本的 shebang 也是。挪完 `import app` 直接失败。
+2. **`.claude/worktrees/` 里的 worktree 会断** —— 每个 worktree 的 `gitdir` 是绝对路径。
+   现在还有别的窗口在用（`wt/branch-diff`）。
+3. **Claude 的会话历史和自动记忆是按工作目录压平命名的**（`-home-dreamer-testBench`），
+   仓库一挪就成孤儿，得一起 `mv`。
+4. `deploy/playwright-mcp.service` 的 `%h/testBench/...`、`CLAUDE.md` / `tests/README.md`
+   里的路径、封样那三条路径豁免，跟着一起改。
+
+**目录名对平台使用者不可见**（页面、接口、包名、库名、仓库名都已经是 Lumiere），
+所以这一条是纯洁癖收益。真要挪，命令是：
+
+```bash
+pkill -f 'uvicorn app.main:app'
+mv /home/dreamer/testBench /home/dreamer/lumiere
+mv ~/.claude/projects/-home-dreamer-testBench ~/.claude/projects/-home-dreamer-lumiere
+cd /home/dreamer/lumiere/backend && rm -rf .venv && python3 -m venv .venv \
+  && .venv/bin/pip install -e . && .venv/bin/pip install -r requirements.txt
+```
+
+挪完重开会话，剩下的路径和封样白名单我来改。
 
 ### Key 重发：得你在页面上做
 
