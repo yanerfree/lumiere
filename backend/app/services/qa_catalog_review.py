@@ -106,7 +106,11 @@ _AMBIENT = {
 # 环境里确实没有它俩，脚本跑到 `[ -n "${UAG_APIKEY:-}" ] || skip_case ...` 就
 # 整条静默跳过：报告上是绿的，实际一条数据面用例都没执行。
 # 只认**空兜底**。写成 `${X:-http://localhost:3000}` 的自带兜底值，没配也照样跑，不算缺。
-_PASSTHRU_RE = re.compile(r"""^\s*["']?\$\{(?P<name>\w+):?[-=]["']*\}["']?\s*$""")
+#
+# 尾注释必须放过 —— config/env.sh 里最该报的那一条恰好带着注释：
+#     export PASSWORD="${PASSWORD:-}"          # 刻意不给默认值,强制外部注入
+# 匹配失败不是"不知道"，是直接倒向另一边被当成"定义过了"，于是这个缺口一声不吭。
+_PASSTHRU_RE = re.compile(r"""^\s*["']?\$\{(?P<name>\w+):?[-=]["']*\}["']?\s*(?:\#.*)?$""")
 
 
 def _is_passthrough(name: str, rhs: str) -> bool:
