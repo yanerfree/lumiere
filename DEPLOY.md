@@ -70,8 +70,8 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 ### 1. 获取代码
 
 ```bash
-git clone https://github.com/yanerfree/testBench.git
-cd testBench
+git clone https://github.com/yanerfree/lumiere.git
+cd lumiere
 ```
 
 ### 2. 修改配置
@@ -333,5 +333,5 @@ sudo systemctl restart lumiere
 
 ## 技术支持
 
-- 仓库地址：https://github.com/yanerfree/testBench
-- 问题反馈：https://github.com/yanerfree/testBench/issues
+- 仓库地址：https://github.com/yanerfree/lumiere
+- 问题反馈：https://github.com/yanerfree/lumiere/issues

@@ -40,9 +40,10 @@ SKIP_FILES = {
 MAX_BYTES = 512 * 1024  # 再大的基本是产物/数据，不是人写的源码
 
 ALLOWED_SUBSTRINGS = {
-    "/home/dreamer/testBench": "工作目录真名，等仓库改名（第 7 步）一起改",
-    "yanerfree/testBench": "GitHub 仓库真名，等仓库改名（第 7 步）一起改",
-    "%h/testBench": "systemd 单元里的仓库路径（%h=HOME），等仓库改名（第 7 步）一起改",
+    # GitHub 仓库 08-26 已改名 lumiere，但本地工作目录还叫 testBench（挪它要重开会话、
+    # 还会撞上别的窗口），所以下面这几条指的都是**本地真路径**，不是品牌名。
+    "/home/dreamer/testBench": "本地工作目录真名，目录没挪",
+    "%h/testBench": "systemd 单元里的仓库路径（%h=HOME），指本地目录",
     "tb-self-shared-project": "自测链那个长期项目的标识，标识故意不动",
     "tb-fwgl": "被测系统 UAG 的模块域码，不是我们的名字",
     "tb-zcgl": "被测系统 UAG 的模块域码，不是我们的名字",
@@ -55,7 +56,7 @@ ALLOWED_SUBSTRINGS = {
 # 全仓通用的行级放过：给的不是「某个文件的例外」，而是「这种写法本身指的不是品牌名」。
 ALLOWED_LINE_REGEXES = {
     re.compile(r"(?:^|cd )testBench/?\s*$"):
-        "仓库目录真名，等仓库改名（第 7 步）一起改",
+        "本地工作目录真名（`cd testBench` / 目录树里那一行），目录没挪",
 }
 
 ALLOWED_PATHS = {
