@@ -152,6 +152,26 @@ class TestEnvGaps:
         assert qr.env_gaps([{"path": "a.sh", "content": 'echo "$TOKEN"\n'}],
                            set(), [lib]) == []
 
+    def test_声明后面带注释也算缺(self):
+        """uag-qa 里最该报的那条恰好带尾注释：
+
+            export PASSWORD="${PASSWORD:-}"          # 刻意不给默认值,强制外部注入
+
+        匹配失败不是"不知道"，是倒向另一边被当成定义过了 —— 于是登录凭据这个
+        最硬的缺口一声不吭，而它一缺，整个域的脚本连 require_login 都过不去。
+        """
+        lib = 'export PASSWORD="${PASSWORD:-}"          # 刻意不给默认值,强制外部注入\n'
+
+        gaps = qr.env_gaps([{"path": "a.sh", "content": "echo hi\n"}],
+                           set(), [lib], ["config/env.sh"])
+
+        assert [g["name"] for g in gaps] == ["PASSWORD"]
+
+    def test_带注释的自带兜底值仍不算缺(self):
+        lib = 'export WEB_URL="${WEB_URL:-http://127.0.0.1:3000}"  # 前端控制台\n'
+
+        assert qr.env_gaps([], set(), [lib], ["config/env.sh"]) == []
+
 
 class TestSourcedFiles:
     def test_按文件名在仓库里找公共库(self):
