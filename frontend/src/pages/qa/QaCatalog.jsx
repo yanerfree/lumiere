@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Card, Table, Tag, Space, Button, Input, Select, Alert, message, Tooltip,
-  Progress, Modal, Form, Collapse, Popconfirm, Popover, Checkbox,
+  Progress, Modal, Form, Collapse, Popconfirm, Popover, Checkbox, Drawer, Empty, Spin,
 } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, BugOutlined, FileTextOutlined, SettingOutlined,
   InfoCircleOutlined, CheckCircleFilled, WarningFilled, CloseCircleOutlined,
+  RobotOutlined, LoadingOutlined,
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
@@ -92,6 +93,15 @@ function Hit({ onClick, active, children, style }) {
   )
 }
 
+// AI 评审的结论。措辞对着「这个域的脚本撑不撑得起这个域的清单」说，
+// 不用「通过/不通过」—— 这里没有门禁，说"不通过"会被当成拦了谁的活
+const VERDICT = {
+  ok: { text: '靠得住', color: 'success' },
+  risky: { text: '有水分', color: 'warning' },
+  bad: { text: '撑不住', color: 'error' },
+}
+const REVIEW_RUNNING = s => s === 'queued' || s === 'running'
+
 const LEGEND = (
   <div style={{ maxWidth: 460, fontSize: 12, lineHeight: 1.9 }}>
     <div><b>优先级 P</b> — 先做哪个。P0 最高，按业务影响 → 核心旅程 → 使用频率判定。</div>
@@ -127,6 +137,18 @@ export default function QaCatalog() {
   const [saving, setSaving] = useState(false)
   const [form] = Form.useForm()
 
+  // 看脚本内容：点开是 git show 出来的原文，只读
+  const [file, setFile] = useState(null)
+  const [fileLoading, setFileLoading] = useState(false)
+
+  // 域级 AI 评审
+  const [envs, setEnvs] = useState([])
+  const [reviews, setReviews] = useState({})      // 域码 → 最近一次评审
+  const [reviewFor, setReviewFor] = useState(null)   // 正在弹「选环境」框的那个域
+  const [envId, setEnvId] = useState()
+  const [starting, setStarting] = useState(false)
+  const [openReview, setOpenReview] = useState(null)  // 抽屉里展示的那一条
+
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
@@ -136,6 +158,57 @@ export default function QaCatalog() {
   }, [projectId])
 
   useEffect(() => { fetchData() }, [fetchData])
+
+  const fetchReviews = useCallback(async () => {
+    try {
+      const res = await api.get(`/projects/${projectId}/qa-catalog/reviews`)
+      const map = {}
+      for (const r of res.data?.reviews || []) map[r.domain] = r
+      setReviews(map)
+      return map
+    } catch { return {} }
+  }, [projectId])
+
+  useEffect(() => {
+    fetchReviews()
+    api.get(`/projects/${projectId}/environments`).then(r => setEnvs(r.data || [])).catch(() => {})
+  }, [projectId, fetchReviews])
+
+  // 有域在评就接着轮询。**不轮询的话页面永远停在「排队中」** —— 后台跑完了没人告诉它
+  const pending = useMemo(
+    () => Object.values(reviews).filter(r => r.status === 'queued' || r.status === 'running'),
+    [reviews])
+  useEffect(() => {
+    if (!pending.length) return undefined
+    const t = setInterval(async () => {
+      const map = await fetchReviews()
+      // 抽屉开着的那条也要跟着变，否则人盯着一个「评审中」看到天荒地老
+      setOpenReview(prev => (prev && map[prev.domain]?.id === prev.id ? map[prev.domain] : prev))
+    }, 3000)
+    return () => clearInterval(t)
+  }, [pending.length, fetchReviews])
+
+  const openFile = async (path) => {
+    setFile({ path, content: '' })
+    setFileLoading(true)
+    try {
+      const res = await api.get(
+        `/projects/${projectId}/qa-catalog/file?path=${encodeURIComponent(path)}`)
+      setFile(res.data)
+    } catch { setFile(null) } finally { setFileLoading(false) }
+  }
+
+  const startReview = async () => {
+    setStarting(true)
+    try {
+      const res = await api.post(`/projects/${projectId}/qa-catalog/reviews`,
+        { domain: reviewFor.code, envId })
+      setReviews(prev => ({ ...prev, [reviewFor.code]: res.data }))
+      setReviewFor(null)
+      setOpenReview(res.data)
+      message.success(`已开始评审 ${reviewFor.code}，几十秒后出结论`)
+    } catch { /* request.js 已展示错误 */ } finally { setStarting(false) }
+  }
 
   const handleRefresh = async () => {
     setRefreshing(true)
@@ -321,8 +394,14 @@ export default function QaCatalog() {
       render: (list) => !list?.length ? <span style={{ color: C.faint }}>—</span> : (
         <Space direction="vertical" size={2} style={{ width: '100%' }}>
           {list.map(s => (
-            <Tooltip key={s.path} title={s.path}>
-              <span style={{ fontSize: 12, fontFamily: 'ui-monospace, monospace', color: s.primary ? C.ink : C.gray }}>
+            <Tooltip key={s.path} title={`${s.path}（点开看内容）`}>
+              <span
+                onClick={() => openFile(s.path)}
+                style={{
+                  fontSize: 12, fontFamily: 'ui-monospace, monospace', cursor: 'pointer',
+                  color: s.primary ? C.teal : C.gray, textDecoration: 'underline dotted',
+                }}
+              >
                 <FileTextOutlined style={{ marginRight: 4, color: C.faint }} />
                 {s.path.split('/').pop()}
               </span>
@@ -527,24 +606,51 @@ export default function QaCatalog() {
           items={[{
             key: 'd',
             label: <span style={{ fontSize: 13 }}>
-              按域看缺口（{domainRows.length} 个域 · 缺得多的排前面 · 点一行筛这个域）
+              按域看缺口（{domainRows.length} 个域 · 缺得多的排前面 · 点一行筛这个域 ·
+              点「AI 评审」看这个域的脚本撑不撑得起清单）
             </span>,
             children: (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(400px, 1fr))', gap: '2px 24px' }}>
-                {domainRows.map(d => (
-                  <Hit key={d.code} active={domain === d.code} onClick={() => jump({ domain: domain === d.code ? undefined : d.code })}>
-                    <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 600, width: 40 }}>{d.code}</span>
-                    <span style={{ width: 110, color: C.gray, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
-                    <Progress
-                      percent={d.total ? Math.round((d.covered / d.total) * 100) : 0}
-                      size="small" showInfo={false} strokeColor={C.teal} style={{ flex: 1, margin: 0, minWidth: 60 }}
-                    />
-                    <span style={{ width: 52, textAlign: 'right', color: C.gray }}>{d.covered}/{d.total}</span>
-                    <span style={{ width: 96, textAlign: 'right', color: d.gap ? C.orange : C.faint }}>
-                      缺 {d.gap}{d.p0Gap ? <b style={{ color: C.red }}> · P0 {d.p0Gap}</b> : null}
-                    </span>
-                  </Hit>
-                ))}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(490px, 1fr))', gap: '2px 24px' }}>
+                {domainRows.map(d => {
+                  const rv = reviews[d.code]
+                  return (
+                    <Hit key={d.code} active={domain === d.code} onClick={() => jump({ domain: domain === d.code ? undefined : d.code })}>
+                      <span style={{ fontFamily: 'ui-monospace, monospace', fontWeight: 600, width: 40 }}>{d.code}</span>
+                      <span style={{ width: 110, color: C.gray, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
+                      <Progress
+                        percent={d.total ? Math.round((d.covered / d.total) * 100) : 0}
+                        size="small" showInfo={false} strokeColor={C.teal} style={{ flex: 1, margin: 0, minWidth: 60 }}
+                      />
+                      <span style={{ width: 52, textAlign: 'right', color: C.gray }}>{d.covered}/{d.total}</span>
+                      <span style={{ width: 96, textAlign: 'right', color: d.gap ? C.orange : C.faint }}>
+                        缺 {d.gap}{d.p0Gap ? <b style={{ color: C.red }}> · P0 {d.p0Gap}</b> : null}
+                      </span>
+                      <span style={{ width: 88, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                        {REVIEW_RUNNING(rv?.status) ? (
+                          <Tag icon={<LoadingOutlined />} color="processing" style={{ margin: 0, cursor: 'pointer' }}
+                               onClick={() => setOpenReview(rv)}>评审中</Tag>
+                        ) : rv?.status === 'done' ? (
+                          <Tooltip title={`${rv.environmentName || '—'} · ${rv.commitSha} · 点开看结论`}>
+                            <Tag color={VERDICT[rv.result?.verdict]?.color || 'default'}
+                                 style={{ margin: 0, cursor: 'pointer' }}
+                                 onClick={() => setOpenReview(rv)}>
+                              {VERDICT[rv.result?.verdict]?.text || '已评'}
+                            </Tag>
+                          </Tooltip>
+                        ) : rv?.status === 'failed' ? (
+                          <Tag color="error" style={{ margin: 0, cursor: 'pointer' }}
+                               onClick={() => setOpenReview(rv)}>没评上</Tag>
+                        ) : (
+                          <Button
+                            type="link" size="small" icon={<RobotOutlined />}
+                            style={{ padding: 0, height: 'auto', fontSize: 12 }}
+                            onClick={() => { setReviewFor(d); setEnvId(envs[0]?.id) }}
+                          >AI 评审</Button>
+                        )}
+                      </span>
+                    </Hit>
+                  )
+                })}
               </div>
             ),
           }]}
@@ -618,7 +724,14 @@ export default function QaCatalog() {
             rowKey="path" size="small" pagination={false}
             dataSource={data.orphanScriptList}
             columns={[
-              { title: '脚本', dataIndex: 'path' },
+              {
+                title: '脚本', dataIndex: 'path',
+                render: p => (
+                  <a onClick={() => openFile(p)} style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+                    <FileTextOutlined style={{ marginRight: 4 }} />{p}
+                  </a>
+                ),
+              },
               { title: '未知 ID', dataIndex: 'ids', render: v => v.join(' ') },
             ]}
           />
@@ -695,6 +808,211 @@ export default function QaCatalog() {
           />
         </Form>
       </Modal>
+
+      {/* 脚本原文：git show 出来的那份，只读 */}
+      <Drawer
+        title={<span style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13 }}>{file?.path}</span>}
+        open={!!file} onClose={() => setFile(null)} width={860}
+        extra={file?.commitSha && <span style={{ fontSize: 12, color: C.gray }}>
+          {file.lines} 行 · {(file.bytes / 1024).toFixed(1)} KB · <code>{file.commitSha.slice(0, 10)}</code>
+        </span>}
+      >
+        {fileLoading ? <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div> : (
+          <>
+            {/* 点开脚本第一件想知道的事：它自己声明覆盖了哪几条、跟清单对不对得上 */}
+            {(file?.header?.ids?.length > 0 || file?.header?.tier || file?.header?.knownBugs?.length > 0) && (
+              <Space wrap size={4} style={{ marginBottom: 10 }}>
+                <span style={{ fontSize: 12, color: C.gray }}>脚本头声明：</span>
+                {(file.header.ids || []).map(id => <Tag key={id} color="blue" style={{ margin: 0 }}>{id}</Tag>)}
+                {file.header.tier && <Tag style={{ margin: 0 }}>{tierText(file.header.tier)}</Tag>}
+                {(file.header.knownBugs || []).map((b, i) => (
+                  <Tag key={i} icon={<BugOutlined />} color="error" style={{ margin: 0 }}>{b}</Tag>
+                ))}
+              </Space>
+            )}
+            {file?.truncated && (
+              <Alert type="warning" showIcon style={{ marginBottom: 10 }}
+                     message="文件太大，只显示了前面一段" />
+            )}
+            <pre style={{
+              margin: 0, padding: 12, background: '#0f1720', color: '#d8e0ea', borderRadius: 6,
+              fontSize: 12, lineHeight: 1.7, overflow: 'auto', maxHeight: 'calc(100vh - 220px)',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            }}>{file?.content}</pre>
+          </>
+        )}
+      </Drawer>
+
+      {/* 选环境 —— 环境是结论的一部分：脚本要的变量这个环境有没有，直接决定它跑不跑得起来 */}
+      <Modal
+        title={`AI 评审 · ${reviewFor?.code || ''} ${reviewFor?.name || ''}`}
+        open={!!reviewFor} onCancel={() => setReviewFor(null)}
+        okText="开始评审" confirmLoading={starting} onOk={startReview}
+        okButtonProps={{ disabled: !envs.length }} width={520}
+      >
+        <Alert
+          type="info" showIcon style={{ marginBottom: 16 }}
+          message="只读这个域的清单和脚本，不跑任何东西"
+          description="平台不会在这个环境上执行 QA 的脚本，也不会往 QA 仓写任何内容。结论只存在本平台。"
+        />
+        <div style={{ fontSize: 13, lineHeight: 2, marginBottom: 12 }}>
+          <div>这个域共 <b>{reviewFor?.total || 0}</b> 条场景（已覆盖 {reviewFor?.covered || 0} · 待补 {reviewFor?.gap || 0}）</div>
+          <div style={{ color: C.gray }}>
+            重点看「声明覆盖了、其实没验到」—— 这正是 QA 自己的 <code>check-coverage.sh</code> 查不了的那一层。
+          </div>
+        </div>
+        <div style={{ fontSize: 13, marginBottom: 6 }}>在哪个环境上评</div>
+        {envs.length ? (
+          <Select
+            value={envId} onChange={setEnvId} style={{ width: '100%' }}
+            options={envs.map(e => ({ value: e.id, label: e.name }))}
+          />
+        ) : (
+          <Alert type="warning" showIcon message="这个项目还没配环境"
+                 description="去「项目设置 → 环境」加一个再来，评审要拿环境的变量名跟脚本引用对账。" />
+        )}
+        <div style={{ fontSize: 12, color: C.gray, marginTop: 8 }}>
+          只把环境的<b>变量名</b>交给模型对账（脚本要 <code>ADMIN_TOKEN</code>、这个环境有没有），
+          <b>变量值一个字节都不会外传</b>。
+        </div>
+      </Modal>
+
+      {/* 评审结论 */}
+      <Drawer
+        title={<Space>
+          <span>AI 评审 · {openReview?.domain} {openReview?.domainName}</span>
+          {openReview?.status === 'done' && (
+            <Tag color={VERDICT[openReview.result?.verdict]?.color || 'default'} style={{ margin: 0 }}>
+              {VERDICT[openReview.result?.verdict]?.text || '已评'}
+            </Tag>
+          )}
+        </Space>}
+        open={!!openReview} onClose={() => setOpenReview(null)} width={780}
+        extra={openReview?.status === 'done' && (
+          <Button size="small" icon={<RobotOutlined />} onClick={() => {
+            const d = domainRows.find(x => x.code === openReview.domain)
+            setOpenReview(null); setReviewFor(d || { code: openReview.domain }); setEnvId(openReview.environmentId || envs[0]?.id)
+          }}>重评</Button>
+        )}
+      >
+        {!openReview ? null : REVIEW_RUNNING(openReview.status) ? (
+          <div style={{ textAlign: 'center', padding: '48px 0', color: C.gray }}>
+            <Spin /><div style={{ marginTop: 12 }}>正在读这个域的 {openReview.scriptCount} 份脚本…几十秒，可以关掉页面</div>
+          </div>
+        ) : openReview.status === 'failed' ? (
+          <Alert type="error" showIcon message="这次没评上" description={openReview.error} />
+        ) : (
+          <ReviewBody r={openReview} onOpenFile={openFile} />
+        )}
+        {openReview && (
+          <div style={{ marginTop: 20, paddingTop: 10, borderTop: '1px solid rgba(0,0,0,0.06)', fontSize: 12, color: C.gray, lineHeight: 1.9 }}>
+            环境 <b>{openReview.environmentName || '—'}</b> · QA 仓 {openReview.branch} <code>{openReview.commitSha}</code>
+            {' · '}{openReview.actor} 发起于 {openReview.createdAt && new Date(openReview.createdAt).toLocaleString('zh-CN')}
+            <div>结论只存在本平台，QA 仓没有任何变化。</div>
+          </div>
+        )}
+      </Drawer>
     </div>
   )
 }
+
+const SEVERITY = { blocker: C.red, major: C.orange, minor: C.gray }
+
+// 评审结论的正文。四块的顺序 = 测试员下一步该干什么的顺序：
+// 先看「声明了没验到」（覆盖率是虚的），再看环境跑不跑得起来，最后才是补什么、先补哪条。
+function ReviewBody({ r, onOpenFile }) {
+  const res = r.result || {}
+  const empty = !res.scriptGaps?.length && !res.catalogGaps?.length
+    && !res.nextUp?.length && !res.envMissing?.length
+  return (
+    <div style={{ fontSize: 13 }}>
+      {res.summary && (
+        <div style={{ marginBottom: 16, lineHeight: 1.9 }}><Rich text={res.summary} /></div>
+      )}
+
+      <Section title="声明覆盖了、其实没验到"
+               hint="脚本头写了 @scenario，但正文没验到那件事 —— QA 自己的门禁查不了这一层">
+        {res.scriptGaps?.length ? res.scriptGaps.map((g, i) => (
+          <div key={i} style={{ padding: '8px 0', borderTop: i ? '1px dashed rgba(0,0,0,0.06)' : 'none' }}>
+            <Space size={6} wrap style={{ marginBottom: 4 }}>
+              {g.id && <Tag color="blue" style={{ margin: 0 }}>{g.id}</Tag>}
+              {g.severity && <Tag color={SEVERITY[g.severity] ? undefined : 'default'}
+                                  style={{ margin: 0, color: SEVERITY[g.severity], borderColor: SEVERITY[g.severity] }}>
+                {g.severity}</Tag>}
+              {g.path && (
+                <a onClick={() => onOpenFile(g.path)} style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12 }}>
+                  {g.path}
+                </a>
+              )}
+            </Space>
+            <div style={{ lineHeight: 1.8 }}><Rich text={g.problem} /></div>
+            {g.fix && <div style={{ color: C.gray, lineHeight: 1.8 }}>建议：<Rich text={g.fix} /></div>}
+          </div>
+        )) : <Nothing text="逐条读下来没抓到「声明了没验到」的" />}
+      </Section>
+
+      <Section title="这个环境跑不起来的" hint={`脚本引用的、或 config 里声明「要从外面传」的，而 ${r.environmentName || '所选环境'} 里没有（代码算的，不是模型猜的）`}>
+        {res.envMissing?.length ? (
+          <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            {res.envMissing.map(v => (
+              <div key={v.name}>
+                <Tag color="warning" style={{ fontFamily: 'ui-monospace, monospace' }}>{v.name}</Tag>
+                <Tooltip title={(v.scripts || []).join('\n')}>
+                  <span style={{ fontSize: 12, color: C.gray }}>
+                    {(v.scripts || []).map(p => p.split('/').pop()).join('、')}
+                  </span>
+                </Tooltip>
+              </div>
+            ))}
+            <div style={{ fontSize: 12, color: C.faint }}>
+              公共库里真赋过值的、自带兜底值的、shell 自带的、夹具运行时拼出来的都已经排掉。
+              写成 <code>{'export X="${X:-}"'}</code> 的算缺 ——
+              那是仓库在明说这个值得从环境来，没配就整条静默跳过。
+            </div>
+          </Space>
+        ) : <Nothing text="脚本要的变量这个环境都有" />}
+      </Section>
+
+      <Section title="清单本身漏了什么" hint="这个域的场景之间明显缺的一环 —— 清单是别人维护的，这只是建议">
+        {res.catalogGaps?.length ? res.catalogGaps.map((g, i) => (
+          <div key={i} style={{ padding: '6px 0', lineHeight: 1.8 }}>
+            <Rich text={g.scenario || g.problem} />
+            {g.why && <div style={{ color: C.gray }}><Rich text={g.why} /></div>}
+          </div>
+        )) : <Nothing text="没看出明显缺的一环" />}
+      </Section>
+
+      <Section title="待补的先做哪条" hint="只在标「待补」的场景里挑">
+        {res.nextUp?.length ? res.nextUp.map((g, i) => (
+          <div key={i} style={{ padding: '6px 0', lineHeight: 1.8 }}>
+            <Space size={6}>
+              <Tag style={{ margin: 0 }}>{i + 1}</Tag>
+              {g.id && <Tag color="blue" style={{ margin: 0 }}>{g.id}</Tag>}
+            </Space>
+            <div><Rich text={g.why || g.problem} /></div>
+          </div>
+        )) : <Nothing text="这个域没有待补的场景" />}
+      </Section>
+
+      {empty && <Empty description="模型这一轮什么都没说 —— 重评一次试试" />}
+
+      <div style={{ fontSize: 12, color: C.gray, marginTop: 12 }}>
+        这次读了 {res.reviewedScripts?.length || 0} 份脚本
+        {res.reviewedScripts?.some(s => s.truncated) && '（有脚本太长被截断，截断的那几份不下结论）'}
+        ，覆盖 {res.scenarioCount || r.scenarioCount} 条场景。
+      </div>
+    </div>
+  )
+}
+
+function Section({ title, hint, children }) {
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontWeight: 600, color: C.ink }}>{title}</div>
+      <div style={{ fontSize: 12, color: C.gray, marginBottom: 6 }}>{hint}</div>
+      {children}
+    </div>
+  )
+}
+
+const Nothing = ({ text }) => <div style={{ fontSize: 12, color: C.faint }}>{text}</div>

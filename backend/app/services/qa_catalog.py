@@ -495,3 +495,55 @@ def cached_read(project_id: str, cfg: dict, refresh: bool) -> dict:
     data = sync_and_read(project_id, cfg, do_fetch=refresh)
     _CACHE[key] = (data["repo"]["commitSha"], data)
     return data
+
+
+# ---- 打开某个文件看内容（只读，git show）----
+
+# 脚本一般几 KB。设上限是防"点开一个 3MB 的夹带文件把浏览器卡死"，
+# 不是防越权 —— 真正管越权的是下面那份白名单。
+MAX_FILE_BYTES = 200_000
+
+
+def readable_paths(data: dict) -> set[str]:
+    """这一页允许点开的文件 = **本次解析真的引用到的那些**。
+
+    白名单从已经算好的数据里现取，不做 `..`/绝对路径之类的清洗：清洗是黑名单思路，
+    漏一个写法就等于把别人仓库里的任意文件（比如 CI 里那份密钥模板）变成可读接口。
+    页面上没出现过的路径，这里一律不给。
+    """
+    paths = {c["path"] for s in data.get("scenarios") or [] for c in (s.get("scripts") or [])}
+    paths.update(x["path"] for x in data.get("orphanScriptList") or [])
+    catalog = (data.get("repo") or {}).get("catalogPath")
+    if catalog:
+        paths.add(catalog)
+    return paths
+
+
+def read_file(project_id: str, cfg: dict, path: str) -> dict:
+    """读 QA 仓里某个文件的内容（`git show <ref>:<path>`）。阻塞调用，请在线程里跑。"""
+    data = cached_read(project_id, cfg, refresh=False)
+    catalog_path = (data.get("repo") or {}).get("catalogPath") or ""
+    if path not in readable_paths(data):
+        raise GitError(f"这个文件不在清单引用的范围里：{path}")
+
+    repo = _repo_dir(project_id)
+    ref, _ = _resolve_ref(repo, cfg.get("branch") or "")
+    text = _show(repo, ref, path)
+    if text is None:
+        raise GitError(f"QA 仓里读不到 {path}（清单引用了它，但这个 commit 上没有这个文件）")
+
+    raw = text.encode("utf-8")
+    truncated = len(raw) > MAX_FILE_BYTES
+    if truncated:
+        text = raw[:MAX_FILE_BYTES].decode("utf-8", "ignore")
+    return {
+        "path": path,
+        "content": text,
+        "lines": text.count("\n") + 1,
+        "bytes": len(raw),
+        "truncated": truncated,
+        "commitSha": data["repo"]["commitSha"],
+        # 抽屉标题上要显示"这个脚本自己声明覆盖了哪几条"——跟清单对不对得上，
+        # 点开的人第一眼就想知道
+        "header": {} if path == catalog_path else parse_case_header(text),
+    }

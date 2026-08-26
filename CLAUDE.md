@@ -72,7 +72,7 @@ cd /home/dreamer/testBench && DATABASE_URL='postgresql+asyncpg://postgres:postgr
 | **CC ↔ 平台闭环的边界规则、红线、Story 清单**（改这一块之前先读） | [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) |
 | **版本升级怎么复用上一版用例**：分支对账（端点反查）、三堆分法、状态流转、废弃审核 | [docs/version-upgrade-branch-diff.md](docs/version-upgrade-branch-diff.md) |
 | **数据归属与隔离**：MCP Key 为什么管不住数据、环境改项目级、哪些表该留全局（含一条「假隔离」陷阱） | [docs/data-scoping-and-isolation.md](docs/data-scoping-and-isolation.md) |
-| **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、页面为什么这么排（P/R 口径照抄对方定义） | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
+| **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、页面为什么这么排（P/R 口径照抄对方定义）、脚本正文白名单、**域级 AI 评审**（环境缺口那一列的四个坑） | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
 
 ## 长驻服务
 

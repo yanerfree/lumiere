@@ -19,6 +19,7 @@ from app.services.qa_catalog import (
     discover_case_files,
     parse_case_header,
     parse_catalog,
+    readable_paths,
 )
 
 CATALOG = """\
@@ -364,3 +365,29 @@ def test_resolve_ref_named_branch_must_exist(qa_repo: Path):
     with pytest.raises(GitError) as e:
         _resolve_ref(qa_repo, "nope")
     assert "nope" in e.value.message
+
+
+# ── 「点开看内容」那个接口的白名单 ────────────────────────────────
+
+def test_readable_paths_只放清单引用到的文件():
+    """白名单从算好的数据里现取。不做路径清洗——清洗是黑名单思路，漏一种写法
+    就把别人仓库里的任意文件（比如 CI 那份密钥模板）变成了可读接口。"""
+    data = {
+        "repo": {"catalogPath": "docs/catalog.md"},
+        "scenarios": [
+            {"scripts": [{"path": "api/smoke.sh"}, {"path": "ui/login.spec.ts"}]},
+            {"scripts": []},
+        ],
+        "orphanScriptList": [{"path": "api/stray.sh", "ids": ["ZZZ-01"]}],
+    }
+
+    paths = readable_paths(data)
+
+    assert paths == {"docs/catalog.md", "api/smoke.sh", "ui/login.spec.ts", "api/stray.sh"}
+    # 页面上没出现过的一律不给：仓库里真实存在的文件也不行
+    for sneaky in ("lib/common.sh", ".gitlab-ci.yml", "../../etc/passwd", "docs/../.env"):
+        assert sneaky not in paths
+
+
+def test_readable_paths_没配置时是空集():
+    assert readable_paths({}) == set()
