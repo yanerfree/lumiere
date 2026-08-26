@@ -20,6 +20,7 @@ tb-* → lum-*）。改名是一次性动作，但**新写的代码会照着旧�
 - `ALLOWED_LINE_PATTERNS`：某个文件里符合某特征的行放过。给的是带日期的
   历史陈述 —— 那些句子记的是当时的事实，改了是篡改历史。
 """
+import functools
 import re
 import subprocess
 from pathlib import Path
@@ -40,8 +41,8 @@ MAX_BYTES = 512 * 1024  # 再大的基本是产物/数据，不是人写的源�
 
 ALLOWED_SUBSTRINGS = {
     "/home/dreamer/testBench": "工作目录真名，等仓库改名（第 7 步）一起改",
-    "testbench_test": "两套测试库的真名，等库改名（第 5 步）一起改",
     "yanerfree/testBench": "GitHub 仓库真名，等仓库改名（第 7 步）一起改",
+    "%h/testBench": "systemd 单元里的仓库路径（%h=HOME），等仓库改名（第 7 步）一起改",
     "tb-self-shared-project": "自测链那个长期项目的标识，标识故意不动",
     "tb-fwgl": "被测系统 UAG 的模块域码，不是我们的名字",
     "tb-zcgl": "被测系统 UAG 的模块域码，不是我们的名字",
@@ -53,11 +54,6 @@ ALLOWED_SUBSTRINGS = {
 
 # 全仓通用的行级放过：给的不是「某个文件的例外」，而是「这种写法本身指的不是品牌名」。
 ALLOWED_LINE_REGEXES = {
-    # 数据库真名还是 testbench，改它要停后端（第 5 步）。连接串/psql -d 里的那一个词
-    # 是库名不是品牌名，所以按上下文放过，而不是把 config.py 整个文件豁免掉 ——
-    # 整个豁免的话，以后谁在 config.py 里写一句带旧品牌名的注释就拦不住了。
-    re.compile(r"""(?:/|-d["',\s]+|POSTGRES_DB:\s*|DATABASE\s+)testbench\b"""):
-        "连接串/psql 里的库名，等库改名（第 5 步）一起改",
     re.compile(r"(?:^|cd )testBench/?\s*$"):
         "仓库目录真名，等仓库改名（第 7 步）一起改",
 }
@@ -66,15 +62,13 @@ ALLOWED_PATHS = {
     "docs/rename-to-lumiere.md": "改名作业本身的记录，通篇都是新旧对照",
     "backend/alembic/versions/zzv0lumren_rename_tb_to_lum.py": "改名迁移，两边名字都得写",
     "backend/tests/test_name_seal.py": "就是这堵墙自己",
-    "DEPLOY.md": "部署命名，第 6 步一起改",
-    "docker-compose.yml": "服务/库名，第 5、6 步一起改",
-    "backend/pyproject.toml": "包名 testbench-backend，改它要重装 venv（第 6 步）",
+    # 判据本身就是「工具名里不许出现 tb_」，写不出旧前缀就没法钉这件事
+    "tests/integration/mcp/test_mcp_endpoint.py": "钉 tools/list 里没有漏改的 tb_，判据要写出旧前缀",
     # User-Agent 是发给被测方的报文头，改之前要等 UAG 那边确认没有依赖
     "frontend/src/components/ApiStepList.jsx": "User-Agent: testBench/1.0，等 UAG 回话",
     "frontend/src/pages/apis/ApiManagement.jsx": "User-Agent: testBench/1.0，等 UAG 回话",
 }
 ALLOWED_PATH_PREFIXES = {
-    "deploy/": "部署脚本/systemd 单元命名，第 6 步一起改",
     # BMAD 规划归档：带日期的历史文档，记的是当时叫这个名字。改了等于改档案。
     "_bmad-output/": "BMAD 规划/实现归档，历史文档",
 }
@@ -160,3 +154,47 @@ def test_whitelist_entries_still_exist(rel):
     没有这条，白名单会越滚越长，最后墙上全是洞而没人知道哪个洞还有用。
     """
     assert (REPO / rel).exists(), f"白名单指向的文件不在了：{rel}（请从白名单里删掉）"
+
+
+@functools.lru_cache(maxsize=1)
+def _still_matching() -> frozenset:
+    """扫一遍全仓，返回「确实还命中了东西」的字面量/正则集合。
+
+    只扫一次（缓存），下面两族参数化用例共用。
+    """
+    used = set()
+    for rel, text in _iter_text_files():
+        for line in text.splitlines():
+            if not (BRAND.search(line) or PREFIX.search(line)):
+                continue          # 只有旧名字那些行才需要放过，别的不算「用到白名单」
+            for s in ALLOWED_SUBSTRINGS:
+                if s in line:
+                    used.add(s)
+            for r in ALLOWED_LINE_REGEXES:
+                if r.search(line):
+                    used.add(r.pattern)
+    return frozenset(used)
+
+
+@pytest.mark.parametrize("literal", sorted(ALLOWED_SUBSTRINGS))
+def test_allowed_substring_still_matches(literal):
+    """字面量豁免也不许烂掉：全仓已经没有这种行了，这一条就该删。
+
+    上面那条只盯着「白名单指的文件还在不在」，盯不住这一类 —— 第 5、6 步做完之后
+    `testbench_test`、`testbench-backend` 这些豁免其实一处都不命中了，而两堵墙照样
+    全绿，没人会发现。洞留着不响，下次真有人写回旧名字就被这个洞放过去了。
+    """
+    assert literal in _still_matching(), (
+        f"白名单里这条字面量已经一处都不命中了：{literal!r}"
+        f"（理由写的是「{ALLOWED_SUBSTRINGS[literal]}」）—— 请从 "
+        "ALLOWED_SUBSTRINGS 里删掉。"
+    )
+
+
+@pytest.mark.parametrize("pattern", sorted(r.pattern for r in ALLOWED_LINE_REGEXES))
+def test_allowed_regex_still_matches(pattern):
+    """行级正则豁免同上：不命中就删，别让墙上留着不响的洞。"""
+    assert pattern in _still_matching(), (
+        f"白名单里这条正则已经一处都不命中了：{pattern!r} —— 请从 "
+        "ALLOWED_LINE_REGEXES 里删掉。"
+    )

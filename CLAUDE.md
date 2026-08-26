@@ -40,15 +40,15 @@
 
 ```bash
 cd backend && .venv/bin/python -m pytest tests/ -q     # 单测/结构封样，~12s，1350+ 条
-# API/E2E，几分钟；DATABASE_URL 换成你自己那个库，别用默认的 testbench_test
-cd /home/dreamer/testBench && DATABASE_URL='postgresql+asyncpg://postgres:postgres@localhost:5432/testbench_test_<你的名字>' \
+# API/E2E，几分钟；DATABASE_URL 换成你自己那个库，别用默认的 lumiere_test
+cd /home/dreamer/testBench && DATABASE_URL='postgresql+asyncpg://postgres:postgres@localhost:5432/lumiere_test_<你的名字>' \
   backend/.venv/bin/python -m pytest tests/ -q
 ```
 
 **根目录那套必须用独占的 `DATABASE_URL`。** 它的 `db_session` 收尾会 `drop_all`，
-两个人（或两个 Claude 会话）同时打 `testbench_test` 就会互相把表删掉 —— 报出来是几十上百条
+两个人（或两个 Claude 会话）同时打 `lumiere_test` 就会互相把表删掉 —— 报出来是几十上百条
 "relation does not exist" 的假 red，而代码一行没错。库不存在先 `createdb`：
-`psql -h localhost -U postgres -c 'CREATE DATABASE testbench_test_<你的名字>'`。
+`psql -h localhost -U postgres -c 'CREATE DATABASE lumiere_test_<你的名字>'`。
 （2026-08-26 就这么撞出过 148 条假 red。）
 
 两个目录都叫 `tests/`，很容易只跑前一套就以为绿了 —— **根目录那套打的是真接口**，

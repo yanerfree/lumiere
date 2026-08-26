@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "=== TestBench 启动中 ==="
+echo "=== Lumiere 启动中 ==="
 
 # 等待 PostgreSQL 可用
 echo "等待数据库连接..."
@@ -10,7 +10,7 @@ for i in $(seq 1 30); do
 import asyncio, asyncpg, os
 async def check():
     url = os.environ.get('DATABASE_URL', '').replace('+asyncpg', '').replace('postgresql+asyncpg', 'postgresql')
-    if not url: url = 'postgresql://postgres:postgres@db:5432/testbench'
+    if not url: url = 'postgresql://postgres:postgres@db:5432/lumiere'
     conn = await asyncpg.connect(url.replace('postgresql+asyncpg://', 'postgresql://'))
     await conn.close()
 asyncio.run(check())

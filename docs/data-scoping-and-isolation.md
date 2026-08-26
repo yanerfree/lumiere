@@ -302,7 +302,7 @@ CLAUDE.md 里那句「直接占用 `/v1/chat/completions` 会被拒，你配成 
 - **两套测试都跑了**（这一点自己先漏过一次，见下）：
   - `backend/tests/` —— 单测 + 结构封样，1130 条通过。新增
     `test_mcp_data_scope.py` 24 条、`test_env_project_scoped.py` 27 条。
-  - 根目录 `tests/` —— 打真接口（`testbench_test` 库）。`tests/api/variables/` 29 条通过，
+  - 根目录 `tests/` —— 打真接口（`lumiere_test` 库）。`tests/api/variables/` 29 条通过，
     其中 12 条是这次新写的跨项目隔离用例。
 
   ⚠ **两个目录都叫 `tests/`。** 环境项目化时只跑了 `backend/tests/`，1130 全绿，

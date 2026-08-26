@@ -1,7 +1,8 @@
 # 改名：testBench → Lumiere（窗口作业）
 
-> **状态：第 1~4 步 + 第 8 步 2026-08-26 已做完。剩第 5（库名）、6（部署命名）、
-> 7（仓库改名）—— 这三步都要停服务或动 GitHub，见 §8。**
+> **状态：第 1~4 步、第 6 步、第 8 步 2026-08-26 已做完；第 5 步代码侧做完了，
+> 只剩「真去改库名」那一下（`ALTER DATABASE` + `.env`）。剩第 5 尾巴、第 7（仓库改名），
+> 见 §8。**
 > 盘点数据是 2026-08-26 实测的，隔久了先重跑 §2 的命令再动手。
 >
 > 第 1 步能提前做是因为它**对活体 MCP 客户端零影响**：后端起的时候没带 `--reload`，
@@ -119,10 +120,10 @@ grep -c 'name="tb_' backend/app/mcp/__init__.py                            # 59 
 | ~~2~~ | ~~MCP 工具名 `tb_*` → `lum_*`~~ **已做（08-26）** | 已验：`tools/list` 真连回 55 个 `lum_`、0 个 `tb_`；页面工具明细展开 59 个名字全 `lum_` |
 | ~~3~~ | ~~预置 skill 目录 `tb-*` → `lum-*`（9 个）~~ **已做（08-26）** | 已验：3 个档位都绑着模型，`cap-lum-quality-review` → `['lum-quality-review']`（档位是 3 个不是 9 个 —— 9 是预置 skill 数，只有质量评审有专用档位） |
 | ~~4~~ | ~~alembic 迁移 `zzv0lumren`~~ **已做（08-26）** | 已验：`check_name_drift.py --strict` 退出 0；upgrade→downgrade→比对备份逐字节一致→再 upgrade |
-| 5 | 库名 + `.env` + compose + conftest + config 默认值 | 后端起得来、页面有数据 |
-| 6 | 部署命名（systemd / nginx / `/opt` / 离线包名） | `systemctl start lumiere` + 页面能开 |
+| 5 | 库名 + `.env` + compose + conftest + config 默认值 | **代码侧已做（08-26）**：compose / `config.py` 默认值 / `.env.example` / 两个 selftest 脚本 / 两套 conftest。**剩 `ALTER DATABASE` + `.env` 那一下**，见 §8 |
+| ~~6~~ | ~~部署命名（systemd / nginx / `/opt` / 离线包名）+ `pyproject.toml` 包名~~ **已做（08-26）** | 已验：venv 按新包名重装（`lumiere-backend 0.1.0`），`import app.main` 通，后端起在 8756、登录 200、6 个项目都在，`:18800/mcp/` 匿名 401（挂着且拦得住） |
 | 7 | 仓库改名 + 两个远端 `git remote set-url` | `git fetch` 两个远端都通 |
-| ~~8~~ | ~~加封样测试~~ **已做（08-26）** | `backend/tests/test_name_seal.py`（两堵墙 + 白名单自检 10 项）；故意往 `config.py` 塞一行旧名，两堵墙都红，删掉就绿 |
+| ~~8~~ | ~~加封样测试~~ **已做（08-26）** | `backend/tests/test_name_seal.py`，21 条；故意往 `config.py` 塞一行旧名，两堵墙都红，删掉就绿 |
 
 ## 4. 做完必须全量回归
 
@@ -132,9 +133,15 @@ DATABASE_URL=…/testbench_test_2 backend/.venv/bin/python -m pytest tests/ -q  
 cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库里没有漂移
 ```
 
-**08-26 改完实跑：** backend `1390 passed`；根目录 `493 passed`（比基线 482 多的 11 条
-是别的窗口补的模块闸门用例，不是改名带来的）；`check_name_drift.py --strict` 退出 0。
-新增 12 条封样 + 5 条 MCP 端点用例，全绿。
+**08-26 第 5（代码侧）/6 步改完再跑：** backend `1411 passed`；根目录 `498 passed`
+（比基线 482 多的 11 条是别的窗口补的模块闸门用例，不是改名带来的）；
+`check_name_drift.py --strict` 退出 0。封样 21 条 + MCP 端点 5 条，全绿。
+
+封样那 21 条里有两族是**盯白名单自己**的：除了「白名单指的文件还在不在」，还加了
+「这条豁免是不是已经一处都不命中了」。加它的直接原因就是这次 —— 第 5、6 步做完之后
+`testbench_test`、`testbench-backend`、`DEPLOY.md` 那几条豁免其实全空了，而两堵墙
+照样全绿，没人会发现。**洞留着不响，下次真有人写回旧名字就从这个洞放过去了。**
+补完这一族，白名单从 10 条路径缩到 4 条。
 
 跑完还要**手工验三样**（自动化覆盖不到）：
 
@@ -183,9 +190,32 @@ cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库�
 
 | 步 | 为什么留着 |
 |---|---|
-| 5 库名 `testbench` → `lumiere` | `ALTER DATABASE` 要求无活连接：停后端 → 改 → 改 `.env`（**这个文件只有你能改**）→ 起。还要同步 `docker-compose.yml`、`config.py` 默认值、两套 `conftest` 的 `testbench_test*`。封样里这一类命中是按「连接串/`psql -d` 里的库名」放过的 |
-| 6 部署命名 + `pyproject.toml` 包名 | `deploy/*`、`DEPLOY.md` 约 25 处；`name = "testbench-backend"` 改了要重装 venv（editable 安装的包名变了） |
-| 7 仓库改名 | GitHub 网页上改（这一步只有你能做），然后 `git remote set-url` 两个远端。改完 `/home/dreamer/testBench` 这个路径和 `tests/README.md` 里的 `cd testBench` 才能跟着改 |
+| 5 的尾巴：`ALTER DATABASE` + `.env` | **代码侧全改完了，只剩真去改库名那一下。** 两件事必须一起做，中间那一刻后端连不上库：`ALTER DATABASE` 被 auto 模式拦下（DDL），`.env` 也是只有你能改的文件。命令见下面那段 |
+| 7 仓库改名 | GitHub 网页上改（这一步只有你能做），然后 `git remote set-url` 两个远端。改完 `/home/dreamer/testBench` 这个路径、`DEPLOY.md` 里的 clone 地址、`deploy/playwright-mcp.service` 里的 `%h/testBench/...` 才能跟着改 |
 | `User-Agent: testBench/1.0` | 等 UAG 回话，见 §7 |
 | 项目名 `tb-self-shared-project` | 项目列表卡片上看得见，但它是**数据行的标识**不是品牌名（描述已经改成「Lumiere 自测链共用的长期项目」）。要改是改一条业务数据，跟改名作业不是一回事 |
 | 存量 Key 前缀 `tb_xxxxx` | 3 把在用的 Key。改 `key_prefix` = 吊销已发出去的 Key。新发的已经是 `lum_` |
+
+### 第 5 步的尾巴：库名怎么改
+
+三个库要一起改，`ALTER DATABASE` 要求无活连接，所以先停后端：
+
+```bash
+pkill -f 'uvicorn app.main:app'                      # 停后端，8756/18800 一起释放
+PGPASSWORD=postgres psql -h localhost -U postgres -c 'ALTER DATABASE testbench      RENAME TO lumiere'
+PGPASSWORD=postgres psql -h localhost -U postgres -c 'ALTER DATABASE testbench_test  RENAME TO lumiere_test'
+PGPASSWORD=postgres psql -h localhost -U postgres -c 'ALTER DATABASE testbench_test_2 RENAME TO lumiere_test_2'
+sed -i 's|/testbench$|/lumiere|' backend/.env        # DATABASE_URL 末尾那个库名
+cd backend && nohup .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8756 &
+```
+
+**`testbench_test2`（少一根下划线）没动。** 它是别人的测试库，改了会让那边正在跑的
+根目录用例在半路上 `InvalidCatalogNameError`。留着不影响封样 —— 封样扫的是仓库文件，
+不是库名。
+
+**代码侧已经不认库名了。** 两套 conftest 原来是 `.replace("/testbench", "/testbench_test")`，
+这写法有个不出声的坑：库改名以后左边换了右边忘了同步（或者 `.env` 里的库名跟代码
+里的字面量不一样），replace 一处都不命中 —— 返回的**就是应用库**，而这个 fixture
+收尾要 `drop_all`。**一跑测试就把开发库的表全删了，而报出来是「测试通过」。**
+所以顺手改成了按库名推导（`_derive_test_db_url`，库名后缀 `_test`），缀不上去
+就没法退化成应用库；也因此这两个文件里再没有库名字面量，改库名不用回来动它们。

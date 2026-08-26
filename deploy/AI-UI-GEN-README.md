@@ -1,7 +1,7 @@
 # UI 脚本生成 —— 运行时依赖与托管
 
 ## 架构（2026-07 重构后）
-UI 脚本生成用 **CLI 引擎**（`ui_agent_engine=cli`，默认）：后端调真实 `claude` CLI，CLI 经 **Playwright MCP(SSE)** 原生驱动浏览器（native tool_use、一个会话、不冷启、走网关 Claude Code 配额不 429），testBench 侧 verify（npx playwright test），失败 `--resume` 同会话自愈 ≤3 轮。
+UI 脚本生成用 **CLI 引擎**（`ui_agent_engine=cli`，默认）：后端调真实 `claude` CLI，CLI 经 **Playwright MCP(SSE)** 原生驱动浏览器（native tool_use、一个会话、不冷启、走网关 Claude Code 配额不 429），Lumiere 侧 verify（npx playwright test），失败 `--resume` 同会话自愈 ≤3 轮。
 
 ## 运行时必需
 | 服务 | 端口 | 必需性 | 说明 |

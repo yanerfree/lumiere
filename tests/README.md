@@ -10,7 +10,7 @@ pip install -e "backend/.[dev]"
 
 确保 PostgreSQL 测试数据库可用：
 ```bash
-createdb testbench_test
+createdb lumiere_test
 ```
 
 ## 运行测试
@@ -96,7 +96,7 @@ headers, _ = make_auth_headers(user)
 | 变量名 | 说明 | 建议默认值 |
 |--------|------|-----------|
 | `BASE_URL` | 目标服务地址 | 空（本地 ASGI） |
-| `DATABASE_URL` | 数据库连接串 | 本地 testbench_test |
+| `DATABASE_URL` | 数据库连接串 | 本地 lumiere_test |
 | `ADMIN_USERNAME` | 管理员账号 | `admin` |
 | `ADMIN_PASSWORD` | 管理员密码 | `admin123` |
 | `TEST_PASSWORD` | 测试用户默认密码 | `Test@123456` |

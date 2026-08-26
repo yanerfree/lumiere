@@ -10,9 +10,9 @@ H="-H Authorization:Bearer\ $T -H Content-Type:application/json"
 
 PROJ=c302b27a-e44a-40c6-983a-5db8eda180df          # 测试平台
 BR=cf56f1cd-3eb7-436b-8e72-8561b143a5a5
-CASE=$(PGPASSWORD=postgres psql -h localhost -U postgres -d testbench -tAc \
+CASE=$(PGPASSWORD=postgres psql -h localhost -U postgres -d lumiere -tAc \
   "SELECT source_case_id FROM api_test_scenarios WHERE branch_id='$BR' LIMIT 1;")
-SC=$(PGPASSWORD=postgres psql -h localhost -U postgres -d testbench -tAc \
+SC=$(PGPASSWORD=postgres psql -h localhost -U postgres -d lumiere -tAc \
   "SELECT id FROM api_test_scenarios WHERE branch_id='$BR' LIMIT 1;")
 BASE=$B/projects/$PROJ/branches/$BR/api-tests
 PASS=0; FAIL=0

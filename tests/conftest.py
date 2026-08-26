@@ -22,6 +22,24 @@ ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin123")
 
 
+def _derive_test_db_url(app_url: str) -> str:
+    """从应用库连接串推测试库连接串：库名后面缀 `_test`。
+
+    **别把库名写死。** 这里原先是拿旧库名写死的 `.replace(旧库名, 旧库名+"_test")`，
+    这种写法有个不出声的坑：一旦库改名（左边换了、右边忘了同步），或者 `.env`
+    里的库名跟代码里这个字面量不一样，replace 一处都不命中 —— 返回的**就是应用
+    库本身**，而这个 fixture 收尾要 `drop_all`。跑一遍测试把开发库的表全删了，
+    而报出来是「测试通过」。改成按库名推导，缀不上去就没法退化成应用库。
+    """
+    base, sep, name = app_url.rpartition("/")
+    if not sep or not name:
+        raise ValueError(f"连接串里读不出库名：{app_url}")
+    db, qmark, query = name.partition("?")
+    if db.endswith("_test") or "_test_" in db:
+        return app_url          # 本来就指着测试库（如 xxx_test_2），照用
+    return f"{base}/{db}_test{qmark}{query}"
+
+
 # ── Fixtures ──
 
 @pytest.fixture
@@ -34,7 +52,7 @@ async def db_session():
     from app.config import settings
     from app.models.user import Base
 
-    db_url = os.environ.get("DATABASE_URL", "").strip() or settings.database_url.replace("/testbench", "/testbench_test")
+    db_url = os.environ.get("DATABASE_URL", "").strip() or _derive_test_db_url(settings.database_url)
     engine = create_async_engine(db_url, echo=False)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

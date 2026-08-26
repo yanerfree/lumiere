@@ -1,18 +1,18 @@
 #!/bin/bash
 # ===========================================
-# TestBench 离线安装包构建脚本
+# Lumiere 离线安装包构建脚本
 # 用法: bash deploy/build-package.sh
-# 输出: testbench-v1.0.0.tar.gz
+# 输出: lumiere-v1.0.0.tar.gz
 # ===========================================
 set -e
 
 VERSION="1.0.0"
-PACKAGE_NAME="testbench-v${VERSION}"
+PACKAGE_NAME="lumiere-v${VERSION}"
 BUILD_DIR="/tmp/${PACKAGE_NAME}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-echo "=== 构建 TestBench v${VERSION} 离线安装包 ==="
+echo "=== 构建 Lumiere v${VERSION} 离线安装包 ==="
 
 # 清理
 rm -rf "$BUILD_DIR"
@@ -50,10 +50,10 @@ cat > "$BUILD_DIR/install.sh" << 'INSTALL_EOF'
 set -e
 
 echo "========================================"
-echo "  TestBench 测试管理平台 — 安装向导"
+echo "  Lumiere 测试管理平台 — 安装向导"
 echo "========================================"
 
-INSTALL_DIR="${INSTALL_DIR:-/opt/testbench}"
+INSTALL_DIR="${INSTALL_DIR:-/opt/lumiere}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 echo ""
@@ -84,7 +84,7 @@ cp -r "$SCRIPT_DIR/docs" "$INSTALL_DIR/"
 cp "$SCRIPT_DIR/pyproject.toml" "$INSTALL_DIR/"
 
 # 前端文件
-FRONTEND_DIR="${FRONTEND_DIR:-/usr/share/nginx/testbench}"
+FRONTEND_DIR="${FRONTEND_DIR:-/usr/share/nginx/lumiere}"
 mkdir -p "$FRONTEND_DIR"
 cp -r "$SCRIPT_DIR/frontend-dist/"* "$FRONTEND_DIR/"
 
@@ -105,7 +105,7 @@ if [ ! -f "$INSTALL_DIR/.env" ]; then
 fi
 
 # nginx 配置
-NGINX_CONF="/etc/nginx/conf.d/testbench.conf"
+NGINX_CONF="/etc/nginx/conf.d/lumiere.conf"
 if command -v nginx &>/dev/null && [ ! -f "$NGINX_CONF" ]; then
     cat > "$NGINX_CONF" << NGINX_EOF
 server {
@@ -131,11 +131,11 @@ NGINX_EOF
 fi
 
 # 创建 systemd 服务
-SERVICE_FILE="/etc/systemd/system/testbench.service"
+SERVICE_FILE="/etc/systemd/system/lumiere.service"
 if [ ! -f "$SERVICE_FILE" ]; then
     cat > "$SERVICE_FILE" << SERVICE_EOF
 [Unit]
-Description=TestBench API Server
+Description=Lumiere API Server
 After=network.target postgresql.service
 
 [Service]
@@ -161,7 +161,7 @@ echo ""
 echo "启动步骤:"
 echo "  1. 编辑配置:  vim $INSTALL_DIR/.env"
 echo "  2. 初始化数据库: cd $INSTALL_DIR/backend && alembic upgrade head"
-echo "  3. 启动后端:  systemctl start testbench"
+echo "  3. 启动后端:  systemctl start lumiere"
 echo "  4. 启动前端:  systemctl reload nginx"
 echo "  5. 访问:      http://$(hostname -I | awk '{print $1}')"
 echo ""

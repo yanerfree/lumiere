@@ -74,7 +74,7 @@ def _parse_endpoint(url: str, default_port: int) -> tuple[str, int] | None:
     从各种连接串里抠出 (host, port)。
 
     吃得下这几类：
-      postgresql+asyncpg://user:pw@localhost:5432/testbench
+      postgresql+asyncpg://user:pw@localhost:5432/lumiere
       redis://localhost:6379/0
       http://192.168.51.10:8080/v1
       https://api.deepseek.com/v1   （不带端口 → 按 scheme 补 443，不是 80）

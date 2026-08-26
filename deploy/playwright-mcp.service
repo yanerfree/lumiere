@@ -1,5 +1,5 @@
 [Unit]
-Description=Playwright MCP (SSE) for testBench UI script generation
+Description=Playwright MCP (SSE) for Lumiere UI script generation
 After=network.target
 
 [Service]

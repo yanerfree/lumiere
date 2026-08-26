@@ -3,7 +3,7 @@ from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
     # 数据库
-    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/testbench"
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/lumiere"
     db_pool_size: int = 10
     db_max_overflow: int = 20
 

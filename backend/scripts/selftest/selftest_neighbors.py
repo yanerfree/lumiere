@@ -31,7 +31,7 @@ def rows_of(d):
 
 def psql(q):
     return subprocess.run(
-        ["psql", "-h", "localhost", "-U", "postgres", "-d", "testbench", "-tAc", q],
+        ["psql", "-h", "localhost", "-U", "postgres", "-d", "lumiere", "-tAc", q],
         capture_output=True, text=True, env={"PGPASSWORD": "postgres", "PATH": "/usr/bin:/bin"}
     ).stdout.strip()
 

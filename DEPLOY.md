@@ -1,4 +1,4 @@
-# TestBench 部署指南
+# Lumiere 部署指南
 
 ## 目录
 
@@ -60,7 +60,7 @@ python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 | `PORT` | 对外访问端口 | `80` |
 | `JWT_EXPIRE_HOURS` | JWT 过期时间（小时） | `8` |
 | `WORKERS` | 后端 Worker 进程数 | `2` |
-| `DATABASE_URL` | 数据库连接串 | `postgresql+asyncpg://postgres:postgres@db:5432/testbench` |
+| `DATABASE_URL` | 数据库连接串 | `postgresql+asyncpg://postgres:postgres@db:5432/lumiere` |
 | `REDIS_URL` | Redis 连接串 | `redis://redis:6379/0` |
 
 ---
@@ -140,12 +140,12 @@ docker compose logs -f db     # 数据库日志
 bash deploy/build-package.sh
 ```
 
-生成 `testbench-v1.0.0.tar.gz`。
+生成 `lumiere-v1.0.0.tar.gz`。
 
 ### 2. 上传到目标服务器
 
 ```bash
-scp testbench-v1.0.0.tar.gz user@server:/tmp/
+scp lumiere-v1.0.0.tar.gz user@server:/tmp/
 ```
 
 ### 3. 安装 PostgreSQL（如未安装）
@@ -168,7 +168,7 @@ sudo systemctl start postgresql redis nginx
 
 ```bash
 sudo -u postgres psql << EOF
-CREATE DATABASE testbench;
+CREATE DATABASE lumiere;
 ALTER USER postgres PASSWORD '你的数据库密码';
 EOF
 ```
@@ -177,8 +177,8 @@ EOF
 
 ```bash
 cd /tmp
-tar xzf testbench-v1.0.0.tar.gz
-cd testbench-v1.0.0
+tar xzf lumiere-v1.0.0.tar.gz
+cd lumiere-v1.0.0
 ```
 
 修改配置：
@@ -191,7 +191,7 @@ vim .env
 
 ```ini
 # 【必须修改】数据库连接（修改密码部分）
-DATABASE_URL=postgresql+asyncpg://postgres:你的数据库密码@localhost:5432/testbench
+DATABASE_URL=postgresql+asyncpg://postgres:你的数据库密码@localhost:5432/lumiere
 
 # 【必须修改】Redis
 REDIS_URL=redis://localhost:6379/0
@@ -211,7 +211,7 @@ sudo bash install.sh
 ### 6. 初始化数据库
 
 ```bash
-cd /opt/testbench/backend
+cd /opt/lumiere/backend
 alembic upgrade head
 ```
 
@@ -219,8 +219,8 @@ alembic upgrade head
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable testbench    # 开机自启
-sudo systemctl start testbench     # 启动后端
+sudo systemctl enable lumiere    # 开机自启
+sudo systemctl start lumiere     # 启动后端
 sudo systemctl reload nginx        # 启动前端
 ```
 
@@ -284,26 +284,26 @@ docker compose down
 docker compose logs -f app
 
 # 备份数据库
-docker compose exec db pg_dump -U postgres testbench > backup.sql
+docker compose exec db pg_dump -U postgres lumiere > backup.sql
 
 # 恢复数据库
-cat backup.sql | docker compose exec -T db psql -U postgres testbench
+cat backup.sql | docker compose exec -T db psql -U postgres lumiere
 ```
 
 ### 离线部署
 
 ```bash
 # 查看状态
-systemctl status testbench
+systemctl status lumiere
 
 # 重启
-systemctl restart testbench
+systemctl restart lumiere
 
 # 查看日志
-journalctl -u testbench -f
+journalctl -u lumiere -f
 
 # 备份数据库
-pg_dump -U postgres testbench > backup.sql
+pg_dump -U postgres lumiere > backup.sql
 ```
 
 ---
@@ -325,8 +325,8 @@ docker compose up -d
 3. 解压后执行：
 ```bash
 sudo bash install.sh
-cd /opt/testbench/backend && alembic upgrade head
-sudo systemctl restart testbench
+cd /opt/lumiere/backend && alembic upgrade head
+sudo systemctl restart lumiere
 ```
 
 ---
