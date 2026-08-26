@@ -1,4 +1,4 @@
-"""testBench MCP Server — 暴露平台数据能力，供 Web 引擎和 Claude Code 使用"""
+"""Lumiere MCP Server — 暴露平台数据能力，供 Web 引擎和 Claude Code 使用"""
 from __future__ import annotations
 
 from fastmcp import FastMCP
@@ -7,8 +7,8 @@ from app.mcp.deps import get_mcp_session
 from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff
 
 mcp = FastMCP(
-    name="testBench",
-    instructions="""testBench 测试管理平台 MCP Server。
+    name="Lumiere",
+    instructions="""Lumiere 测试管理平台 MCP Server。
 
 ═══════════════════════════════════════════════════════════
 【先看这里·选对工具，别搞混】
@@ -839,7 +839,7 @@ _section("Skill 共享")
 _register(
     skills.push_skill,
     name="tb_push_skill",
-    description="【把本项目的 skill 推上平台】读你本地 .claude/skills/<name>/ 的内容，推到 testBench 存起来，默认 visibility=public 即其它项目可取用。存的是**客户端侧执行**的 skill（跑在开发者机器的 Claude Code 里，用 Bash/Edit/Playwright），平台只存取、永不当 prompt 执行 —— 跟内置 tb-* 不是一类。同名会覆盖，覆盖前自动留档可回滚。参数: project_id(项目UUID), content(SKILL.md全文,必填), name(可选,不传则取 frontmatter 里的 name), files(可选,附属文件{相对路径:文本内容},如 references/api.md), description(可选,不传取 frontmatter), visibility(public全平台可取/project仅本项目,默认public), overwrite(默认true)",
+    description="【把本项目的 skill 推上平台】读你本地 .claude/skills/<name>/ 的内容，推到 Lumiere 存起来，默认 visibility=public 即其它项目可取用。存的是**客户端侧执行**的 skill（跑在开发者机器的 Claude Code 里，用 Bash/Edit/Playwright），平台只存取、永不当 prompt 执行 —— 跟内置 tb-* 不是一类。同名会覆盖，覆盖前自动留档可回滚。参数: project_id(项目UUID), content(SKILL.md全文,必填), name(可选,不传则取 frontmatter 里的 name), files(可选,附属文件{相对路径:文本内容},如 references/api.md), description(可选,不传取 frontmatter), visibility(public全平台可取/project仅本项目,默认public), overwrite(默认true)",
 )
 
 _register(

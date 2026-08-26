@@ -1,7 +1,14 @@
 # 改名：testBench → Lumiere（窗口作业）
 
-> **状态：未执行。** 等一个能停服务的窗口，一次做完。这份是那天照着走的清单。
+> **状态：第 1 步（显示层/文案/文档）2026-08-26 已做完并提交；第 2 步起未执行。**
 > 盘点数据是 2026-08-26 实测的，隔久了先重跑 §2 的命令再动手。
+>
+> 第 1 步能提前做是因为它**对活体 MCP 客户端零影响**：后端起的时候没带 `--reload`，
+> 改了文件不重启就不生效，所以当时有个 session 正连着 MCP 也不用等它。
+> 顺带做掉的三件不在原清单里的：`public/favicon.svg` 里的字母 **T → L**（顶栏/标签页的图标
+> 就是它，i18n 那条 `header.platformName` 反而没渲染在 logo 上）、中文顶栏原来只显示
+> 「测试管理平台」品牌名一次都不露 → 改成「Lumiere 测试管理平台」、
+> `ui-test-script-gen/testbench-rules.md` 改名 `lumiere-rules.md`（全仓零引用，确认过）。
 
 ## 1. 已经定了的四件事
 
@@ -57,6 +64,19 @@ grep -c 'name="tb_' backend/app/mcp/__init__.py                            # 59 
 | `projects.mcp_allowed_tools` | 2 行 / 107 个名字 | Key 范围里全是不存在的工具，`tools/list` 空，报错长得像"工具没注册" |
 | `ai_capability_bindings.module_keys` | 1 行（`tb-quality-review`） | 「AI 能力→模型」页多一个绑不上模型的空档位 |
 | `knowledge_entries`（title + content） | 4 行 | 这是写给未来 CC 看的指引、点名了工具名，不改就是把它指向不存在的工具 |
+| `projects.description`（`tb-self-shared-project` 那条） | 1 行 | 界面上直接看得见 —— 项目列表卡片写着「testBench 自测链共用的长期项目」。第 1 步做完页面上唯一残留的旧名就是它 |
+
+### A'. 第 1 步刻意留下的（各有原因）
+
+| 位置 | 为什么留 |
+|---|---|
+| `/home/dreamer/testBench` 路径（`CLAUDE.md:44`、`tests/README.md:7,111`、`scan_overflow.py:17`） | 目录真名。要么不改，要么跟仓库改名一起改（第 7 步） |
+| `User-Agent: testBench/1.0` 两处 | 等 UAG 回话，见 §7 |
+| `deploy/*`、`DEPLOY.md`（约 25 处）、`pyproject.toml` 的 `name = "testbench-backend"` | 第 6 步一起改。pyproject 改名要重装 venv（editable 安装），别单独动 |
+| 带日期的史述：`alembic/versions/zz9orph1_*.py:13`、`docs/cc-platform-loop-spec.md:1850` | 讲的是"2026-07 那时候"，改了是篡改。第 8 步封样要按文件白名单放过这两个 |
+| `.mcp.json:3` 的 server key `testbench`、`MCPTools.jsx:493` 里给用户复制的同一个 key | 跟第 2 步的工具改名一起走（同一次重连生效） |
+| `run_evidence_service.py:24` 的 `/tmp/testbench_evidence` | 跟第 2 步一起。改了以后 tmp 里的老截图就找不着了（本来也会被清），不是问题但要知道 |
+| `_bmad-output/`、`tests/report.txt`、`tea-cases.json` 之外的生成物 | 归档件/生成物，不是源 |
 
 ### C. 不动
 
@@ -94,7 +114,7 @@ grep -c 'name="tb_' backend/app/mcp/__init__.py                            # 59 
 
 | 步 | 做什么 | 怎么确认这步成了 |
 |---|---|---|
-| 1 | 显示层 + UI 文案 + 文档（逐条过，不无脑 sed） | 页面顶栏/登录页/浏览器标签 |
+| ~~1~~ | ~~显示层 + UI 文案 + 文档~~ **已做（41 文件，08-26）** | 已验：登录页/顶栏/标签页都是新名，1390 单测过，前端 build 过 |
 | 2 | MCP 工具名 `tb_*` → `lum_*`（`_register` 出口 + profiles + tools + docs） | `pytest backend/tests/test_mcp_profiles.py` —— 它钉了「档位里的名字都真注册过」，改漏一边就红 |
 | 3 | 预置 skill 目录 `tb-*` → `lum-*`（9 个） | 「AI 能力→模型」页 9 个档位都在、都能绑模型 |
 | 4 | alembic 迁移：§2 B 那三处（带 where，写 downgrade 反向映射） | `scripts/check_name_drift.py --strict` 退出 0 |
@@ -106,7 +126,7 @@ grep -c 'name="tb_' backend/app/mcp/__init__.py                            # 59 
 ## 4. 做完必须全量回归
 
 ```bash
-cd backend && .venv/bin/python -m pytest tests/ -q                       # 基线 1352
+cd backend && .venv/bin/python -m pytest tests/ -q                       # 基线 1390
 DATABASE_URL=…/testbench_test_2 backend/.venv/bin/python -m pytest tests/ -q   # 基线 482，独立库别跟人抢
 cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库里没有漂移
 ```

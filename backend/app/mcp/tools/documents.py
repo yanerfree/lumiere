@@ -14,7 +14,7 @@ def _build_playbook(doc_type: str, label: str, template: str) -> str:
     """组装外部 Claude Code 可直接执行的 playbook。"""
     return f"""# 在 Claude Code 中生成【{label}】
 
-你现在要为**当前项目对应的系统**生成一份【{label}】。规范由 testBench 平台提供，
+你现在要为**当前项目对应的系统**生成一份【{label}】。规范由 Lumiere 平台提供，
 但**由你（Claude Code）在本地实操**：真实打开系统、逐页截图、按模板把截图贴进文档。
 平台不代跑。
 

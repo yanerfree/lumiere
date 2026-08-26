@@ -101,7 +101,7 @@ def run_and_report():
 
     # 生成报告
     out = []
-    out.append(f"testBench 自动化测试报告")
+    out.append(f"Lumiere 自动化测试报告")
     out.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     out.append(f"总计: {total} 个 | 通过: {passed} | 失败: {failed}")
     level_summary = " | ".join(f"{k}: {v}" for k, v in sorted(level_counts.items()))

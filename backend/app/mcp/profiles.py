@@ -263,7 +263,7 @@ def render_prompt(key: str, *, mcp_url: str, project_name: str | None = None,
     if p is None or p["tools"] is None:
         return None  # 「全量」档没有"去干什么活"，渲染不出指令
 
-    lines = [f"连上 testBench：{mcp_url}", ""]
+    lines = [f"连上 Lumiere：{mcp_url}", ""]
     where = " / ".join(x for x in (project_name, branch_name) if x)
     if where:
         lines.append(f"项目 {where}")

@@ -149,7 +149,7 @@ export default function SkillManage() {
         message="Skill 是什么？"
         description={
           <div style={{ fontSize: 12, lineHeight: 2 }}>
-            <b>Skill</b> 是 testBench 平台的 AI 工作流定义（YAML + Markdown 文件），包含：<br/>
+            <b>Skill</b> 是 Lumiere 平台的 AI 工作流定义（YAML + Markdown 文件），包含：<br/>
             <b>步骤</b> — AI 按步骤执行（收集上下文 → 生成 → 入库），每步有明确的输入输出<br/>
             <b>工具</b> — Skill 执行时调用的 MCP 工具（读取接口定义、创建用例等）<br/>
             <b>质量红线</b> — 约束 AI 输出的质量规则（如 P0 不超过 15%、每条用例一个验证点）<br/>

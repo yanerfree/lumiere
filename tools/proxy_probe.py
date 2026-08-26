@@ -773,7 +773,7 @@ def parse_args(argv=None):
 """)
     p.add_argument("--host", default="0.0.0.0",
                    help="监听地址，默认 0.0.0.0（容器要能连过来，别改 127.0.0.1）")
-    # 端口跟 testBench 的 28xxx 约定对齐（代理观测占 28900），大号段不容易被占
+    # 端口跟 Lumiere 的 28xxx 约定对齐（代理观测占 28900），大号段不容易被占
     p.add_argument("--port", type=int, default=28900, help="代理端口，默认 28900")
     p.add_argument("--log-file", default=None, help="日志文件路径（同时仍输出到 stdout）")
     p.add_argument("--stats-port", type=int, default=28901,

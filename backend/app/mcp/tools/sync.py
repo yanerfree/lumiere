@@ -1,4 +1,4 @@
-"""MCP 回推同步工具 —— 把 Claude Code 活体验证过的成果显式写回 testBench。
+"""MCP 回推同步工具 —— 把 Claude Code 活体验证过的成果显式写回 Lumiere。
 
 范围（已与用户确认）：步骤用例 由 tb_create_case 负责；本模块负责另外三类回推——
   1. 用例编排的接口场景     tb_sync_orchestrated_scenario（核心新通道）

@@ -555,7 +555,7 @@ img {{ max-width:100%; border:1px solid #eee; border-radius:6px; margin:8px 0; }
 </style></head>
 <body>{html_body}
 <hr style="margin-top:40px;border:none;border-top:1px solid #eee">
-<p style="font-size:12px;color:#999">由 testBench 测试管理平台生成</p>
+<p style="font-size:12px;color:#999">由 Lumiere 测试管理平台生成</p>
 </body></html>"""
 
     from urllib.parse import quote

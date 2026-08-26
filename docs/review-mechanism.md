@@ -1,6 +1,6 @@
 # 审核机制：用例审核 + 模块审核（对外可借鉴版）
 
-> 这份是**给平台外的人看的**：不依赖 testBench 的表结构和页面，只讲判据、流程和为什么。
+> 这份是**给平台外的人看的**：不依赖 Lumiere 的表结构和页面，只讲判据、流程和为什么。
 > 内部实现细节看 [review-spec.md](review-spec.md)（流程/交互）、
 > `backend/app/services/review/RULES.md`（判据元规则）和 `services/review/` 的代码注释。
 

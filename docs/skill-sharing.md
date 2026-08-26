@@ -37,10 +37,10 @@
 
 ### 路线二：MCP（批量、或带附属文件时最省事）
 
-项目侧的 Claude Code 已经连了 testBench MCP，直接说人话：
+项目侧的 Claude Code 已经连了 Lumiere MCP，直接说人话：
 
 ```
-「把我 .claude/skills 下的 feature-verify 传到 testBench」
+「把我 .claude/skills 下的 feature-verify 传到 Lumiere」
 ```
 
 它会读本地 `SKILL.md`（连 `references/` 等附属文件一起）然后调：
@@ -77,7 +77,7 @@ curl -X POST "$BASE/api/projects/$PID/skills" \
 ### MCP
 
 ```
-「看看 testBench 上有哪些 skill 能用」   → tb_list_skills
+「看看 Lumiere 上有哪些 skill 能用」   → tb_list_skills
 「把 feature-verify 拉到本地」            → tb_pull_skill
 ```
 

@@ -126,7 +126,7 @@ async def seed_environments():
 
 async def main():
     print("=" * 50)
-    print("testBench 种子数据初始化")
+    print("Lumiere 种子数据初始化")
     print("=" * 50)
     await seed_admin()
     # **环境和全局变量不在这里铺了。** 2026-08-21 它们从全平台改成项目级

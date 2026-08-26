@@ -11,8 +11,8 @@ from fastmcp import FastMCP
 from app.api.mcp_mock import DEFAULT_SUCCESS, TOOL_DESCRIPTIONS, get_mock_response_always
 
 mock_mcp = FastMCP(
-    name="testBench-mock",
-    instructions="testBench MCP Mock Server。返回可配置的模拟数据，用于外部 MCP 客户端联调测试，不访问真实数据库。",
+    name="Lumiere-mock",
+    instructions="Lumiere MCP Mock Server。返回可配置的模拟数据，用于外部 MCP 客户端联调测试，不访问真实数据库。",
 )
 
 

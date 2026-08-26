@@ -76,14 +76,14 @@ const MESSAGES = {
 
     // 登录
     'login.title': '测试管理平台',
-    'login.subtitle': 'TestBench - 统一测试管理与执行',
+    'login.subtitle': 'Lumiere - 统一测试管理与执行',
     'login.username': '用户名',
     'login.password': '密码',
     'login.submit': '登 录',
     'login.success': '登录成功',
 
     // Header
-    'header.platformName': '测试管理平台',
+    'header.platformName': 'Lumiere 测试管理平台',
     'header.changePassword': '修改密码',
     'header.logout': '退出登录',
   },
@@ -154,13 +154,13 @@ const MESSAGES = {
     'projects.settings': 'Settings',
 
     'login.title': 'Test Management Platform',
-    'login.subtitle': 'TestBench - Unified Test Management',
+    'login.subtitle': 'Lumiere - Unified Test Management',
     'login.username': 'Username',
     'login.password': 'Password',
     'login.submit': 'Login',
     'login.success': 'Login successful',
 
-    'header.platformName': 'TestBench',
+    'header.platformName': 'Lumiere',
     'header.changePassword': 'Change Password',
     'header.logout': 'Logout',
   },

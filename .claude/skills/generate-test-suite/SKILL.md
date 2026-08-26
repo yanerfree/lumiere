@@ -11,7 +11,7 @@ allowed-tools: Read Write Bash Glob
 - **接口测试场景** — API 自动化脚本 + 步骤
 - **UI 测试场景** — E2E 自动化脚本 + 步骤
 
-输出格式直接兼容 testBench 平台导入。
+输出格式直接兼容 Lumiere 平台导入。
 
 ---
 

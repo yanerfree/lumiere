@@ -2,7 +2,7 @@
 
 替代 LangGraph+claude-proxy（每步冷启 CLI，复杂用例极慢）方案：
 - 一个 `claude --print` 会话内完成"探索浏览器→生成脚本"，原生 tool_use、不冷启、不 429（真 claude-cli 客户端走网关正常配额）。
-- testBench 侧负责 verify（npx playwright test）；失败则 `--resume` 同一会话喂错误自愈，≤3 轮。
+- Lumiere 侧负责 verify（npx playwright test）；失败则 `--resume` 同一会话喂错误自愈，≤3 轮。
 
 需要长驻 Playwright MCP（SSE，settings.playwright_mcp_url）与网关 token（settings.ai_auth_token）。
 """
@@ -225,7 +225,7 @@ async def _run_cli(prompt: str, mcp_cfg: str, model: str, resume_sid: str | None
         "claude", "--print", "--output-format", "stream-json", "--verbose",
         "--model", model,
         "--mcp-config", mcp_cfg,
-        "--strict-mcp-config",  # 只用上面的 playwright MCP，忽略项目/全局 .mcp.json（防止误加载 testbench 自身工具）
+        "--strict-mcp-config",  # 只用上面的 playwright MCP，忽略项目/全局 .mcp.json（防止误加载 Lumiere 自身工具）
         "--dangerously-skip-permissions",
         "--disallowedTools", "Bash,Read,Write,Edit,NotebookEdit,WebFetch,WebSearch",
         "--max-turns", "80",
@@ -362,7 +362,7 @@ async def stream_cli_agent(
                 yield SSEEvent("status", {"content": f"第 {round_no} 轮未产出脚本，重试..."})
                 continue
 
-            # 守卫：page.goto 硬编码绝对 URL = 测错应用（如撞到别的端口/testBench 自身）→ 判无效，宁可失败不存假通过
+            # 守卫：page.goto 硬编码绝对 URL = 测错应用（如撞到别的端口/Lumiere 自身）→ 判无效，宁可失败不存假通过
             if re.search(r"\.goto\(\s*['\"]https?://", candidate):
                 bad = re.search(r"\.goto\(\s*['\"](https?://[^'\"]+)", candidate)
                 last_error = (f"脚本硬编码了绝对 URL（{bad.group(1) if bad else '?'}），"

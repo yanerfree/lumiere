@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""对 testBench 后端那一份代理监听器跑：并发 / SSE 不缓冲 / chunked 请求体 / origin-form。"""
+"""对 Lumiere 后端那一份代理监听器跑：并发 / SSE 不缓冲 / chunked 请求体 / origin-form。"""
 import json, re, socket, subprocess, threading, time, urllib.request
 
 HOST_IP = "192.168.51.108"

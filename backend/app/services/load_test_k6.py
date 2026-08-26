@@ -1,6 +1,6 @@
 """场景 → k6 压测脚本生成器 + 部署指引。
 
-设计：数据驱动。生成的脚本是一段固定的 k6 模板（含与 testBench 平台执行语义一致的
+设计：数据驱动。生成的脚本是一段固定的 k6 模板（含与 Lumiere 平台执行语义一致的
 helper：变量替换 ${var}、简化 jsonpath 提取、断言→check），把场景的 STEPS / VARIABLES /
 executor 配置以 JSON 注入。这样脚本既是标准可读的 k6 脚本，又忠实还原平台里配置的行为。
 
@@ -13,15 +13,15 @@ import json
 
 # k6 脚本模板：__TOKEN__ 处注入 JSON。JS 大括号原样保留（不要用 f-string / .format）。
 _K6_TEMPLATE = r"""// ============================================================================
-// testBench 生成的 k6 压测脚本
+// Lumiere 生成的 k6 压测脚本
 // 场景: __SCENARIO_NAME__
 // 生成后可直接在装有 k6 的压测机上运行，见文件末尾「部署与运行」注释。
-// 行为与 testBench 平台内的执行语义一致（变量替换 / jsonpath 提取 / 断言）。
+// 行为与 Lumiere 平台内的执行语义一致（变量替换 / jsonpath 提取 / 断言）。
 // ============================================================================
 import http from 'k6/http';
 import { check } from 'k6';
 
-// ---- 场景数据（由 testBench 注入）----
+// ---- 场景数据（由 Lumiere 注入）----
 const STEPS = __STEPS__;
 const VARIABLES = __VARIABLES__;
 
@@ -41,7 +41,7 @@ export const options = {
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(90)', 'p(95)', 'p(99)'],
 };
 
-// ---- helpers：与 testBench 平台执行语义保持一致 ----
+// ---- helpers：与 Lumiere 平台执行语义保持一致 ----
 function resolveVars(tpl, env) {
   if (tpl == null) return tpl;
   let r = String(tpl);
@@ -206,7 +206,7 @@ def generate_deploy_guide(config: dict, scenario_name: str = "") -> str:
     vus = int(config.get("concurrent_users") or 1)
     return f"""# k6 压测部署指引 — {scenario_name or '场景'}
 
-> testBench 只负责**生成脚本**和**本地小并发试跑**；真正的压力请在**独立压测机**上用 k6 运行，
+> Lumiere 只负责**生成脚本**和**本地小并发试跑**；真正的压力请在**独立压测机**上用 k6 运行，
 > 避免压测机与被测系统争抢资源、也避免单机成为瓶颈。
 
 ## 1. 在压测机上安装 k6

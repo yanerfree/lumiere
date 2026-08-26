@@ -20,8 +20,8 @@ inputs:
 
 ## 两种使用模式
 
-- **平台内生成**：在 testBench「文档管理」页填系统地址/账号 → 平台跑 Playwright 截图 + AI 写文档（下方 Step 1~5 即平台端流程）。
-- **Claude Code 客户端模式**：外部项目连上 testBench MCP 后，调用 `tb_get_doc_spec(doc_type)` 取回「操作流程 + 格式模板 + 写作规则」，由 Claude Code 用自己的浏览器工具在**本地实操被测系统、截图、按模板贴图**，文档落盘到项目 `docs/`。平台不代跑，只发规范。两种模式共用下方同一套「格式模板」。
+- **平台内生成**：在 Lumiere「文档管理」页填系统地址/账号 → 平台跑 Playwright 截图 + AI 写文档（下方 Step 1~5 即平台端流程）。
+- **Claude Code 客户端模式**：外部项目连上 Lumiere MCP 后，调用 `tb_get_doc_spec(doc_type)` 取回「操作流程 + 格式模板 + 写作规则」，由 Claude Code 用自己的浏览器工具在**本地实操被测系统、截图、按模板贴图**，文档落盘到项目 `docs/`。平台不代跑，只发规范。两种模式共用下方同一套「格式模板」。
 
 ## Step 1 — 启动浏览器并登录
 

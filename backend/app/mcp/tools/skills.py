@@ -79,10 +79,10 @@ async def push_skill(
             "可在平台「Skill 管理」页回滚。"
         )
     if result["platformTools"]:
-        # 客户端 skill 声明了平台 MCP 工具 —— 合法但值得指出：取用方必须也连了 testBench MCP
+        # 客户端 skill 声明了平台 MCP 工具 —— 合法但值得指出：取用方必须也连了 Lumiere MCP
         result["note"] = (
             f"这个 skill 声明了平台 MCP 工具 {result['platformTools']}，"
-            "取用方项目也必须连上 testBench MCP 才能跑通。"
+            "取用方项目也必须连上 Lumiere MCP 才能跑通。"
         )
     return result
 

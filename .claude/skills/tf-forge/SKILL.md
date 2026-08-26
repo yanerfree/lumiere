@@ -1,11 +1,11 @@
 ---
 name: tf-forge
-description: 从 testBench 平台的 task JSON 中读取接口信息和业务规则，生成高质量测试用例并导入平台，生成 pytest+httpx 脚本到 tests/api/ 目录，更新 tea-cases.json。Use when the user says "生成测试" or "forge" or "tf-forge"
+description: 从 Lumiere 平台的 task JSON 中读取接口信息和业务规则，生成高质量测试用例并导入平台，生成 pytest+httpx 脚本到 tests/api/ 目录，更新 tea-cases.json。Use when the user says "生成测试" or "forge" or "tf-forge"
 ---
 
 # TestForge — AI 测试用例与脚本生成
 
-从 testBench 平台生成的 task JSON 中读取接口信息和业务规则，系统化应用 6 种测试设计技法生成高质量测试用例，自动导入 testBench 平台，生成可执行的 pytest+httpx 脚本。
+从 Lumiere 平台生成的 task JSON 中读取接口信息和业务规则，系统化应用 6 种测试设计技法生成高质量测试用例，自动导入 Lumiere 平台，生成可执行的 pytest+httpx 脚本。
 
 ## 核心原则
 
@@ -13,7 +13,7 @@ description: 从 testBench 平台的 task JSON 中读取接口信息和业务规
 - **数据随机化** —— 可重复输入用 `uuid.uuid4().hex[:8]` 生成随机后缀；环境相关值走 `os.getenv` 带默认值
 - **依赖资源动态构造** —— 不假设数据库已有特定数据；前置数据走 fixture 创建，用完即清理
 - **脚本自包含** —— 生成的脚本不依赖被测项目仓库的代码，所有 fixture 在脚本内自行定义
-- **遵循 testBench 规范** —— 文件命名 `test_{slug}.py`、类命名 `Test{PascalCase}`、遵循 `project-context.md` 中的 TEA 约束
+- **遵循 Lumiere 规范** —— 文件命名 `test_{slug}.py`、类命名 `Test{PascalCase}`、遵循 `project-context.md` 中的 TEA 约束
 - **质量门禁** —— 用例设计完成后自评分（完整性/准确性/有效性/可执行性），总分 ≥75 才继续
 
 ## 输入
@@ -26,7 +26,7 @@ task JSON 必含字段：
 
 | 字段 | 说明 |
 |------|------|
-| `platform.api_url` | testBench API 地址 |
+| `platform.api_url` | Lumiere API 地址 |
 | `platform.token` | JWT 认证 token |
 | `platform.project_id` | 目标项目 UUID |
 | `platform.branch_id` | 目标分支 UUID |
@@ -140,9 +140,9 @@ task JSON 必含字段：
 - 修改 → 根据用户修改调整后再确认
 - 补充 → 新增用例后再确认
 
-### Step 6：导入用例到 testBench 平台
+### Step 6：导入用例到 Lumiere 平台
 
-将确认后的用例转为 testBench 导入格式：
+将确认后的用例转为 Lumiere 导入格式：
 
 ```json
 [
@@ -167,7 +167,7 @@ task JSON 必含字段：
 
 **tea_id 规则**：`tf_{module}_{slug}`，其中 slug 从用例名称生成（小写、下划线分隔、去特殊字符）。
 
-将 JSON 保存为临时文件，然后调用 testBench 导入 API：
+将 JSON 保存为临时文件，然后调用 Lumiere 导入 API：
 
 ```bash
 curl -X POST "{api_url}/api/projects/{project_id}/branches/{branch_id}/cases/import" \
@@ -181,7 +181,7 @@ curl -X POST "{api_url}/api/projects/{project_id}/branches/{branch_id}/cases/imp
 
 对每条 type=API 的用例，生成 pytest+httpx 脚本。
 
-**文件结构**（遵循 testBench project-context.md）：
+**文件结构**（遵循 Lumiere project-context.md）：
 
 ```python
 """

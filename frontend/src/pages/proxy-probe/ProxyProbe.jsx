@@ -107,7 +107,7 @@ function ProxyProbeInner() {
   const timer = useRef(null)
 
   // 代理地址取后端探测到的内网 IP，不用 window.location.hostname ——
-  // 如果测试人员是从 localhost 打开 testBench 的，那样拼出来会是 http://127.0.0.1:28900，
+  // 如果测试人员是从 localhost 打开 Lumiere 的，那样拼出来会是 http://127.0.0.1:28900，
   // 复制给容器用等于让容器连它自己，日志永远为空，会被误判成「出站代理没生效」。
   const proxyAddr = status?.proxyUrl || ''
   const loopbackOnly = !!status && !status.lanIp

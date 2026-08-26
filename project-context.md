@@ -1,4 +1,4 @@
-# testBench 项目上下文（TEA 强制约束）
+# Lumiere 项目上下文（TEA 强制约束）
 
 本文件是 TEA 所有工作流（Framework / ATDD / Automate / Review）的强制输入。
 TEA 在生成测试用例和脚本时**必须遵循**本文件中的所有规范。
@@ -9,7 +9,7 @@ TEA 在生成测试用例和脚本时**必须遵循**本文件中的所有规范
 
 | 项目 | 值 |
 |------|---|
-| 名称 | testBench — 测试管理平台 |
+| 名称 | Lumiere — 测试管理平台 |
 | 技术栈 | fullstack（后端 Python FastAPI + 前端 React） |
 | 后端框架 | FastAPI + SQLAlchemy async + asyncpg + pytest |
 | 前端框架 | React 19 + Ant Design + Vite |
@@ -211,7 +211,7 @@ TEA 每次生成或更新测试脚本时，会同时生成这个文件。它记�
 | 角色 | 怎么用 |
 |------|--------|
 | **TEA** | 每次生成脚本时同步更新此文件，保证脚本和清单一一对应 |
-| **testBench 平台** | 读取此文件导入用例，根据 `tea_id` 匹配新增/更新/移除，根据 `script_ref.file` 定位脚本执行 |
+| **Lumiere 平台** | 读取此文件导入用例，根据 `tea_id` 匹配新增/更新/移除，根据 `script_ref.file` 定位脚本执行 |
 | **开发者** | 可以查看当前有多少用例、覆盖了哪些模块、什么优先级分布 |
 
 **它不是什么：**
@@ -253,7 +253,7 @@ tea_cases_levels: ["api", "e2e"]
 {
   "version": "1.0",
   "generatedAt": "2026-04-15T10:00:00Z",
-  "project": "testBench",
+  "project": "Lumiere",
   "summary": {
     "total": 39,
     "byLevel": { "unit": 5, "integration": 4, "api": 25, "e2e": 5 },
@@ -471,7 +471,7 @@ class Test{PascalCaseScenario}:
 
 ---
 
-## 8. 模块清单（testBench 项目）
+## 8. 模块清单（Lumiere 项目）
 
 | module | 说明 | 对应后端 |
 |--------|------|---------|
@@ -493,6 +493,6 @@ class Test{PascalCaseScenario}:
 
 ## 9. 本规范的适用范围
 
-- **TEA 所有工作流**（Framework / ATDD / Automate / Review）在生成 testBench 项目的测试时，必须遵循本规范
+- **TEA 所有工作流**（Framework / ATDD / Automate / Review）在生成 Lumiere 项目的测试时，必须遵循本规范
 - **其他项目**可以复制本文件到自己的项目根目录，修改第 1 节（项目信息）和第 8 节（模块清单），其余规范通用
 - 如果本文件与 TEA 工作流模板默认行为冲突，**以本文件为准**

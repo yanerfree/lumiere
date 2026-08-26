@@ -13,7 +13,7 @@ import { useBranch, setBranchId } from '../utils/branch'
 function buildDiffPrompt(branchName, stats) {
   const n = stats?.cases?.cases ?? 0
   const sc = stats?.apiTest?.scenarios ?? 0
-  return `在 testBench 上给分支「${branchName}」做一次版本升级对账（刚从上一版复制了 ${n} 条用例${sc ? `、${sc} 条接口场景` : ''}）。
+  return `在 Lumiere 上给分支「${branchName}」做一次版本升级对账（刚从上一版复制了 ${n} 条用例${sc ? `、${sc} 条接口场景` : ''}）。
 
 两个 git 版本号：从 <填旧版本 tag，如 v1.0.0> 到 <填新版本 tag，如 v2.0.0>。
 

@@ -374,8 +374,8 @@ class McpMockServerManager:
         from fastmcp import FastMCP
 
         mcp = FastMCP(
-            name="testBench-mock",
-            instructions="testBench MCP Mock Server — 返回可配置的模拟数据，用于 MCP 客户端联调测试。",
+            name="Lumiere-mock",
+            instructions="Lumiere MCP Mock Server — 返回可配置的模拟数据，用于 MCP 客户端联调测试。",
         )
 
         mgr = self

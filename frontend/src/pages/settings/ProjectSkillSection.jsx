@@ -20,8 +20,8 @@ import { api, getValidToken } from '../../utils/request'
 const { Text, Paragraph } = Typography
 
 const MCP_SNIPPET = `# 在任意项目的 Claude Code 里：
-「把我 .claude/skills 下的 feature-verify 传到 testBench」   → tb_push_skill
-「看看 testBench 上有哪些 skill 能用」                        → tb_list_skills
+「把我 .claude/skills 下的 feature-verify 传到 Lumiere」   → tb_push_skill
+「看看 Lumiere 上有哪些 skill 能用」                        → tb_list_skills
 「把 feature-verify 拉到本地」                                → tb_pull_skill`
 
 // 粘贴框的起手模板 —— 让人一眼知道 frontmatter 要写什么，name 是从这里读的
@@ -209,7 +209,7 @@ export default function ProjectSkillSection() {
               ? <Tag style={{ fontSize: 11 }} icon={<TeamOutlined />}>全平台可取用</Tag>
               : <Tag style={{ fontSize: 11 }}>仅本项目</Tag>}
             {row.platformTools?.length > 0 && (
-              <Tooltip title={`声明了平台 MCP 工具：${row.platformTools.join(', ')} —— 取用方项目也必须连上 testBench MCP 才能跑通`}>
+              <Tooltip title={`声明了平台 MCP 工具：${row.platformTools.join(', ')} —— 取用方项目也必须连上 Lumiere MCP 才能跑通`}>
                 <Tag color="orange" style={{ fontSize: 11 }} icon={<ApiOutlined />}>依赖平台工具</Tag>
               </Tooltip>
             )}
@@ -328,7 +328,7 @@ export default function ProjectSkillSection() {
               description={
                 <span style={{ fontSize: 12, color: '#86909c' }}>
                   {scope === 'own'
-                    ? '本项目还没有 Skill —— 点右上「添加 Skill」粘贴内容，或在 Claude Code 里说「把 xxx 传到 testBench」'
+                    ? '本项目还没有 Skill —— 点右上「添加 Skill」粘贴内容，或在 Claude Code 里说「把 xxx 传到 Lumiere」'
                     : '还没有项目共享 Skill 出来'}
                 </span>
               }
@@ -518,7 +518,7 @@ export default function ProjectSkillSection() {
           名字自动从 frontmatter 的 <Text code>name</Text> 读。什么都不用装、不用打包。
         </Paragraph>
         <Paragraph style={{ fontSize: 13, marginTop: 12, marginBottom: 8 }}>
-          <b>批量 / 带附属文件：走 MCP</b> —— 项目侧的 Claude Code 已经连了 testBench MCP，
+          <b>批量 / 带附属文件：走 MCP</b> —— 项目侧的 Claude Code 已经连了 Lumiere MCP，
           直接说人话，它自己读文件自己推：
         </Paragraph>
         <pre style={{

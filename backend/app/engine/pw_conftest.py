@@ -36,7 +36,7 @@ def write_playwright_conftest(
     tenant_pass = ev.get("TENANT_PASSWORD", "")
     base_url = ev.get("BASE_URL", "")
     lang_key = ev.get("UI_LANG_STORAGE_KEY", "")
-    # 存进去的**值**也各家不同：stoa 要 BCP-47（zh-CN/en-US），testBench 自己要短码（zh/en）。
+    # 存进去的**值**也各家不同：stoa 要 BCP-47（zh-CN/en-US），Lumiere 自己要短码（zh/en）。
     # 默认 BCP-47；要短码就在环境里配 UI_LANG_STORAGE_VALUE={lang}。
     # 猜错的代价还是"设了没生效"：键对了值不认，页面照旧原语种，断言全红。
     lang_value = (ev.get("UI_LANG_STORAGE_VALUE") or "{locale}") \

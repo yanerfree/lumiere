@@ -332,7 +332,7 @@ class ToolScopeMiddleware(Middleware):
         if allowed is not None and context.message.name not in set(allowed):
             raise ToolError(
                 f"工具 {context.message.name} 不在本项目的 MCP 工具范围内。"
-                "如需使用，请在 testBench「MCP 工具中心 → 工具范围」调整 —— "
+                "如需使用，请在 Lumiere「MCP 工具中心 → 工具范围」调整 —— "
                 "范围是项目级的，改一次本项目所有 Key 都生效，不用重新建 Key。"
             )
 

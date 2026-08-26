@@ -8,7 +8,7 @@ __Demo duration__: ~5 minutes
 
 ## Scenario Overview
 
-The testBench test management platform supports multi-user, multi-project permission management. Administrators can create users and assign them to specific projects. Regular users can only see projects they've been assigned to after logging in, and can create and manage test cases within those projects.
+The Lumiere test management platform supports multi-user, multi-project permission management. Administrators can create users and assign them to specific projects. Regular users can only see projects they've been assigned to after logging in, and can create and manage test cases within those projects.
 
 This scenario demonstrates the complete workflow from creating a user to the user independently using the system.
 
