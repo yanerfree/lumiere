@@ -279,21 +279,21 @@ def test_规范提醒不要把进度当质量问题():
 def test_CC能自审():
     from app.mcp import TOOL_CATALOG
     d = {t["name"]: t["description"] for t in TOOL_CATALOG}
-    assert "tb_review_case" in d
-    assert "blocker" in d["tb_review_case"] and "六维" in d["tb_review_case"]
+    assert "lum_review_case" in d
+    assert "blocker" in d["lum_review_case"] and "六维" in d["lum_review_case"]
 
 
 def test_超时不代表没跑完():
     """这个工具是一次不间断的同步调用，run_first=true 时可能跑到分钟级，
     中途没有心跳——批量审核已经有 batchId 轮询解决了同样的问题，单条这边
-    还没跟上。活体验证撞过：`tb_review_case` 报"300s 无响应，已中止"，
+    还没跟上。活体验证撞过：`lum_review_case` 报"300s 无响应，已中止"，
     但服务端其实跑完了、结果也写库了（77 分），当时按"没跑出结果"汇报，
-    后来靠 tb_check_deliverable 才发现已经有结论。至少要在工具说明里
+    后来靠 lum_check_deliverable 才发现已经有结论。至少要在工具说明里
     把这条路指出来，别让调用方以为这次调用完全没有产出。
     """
     from app.mcp import TOOL_CATALOG
     d = {t["name"]: t["description"] for t in TOOL_CATALOG}
-    assert "超时" in d["tb_review_case"] and "不代表没跑完" in d["tb_review_case"]
+    assert "超时" in d["lum_review_case"] and "不代表没跑完" in d["lum_review_case"]
     import inspect
     from app.mcp.tools import review
     assert "不代表这条没跑完" in inspect.getsource(review.review_case)
@@ -304,7 +304,7 @@ def test_自审工具在回推那两档里():
     from app.mcp.profiles import PROFILES
     for key in ("live", "uiscript"):
         p = next(x for x in PROFILES if x["key"] == key)
-        assert "tb_review_case" in p["tools"], f"{key} 档里没有 tb_review_case"
+        assert "lum_review_case" in p["tools"], f"{key} 档里没有 lum_review_case"
 
 
 def test_结论落库到审核标签和评分():
@@ -348,7 +348,7 @@ def test_模块级流式评审端点已下线():
     """留着它就有两个"AI 评审"入口，出来的结论还不一样 —— 人不知道该信哪个。"""
     from app.api import skill_run
     src = inspect.getsource(skill_run)
-    assert "tb-quality-review" not in src or "已下线" in src
+    assert "lum-quality-review" not in src or "已下线" in src
     assert "run_quality_review" not in src
 
 
@@ -478,7 +478,7 @@ def test_交付门禁会说出AI打回():
     from app.mcp.tools import deliverable
     src = inspect.getsource(deliverable.check_deliverable)
     assert "ai_review_rejected" in src
-    assert "tb_review_case 复核" in src, "要告诉它改完怎么复核"
+    assert "lum_review_case 复核" in src, "要告诉它改完怎么复核"
     assert "blockers.append" not in src.split("ai_review_rejected")[1][:200], \
         "评审是质量判断，不该当成交付事实去卡（那是两种东西）"
 

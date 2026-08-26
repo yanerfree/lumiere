@@ -2,8 +2,8 @@
 
 这一层此前**整层不存在**：Key 的 project_id 只用来选工具范围，工具入参里的
 project_id / branch_id / case_id 是调用方随便填的，直接拿去查库。实测（2026-08-21）
-不带任何凭据就能 initialize，再 tb_list_projects 列出全部 6 个项目、
-tb_list_branches 往下读到任意项目 —— 匿名和越权两件事叠在一起。
+不带任何凭据就能 initialize，再 lum_list_projects 列出全部 6 个项目、
+lum_list_branches 往下读到任意项目 —— 匿名和越权两件事叠在一起。
 
 背景和方案：docs/data-scoping-and-isolation.md
 """
@@ -62,7 +62,7 @@ def test_豁免必须写理由():
 
 
 def test_skill_id必须豁免():
-    """★ tb_pull_skill 的 skill_id 是**跨项目取用的正规通道**（要求 skill 是 public）。
+    """★ lum_pull_skill 的 skill_id 是**跨项目取用的正规通道**（要求 skill 是 public）。
 
     把它"补全"进 _OWNER_SQL 会把 skill 共享整个打死，而且症状是
     "别的项目的 skill 突然拉不下来了"，很难联想到这里。
@@ -75,7 +75,7 @@ def test_skill_id必须豁免():
 def test_环境id受校验(param):
     """环境 2026-08-21 起是项目级的（迁移 zzo0envproj），所以它不再豁免。
 
-    两个名字都得在：tb_create_plan 用的是 environment_id，其余工具用 env_id，
+    两个名字都得在：lum_create_plan 用的是 environment_id，其余工具用 env_id，
     指的是同一张表 —— 只挪一个等于留半个口子。
     环境里存着 BASE_URL、账号、密码，漏掉它比漏掉用例更贵。
     """
@@ -107,7 +107,7 @@ def test_反查SQL里的表都真的存在():
     ({"branch_id": X}, [("branch_id", X)], "单个 id"),
     ({"case_ids": [X, PA]}, [("case_ids", X), ("case_ids", PA)], "list 形态"),
     ({"scenario_ids": f"{X},{PA}"}, [("scenario_ids", X), ("scenario_ids", PA)],
-     "★逗号分隔的字符串 —— tb_run_api_test 的 scenario_ids 就是这个形态"),
+     "★逗号分隔的字符串 —— lum_run_api_test 的 scenario_ids 就是这个形态"),
     ({"title": X, "keyword": "abc"}, [], "不在表里的参数一概不看"),
     ({"branch_id": None}, [], "None 跳过（可选参数没传）"),
     ({"branch_id": "not-a-uuid"}, [],
@@ -176,10 +176,10 @@ async def test_查不到归属也算不合规(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_folder_id两张表任一命中就算(monkeypatch):
-    """★ 同一个参数名在两个工具里指不同的表：tb_list_cases 的 folder_id 是
-    case_folders，tb_list_api_tests 的是 api_test_folders。
+    """★ 同一个参数名在两个工具里指不同的表：lum_list_cases 的 folder_id 是
+    case_folders，lum_list_api_tests 的是 api_test_folders。
 
-    只查第一张表的话，tb_list_api_tests 会被整个打死（它的 folder_id
+    只查第一张表的话，lum_list_api_tests 会被整个打死（它的 folder_id
     在 case_folders 里永远查不到 → 被当成"不是本项目的"）。
     """
     assert len(_OWNER_SQL["folder_id"]) == 2, "folder_id 必须有两条候选"
@@ -190,7 +190,7 @@ async def test_folder_id两张表任一命中就算(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_没有可校验的id就不查库(monkeypatch):
-    """大量工具的入参里没有任何 id（tb_llm_mock_status 等），别为它们白打一次库。"""
+    """大量工具的入参里没有任何 id（lum_llm_mock_status 等），别为它们白打一次库。"""
     sess = _FakeSession([])
     _patch_session(monkeypatch, sess)
     assert await check_data_scope(PA, {"path": "/v1/x", "limit": 10}) is None
@@ -199,7 +199,7 @@ async def test_没有可校验的id就不查库(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_多个id里有一个不合规就拦(monkeypatch):
-    """tb_sync_orchestrated_scenario 这类同时带 branch_id 和 source_case_id 的，
+    """lum_sync_orchestrated_scenario 这类同时带 branch_id 和 source_case_id 的，
     任一条不属于本项目都得拦。"""
     _patch_session(monkeypatch, _FakeSession([PA, PB]))
     bad = await check_data_scope(PA, {"branch_id": X, "source_case_id": PB})

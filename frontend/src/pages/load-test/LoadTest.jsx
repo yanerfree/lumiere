@@ -867,7 +867,7 @@ export default function LoadTest() {
   return (
     <div style={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       {/* ─── Header ─── */}
-      <div className="tb-page-strip" style={{
+      <div className="lum-page-strip" style={{
         padding: '12px 20px', display: 'flex', alignItems: 'center', gap: 12,
         flexShrink: 0,
       }}>

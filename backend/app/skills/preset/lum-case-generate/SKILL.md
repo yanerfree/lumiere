@@ -1,16 +1,16 @@
 ---
-name: tb-case-generate
+name: lum-case-generate
 description: 基于业务场景和项目文档，生成页面级功能测试用例。步骤面向 UI 操作，可直接用于手工测试和 Playwright 自动化。
 version: 2
 tools:
-  - tb_list_projects
-  - tb_list_branches
-  - tb_list_cases
-  - tb_get_case
-  - tb_get_folder_tree
-  - tb_list_api_tree
-  - tb_get_api_node
-  - tb_create_case
+  - lum_list_projects
+  - lum_list_branches
+  - lum_list_cases
+  - lum_get_case
+  - lum_get_folder_tree
+  - lum_list_api_tree
+  - lum_get_api_node
+  - lum_create_case
 ---
 
 # 用例生成 Skill v2
@@ -77,10 +77,10 @@ tools:
 
 ### Step 1：上下文收集
 
-1. 调用 `tb_list_api_tree` 获取项目 API 接口列表（用于**理解业务逻辑**，不作为用例步骤）
-2. 调用 `tb_get_api_node` 获取目标接口详情（字段定义、校验规则、枚举值）
-3. 调用 `tb_list_cases` 查询同模块已有用例（避免重复）
-4. 调用 `tb_get_folder_tree` 了解用例目录结构
+1. 调用 `lum_list_api_tree` 获取项目 API 接口列表（用于**理解业务逻辑**，不作为用例步骤）
+2. 调用 `lum_get_api_node` 获取目标接口详情（字段定义、校验规则、枚举值）
+3. 调用 `lum_list_cases` 查询同模块已有用例（避免重复）
+4. 调用 `lum_get_folder_tree` 了解用例目录结构
 5. 如果用户提供了项目文档路径，用 `Read` 读取提取功能点清单
 
 ### Step 2：维度规划
@@ -140,7 +140,7 @@ tools:
 
 ### Step 5：入库
 
-将自检通过的用例逐条调用 `tb_create_case` 入库。
+将自检通过的用例逐条调用 `lum_create_case` 入库。
 
 输出最终统计：
 ```

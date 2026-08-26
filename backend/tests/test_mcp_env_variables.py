@@ -1,4 +1,4 @@
-"""tb_get_merged_variables 的封样。
+"""lum_get_merged_variables 的封样。
 
 实测：这个工具对**每一个环境**都直接报错
 `structured_content must be a dict or None. Got list: [...]` ——
@@ -6,7 +6,7 @@ service 返回 list，而 FastMCP 要求结构化内容是 dict。
 它的描述写着"排查『变量未解析』先查这里"，结果这个入口自己一直是坏的，
 而且它就在 live / uiscript 两个主力档位里。
 
-修的时候要连带脱敏：同族的 tb_list_global_data 一直脱敏，这条不脱
+修的时候要连带脱敏：同族的 lum_list_global_data 一直脱敏，这条不脱
 等于把一个崩溃换成一次凭证泄漏。
 """
 import asyncio

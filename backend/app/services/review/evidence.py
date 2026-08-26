@@ -268,7 +268,7 @@ async def _unresolvable_placeholders(session: AsyncSession, case: Case,
              "detail": f"这些文案占位符的键在项目词典里查不到：{'、'.join(missing[:5])}。"
                        f"查不到就退回竖线后面的中文 —— 英文环境下测的还是中文那一版，"
                        f"而中文环境跑起来全绿，谁都看不出来。"
-                       f"要么用词典里已有的键，要么先 tb_upsert_i18n_terms 把它登记上。"}]
+                       f"要么用词典里已有的键，要么先 lum_upsert_i18n_terms 把它登记上。"}]
 
 
 def machine_findings(case: Case, scenario: dict | None, script: dict | None) -> list[dict]:

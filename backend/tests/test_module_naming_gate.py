@@ -86,7 +86,7 @@ def test_第一个模块不提示():
 
 
 def test_门禁接在建用例和改用例两条路上():
-    """只接建用例的话，CC 用 tb_update_case 搬目录时照样能建出歪目录。"""
+    """只接建用例的话，CC 用 lum_update_case 搬目录时照样能建出歪目录。"""
     from app.mcp.tools import test_cases
     for fn in (test_cases.create_case, test_cases.update_case):
         assert "_check_module" in inspect.getsource(fn)
@@ -183,7 +183,7 @@ def test_建目录不再把显示名存成大写():
 
 # ── creating=False：放用例 ≠ 建模块（2026-08-25 的 bug）────────────────
 # 规则 2「同一位置已有 → 硬拒」是**建模块**的判据。它原来也接在
-# tb_create_case / tb_update_case 上，于是目录一旦存在，用完全相同的
+# lum_create_case / lum_update_case 上，于是目录一旦存在，用完全相同的
 # module+submodule 再传就被拒，提示还是「直接往它里面加用例，别再建一个」——
 # 而那正是调用方刚做的事，参数上无从表达。后果：每个目录只装得下第一条用例。
 # 打真库的复现在 tests/integration/services/test_module_gate_intake.py。

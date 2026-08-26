@@ -235,7 +235,7 @@ def apply_case_status(case, script_type: str, status: str, run_mode: str = DEBUG
         # **关联 bug 这里一个字都不动。** 曾经想过"跑绿就自动摘掉已修的关联"，
         # 但那是在执行路径上偷偷改另一份数据：关联凭什么消失、什么时候消失，
         # 页面上看不出来，出问题也查不回去。谁调通的谁清 ——
-        # CC 验完传 tb_update_case(bug_refs=[]) 一行就完事，一次显式动作。
+        # CC 验完传 lum_update_case(bug_refs=[]) 一行就完事，一次显式动作。
         # 忘了清也不会错到哪里去：列表上就是一条橙色「待重跑」挂着，看得见。
     elif run_mode == REGRESSION:
         setattr(case, dim_attr, "debugging")

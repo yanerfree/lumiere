@@ -218,7 +218,7 @@ async def run(session, branch_id, *, folder_id=None, module: str | None = None,
         from app.services.ai_config_resolver import resolve_ai_config
         pid = (await session.execute(
             select(Branch.project_id).where(Branch.id == bid))).scalars().first()
-        ai_config = await resolve_ai_config(pid, session, capability="tb-quality-review")
+        ai_config = await resolve_ai_config(pid, session, capability="lum-quality-review")
 
     issues = await common_issues(session, [c.id for c in cases])
     gaps, gaps_total = await coverage_gaps(session, cases, ai_config, observed_actions)

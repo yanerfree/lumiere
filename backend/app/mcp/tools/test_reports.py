@@ -11,14 +11,14 @@ from app.services.execution_service import get_report_with_scenarios
 
 async def _plan_of(session: AsyncSession, plan_id: str | None, report_id: str | None):
     """两个报告工具都只要「哪次执行」。**给了 report_id 就该够** ——
-    tb_run_plan 返回的是 taskId + reportId，提示也写着"拿 reportId 来查"，
+    lum_run_plan 返回的是 taskId + reportId，提示也写着"拿 reportId 来查"，
     而这两个工具此前只认 plan_id：照提示做一定报参数错，
     错误还指向调用方而不是那句提示。报告本来就挂在计划上，自己查出来。
     """
     if plan_id:
         return uuid.UUID(plan_id)
     if not report_id:
-        raise ValueError("plan_id 和 report_id 至少给一个（tb_list_plans / tb_list_reports 拿）")
+        raise ValueError("plan_id 和 report_id 至少给一个（lum_list_plans / lum_list_reports 拿）")
     from app.models.report import TestReport
     rep = await session.get(TestReport, uuid.UUID(report_id))
     if rep is None:
@@ -48,7 +48,7 @@ async def get_failed_scenarios(session: AsyncSession, plan_id: str | None = None
         report_id=uuid.UUID(report_id) if report_id else None,
     )
     if not report:
-        return {"total": 0, "failed": [], "usage": "这个计划还没有报告，先 tb_run_plan 跑一次。"}
+        return {"total": 0, "failed": [], "usage": "这个计划还没有报告，先 lum_run_plan 跑一次。"}
 
     # get_report_with_scenarios 返回的 scenarios 是 **ORM 对象**（额外挂了 _case_steps 等），
     # 不是 dict —— 原来这里按 dict 取值，一调就 'TestReportScenario' object has no attribute 'get'。
@@ -62,7 +62,7 @@ async def get_failed_scenarios(session: AsyncSession, plan_id: str | None = None
         if sc.status not in ("failed", "error"):
             continue
         # 把这条场景对应的执行记录带上 —— CC 下一步要用 runId 去调
-        # tb_get_ui_script_result 拿证据包、调 tb_submit_analysis 提交归因。
+        # lum_get_ui_script_result 拿证据包、调 lum_submit_analysis 提交归因。
         # 没有它，CC 拿到一堆失败却不知道从哪读证据。
         run = (await session.execute(
             select(ScriptRun)
@@ -91,7 +91,7 @@ async def get_failed_scenarios(session: AsyncSession, plan_id: str | None = None
     return {
         "total": len(failed),
         "failed": failed,
-        "usage": "拿 **caseId** 调 tb_get_ui_script_result 看证据包（截图路径/流量/现象初判）"
+        "usage": "拿 **caseId** 调 lum_get_ui_script_result 看证据包（截图路径/流量/现象初判）"
                  "—— 那个工具的入参是 case_id，不是 runId；**runId 是下一步 "
-                 "tb_submit_analysis 用的**。判完再调 tb_submit_analysis 回填归因。",
+                 "lum_submit_analysis 用的**。判完再调 lum_submit_analysis 回填归因。",
     }

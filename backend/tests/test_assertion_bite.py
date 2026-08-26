@@ -107,18 +107,18 @@ def test_工具注册了并进了live档():
     from app.mcp.profiles import PROFILES
 
     cat = {t["name"]: t["description"] for t in TOOL_CATALOG}
-    assert "tb_check_assertion_bite" in cat
-    d = cat["tb_check_assertion_bite"]
+    assert "lum_check_assertion_bite" in cat
+    d = cat["lum_check_assertion_bite"]
     assert "别跳产出 id 的创建步" in d, "不说清跳什么，CC 会跳创建步然后全部判不了"
     assert "请求是真发的" in d, "没说清它会在被测系统里造数据"
     live = next(p for p in PROFILES if p["key"] == "live")
-    assert "tb_check_assertion_bite" in live["tools"]
+    assert "lum_check_assertion_bite" in live["tools"]
 
 
 def test_规范里把它接到断言纪律上():
     """「先让它红一次」如果没有工具可用，就只是一句口号。"""
     from app.mcp.tools.sync import _SPEC_API_SCENARIO as spec
-    assert "tb_check_assertion_bite" in spec
+    assert "lum_check_assertion_bite" in spec
 
 
 def test_夹着别的动作时说清该跳哪个():
@@ -137,10 +137,10 @@ def test_夹着别的动作时说清该跳哪个():
 
 def test_跳清理步会留残留这件事说出来了():
     """跳的正是清理步时，那一趟造的数据不会被删，而且变异运行不留痕 ——
-    tb_check_env_hygiene 也看不见它。不写这句，谁跑谁在被测系统里攒垃圾。"""
+    lum_check_env_hygiene 也看不见它。不写这句，谁跑谁在被测系统里攒垃圾。"""
     from app.mcp import TOOL_CATALOG
 
-    d = {t["name"]: t["description"] for t in TOOL_CATALOG}["tb_check_assertion_bite"]
+    d = {t["name"]: t["description"] for t in TOOL_CATALOG}["lum_check_assertion_bite"]
     assert "残留归你自己收" in d and "看不见" in d
 
 

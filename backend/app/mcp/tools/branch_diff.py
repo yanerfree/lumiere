@@ -12,7 +12,7 @@
 1. 平台单独产不出影响清单 —— 分支复制那一刻还没人告诉它新版本改了什么。
    「复制完自动出清单」在原理上不成立。
 2. 不做定时扫、不做每次执行后扫。**一个版本对一次账**（漏了可以补交）。
-3. 平台不推，CC 拉 —— 清单落平台、挂 `tb_next_duty` 队列，会话关了也续得上。
+3. 平台不推，CC 拉 —— 清单落平台、挂 `lum_next_duty` 队列，会话关了也续得上。
 """
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ async def list_branch_endpoints(session: AsyncSession, branch_id: str) -> dict:
     """【对账第一步】这个分支的用例依赖了哪些端点、哪些字段 —— 反查的**平台那一半**。
 
     回每个端点的归一化「路径模板」+ 用它的用例编号/场景/步骤名/期望状态码/断言字段路径。
-    拿它跟你本机 `git diff <旧版本>..<新版本>` 的结果求交集，再调 tb_apply_endpoint_diff。
+    拿它跟你本机 `git diff <旧版本>..<新版本>` 的结果求交集，再调 lum_apply_endpoint_diff。
 
     ⚠ **必读返回里的「覆盖不到的」那一节**：手工步骤（JSONB 文本）和 UI 脚本
     （Playwright 正文）里没有结构化的 method/url，所以这套反查**探不到它们**。
@@ -48,10 +48,10 @@ async def apply_endpoint_diff(
     """【对账第二步】把新版本的变更报上来，平台求交集落清单。**一个用例都不改。**
 
     分三堆 + 一堆：命中的进「要改」（`removed` 的进「该废候选」），没命中的进
-    「照抄」，`kind=added` 的进「待补用例」。清单进 tb_next_duty 队列。
+    「照抄」，`kind=added` 的进「待补用例」。清单进 lum_next_duty 队列。
 
     `changes` 每条 `{url, method, kind, detail}`，kind 取值：
-      · `removed`        端点没了 → 该废**候选**（不自动废，走 tb_request_deprecate 交证据）
+      · `removed`        端点没了 → 该废**候选**（不自动废，走 lum_request_deprecate 交证据）
       · `field_changed`  请求/响应字段变了 → 要改。detail 必填（变成什么）
       · `new_state`      新增了状态值/分支 → 要改。detail 必填
       · `renamed`        端点改名/挪位置 → **要改，不是要废**（改名在 UI 上长得像"没了"）
@@ -93,7 +93,7 @@ async def request_deprecate(
         拆页面在 UI 上**都长得像"没了"**
 
     提请只挂「待废审」，**用例状态一个字不动**；`lifecycle_status=deprecated`
-    要等批准才落。批准有两条路：tb_review_case（这条用例有待决废弃请求时它不审六维，
+    要等批准才落。批准有两条路：lum_review_case（这条用例有待决废弃请求时它不审六维，
     改审「该不该废」，平台自己复核接口那半边）、或人在列表页/详情页一条条确认。
     探不出来一律落人。
 

@@ -34,10 +34,10 @@ async def _has_new_style_script(session: AsyncSession, case_id, test_type: str):
     接口这一维有两种载体，此前只认第一种：
     1. `scripts` 表里 script_type='api' 的 pytest 脚本
     2. `api_test_scenarios` 里绑了这条用例的**编排接口场景** —— MCP
-       `tb_sync_orchestrated_scenario` 回推的就是这个
+       `lum_sync_orchestrated_scenario` 回推的就是这个
 
     实测：全平台 8 条有接口场景的用例，**0 条**有 api 脚本。只认第一种的话，
-    CC 这条链的接口产物一条都进不了计划回归 —— 只能用 tb_run_api_test 即席跑，
+    CC 这条链的接口产物一条都进不了计划回归 —— 只能用 lum_run_api_test 即席跑，
     不进计划通过率。而建计划时还会说"这条会执行"，跑起来又变成"记成待人工录入"。
     """
     from app.services import script_service
@@ -179,7 +179,7 @@ async def _run_new_style_script(session: AsyncSession, case, test_type: str, bas
 
     # 文案词典：`${键|中文}` 在执行前换成该语种的真文案。**这条路以前压根没渲染** ——
     # 而它是计划/回归/批量三种执行共用的入口（execution.py 也调这个函数）。
-    # 后果：同一份脚本 tb_run_ui_script 跑绿（MCP 那条路渲染了），进计划直接
+    # 后果：同一份脚本 lum_run_ui_script 跑绿（MCP 那条路渲染了），进计划直接
     # status=error / 0ms / 拒绝执行，报错却指向"占位里补上 ${键|中文}"——
     # 而脚本里写的本来就是 ${键|中文}。渲染和替换默认值必须同一处，别再各写一份。
     from app.services.i18n_harvest_service import load_locale_table_for_case
@@ -189,7 +189,7 @@ async def _run_new_style_script(session: AsyncSession, case, test_type: str, bas
     except Exception:
         i18n = {}
     content, _text_stat = render_text(content, i18n, locale_of(env_vars))
-    sandbox = tempfile.mkdtemp(prefix="tb_batch_")
+    sandbox = tempfile.mkdtemp(prefix="lum_batch_")
     try:
         sp = _P(sandbox) / file_name
         sp.parent.mkdir(parents=True, exist_ok=True)

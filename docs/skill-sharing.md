@@ -8,10 +8,10 @@
 |---|---|---|
 | 存在哪 | `backend/app/skills/preset/`（文件系统） | DB `skills` 表 |
 | 谁执行 | **平台后端** —— `skill_executor` 读 SKILL.md 当 prompt 喂给 LLM | **客户端** —— 你机器上的 Claude Code |
-| 用什么工具 | 平台 MCP 工具（`tb_*`） | 本地工具（Bash / Edit / Playwright） |
+| 用什么工具 | 平台 MCP 工具（`lum_*`） | 本地工具（Bash / Edit / Playwright） |
 | 绑模型档位 | 要，在「AI 能力→模型」页 | 不要，不占档位 |
-| 命名 | `tb-*` | 随你 |
-| 举例 | `tb-scenario-extract`、`tb-case-generate` | `feature-verify`、`fix-issue`、`seed-data` |
+| 命名 | `lum-*` | 随你 |
+| 举例 | `lum-scenario-extract`、`lum-case-generate` | `feature-verify`、`fix-issue`、`seed-data` |
 | 接口 | `/api/skills` | `/api/projects/{pid}/skills` |
 
 **为什么必须分开**：项目 skill 如果混进 preset 目录，一是「AI 能力→模型」页会冒出
@@ -46,7 +46,7 @@
 它会读本地 `SKILL.md`（连 `references/` 等附属文件一起）然后调：
 
 ```
-tb_push_skill(project_id, content=SKILL.md全文, files={"references/x.md": "..."})
+lum_push_skill(project_id, content=SKILL.md全文, files={"references/x.md": "..."})
 ```
 
 - `name` 不传就取 frontmatter 里的 `name`
@@ -77,11 +77,11 @@ curl -X POST "$BASE/api/projects/$PID/skills" \
 ### MCP
 
 ```
-「看看 Lumiere 上有哪些 skill 能用」   → tb_list_skills
-「把 feature-verify 拉到本地」            → tb_pull_skill
+「看看 Lumiere 上有哪些 skill 能用」   → lum_list_skills
+「把 feature-verify 拉到本地」            → lum_pull_skill
 ```
 
-`tb_pull_skill` 的返回里直接带落盘路径，不用自己拼：
+`lum_pull_skill` 的返回里直接带落盘路径，不用自己拼：
 
 ```json
 {
@@ -91,7 +91,7 @@ curl -X POST "$BASE/api/projects/$PID/skills" \
 }
 ```
 
-跨项目取用要用 `skill_id`（`tb_list_skills` 返回里有），且该 skill 必须是 `public`。
+跨项目取用要用 `skill_id`（`lum_list_skills` 返回里有），且该 skill 必须是 `public`。
 取自己项目的可以用 `project_id + name`，不受 public 限制。
 
 > 写到本地后**要重启 Claude Code 会话**，新 skill 才会被识别。
@@ -147,6 +147,6 @@ HTTP 和 MCP 两条路共用同一份规则 —— 不会出现「页面拦住�
 | `backend/app/models/skill.py` | `skills` + `skill_versions` 两张表 |
 | `backend/app/services/skill_registry.py` | 校验 / frontmatter 解析 / 打包解包 / upsert，两条通道共用 |
 | `backend/app/api/project_skills.py` | HTTP 接口 |
-| `backend/app/mcp/tools/skills.py` | `tb_push_skill` / `tb_list_skills` / `tb_pull_skill` |
+| `backend/app/mcp/tools/skills.py` | `lum_push_skill` / `lum_list_skills` / `lum_pull_skill` |
 | `frontend/src/pages/settings/ProjectSkillSection.jsx` | Skill 管理页的「项目 Skill」分区 |
-| `backend/app/api/skill_manage.py` | 平台内置 `tb-*`，**不是**本文说的这类 |
+| `backend/app/api/skill_manage.py` | 平台内置 `lum-*`，**不是**本文说的这类 |

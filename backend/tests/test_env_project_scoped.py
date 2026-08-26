@@ -88,7 +88,7 @@ def test_服务层的project_id是必填(fn_name):
 
 
 def test_MCP列环境的工具也要项目():
-    """tb_list_environments 原来返回全库环境，等于把别的项目的被测地址一并露出来。"""
+    """lum_list_environments 原来返回全库环境，等于把别的项目的被测地址一并露出来。"""
     from app.mcp.tools import environments
 
     sig = inspect.signature(environments.list_environments)
@@ -100,7 +100,7 @@ def test_工具描述里说清了是本项目():
     """描述是 CC 唯一的说明书。还写着"所有环境"的话它会以为看得见全部。"""
     from app.mcp import TOOL_CATALOG
 
-    d = next(t["description"] for t in TOOL_CATALOG if t["name"] == "tb_list_environments")
+    d = next(t["description"] for t in TOOL_CATALOG if t["name"] == "lum_list_environments")
     assert "本项目" in d and "project_id" in d
     assert "所有测试环境" not in d
 

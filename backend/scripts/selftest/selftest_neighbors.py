@@ -47,7 +47,7 @@ c = req(f"/projects/{PROJ}/branches/{BR}/cases/{case_id}", tok=T)["data"]
 lst = req(f"/projects/{PROJ}/branches/{BR}/cases?pageSize=5", tok=T)["data"]
 items = lst["items"] if isinstance(lst, dict) else lst
 (ok if items else bad).append(f"用例列表返回 {len(items)} 条")
-# owes（还欠哪几维）只在 MCP 的 tb_list_cases 里算，HTTP 列表本来就没有这个字段
+# owes（还欠哪几维）只在 MCP 的 lum_list_cases 里算，HTTP 列表本来就没有这个字段
 # —— 上一版在这里断言 HTTP 列表带 owes，是我写错了。真正该验的是那段计算
 # 仍然在查 api_test_scenarios（接口维度算不算"做完"全靠它）。
 mcp_src = open("backend/app/mcp/tools/test_cases.py").read()

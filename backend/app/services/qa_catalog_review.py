@@ -519,7 +519,7 @@ async def execute(project_id: uuid.UUID, review_id: uuid.UUID, cfg: dict, domain
                 # **只取键名**：值里是真凭证，一个字节都不能进 prompt
                 env_keys = sorted((await build_run_env(session, review.environment_id)).keys())
 
-            cfg_ai = await resolve_ai_config(project_id, session, capability="tb-quality-review")
+            cfg_ai = await resolve_ai_config(project_id, session, capability="lum-quality-review")
             if not cfg_ai:
                 raise RuntimeError("AI 服务未配置 —— 去「AI 服务配置 → AI 能力」绑一个模型再来")
 

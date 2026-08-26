@@ -90,9 +90,9 @@ async def execute_case_generate(
     ai_config: ResolvedAIConfig,
     session: AsyncSession,
 ) -> AsyncIterator[SSEEvent]:
-    """执行 tb-case-generate Skill，逐步 yield SSE 事件。"""
+    """执行 lum-case-generate Skill，逐步 yield SSE 事件。"""
 
-    meta, steps = load_skill("tb-case-generate")
+    meta, steps = load_skill("lum-case-generate")
     yield SSEEvent(type="skill_start", data={
         "skill": meta.name,
         "description": meta.description,
@@ -215,7 +215,7 @@ async def execute_case_generate(
     from app.models.case_file import AIUsageLog
     session.add(AIUsageLog(
         project_id=project_id,
-        skill_name="tb-case-generate",
+        skill_name="lum-case-generate",
         model=ai_config.model,
         total_tokens=len(full_content) * 2,
     ))
@@ -361,9 +361,9 @@ async def execute_quality_review(
     ai_config: ResolvedAIConfig,
     session: AsyncSession,
 ) -> AsyncIterator[SSEEvent]:
-    """执行 tb-quality-review Skill。"""
+    """执行 lum-quality-review Skill。"""
 
-    yield SSEEvent(type="skill_start", data={"skill": "tb-quality-review", "totalSteps": 3})
+    yield SSEEvent(type="skill_start", data={"skill": "lum-quality-review", "totalSteps": 3})
 
     # Step 1: 收集用例
     yield SSEEvent(type="step_start", data={"step": 1, "title": "收集用例和接口"})
@@ -509,7 +509,7 @@ missingApis 只能从下方真实给出的 API 列表里挑；列表为空就返
     yield SSEEvent(type="step_done", data={"step": 3, "summary": f"评审完成: {score} 分 ({level})"})
 
     from app.models.case_file import AIUsageLog
-    session.add(AIUsageLog(project_id=project_id, skill_name="tb-quality-review", model=ai_config.model, total_tokens=len(full_content) * 2))
+    session.add(AIUsageLog(project_id=project_id, skill_name="lum-quality-review", model=ai_config.model, total_tokens=len(full_content) * 2))
 
     from app.api.knowledge import add_knowledge_from_review
     await add_knowledge_from_review(session, project_id, report)
@@ -564,9 +564,9 @@ async def execute_diagnose(
     ai_config: ResolvedAIConfig,
     session: AsyncSession,
 ) -> AsyncIterator[SSEEvent]:
-    """执行 tb-diagnose Skill — 分析失败用例的根因。"""
+    """执行 lum-diagnose Skill — 分析失败用例的根因。"""
 
-    yield SSEEvent(type="skill_start", data={"skill": "tb-diagnose", "totalSteps": 3})
+    yield SSEEvent(type="skill_start", data={"skill": "lum-diagnose", "totalSteps": 3})
 
     # Step 1: 收集失败信息
     yield SSEEvent(type="step_start", data={"step": 1, "title": "收集失败信息"})

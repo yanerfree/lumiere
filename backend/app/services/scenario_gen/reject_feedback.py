@@ -13,8 +13,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.case import Case
 from app.services.scenario_gen.settings import get_settings
 
-FENCE_START = "===TESTBENCH_REJECT_REASONS_START==="
-FENCE_END = "===TESTBENCH_REJECT_REASONS_END==="
+FENCE_START = "===LUMIERE_REJECT_REASONS_START==="
+FENCE_END = "===LUMIERE_REJECT_REASONS_END==="
 
 
 async def get_recent_reject_reasons(

@@ -312,7 +312,7 @@ class LoadTestRunner:
         """取断言的比较值。None = 这条断言根本没给值，是配置坏了。
 
         平台里断言值有两种写法：压测页面写 `value`，接口场景/回推那边写 `expected`
-        （见 tb_sync_orchestrated_scenario 的 steps.assertions）。两边都认，
+        （见 lum_sync_orchestrated_scenario 的 steps.assertions）。两边都认，
         否则从那边搬过来的场景会**每一发都判失败**，而失败原因还显示成状态码，没法查。
         """
         for k in ("value", "expected"):

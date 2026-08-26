@@ -151,7 +151,7 @@ class _FakeCase:
 
 def test_没做过咬合检查不算断言有效():
     ok, why = _bite_ok(_FakeCase(bite_result=None), "fp1")
-    assert not ok and "tb_check_assertion_bite" in why
+    assert not ok and "lum_check_assertion_bite" in why
 
 
 def test_咬合结论过期不算():
@@ -248,7 +248,7 @@ def test_废弃的用例四处都排除():
     for rel, what in [
         ("mcp/tools/duty.py", "待办队列"),
         ("mcp/tools/deliverable.py", "交付门禁"),
-        ("mcp/tools/test_cases.py", "tb_list_cases"),
+        ("mcp/tools/test_cases.py", "lum_list_cases"),
         ("services/case_service.py", "用例列表接口"),
         ("engine/tasks/adhoc_execution.py", "批量回归"),
         ("services/plan_service.py", "建计划"),

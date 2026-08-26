@@ -122,7 +122,7 @@ async def build_run_env(session: AsyncSession, env_id) -> dict[str, str]:
 
     这一层原来不存在。四条执行路径各自 `select(EnvironmentVariable)` 组一份，
     **全局变量一条都没被注入过** —— `GlobalVariable` 全库只有 CRUD 和
-    `tb_get_merged_variables` 的展示在用，而那个工具的说明写着
+    `lum_get_merged_variables` 的展示在用，而那个工具的说明写着
     「看某个环境执行时实际会注入哪些变量（全局变量 + 该环境变量）」。
     页面上摆着 5 个全局变量、工具说明也承诺了，实际一个都不注入。
 

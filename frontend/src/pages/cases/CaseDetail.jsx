@@ -1243,7 +1243,7 @@ function ScenarioEditor({
     <Card styles={{ body: { padding: '24px 20px' } }}>
       {type !== 'api' && manualSteps?.length > 0 ? (
         /* 平台侧「AI 生成脚本」入口已下线：实测几十次没跑通过，弱模型 + 管道崩 + 执行器精分。
-           脚本改由外部 Claude Code 在本地写好、跑通，再经 tb_sync_ui_script 回推进来。
+           脚本改由外部 Claude Code 在本地写好、跑通，再经 lum_sync_ui_script 回推进来。
            平台只负责存、跑、留痕——它擅长的部分。 */
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, padding: '32px 0' }}>
           <DesktopOutlined style={{ fontSize: 40, color: 'rgba(124,92,191,0.25)' }} />
@@ -1261,7 +1261,7 @@ function ScenarioEditor({
             </span>
           </div>
           <div style={{ fontSize: 12, color: '#c9cdd4' }}>
-            它会先调 tb_get_sync_spec(kind='ui_script') 对齐写法，再用 tb_sync_ui_script 入库
+            它会先调 lum_get_sync_spec(kind='ui_script') 对齐写法，再用 lum_sync_ui_script 入库
           </div>
         </div>
       ) : type !== 'api' ? (
@@ -2220,7 +2220,7 @@ export default function CaseDetail() {
 
   // 隔离态直接从 quarantinedUntil 算 —— 到期即失效，不需要谁去清标记
   const quarantined = !!caseData?.quarantinedUntil && new Date(caseData.quarantinedUntil) > new Date()
-  // 只读展示：这一栏由 CC 通过 tb_update_case(blocked_external=...) 写，人不在这儿改 ——
+  // 只读展示：这一栏由 CC 通过 lum_update_case(blocked_external=...) 写，人不在这儿改 ——
   // 它记的是「写不了的原因」，该由干活那边自述，条件到位了也该由它撤。
   const blockedExternal = caseData?.blockedExternal || ''
   // 检测到不稳定 ≠ 被隔离。检测只标记，隔离要人自己点。

@@ -186,7 +186,7 @@ def test_check_branch_把两个信号给CC():
 def test_工具描述里写清了这两个参数():
     """CC 只照工具描述调参 —— 描述里没有，参数等于不存在。"""
     from app.mcp import TOOL_CATALOG
-    d = {t["name"]: t["description"] for t in TOOL_CATALOG}["tb_update_case"]
+    d = {t["name"]: t["description"] for t in TOOL_CATALOG}["lum_update_case"]
     assert "bug_refs" in d and "tags" in d
     assert "永久痕迹" in d, "没写清 fixed 之后关联要留着，CC 会顺手清掉"
 
@@ -238,8 +238,8 @@ def test_规范里写清了整条流程():
 def test_两个工具描述都提了():
     from app.mcp import TOOL_CATALOG
     d = {t["name"]: t["description"] for t in TOOL_CATALOG}
-    assert "bug_refs" in d["tb_update_case"], "写入口没写"
-    assert "bug_state" in d["tb_list_cases"], "读入口没写 —— CC 不会去猜一个参数名"
+    assert "bug_refs" in d["lum_update_case"], "写入口没写"
+    assert "bug_state" in d["lum_list_cases"], "读入口没写 —— CC 不会去猜一个参数名"
 
 
 def test_筛选条件不能对text取反():

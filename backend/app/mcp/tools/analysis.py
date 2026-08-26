@@ -30,7 +30,7 @@ async def submit_analysis(
 ) -> dict:
     """把你对某次失败的归因写回平台。
 
-    先调 tb_get_ui_script_result 拿证据包和 run_id，看完截图和流量再来。
+    先调 lum_get_ui_script_result 拿证据包和 run_id，看完截图和流量再来。
 
     **去向按证据齐不齐分流，不是一律等人**（见 analysis_service.route）：
     · test_defect / case_expired / env_issue / data_issue / flaky → `self_serve`，

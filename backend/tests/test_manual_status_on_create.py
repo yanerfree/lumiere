@@ -1,7 +1,7 @@
 """带步骤新建的用例，手工维度不该停在 draft。
 
 活体跑回推链路时撞到的：MCP 建了一条带 3 步的用例，跑完接口全绿，
-`tb_check_branch` 却一直挂着「有脆弱点：manual 维度还在 draft」，
+`lum_check_branch` 却一直挂着「有脆弱点：manual 维度还在 draft」，
 判词还让人去"改一下步骤重存" —— 而那条用例从头到尾没错过。
 
 根子在时序：`sync_manual_status` 跑在 flush **之前**，列的 server_default 还没落下来，

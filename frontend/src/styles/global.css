@@ -662,7 +662,7 @@ textarea.ant-input-disabled {
   background: transparent !important;
 }
 /* 非 antd 的裸 <table>（少数页面手写的）也给圆角，别一块直角混在里面 */
-.tb-table,
+.lum-table,
 table.plain-table {
   border-radius: var(--radius-lg);
   overflow: hidden;
@@ -700,7 +700,7 @@ table.plain-table {
    工具页各写了一套：OAuth2 Mock 0.7 白、HTTP 请求 0.7、协议 Mock 0.5、
    LLM Mock 0.25、MCP Mock 全透，而且**全是直角**，所以并排看像五个不同产品。
    统一成一个类：同一档底色 + 上方 16px 圆角（跟面板的圆角对齐）。 */
-.tb-page-strip {
+.lum-page-strip {
   background: var(--strip-bg) !important;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0 !important;
   border-bottom: 1px solid rgba(0, 0, 0, 0.05) !important;
@@ -709,7 +709,7 @@ table.plain-table {
 }
 
 /* 页面级的大面板（表格容器、左右分栏的两侧）—— 圆角 + 统一底色 */
-.tb-panel {
+.lum-panel {
   background: var(--panel-bg) !important;
   border-radius: var(--radius-lg) !important;
   backdrop-filter: blur(10px);
@@ -717,14 +717,14 @@ table.plain-table {
 }
 
 /* --- 列表里的"时间"列：统一等宽 + 次要色，让它不抢主信息 --- */
-.tb-time-cell {
+.lum-time-cell {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   color: var(--text-secondary);
   letter-spacing: 0;
   white-space: nowrap;
 }
-.tb-time-cell .tb-time-date {
+.lum-time-cell .lum-time-date {
   color: var(--text-regular);
 }
 

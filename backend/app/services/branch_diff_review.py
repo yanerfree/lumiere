@@ -1,6 +1,6 @@
 """照抄堆自动过审 + 废弃审核。文档：docs/version-upgrade-branch-diff.md §5 §6
 
-两件事共用一个入口 `tb_review_case`（§6：合进去，不新开工具），所以放在一起。
+两件事共用一个入口 `lum_review_case`（§6：合进去，不新开工具），所以放在一起。
 
 **照抄堆为什么可以不走 AI 六维审**：清单命中的是「端点变了 / 字段变了 / 新增了
 状态值」。一条用例**没被命中**就意味着它碰的接口和字段新版本全没动、新增的东西
@@ -40,7 +40,7 @@ def _dims_for(target_level: str | None) -> list[str]:
 # ── 照抄堆自动过审：四条件 ────────────────────────────────────
 
 def _bite_ok(case, live_fp: str | None) -> tuple[bool, str]:
-    """条件 4：断言咬得住。判据是 `tb_check_assertion_bite` **落库的**结论。
+    """条件 4：断言咬得住。判据是 `lum_check_assertion_bite` **落库的**结论。
 
     跑绿不等于断言有效：方向写反的断言是绿的，恒真断言（动作前后都成立）也是绿的。
     数量和指纹都判不了这件事，只有「删掉原因、看结果是否消失」能判。
@@ -48,7 +48,7 @@ def _bite_ok(case, live_fp: str | None) -> tuple[bool, str]:
     br = case.bite_result or {}
     summary = br.get("summary") or {}
     if not summary:
-        return False, ("没有断言咬合结论 —— 跑一次 tb_check_assertion_bite("
+        return False, ("没有断言咬合结论 —— 跑一次 lum_check_assertion_bite("
                        "case_id, skip_steps='那个改状态的动作步名', env_id)")
     if br.get("fingerprint") and live_fp and br["fingerprint"] != live_fp:
         return False, "断言咬合结论是改动之前那一版的，已过期，重跑一次"
@@ -75,11 +75,11 @@ async def auto_approve_reason(
         return False, "不是从别的分支复制来的（没有源用例），谈不上「与上一版逐字一致」", False
     if not case.content_fingerprint:
         return False, ("内容指纹已失效 —— 复制之后内容被改过（哪怕只改了标题）。"
-                       "改过就走 AI 审：tb_review_case(case_id, run_first=true, env_id)"), False
+                       "改过就走 AI 审：lum_review_case(case_id, run_first=true, env_id)"), False
     live_fp = await compute_fingerprint(session, case.id)
     if live_fp != case.content_fingerprint:
         return False, ("内容跟复制那一刻已经不一致（接口场景正文或 UI 脚本被改过）。"
-                       "改过就走 AI 审：tb_review_case(case_id, run_first=true, env_id)"), False
+                       "改过就走 AI 审：lum_review_case(case_id, run_first=true, env_id)"), False
 
     # 「上一版已审通过」—— 自动过审是拿上一版的审核结论续期，
     # 上一版没通过就没有结论可续。
@@ -142,13 +142,13 @@ async def hit_case_ids_of(session: AsyncSession, branch_id: uuid.UUID) -> set | 
 
 
 NO_BATCH_NOTE = ("这个分支还没对过账（一个对账批次都没有），所以「未被清单命中」"
-                 "在原理上不成立 —— 一条都不自动过审。先 tb_list_branch_endpoints "
-                 "+ tb_apply_endpoint_diff。")
+                 "在原理上不成立 —— 一条都不自动过审。先 lum_list_branch_endpoints "
+                 "+ lum_apply_endpoint_diff。")
 
 
 REVOKE_TEXT = ("内容改过了，原自动过审失效 —— 自动过审的判据是「内容与上一版逐字一致」，"
                "内容一变这个判据就不成立。改过的内容必须走 AI 审："
-               "tb_review_case(case_id, run_first=true, env_id)。")
+               "lum_review_case(case_id, run_first=true, env_id)。")
 
 
 def revoke_auto_approval(case, why: str = REVOKE_TEXT) -> bool:
@@ -176,8 +176,8 @@ async def revoke_diverged(session: AsyncSession, branch_id, commit: bool = False
     """把**内容已经跟复制那一刻不一致**的自动过审全部撤回。
 
     为什么要在这里重算而不是在每个写入口挂钩子：改内容的路不止一条 ——
-    tb_update_case 改步骤/预期/标题、tb_sync_orchestrated_scenario 改接口场景正文、
-    tb_sync_ui_script 改 UI 脚本。逐个挂钩子，漏一条就留一个**假绿**：
+    lum_update_case 改步骤/预期/标题、lum_sync_orchestrated_scenario 改接口场景正文、
+    lum_sync_ui_script 改 UI 脚本。逐个挂钩子，漏一条就留一个**假绿**：
     那条用例顶着「已通过」，而它通过的依据（内容与上一版逐字一致）早就不成立了。
 
     重算指纹是**路径无关**的：不管谁改的、从哪改的，对不上就撤。
@@ -344,7 +344,7 @@ def _evidence_gaps(evidence: dict | None) -> list[str]:
 async def request_deprecate(
     session: AsyncSession, case_id: str, reason: str, evidence: dict | None = None,
 ) -> dict:
-    """提请废弃一条用例。**独立工具，不塞进 tb_update_case** ——
+    """提请废弃一条用例。**独立工具，不塞进 lum_update_case** ——
     塞进去会被顺手带过（改标题时把用例一起废了），而且这里要硬校验证据。"""
     from app.models.case import Case
 
@@ -399,7 +399,7 @@ async def request_deprecate(
         "deprecate_status": "requested",
         "说明": ("已挂上「待废审」。**用例状态一个字没动** —— lifecycle_status "
                  "要等批准才落 deprecated。"),
-        "下一步": ("tb_review_case(case_id) —— 这条用例有待决废弃请求时它不审六维，"
+        "下一步": ("lum_review_case(case_id) —— 这条用例有待决废弃请求时它不审六维，"
                    "改审「该不该废」：平台自己复核接口那半边（真打老端点看是不是 "
                    "404/410），UI 那半边看你交的证据。探不出来落人，不会自己拍。"),
     }
@@ -534,7 +534,7 @@ async def review_deprecate(
         "caseCode": case.case_code,
         "留痕": "decidedBy=ai，理由和证据都在 deprecate_reason 里，可撤销回草稿",
         "副作用": ("这条从此不进待办队列、不进批量回归、不算进通过率分母。"
-                   "tb_list_cases 显式传 lifecycle_status=deprecated 还查得到"
+                   "lum_list_cases 显式传 lifecycle_status=deprecated 还查得到"
                    "（不然废了就再也找不着，撤销都撤不了）。"),
     }
 

@@ -96,17 +96,17 @@ def test_工具注册了并且进了UI脚本档():
     from app.mcp import TOOL_CATALOG
     from app.mcp.profiles import PROFILES
 
-    assert "tb_upsert_i18n_terms" in {t["name"] for t in TOOL_CATALOG}
+    assert "lum_upsert_i18n_terms" in {t["name"] for t in TOOL_CATALOG}
     for key in ("uiscript", "live"):
         p = next(x for x in PROFILES if x["key"] == key)
-        assert "tb_upsert_i18n_terms" in p["tools"], key
+        assert "lum_upsert_i18n_terms" in p["tools"], key
 
 
 def test_规范里指向这个通道并说清两种查不到的后果():
     """键查不到返回键名 → 选择器必挂（假红，排查的人会误判成产品缺陷）；
     中文查不到返回中文 → 不挂。两者后果不同，不写清就没法自己判断该用哪种。"""
     from app.mcp.tools.sync import _SPEC_UI_SCRIPT as spec
-    assert "tb_upsert_i18n_terms" in spec
+    assert "lum_upsert_i18n_terms" in spec
     assert "退回中文" in spec and "找不到元素" in spec
     assert "TEST_LANGUAGE=en" in spec, "没说本地怎么跑英文，纪律在本地就验不了"
 

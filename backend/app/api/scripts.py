@@ -131,8 +131,8 @@ async def create_script(
 # 重新启用的三条判据见该文档红线 1：①探索期数据隔离 ②跑满 20 条测广度
 # ③两条都过了再评估作为「批量首稿」通道回来。
 #
-# 现在的通道：外部 Claude Code 本地写好跑通 → tb_sync_ui_script 回推 →
-# tb_run_ui_script 让平台在标准环境执行确认。
+# 现在的通道：外部 Claude Code 本地写好跑通 → lum_sync_ui_script 回推 →
+# lum_run_ui_script 让平台在标准环境执行确认。
 # ────────────────────────────────────────────────────────────────────
 
 @router.get("/preflight")
@@ -202,7 +202,7 @@ async def run_script(
         content, _ = render_text(content, await load_locale_table_for_case(session, case_id),
                                  locale_of(env_vars))
 
-    sandbox_dir = tempfile.mkdtemp(prefix="tb_run_")
+    sandbox_dir = tempfile.mkdtemp(prefix="lum_run_")
     try:
         script_path = Path(sandbox_dir) / file_name
         script_path.parent.mkdir(parents=True, exist_ok=True)
@@ -299,7 +299,7 @@ async def _run_typescript_stream(script, case_id, env_vars, user, session):
     import json
     import time as time_mod
 
-    sandbox_dir = tempfile.mkdtemp(prefix="tb_ts_run_")
+    sandbox_dir = tempfile.mkdtemp(prefix="lum_ts_run_")
     try:
         from app.services.ai.verify_tool import FIXTURE_SHIM, GLOBAL_SETUP, _link_node_modules
         import os as os_mod
@@ -464,7 +464,7 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
         })
         return
 
-    sandbox_dir = tempfile.mkdtemp(prefix="tb_run_")
+    sandbox_dir = tempfile.mkdtemp(prefix="lum_run_")
     script_path = Path(sandbox_dir) / file_name
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text(content, encoding="utf-8")

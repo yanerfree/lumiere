@@ -70,7 +70,7 @@ async def stale_map(session: AsyncSession, case_ids) -> dict[uuid.UUID, bool]:
 
     为什么列表也要知道（原反馈 #1 的遗留）：`list_rounds` 的 `stale` 只到详情页
     的时间线上，列表上那个"通过/打回"标签照旧 —— 于是一条 approved 的用例被
-    `tb_sync_ui_script` 换过脚本之后，在列表上仍然是干干净净的"通过"，
+    `lum_sync_ui_script` 换过脚本之后，在列表上仍然是干干净净的"通过"，
     没人会想到去点开看那个结论是对着哪一版算的。
 
     **只读派生，不动 `review_status`**：照抄 `display_status()` 的取舍
@@ -182,10 +182,10 @@ async def record_edit(session: AsyncSession, case_id, *, note: str,
     """CC 改了用例内容 —— 在时间线上留一条痕迹。返回记下的那一行，没记则 None。
 
     **为什么非要有它**：`cc_resubmit` 只在「被打回 + 回推接口场景」这一条路上记
-    （`sync._reflect_block`），而 CC 更常用的是 `tb_update_case` 改步骤/预期、
-    `tb_sync_ui_script` 换脚本 —— 那些一律不记。后果是同一条用例连审几轮，
+    （`sync._reflect_block`），而 CC 更常用的是 `lum_update_case` 改步骤/预期、
+    `lum_sync_ui_script` 换脚本 —— 那些一律不记。后果是同一条用例连审几轮，
     时间线上只有几个分数在上下跳，**看不出中间到底改没改**：实测 TC-DYGL-00001
-    一天审了 8 轮（79→71→76→76→74→77→89 通过），中间 6 次 `tb_update_case`，
+    一天审了 8 轮（79→71→76→76→74→77→89 通过），中间 6 次 `lum_update_case`，
     而"改了再审"和"原样再审"在库里长得一模一样。模型给的分本来就抖
     （同一条 86 和 78 是常事，见 `score_and_verdict` 的注释），
     分不开这两者，"改到过为止"和"刷到过为止"就既无法证实也无法证伪。

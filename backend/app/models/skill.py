@@ -1,8 +1,8 @@
 """项目 Skill —— 从项目侧推上平台、可被其它项目取用的 Claude Code 工作流。
 
-与 `app/skills/preset/` 下的内置 `tb-*` 是两类东西，边界是**谁执行**：
+与 `app/skills/preset/` 下的内置 `lum-*` 是两类东西，边界是**谁执行**：
 
-- 内置 `tb-*`（文件系统）= **平台侧执行**。skill_executor 读 SKILL.md 当 prompt
+- 内置 `lum-*`（文件系统）= **平台侧执行**。skill_executor 读 SKILL.md 当 prompt
   喂给后端 LLM，每个都在「AI 能力→模型」里绑一个模型档位。
 - 本表（DB）= **客户端侧执行**。跑在开发者机器的 Claude Code 里，用 Bash/Edit/
   Playwright 这些本地工具，平台只做存取，永不执行。

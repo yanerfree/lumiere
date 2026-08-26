@@ -1112,7 +1112,7 @@ export default function CaseManagement() {
       // 结论出具之后场景/UI 脚本又被改过（`reviewStale`，只读派生字段，见
       // `rounds.stale_map`）。**标签本身不改** —— 它确实是通过/打回；但列表上
       // 必须看得出"这个结论对的是哪一版"：一条 approved 的用例被
-      // tb_sync_ui_script 换过脚本之后，原来在列表上干干净净，没人会想到
+      // lum_sync_ui_script 换过脚本之后，原来在列表上干干净净，没人会想到
       // 点开看那个结论算的是旧内容（原反馈 #1）。
       // **缺键/null = 判不出来，不当过期处理** —— 存量轮次没存签名，不猜。
       const stale = row.reviewStale === true
@@ -1452,11 +1452,11 @@ export default function CaseManagement() {
                     实现和数据一概没动，下线的只是入口；用例仍由外部 CC 活体验证后回推。 */}
                 {/* 「从接口生成」已下线（2026-08-19 用户决定）：它建的是 testforge task JSON，
                     真正生成用例的是 CC 侧 /tf-forge —— 平台这一步只是替 CC 拼一份任务文件，
-                    而 CC 自己就能读接口树（tb_list_api_tree / tb_get_api_node）。
+                    而 CC 自己就能读接口树（lum_list_api_tree / lum_get_api_node）。
                     后端 /testforge/* 端点保留：tf-forge skill 还按老 task 文件跑得动。 */}
                 {/* 批量「AI 生成脚本」已下线：走的是 scripts/generate-stream 那条平台侧生成管道，
                     实测跑不通（详情页的单条入口同批下线）。UI 脚本改由外部 Claude Code 写好跑通后
-                    经 tb_sync_ui_script 回推。 */}
+                    经 lum_sync_ui_script 回推。 */}
                 <Tooltip title="按六维逐条审核（场景合理性/验证点到位/接口必要性/UI脚本/覆盖遗漏/纪律）：勾选了就评勾选的，没勾就评当前模块。结论落库到审核标签和评分">
                   <Button icon={<SearchOutlined />} onClick={() => handleQualityReview()}>AI 审核</Button>
                 </Tooltip>

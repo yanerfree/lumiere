@@ -21,7 +21,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # 截图落盘目录。同机可达，CC 用 Read 直接打开。
-SHOT_DIR = Path(tempfile.gettempdir()) / "testbench_evidence"
+SHOT_DIR = Path(tempfile.gettempdir()) / "lumiere_evidence"
 
 MAX_SHOTS = 4
 MAX_INTERESTING = 20

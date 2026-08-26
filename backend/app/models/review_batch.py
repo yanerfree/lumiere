@@ -29,7 +29,7 @@ from app.models.user import Base
 # 抽审、增量只能说"这几条过了"，否则挑三条好的一审就能宣布模块没问题。
 #
 # `cc_inline` 跟其余五种**不是一回事**：那五种都是队列拥有的批次（`queue.enqueue`
-# 排进去、worker 捡起来跑）；`cc_inline` 是 `tb_review_case` 在进程内直接跑的，
+# 排进去、worker 捡起来跑）；`cc_inline` 是 `lum_review_case` 在进程内直接跑的，
 # 账本上这一行只是"正在审"的标记 + 防重复的锁。两者混用会出两种事故：
 #   ① 队列 worker 把 CC 的内联行当待跑批次捡走，凭空多跑一遍（还固定真跑）；
 #   ② 重启收尾把它退回 queued，同样多跑一遍。

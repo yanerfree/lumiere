@@ -14,7 +14,7 @@
 ②③ 这两条的共同形状是"所有断言都打在同一个入口上"。
 **数据面入口叫什么，平台不猜也不硬编码** —— 每个项目不一样（网关叫 gatewayBase，
 别的项目可能是另一套）。CC 在测的过程中摸清了，就自己写进共享数据
-（tb_upsert_automation_resource），下次用 ${资源名} 取。这里只判"是不是只打了一个入口"。
+（lum_upsert_automation_resource），下次用 ${资源名} 取。这里只判"是不是只打了一个入口"。
 """
 from __future__ import annotations
 
@@ -140,7 +140,7 @@ def single_entry_effect(steps: list[dict], title: str = "") -> list[dict]:
 
     「转 approved」只是控制面写了个状态；真正的生效判据是**拿那个凭据去调
     需要认证的服务通不通**、或者**页面上那个入口还灰不灰**。
-    平台不猜你的数据面叫什么：摸清了就写进共享数据（tb_upsert_automation_resource），
+    平台不猜你的数据面叫什么：摸清了就写进共享数据（lum_upsert_automation_resource），
     下次 ${资源名} 直接取。
     """
     hosts = {h for st in steps if (h := _host_var(st.get("url", "")))}
@@ -159,7 +159,7 @@ def single_entry_effect(steps: list[dict], title: str = "") -> list[dict]:
              f"这条在验「生效」（{names}），但所有请求都打在 ${{{only}}} 一个入口上。"
              f"控制面的状态字段变了不等于真生效 —— 判据是拿凭据去调那个需要认证的服务、"
              f"或者看页面上入口还灰不灰。这个项目的数据面入口摸清了就写进共享数据"
-             f"（tb_upsert_automation_resource），之后 ${{资源名}} 直接取。"}]
+             f"（lum_upsert_automation_resource），之后 ${{资源名}} 直接取。"}]
 
 
 def control_group_in_one(steps: list[dict]) -> list[dict]:

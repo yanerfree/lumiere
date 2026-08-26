@@ -37,7 +37,7 @@ MAX_BATCH = 30          # 一次最多评这么多条 —— 再多就该分模�
 
 
 async def _config(project_id: uuid.UUID, session: AsyncSession):
-    cfg = await resolve_ai_config(project_id, session, capability="tb-quality-review")
+    cfg = await resolve_ai_config(project_id, session, capability="lum-quality-review")
     if not cfg:
         raise AppError(code="AI_NOT_CONFIGURED", message="AI 服务未配置", status_code=503)
     return cfg

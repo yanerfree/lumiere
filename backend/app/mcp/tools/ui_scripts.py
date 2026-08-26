@@ -50,9 +50,9 @@ async def run_ui_script(
     script = await script_service.get_active_script(session, cid, "ui")
     if not script:
         return {"status": "error",
-                "message": "没有可执行的 UI 脚本 —— 先用 tb_sync_ui_script 把你本地"
+                "message": "没有可执行的 UI 脚本 —— 先用 lum_sync_ui_script 把你本地"
                            "写好并跑通的脚本回推上来。（平台侧生成已封存，"
-                           "**没有 tb_generate_ui_script 这个工具**。）"}
+                           "**没有 lum_generate_ui_script 这个工具**。）"}
 
     # 全局变量 + 环境变量（同名以环境为准）。见 variable_service.build_run_env ——
     # 四条执行路径原来各写一份 select，全局变量一条都没被注入过。
@@ -117,13 +117,13 @@ async def run_ui_script(
             "textPlaceholdersUnresolved": left,
             "why": ("跑了也没意义：正例会红在「找不到元素」上，而「不应出现」那类断言会"
                     "**假绿**（未替换的占位匹配不到任何元素，'不该存在'当然成立）。"),
-            "fix": ("两条任选一条：① tb_upsert_i18n_terms(project_id, "
+            "fix": ("两条任选一条：① lum_upsert_i18n_terms(project_id, "
                     "items=[{key, zh, en}]) 把这几个键登记上；"
                     "② 占位里补中文原文写成 ${键|中文原文}（英文环境下会退回中文，"
                     "不挂但测的是中文那一版）。"),
         }
 
-    sandbox_dir = tempfile.mkdtemp(prefix="tb_ui_")
+    sandbox_dir = tempfile.mkdtemp(prefix="lum_ui_")
     try:
         script_path = Path(sandbox_dir) / file_name
         script_path.parent.mkdir(parents=True, exist_ok=True)
@@ -187,8 +187,8 @@ async def run_ui_script(
         } for i, s in enumerate(steps, 1)],
         "screenshots_count": len(result.get("screenshots") or []),
         "case_status": case.ui_status if case else None,
-        # **runId 必须回**：跑完要归因（tb_submit_analysis 要它）。
-        # 不回的话 CC 得再调一次 tb_get_ui_script_result 去找 —— 活体验证时
+        # **runId 必须回**：跑完要归因（lum_submit_analysis 要它）。
+        # 不回的话 CC 得再调一次 lum_get_ui_script_result 去找 —— 活体验证时
         # 归因那一步就是因为拿不到 run_id 静默跳过的。
         "runId": str(run_row.id) if run_row is not None else None,
     }
@@ -211,7 +211,7 @@ async def run_ui_script(
                 out["ticket"] = {"id": str(t.id), "status": t.status,
                                  "phenomenon": t.phenomenon, "occurrences": t.occurrences,
                                  "recurrence": t.recurrence,
-                                 "next": "拿证据判原因 → tb_submit_analysis(run_id=上面那个 runId)"}
+                                 "next": "拿证据判原因 → lum_submit_analysis(run_id=上面那个 runId)"}
         except Exception:  # noqa: BLE001
             pass
     if not steps:
@@ -285,7 +285,7 @@ async def run_ui_scripts_batch(
     if blocked_by_bug:
         out["skippedBlockedByBug"] = blocked_by_bug
         out["note"] = (f"{len(blocked_by_bug)} 条卡在产品 bug，本轮没跑（不计入通过率）。"
-                       "bug 修好了就用 tb_update_case(bug_refs=[{...,'status':'fixed'}]) "
+                       "bug 修好了就用 lum_update_case(bug_refs=[{...,'status':'fixed'}]) "
                        "标一下，下轮会跑；跑绿后平台自动摘掉关联。")
     return out
 
@@ -299,9 +299,9 @@ async def get_ui_script_result(
     """最近一次执行的**证据包** —— UI 和接口场景都收。
 
     原来这里硬过滤 `script_type == "ui"`，于是**接口场景的失败拿不到证据包**：
-    没有 run_id、没有 error_summary、没有现象初判。而 `tb_submit_analysis` 必须带
+    没有 run_id、没有 error_summary、没有现象初判。而 `lum_submit_analysis` 必须带
     run_id、evidence 还要能对上这次执行 —— 等于接口那半边的归因链是断的。
-    偏偏 `tb_get_failed_scenarios` 对 api 计划照样把人指到这里来（它按
+    偏偏 `lum_get_failed_scenarios` 对 api 计划照样把人指到这里来（它按
     report_scenario_id 取 run，不分维度），所以这个断口是走得到的。
 
     接口执行没有截图和浏览器流量（那是浏览器才有的），但 error_summary、
@@ -310,10 +310,10 @@ async def get_ui_script_result(
 
     `script_type` 不传 = 取这条用例**最近的一次**执行，不管哪一维。
 
-    **要归因就把 `run_id` 传上**（`tb_get_failed_scenarios` 给的那个）。不传只能拿到
+    **要归因就把 `run_id` 传上**（`lum_get_failed_scenarios` 给的那个）。不传只能拿到
     「最近一次」，而这条用例可能已经被复跑过 —— 活体自测就撞到了：
     TC-DYGL-00013 有 6 次接口执行，最近一次是 passed，于是证据包里
-    error_summary/stdout 全空，什么指针都写不出来，而 `tb_submit_analysis`
+    error_summary/stdout 全空，什么指针都写不出来，而 `lum_submit_analysis`
     又明确拒收 passed 的执行。**报告里指着失败那一次，这里却给最新那一次** ——
     中间这个错位不补上，复跑过的用例就永远归不了因。
     """
@@ -377,9 +377,9 @@ async def get_ui_script_result(
             # 平台的初判：只判「是什么」（现象），「为什么」（归因）归你
             "failure_phenomenon": run.failure_phenomenon,
             # 这次是通过的就说一句 —— 通过的执行没有失败证据，
-            # 而 tb_submit_analysis 会直接拒收它，早点说清省一趟
+            # 而 lum_submit_analysis 会直接拒收它，早点说清省一趟
             "note": ("这次执行是**通过**的，没有失败证据可归因。要看失败那次，"
-                     "把 tb_get_failed_scenarios 给的 runId 传进来。"
+                     "把 lum_get_failed_scenarios 给的 runId 传进来。"
                      if (run.status or "") == "passed" else None),
             **evidence,
         },
@@ -477,11 +477,11 @@ async def render_ui_script(
         out["exportEnv"] = " ".join(f"{k}=<{k}>" for k in sorted(need_export))
         out["usage"] = ("content 存成 fileName，把 exportEnv 里那几个凭据 export 了直接 pytest 跑。"
                         "要一个不用 export 的自包含文件就传 include_credentials=true。"
-                        + ("textUnresolved 非空先 tb_upsert_i18n_terms 登记，或在占位里补 |中文原文。"
+                        + ("textUnresolved 非空先 lum_upsert_i18n_terms 登记，或在占位里补 |中文原文。"
                            if stat["missing"] else ""))
     else:
         out["usage"] = ("content 存成 fileName，直接 pytest 跑，不用再配任何东西。"
-                        + ("textUnresolved 非空先 tb_upsert_i18n_terms 登记。"
+                        + ("textUnresolved 非空先 lum_upsert_i18n_terms 登记。"
                            if stat["missing"] else ""))
     if not env_id:
         out["usage"] = "只渲染了文案 —— 传 env_id 才会烧进环境变量和语种开关。" + out["usage"]

@@ -3,7 +3,7 @@
 ## 为什么要分档
 
 42 个工具平铺给模型，它挑不准。实测过的具体后果：想回推活体验证成果的 CC
-看到 `tb_generate_api_test`（凭接口文档造场景），觉得更省事就走了它 ——
+看到 `lum_generate_api_test`（凭接口文档造场景），觉得更省事就走了它 ——
 正好是要避开的那条路。instructions 里写了"默认先活体验证"也拦不住，
 **软约束对模型是建议，工具范围才是墙**。
 
@@ -31,11 +31,11 @@
 from __future__ import annotations
 
 # 每条链都要先定位到项目/分支，单列出来避免各档位重复抄
-_LOCATE = ["tb_list_projects", "tb_list_branches"]
+_LOCATE = ["lum_list_projects", "lum_list_branches"]
 # 项目须知：动手前该读的那些「被测系统就是这样」。读放进 _LOCATE 之外
 # 单列，是因为归因档也要读（判断"这是缺陷还是系统本来如此"全靠它），
 # 但归因档刻意不给任何写库工具。
-_NOTES_READ = ["tb_list_project_notes"]
+_NOTES_READ = ["lum_list_project_notes"]
 
 # 档位名单列出来：全链路那一档的说明要**逐字引用**这四个名字拼出来。
 # 手写一句"写用例 → 回填接口场景和 UI 脚本 → 组计划跑一轮 → 读报告 → 提归因"
@@ -52,37 +52,37 @@ _LABELS = {
 # 又得回头猜哪个才算数。test_四段的排列顺序和说明一致 钉住了这条。
 _CHAIN = ["live", "uiscript", "regression", "triage"]
 
-_LIVE = _LOCATE + _NOTES_READ + ["tb_add_project_note"] + [
-    "tb_list_cases", "tb_get_case", "tb_get_folder_tree", "tb_create_case", "tb_update_case",
-    "tb_list_api_tree", "tb_get_api_node",
-    "tb_list_environments", "tb_get_merged_variables",
-    "tb_get_sync_spec", "tb_list_global_data",
-    "tb_upsert_scenario_variables", "tb_list_scenario_variables",
-    "tb_upsert_automation_resource",
-    "tb_sync_orchestrated_scenario",
+_LIVE = _LOCATE + _NOTES_READ + ["lum_add_project_note"] + [
+    "lum_list_cases", "lum_get_case", "lum_get_folder_tree", "lum_create_case", "lum_update_case",
+    "lum_list_api_tree", "lum_get_api_node",
+    "lum_list_environments", "lum_get_merged_variables",
+    "lum_get_sync_spec", "lum_list_global_data",
+    "lum_upsert_scenario_variables", "lum_list_scenario_variables",
+    "lum_upsert_automation_resource",
+    "lum_sync_orchestrated_scenario",
     # 断言里的错误提示语走 ${T:中文}，用的是同一份词典，所以这一档也要能登记
-    "tb_upsert_i18n_terms",
-    "tb_list_api_tests", "tb_get_api_test", "tb_run_api_test",
+    "lum_upsert_i18n_terms",
+    "lum_list_api_tests", "lum_get_api_test", "lum_run_api_test",
     # 跑绿之后还得回答"这些断言有没有用" —— 跳掉动作步再跑一遍，该红的必须红
-    "tb_check_assertion_bite",
+    "lum_check_assertion_bite",
     # 自己造的垃圾会反过来毁掉自己的断言（列表堆满之后 data[0] 指向别人）
-    "tb_check_env_hygiene",
+    "lum_check_env_hygiene",
     # 产出完自己先跑一遍交付门禁，别再自己宣布"这条可以交付了"
-    "tb_check_deliverable", "tb_check_branch",
+    "lum_check_deliverable", "lum_check_branch",
     # 六维评审，回推完自己先过一遍（blocker 一条都不许留着交上去）。
-    # **tb_review_case 和 tb_review_check 必须同档**：前者超时中止时唯一正确的
+    # **lum_review_case 和 lum_review_check 必须同档**：前者超时中止时唯一正确的
     # 下一步就是调后者查（评审是跑完就落库）—— 只发前者不发后者的话，超时之后
-    # CC 手上没有任何只读查询手段，只能重调 tb_review_case，而那正是要防的重复真跑。
-    "tb_review_case", "tb_review_check",
+    # CC 手上没有任何只读查询手段，只能重调 lum_review_case，而那正是要防的重复真跑。
+    "lum_review_case", "lum_review_check",
     # 推一批就送一批进队列 —— 别自己 for 循环调上面那个，那样并发真跑打同一个
     # 环境，同环境串行和熔断两道保护一条都吃不到（假打回就是这么来的）
-    "tb_review_batch", "tb_review_batch_status",
+    "lum_review_batch", "lum_review_batch_status",
     # 写完一批自己问一句「这个模块还缺什么」，拿到清单接着补，不用人催
-    "tb_module_checkup",
+    "lum_module_checkup",
     # 版本升级对账：新分支复制完，拿本机 git diff 跟平台的端点表求交集，
     # 把这批用例分成照抄/要改/该废/待补四堆。**跟主线同一档** ——
     # 单独开一档的话，干版本升级的人得同时选两档才能干完一件事。
-    "tb_list_branch_endpoints", "tb_apply_endpoint_diff", "tb_request_deprecate",
+    "lum_list_branch_endpoints", "lum_apply_endpoint_diff", "lum_request_deprecate",
 ]
 
 # Mock 上游 / 抓真实请求。**单独一档而不是塞进 live**：
@@ -90,40 +90,40 @@ _LIVE = _LOCATE + _NOTES_READ + ["tb_add_project_note"] + [
 # ②单独一张卡片，这个能力才**被看得见** —— 平台自己的工具没人知道怎么用，
 #   多半不是因为难用，是因为它只存在于某个菜单深处
 _MOCKS = [
-    "tb_llm_mock_status", "tb_upsert_llm_mock_route",
-    "tb_llm_mock_requests", "tb_llm_mock_reset", "tb_proxy_capture",
+    "lum_llm_mock_status", "lum_upsert_llm_mock_route",
+    "lum_llm_mock_requests", "lum_llm_mock_reset", "lum_proxy_capture",
 ]
 
 _UISCRIPT = _LOCATE + _NOTES_READ + [
-    "tb_list_cases", "tb_get_case",
-    "tb_get_sync_spec", "tb_list_global_data",
-    "tb_list_scenario_variables", "tb_upsert_scenario_variables",
-    "tb_list_environments", "tb_get_merged_variables",
-    "tb_sync_ui_script", "tb_run_ui_script", "tb_get_ui_script_result",
+    "lum_list_cases", "lum_get_case",
+    "lum_get_sync_spec", "lum_list_global_data",
+    "lum_list_scenario_variables", "lum_upsert_scenario_variables",
+    "lum_list_environments", "lum_get_merged_variables",
+    "lum_sync_ui_script", "lum_run_ui_script", "lum_get_ui_script_result",
     # 本地跑之前先渲染一份（文案占位在平台执行前才替换，本地跑要先换掉）
-    "tb_render_ui_script",
+    "lum_render_ui_script",
     # 文案纪律要求走 t()，那就得有地方登记词条 —— 缺这个通道，纪律就只能靠人工转抄
-    "tb_upsert_i18n_terms",
-    "tb_check_deliverable", "tb_check_branch",
-    "tb_review_case", "tb_review_check",
-    "tb_review_batch", "tb_review_batch_status", "tb_module_checkup",
+    "lum_upsert_i18n_terms",
+    "lum_check_deliverable", "lum_check_branch",
+    "lum_review_case", "lum_review_check",
+    "lum_review_batch", "lum_review_batch_status", "lum_module_checkup",
 ]
 
 _TRIAGE = _LOCATE + _NOTES_READ + [
-    "tb_list_plans", "tb_list_reports", "tb_get_report_summary",
-    "tb_get_failed_scenarios", "tb_get_ui_script_result", "tb_get_case",
-    "tb_submit_analysis", "tb_list_pending_confirm",
+    "lum_list_plans", "lum_list_reports", "lum_get_report_summary",
+    "lum_get_failed_scenarios", "lum_get_ui_script_result", "lum_get_case",
+    "lum_submit_analysis", "lum_list_pending_confirm",
     # 每轮上来先问"该干什么" —— 四个队列一次给全，不用自己拼
-    "tb_next_duty",
+    "lum_next_duty",
 ]
 
 _REGRESSION = _LOCATE + [
-    "tb_list_cases", "tb_list_environments",
-    "tb_create_plan", "tb_run_plan", "tb_list_plans",
-    "tb_list_reports", "tb_get_report_summary", "tb_get_failed_scenarios",
-    "tb_check_deliverable", "tb_check_branch",
-    "tb_run_ui_scripts_batch", "tb_list_api_tests", "tb_run_api_test",
-    "tb_next_duty",
+    "lum_list_cases", "lum_list_environments",
+    "lum_create_plan", "lum_run_plan", "lum_list_plans",
+    "lum_list_reports", "lum_get_report_summary", "lum_get_failed_scenarios",
+    "lum_check_deliverable", "lum_check_branch",
+    "lum_run_ui_scripts_batch", "lum_list_api_tests", "lum_run_api_test",
+    "lum_next_duty",
 ]
 
 # 主线那条完整的链。前面四档是它切开的段，单独用得上，但**最常见的用法是从头干到尾** ——
@@ -132,7 +132,7 @@ _REGRESSION = _LOCATE + [
 #
 # 它比别的档大得多（三十多个），这是有意的：这一档挡的不是"工具多"，而是那几条
 # **会把人带偏的岔路** —— Skill 存取、文档规范、接口库维护。
-# （需求文档流水线和 tb_generate_api_test 那两条岔路已整体下线，不用再挡了）
+# （需求文档流水线和 lum_generate_api_test 那两条岔路已整体下线，不用再挡了）
 _FULLLOOP = sorted(set(_LIVE + _UISCRIPT + _REGRESSION + _TRIAGE + _MOCKS))
 _FULLLOOP_TASK = "下面这四件活连起来干完：" + " → ".join(
     f"{n}{_LABELS[k]}" for n, k in zip("①②③④", _CHAIN)
@@ -187,7 +187,7 @@ PROFILES: list[dict] = [
     },
     # 「需求文档批量生成用例」档已删 —— 那条流水线的入口整体下线了，
     # 原因见 app/mcp/__init__.py 里「需求→用例流水线：已下线」那段注释。
-    # 原来这一档叫「只有接口文档，连不上系统」，配的是 tb_generate_api_test（凭文档造场景）。
+    # 原来这一档叫「只有接口文档，连不上系统」，配的是 lum_generate_api_test（凭文档造场景）。
     # 那个工具 2026-08-15 随「接口测试」模块一起下线 —— 它造出来的场景不绑用例，
     # 而场景变量只能挂在用例上，所以结构上就跑不了。这一档因此收敛回它真正干的事：
     # **维护接口库**（记系统有哪些接口、怎么调），供后面编排场景时查阅引用。
@@ -198,8 +198,8 @@ PROFILES: list[dict] = [
         "task": "把系统有哪些接口、怎么调记进接口库，供后续写用例和编排场景时查阅",
         "hint": "接口库只是文档，没有断言、不能执行。要可执行的接口场景，选「用例：步骤 + 接口场景」亲手跑通再回推",
         "tools": _LOCATE + [
-            "tb_list_api_tree", "tb_get_api_node", "tb_create_api_node",
-            "tb_list_api_tests", "tb_get_api_test",
+            "lum_list_api_tree", "lum_get_api_node", "lum_create_api_node",
+            "lum_list_api_tests", "lum_get_api_test",
         ],
     },
     {
@@ -207,14 +207,14 @@ PROFILES: list[dict] = [
         "label": "写操作/演示/验收文档",
         "task": "拿平台的文档规范，在本地实操被测系统、截图，产出带图文档",
         "hint": "平台只给模板和规范，实操和截图都在你本地 —— 它不需要写库权限",
-        "tools": _LOCATE + ["tb_get_doc_spec", "tb_list_cases", "tb_get_case"],
+        "tools": _LOCATE + ["lum_get_doc_spec", "lum_list_cases", "lum_get_case"],
     },
     {
         "key": "skill",
         "label": "Skill 取用与共享",
         "task": "把本项目的 skill 推上平台，或取用别的项目共享出来的",
         "hint": "存的是客户端侧执行的 skill（跑在你机器的 Claude Code 里），平台只做存取",
-        "tools": ["tb_list_projects", "tb_list_skills", "tb_pull_skill", "tb_push_skill"],
+        "tools": ["lum_list_projects", "lum_list_skills", "lum_pull_skill", "lum_push_skill"],
     },
     {
         "key": "all",
@@ -233,14 +233,14 @@ MODULE_SLOT = "{模块名}"
 #
 #   · 一连上就生效的那份 —— `app/mcp/__init__.py` 的 `instructions`（10.7k 字，
 #     内容比这里全得多，还带「预期不能照抄实测」这类只有它有的判据）。
-#   · 工具自己的描述 —— 判重看 tb_list_cases 的 owes/pending_only，
-#     模块缺口看 tb_module_checkup 的 coverageGaps。
-#   · **工具的返回值** —— 这是最强的一层：tb_next_duty 每条带「下一步该调哪个工具」、
-#     tb_check_deliverable 直接说卡在哪、tb_sync_orchestrated_scenario 推完当场把
+#   · 工具自己的描述 —— 判重看 lum_list_cases 的 owes/pending_only，
+#     模块缺口看 lum_module_checkup 的 coverageGaps。
+#   · **工具的返回值** —— 这是最强的一层：lum_next_duty 每条带「下一步该调哪个工具」、
+#     lum_check_deliverable 直接说卡在哪、lum_sync_orchestrated_scenario 推完当场把
 #     四问摊出来。规范在人需要它的那一刻才出现，不用先背下来。
 #
 # 抄进指令的代价不只是长：指令是无条件拼给每一档的，纪律里点名的工具却按档发 ——
-# 「先调 tb_list_cases」曾同时发给归因/Mock/接口库/Skill 四档，而这四档的 Key
+# 「先调 lum_list_cases」曾同时发给归因/Mock/接口库/Skill 四档，而这四档的 Key
 # 里根本没有这个工具，CC 照着做只能撞空。范围外的工具不许在指令里出现，
 # `test_接入指令不点名本档范围外的工具` 钉住了这条。
 #

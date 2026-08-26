@@ -76,7 +76,7 @@ async def generate_cases(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    config = await _get_ai_config(project_id, session, capability="tb-case-generate")
+    config = await _get_ai_config(project_id, session, capability="lum-case-generate")
 
     from app.services.ai.case_gen_service import build_case_gen_messages
     messages = build_case_gen_messages(

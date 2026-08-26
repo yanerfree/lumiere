@@ -200,7 +200,7 @@ def test_值班入口在triage和regression两档里():
     from app.mcp.profiles import PROFILES
     for key in ("triage", "regression"):
         p = next(x for x in PROFILES if x["key"] == key)
-        assert "tb_next_duty" in p["tools"], f"{key} 档里没有"
+        assert "lum_next_duty" in p["tools"], f"{key} 档里没有"
 
 
 # ── 页面侧 ───────────────────────────────────────────────────────
@@ -257,8 +257,8 @@ def test_用例模型上没有retest_pending():
 
 
 def test_跑完要把runId回出来():
-    """活体撞出来的：`tb_run_ui_script` 不回 run_id，而 `tb_submit_analysis` 要它 ——
-    CC 跑完想归因得再调一次 tb_get_ui_script_result 去找，归因链第一步就断了。
+    """活体撞出来的：`lum_run_ui_script` 不回 run_id，而 `lum_submit_analysis` 要它 ——
+    CC 跑完想归因得再调一次 lum_get_ui_script_result 去找，归因链第一步就断了。
     """
     import inspect
 
@@ -266,4 +266,4 @@ def test_跑完要把runId回出来():
     src = inspect.getsource(run_ui_script)
     assert '"runId": str(run_row.id)' in src
     assert '"ticket"' in src, "红了要把对应的跟进单一起给出来，别让它再查一遍"
-    assert "tb_submit_analysis(run_id=" in src, "要指路：下一步拿这个 runId 去归因"
+    assert "lum_submit_analysis(run_id=" in src, "要指路：下一步拿这个 runId 去归因"

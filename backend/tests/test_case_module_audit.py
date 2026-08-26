@@ -497,7 +497,7 @@ def test_评审的统计数字由平台算():
     from app.services.ai import skill_executor
 
     src = inspect.getsource(skill_executor)
-    i = src.index("tb-quality-review Skill")
+    i = src.index("lum-quality-review Skill")
     body = src[i:i + 9000]
 
     assert 'facts = {' in body, "平台没有自己算统计"
@@ -514,7 +514,7 @@ def test_没有api端点时不许列缺失的api():
     from app.services.ai import skill_executor
 
     src = inspect.getsource(skill_executor)
-    i = src.index("tb-quality-review Skill")
+    i = src.index("lum-quality-review Skill")
     body = src[i:i + 9000]
     assert 'cov["missingApis"] = []' in body
     assert 'cov["apisTotal"] = facts["apisTotal"]' in body
@@ -528,7 +528,7 @@ def test_评审要取全量而不是被静默截断():
     from app.services.ai import skill_executor
 
     src = inspect.getsource(skill_executor)
-    i = src.index("tb-quality-review Skill")
+    i = src.index("lum-quality-review Skill")
     body = src[i:i + 9000]
     assert "while True:" in body and "page += 1" in body, "没有分页取全"
     assert "page_size=200" not in body, "还在用会被静默截断的写法"
@@ -541,7 +541,7 @@ def test_抽样时必须在报告里说明():
     from app.services.ai import skill_executor
 
     src = inspect.getsource(skill_executor)
-    i = src.index("tb-quality-review Skill")
+    i = src.index("lum-quality-review Skill")
     body = src[i:i + 9000]
     assert 'sampledCases"] < facts["totalCases"]' in body
     assert "仅代表抽样部分" in body
@@ -867,7 +867,7 @@ def test_场景变量在所有执行路径都注册裸名():
 def test_执行服务里flaky_service是模块级导入():
     """函数内 import 只在那一个函数里有效。start_execution 用了却没导入，
     计划里只要有一条不是 executable 的用例就走到那个分支 → NameError
-    把整个计划执行打死。实测 tb_run_plan 直接崩。
+    把整个计划执行打死。实测 lum_run_plan 直接崩。
     """
     import ast
     import inspect
@@ -915,7 +915,7 @@ def test_不会执行的判据和执行器保持一致():
 @pytest.mark.asyncio
 async def test_接口场景也算可执行产物():
     """回归执行器此前只认 `scripts` 表的 api 脚本，而 MCP
-    `tb_sync_orchestrated_scenario` 回推的是 `api_test_scenarios`。
+    `lum_sync_orchestrated_scenario` 回推的是 `api_test_scenarios`。
 
     实测：全平台 8 条有接口场景的用例，**0 条**有 api 脚本 ——
     CC 这条链的接口产物一条都进不了计划回归，只能即席跑、不进通过率。
@@ -1753,9 +1753,9 @@ def test_Mock是独立一档不塞进用例档():
     keys = {p["key"] for p in PROFILES}
     assert "mocks" in keys, "Mock 没有自己的档位卡片，等于藏起来了"
     live = next(p for p in PROFILES if p["key"] == "live")
-    assert "tb_llm_mock_status" not in live["tools"], "又塞回 live 了"
+    assert "lum_llm_mock_status" not in live["tools"], "又塞回 live 了"
     full = next(p for p in PROFILES if p["key"] == "fullloop")
-    assert "tb_llm_mock_status" in full["tools"], "全链路档反而没有，选它的人用不上"
+    assert "lum_llm_mock_status" in full["tools"], "全链路档反而没有，选它的人用不上"
 
 
 # ── 回收站得能出来 ──────────────────────────────────────────────────
@@ -1915,14 +1915,14 @@ def test_接口场景列表不许被当成判重依据():
 
     但**要守的那件事没变**：这个列表说明的是"各用例的接口维度做没做"，
     说明不了"这个测试点写没写过"。实测跑偏过 —— CC 看到一条全绿就不写新用例了。
-    所以 usage 里必须把人指回 tb_list_cases。
+    所以 usage 里必须把人指回 lum_list_cases。
     """
     from app.mcp.tools import api_tests
 
     body = _code_of(api_tests, "list_api_test_scenarios")
     assert "standalone" not in body, (
         "standalone 分组还在 —— 它现在恒为空（NOT NULL 约束），留着是误导")
-    assert "tb_list_cases" in body, "没把判重指回 tb_list_cases，这个列表就会被拿去判重"
+    assert "lum_list_cases" in body, "没把判重指回 lum_list_cases，这个列表就会被拿去判重"
 
 
 def test_instructions说清无主场景不算数():
@@ -1937,7 +1937,7 @@ def test_instructions说清无主场景不算数():
     from app.mcp import mcp
 
     ins = mcp.instructions
-    assert "判重只看 tb_list_cases" in ins
+    assert "判重只看 lum_list_cases" in ins
     assert "无主场景" in ins
     # 只认一句原话太脆 —— 这条已经因为改文案红过一次（把"不要把它算进来"改成
     # "别算进判重"）。认意思：两种说法哪种都行，但**必须说了别拿它判重**。
@@ -1950,7 +1950,7 @@ def test_instructions说清无主场景不算数():
 
 def test_等待重试这个能力要送达CC():
     """加了能力不等于送达。实测：平台支持了 wait_ms/retry_timeout_ms，但
-    tb_get_sync_spec 的规范里没写、工具描述的参数列表里也没有 ——
+    lum_get_sync_spec 的规范里没写、工具描述的参数列表里也没有 ——
     CC 根本不知道它存在，只能沿用老办法（插「查版本历史」「查操作日志」这类
     真步骤去占时间窗），而那正是它自己说"很脆"的招。
 
@@ -1970,7 +1970,7 @@ def test_等待重试这个能力要送达CC():
 
     from app.mcp import TOOL_CATALOG
     desc = next(t["description"] for t in TOOL_CATALOG
-                if t["name"] == "tb_sync_orchestrated_scenario")
+                if t["name"] == "lum_sync_orchestrated_scenario")
     # 钉在 **steps 的参数列表**里，不是"描述里出现过这个词" ——
     # 末尾那句指引里也有它，光判 `in desc` 会被喂饱（本轮第十三次）。
     params = desc[desc.index("steps([{"):desc.index("}])")]

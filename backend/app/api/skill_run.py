@@ -33,7 +33,7 @@ class RunCaseGenerateRequest(BaseSchema):
     submodule: str | None = None
 
 
-@router.post("/tb-case-generate")
+@router.post("/lum-case-generate")
 async def run_case_generate(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
@@ -41,7 +41,7 @@ async def run_case_generate(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
 ):
-    ai_config = await resolve_ai_config(project_id, session, capability="tb-case-generate")
+    ai_config = await resolve_ai_config(project_id, session, capability="lum-case-generate")
     if not ai_config:
         raise AppError(
             code="AI_NOT_CONFIGURED",
@@ -82,11 +82,11 @@ async def run_case_generate(
 # 每条都带着自己的断言、脚本、执行记录去评，判定规则在平台代码里。
 # executor 里的 execute_quality_review 先留着不动 —— 它还接着 knowledge 回填那条路。
 # ── 平台侧「AI 失败诊断」已下线（2026-08-08）────────────────────────
-# 原 POST /tb-diagnose 在此摘掉。三个理由：
+# 原 POST /lum-diagnose 在此摘掉。三个理由：
 #   1. 前端从来没有调用方 —— 能力总览页写着"测试报告 → 失败用例旁「AI 诊断」按钮"，
 #      那个按钮不存在，是一条只在文案里活着的能力。
 #   2. 和已定的三层失败判断直接冲突：现象由平台按规则算，归因由外部 Claude Code
-#      提（tb_submit_analysis），结论由人确认。平台自己再诊断一份就是第四个声音。
+#      提（lum_submit_analysis），结论由人确认。平台自己再诊断一份就是第四个声音。
 #   3. 留着路由 = 留一条"平台也能归因"的暗路，和 docs/cc-platform-loop-spec.md
 #      红线 3 是同一条纪律。
 # skill_executor.execute_diagnose 暂留（已无调用方），要复活先改红线再说。

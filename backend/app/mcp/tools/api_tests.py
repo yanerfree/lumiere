@@ -1,8 +1,8 @@
 """MCP 工具 — 接口场景的查询与执行。
 
-生成不在这里：2026-08-15 下线「接口测试」模块时一并摘掉了 tb_generate_api_test
+生成不在这里：2026-08-15 下线「接口测试」模块时一并摘掉了 lum_generate_api_test
 （凭接口文档 AI 造场景）。生成归外部 Claude Code，平台只做呈现和回推通道。
-回推走 tb_sync_orchestrated_scenario。
+回推走 lum_sync_orchestrated_scenario。
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ async def list_api_test_scenarios(
     ⚠ 返回类型标注必须跟真实返回一致：这里返回的是 `{scenarios, total, usage}` 对象，
     标注写成 `list[dict]` 的话 **FastMCP 会照标注生成 outputSchema**，
     真调时客户端拿数组的 schema 去校验对象，直接
-    `RuntimeError: Invalid structured content returned by tool tb_list_api_tests`。
+    `RuntimeError: Invalid structured content returned by tool lum_list_api_tests`。
     页面侧没事（它不校验 schema），只有 MCP 那条路会炸 —— 活体自测撞出来的。
     """
     q = select(ApiTestScenario).where(ApiTestScenario.branch_id == uuid.UUID(branch_id))
@@ -61,7 +61,7 @@ async def list_api_test_scenarios(
         "scenarios": rows,
         "total": len(rows),
         "usage": "这里列的是**各用例的接口维度产物**，一个用例最多一条。"
-                 "判「这个测试点写没写过」用 tb_list_cases，别拿这个列表判 —— "
+                 "判「这个测试点写没写过」用 lum_list_cases，别拿这个列表判 —— "
                  "看到一条全绿就以为「已经有了」，实测跑偏过。",
     }
 
@@ -213,7 +213,7 @@ async def run_api_test(
                 results.append({
                     "precheck": "共享资源没探到 —— 引用 ${资源名} 的步骤会直接不发请求（statusCode 为空）",
                     "missing": miss,
-                    "howToFix": "按 tb_list_global_data(probe=true) 看它的 createDef 自己把资源造出来；"
+                    "howToFix": "按 lum_list_global_data(probe=true) 看它的 createDef 自己把资源造出来；"
                                 "或检查 exists_check.extract 的 JSONPath 是不是没抽到值。",
                 })
         elif event.type == "scenario_done":
@@ -333,7 +333,7 @@ async def check_assertion_bite(
 
     只读：不写步骤状态、不建报告、不动用例维度 —— 它是一次诊断，不是一次回归。
     ⚠ 但**请求是真发的**：没被跳掉的步骤照跑，会在被测系统里造数据。
-    跳的正是清理步时，那一趟的残留不会被删，也不在 tb_check_env_hygiene 的视野里
+    跳的正是清理步时，那一趟的残留不会被删，也不在 lum_check_env_hygiene 的视野里
     （变异运行不留痕）—— 自己收尾。
 
     参数: case_id(用例UUID), skip_steps(要跳掉的步骤名，多个用逗号分隔),

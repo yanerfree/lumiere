@@ -7,7 +7,7 @@
 `_OWNER_SQL`、`app/deps/scope.py`、迁移 `zzo0envproj`。封样测试：
 `tests/test_mcp_data_scope.py`（24 条）、`tests/test_env_project_scoped.py`（15 条）。
 
-工具范围（哪些 tb_* 露给这把 Key）已经实现且工作正常，在
+工具范围（哪些 lum_* 露给这把 Key）已经实现且工作正常，在
 [`backend/app/mcp/middleware.py`](../backend/app/mcp/middleware.py)。这份文档管的是
 **数据范围**：那把 Key 能读到、能改到哪些项目的东西。
 
@@ -40,12 +40,12 @@ curl -s -X POST http://127.0.0.1:18800/mcp/ -H "mcp-session-id: $SID" \
 # → 返回全部 6 个项目
 curl -s -X POST http://127.0.0.1:18800/mcp/ -H "mcp-session-id: $SID" \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"tb_list_projects","arguments":{}}}'
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"lum_list_projects","arguments":{}}}'
 
 # → 拿上一步任意项目的 id，照样列得出它的分支，再往下就是用例
 curl -s -X POST http://127.0.0.1:18800/mcp/ -H "mcp-session-id: $SID" \
   -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
-  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"tb_list_branches","arguments":{"project_id":"<别的项目>"}}}'
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"lum_list_branches","arguments":{"project_id":"<别的项目>"}}}'
 ```
 
 三处根因，各自独立：
@@ -54,13 +54,13 @@ curl -s -X POST http://127.0.0.1:18800/mcp/ -H "mcp-session-id: $SID" \
 |---|---|---|
 | 1 | [`main.py`](../backend/app/main.py) `MCPAuthMiddleware` | 没有 bearer 且 `MCP_API_KEY` 未设 → **直接放行**。平台监听 `0.0.0.0`，同局域网谁都能连 |
 | 2 | [`middleware.py`](../backend/app/mcp/middleware.py) | Key 的 `project_id` 只用来查 `projects.mcp_allowed_tools`。没有 `current_caller_project_id()` 这种东西 |
-| 3 | 全部 52 个 tb_* 工具 | `project_id`/`branch_id`/`case_id` 都是**调用方传进来的入参**，直接拿去查库。既不跟 Key 的项目比对，也不走 `require_project_role`/[`deps/scope.py`](../backend/app/deps/scope.py) |
+| 3 | 全部 52 个 lum_* 工具 | `project_id`/`branch_id`/`case_id` 都是**调用方传进来的入参**，直接拿去查库。既不跟 Key 的项目比对，也不走 `require_project_role`/[`deps/scope.py`](../backend/app/deps/scope.py) |
 
 三条都已修（2026-08-21）：① 删掉那条放行分支，`env_key` 降级成可选的额外通道，
 不再是"设了才开始检查"的总开关；② `_lookup_key()` 多带出 `project_id`；
 ③ `on_call_tool` 里按 `_OWNER_SQL` 反查入参归属。
 
-`tb_list_projects` 更直接：`select(Project)` 无 where，描述里还写着
+`lum_list_projects` 更直接：`select(Project)` 无 where，描述里还写着
 「Claude Code 用于确定要操作的目标项目」—— 等于明确请它自己在 6 个项目里挑。
 
 **HTTP 侧这个坑早就堵过。** `deps/scope.py` 开头那段记着实测结果：
@@ -112,8 +112,8 @@ MCP 侧是同一个坑，而现在写库的主力恰恰是 CC。
 
 另外两处要单独改（它们没有 id 入参，反查表管不到）：
 
-- `tb_list_projects` → 按 Key 的项目过滤。
-- `tb_list_environments` → 同上，**§4 落地之后**。
+- `lum_list_projects` → 按 Key 的项目过滤。
+- `lum_list_environments` → 同上，**§4 落地之后**。
 
 ### 存量 Key 的口径
 
@@ -179,7 +179,7 @@ select name, key_prefix, project_id, last_used_at from mcp_api_keys where is_act
   连带修掉三处会静默串项目的查询：`put_variables` 那句无条件
   `delete(GlobalVariable)`（**任何项目点一次保存就清空全平台**）、
   `build_run_env`（A 项目的执行会被 B 项目的 `TEST_LANGUAGE` 覆盖）、
-  `get_merged_variables` 和 `tb_list_global_data`。
+  `get_merged_variables` 和 `lum_list_global_data`。
 - **`notification_channels` 留全局。** 通知渠道是平台设施，不是项目资产。
   这条是真该留的，别跟上面那条搞混。
 - **[`api/variables.py`](../backend/app/api/variables.py) 补了项目归属校验。**
@@ -291,7 +291,7 @@ CLAUDE.md 里那句「直接占用 `/v1/chat/completions` 会被拒，你配成 
 | # | 事情 | 状态 |
 |---|---|---|
 | 1 | 堵匿名放行 | ✅ 删掉放行分支；`_deny()` 统一出口；查库失败也 fail closed |
-| 2 | MCP 项目归属校验 | ✅ `_OWNER_SQL` 覆盖 14 个参数名，`tb_list_projects` 自己过滤 |
+| 2 | MCP 项目归属校验 | ✅ `_OWNER_SQL` 覆盖 14 个参数名，`lum_list_projects` 自己过滤 |
 | 3 | 环境改项目级 | ✅ 迁移 + 模型 + 服务 + 路由 + 20 处前端调用 + 页面搬家 |
 | 3b | 全局变量改项目级 + 新项目默认数据 | ✅ 迁移 `zzp0gvarproj`；连带修掉 3 处会静默串项目的查询 |
 | 3c | 自动化数据页去掉「凭证概览」 | ✅ 跟环境配置是同一份数据，两处显示只会让人不知道该改哪边 |

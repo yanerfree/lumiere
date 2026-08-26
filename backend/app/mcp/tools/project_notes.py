@@ -75,7 +75,7 @@ async def list_project_notes(
             "source": e.source,
         } for e in rows],
         "total": len(rows),
-        "usage": "写用例之前读一遍；这一轮撞出来的新坑用 tb_add_project_note 写回去，"
+        "usage": "写用例之前读一遍；这一轮撞出来的新坑用 lum_add_project_note 写回去，"
                  "别让下一轮再踩一遍。",
     }
 

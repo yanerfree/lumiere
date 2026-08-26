@@ -66,7 +66,7 @@ NEEDS_HUMAN = {"requirement_unclear", "unknown"}
 SAMPLE_EVERY = 10          # 每 10 条抽 1 条
 # **写死，不做成可配置**：又一个能被调成 0 的开关，和「检查项不做成可勾选」同一条纪律。
 
-# 真正在等人的两种去向。`tb_list_pending_confirm` 默认只列这些 ——
+# 真正在等人的两种去向。`lum_list_pending_confirm` 默认只列这些 ——
 # 此前它列的是"所有还没确认的"，于是自证放行的也混在里面（CC 明明被告知
 # "你自己改不用等"），队列里绝大多数是不需要人动的东西，人就不看了。
 WAITING_ON_HUMAN = ("needs_human", "self_serve_sampled")
@@ -247,7 +247,7 @@ async def submit(session: AsyncSession, run_id: str, payload: dict, author: str 
 
     run = (await session.execute(select(ScriptRun).where(ScriptRun.id == rid))).scalar_one_or_none()
     if not run:
-        return {"error": "找不到这次执行记录。先调 tb_get_ui_script_result 拿 run_id"}
+        return {"error": "找不到这次执行记录。先调 lum_get_ui_script_result 拿 run_id"}
     if run.status == "passed":
         return {"error": "这次执行是通过的，没有需要归因的失败"}
 
@@ -389,7 +389,7 @@ async def agreement_stats(session: AsyncSession, project_id: uuid.UUID | None = 
     重点看 `product_defect` 桶的推翻率：CC 说"是产品的锅"而人推翻的比例
     超过 30%，说明它在系统性甩锅，该收紧提示词或降低它这一类的权重。
 
-    平台此前只有 tb_get_generation_stats（量生成通过率），**没有任何东西量
+    平台此前只有 lum_get_generation_stats（量生成通过率），**没有任何东西量
     AI 判断准不准**。
     """
     from app.models.case import Case

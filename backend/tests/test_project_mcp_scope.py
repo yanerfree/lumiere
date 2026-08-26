@@ -16,7 +16,7 @@ from app.mcp.profiles import PROFILES
 
 
 PROJ = "11111111-1111-1111-1111-111111111111"
-A, B = ["tb_list_projects"], ["tb_get_case", "tb_list_cases"]
+A, B = ["lum_list_projects"], ["lum_get_case", "lum_list_cases"]
 
 
 @pytest.mark.parametrize("project_id,project_scope,legacy,expect,why", [
@@ -72,7 +72,7 @@ def test_不限制反查成全量_而不是custom():
 
 
 def test_对不上任何一档就是custom():
-    assert _match_profile(["tb_list_projects"]) == "custom"
+    assert _match_profile(["lum_list_projects"]) == "custom"
     assert _match_profile([]) == "custom"
 
 
@@ -119,5 +119,5 @@ def test_只写得进真存在的工具名():
     from app.api.mcp_keys import _validate_tools
 
     known = next(t["name"] for t in TOOL_CATALOG)
-    assert _validate_tools([known, "tb_不存在的工具"]) == [known]
+    assert _validate_tools([known, "lum_不存在的工具"]) == [known]
     assert _validate_tools(None) is None

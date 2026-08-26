@@ -223,7 +223,7 @@ def execute_single_case(
             steps = parse_step_json(step_json_path)
 
     # 8. 采集 Playwright 截图 + 网络流量（可选）
-    # 必须在这里采，不能等回到调用方 —— 四条调用方（/run、tb_run_ui_script、
+    # 必须在这里采，不能等回到调用方 —— 四条调用方（/run、lum_run_ui_script、
     # 计划执行、adhoc 批量）都在 finally 里 rmtree(sandbox)，跟着 sandbox 走的一律拿不到。
     from app.engine.har import parse_har_dir
     screenshots = _collect_screenshots(pw_output_dir) if pw_output_dir else []

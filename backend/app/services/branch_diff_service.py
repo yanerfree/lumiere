@@ -1,8 +1,8 @@
 """版本升级·分支对账（端点反查）。文档：docs/version-upgrade-branch-diff.md
 
 **这个模块只读用例、只写清单和标签。** 它没有任何路径能改 `steps` / 断言 /
-`review_status` / 三维状态 —— 红线 1。改用例还是走 `tb_update_case` /
-`tb_sync_orchestrated_scenario`，一条条过原有门禁。
+`review_status` / 三维状态 —— 红线 1。改用例还是走 `lum_update_case` /
+`lum_sync_orchestrated_scenario`，一条条过原有门禁。
 
 为什么这条红线值一条命：这批用例是上一版审过的成果，一个"自动帮你改"的工具
 改坏了没人看得出来 —— 它改的正是断言，而断言坏了的表现就是**变绿**。
@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 logger = logging.getLogger(__name__)
 
 # CC 能报的变更类型。
-#   removed        端点没了            → 该废候选（**不自动废**，要走 tb_request_deprecate）
+#   removed        端点没了            → 该废候选（**不自动废**，要走 lum_request_deprecate）
 #   field_changed  响应/请求字段变了   → 要改
 #   new_state      新增了状态值/分支   → 要改
 #   renamed        端点改名/挪位置     → 要改（**不是废** —— 红线 3：改名在 UI 上长得像"没了"）
@@ -274,7 +274,7 @@ async def list_branch_endpoints(session: AsyncSession, branch_id: str) -> dict:
         endpoints.append(slot)
 
     # —— 反查覆盖不到的那些。**这一节必须显式说出来** ——
-    # 不说的话，这批用例在下一步 tb_apply_endpoint_diff 里"一条都没命中"，
+    # 不说的话，这批用例在下一步 lum_apply_endpoint_diff 里"一条都没命中"，
     # 而"没命中"会被当成"接口没动、可以照抄"，直接自动过审。
     ui_cases = {
         r[0] for r in (await session.execute(
@@ -292,7 +292,7 @@ async def list_branch_endpoints(session: AsyncSession, branch_id: str) -> dict:
         "endpoints": endpoints,
         "覆盖不到的": {
             "说明": ("下面这些用例在这份端点表里没有任何结构化端点，所以 "
-                     "tb_apply_endpoint_diff 对它们**一条都不会命中** —— 而「没命中」"
+                     "lum_apply_endpoint_diff 对它们**一条都不会命中** —— 而「没命中」"
                      "会被当成「接口没动、可以照抄」。纯 UI 改版和纯手工流程的变化"
                      "只能你拿 v2.0 的前端/需求改动自己比。"),
             "只有手工步骤的用例": [
@@ -307,7 +307,7 @@ async def list_branch_endpoints(session: AsyncSession, branch_id: str) -> dict:
             ],
         },
         "下一步": ("本机 git diff <v1>..<v2> 看改了哪些 router / schema，跟上面求交集，"
-                   "然后 tb_apply_endpoint_diff(branch_id, changes=[...])。"
+                   "然后 lum_apply_endpoint_diff(branch_id, changes=[...])。"
                    f"kind 取值：{'、'.join(CHANGE_KINDS)}。"
                    "**v2.0 新加的端点也要报**（kind=added）—— 它不命中任何老用例，"
                    "但它是「该补用例」那一堆，不报就没人知道新功能没覆盖。"),
@@ -361,7 +361,7 @@ async def apply_endpoint_diff(
     """拿 CC 报的 v2.0 变更跟平台的端点表求交集，落清单。**一个用例都不改。**
 
     落完之后：命中的进「要改」堆（`removed` 的进「该废候选」），没命中的进「照抄」堆，
-    `added` 的进「待补用例」堆。清单进 `tb_next_duty` 队列，CC 每轮问一句就知道干到哪。
+    `added` 的进「待补用例」堆。清单进 `lum_next_duty` 队列，CC 每轮问一句就知道干到哪。
 
     两处**会写**的地方（都不是改用例内容）：
       · 命中的用例，预期落款打回「待重新确认」—— 需求变了、步骤没变那种漏网
@@ -503,7 +503,7 @@ async def apply_endpoint_diff(
                      "说明": "内容没变也必须在新版本上真跑一遍 —— 「接口签名没变、"
                              "底层行为变了」只有这一跑抓得到。跑绿+断言咬得住才会自动过审。"},
             "该废候选": {"条数": len(deprecate_candidates), "用例": deprecate_candidates,
-                         "说明": "端点没了。**别自己废** —— 走 tb_request_deprecate 交证据，"
+                         "说明": "端点没了。**别自己废** —— 走 lum_request_deprecate 交证据，"
                                  "「我在页面上找不到」不等于「这个功能没了」（改名、挪菜单、"
                                  "拆页面在 UI 上都长得像没了）。"},
         },
@@ -518,8 +518,8 @@ async def apply_endpoint_diff(
             "条数": len(unmatched_changes), "变更": unmatched_changes,
             "说明": "这些变更在分支里找不到任何用例引用。可能是真没人依赖（好消息），"
                     "也可能是 url 写法差太多没对上 —— 后者会让受影响的用例被判进"
-                    "照抄堆自动过审，所以自己核一眼：拿 tb_list_branch_endpoints 的"
+                    "照抄堆自动过审，所以自己核一眼：拿 lum_list_branch_endpoints 的"
                     "「路径模板」跟你报的 url 比。",
         } if unmatched_changes else None,
-        "下一步": "tb_next_duty(branch_id) 取「待处理接口变动」，一条条改。",
+        "下一步": "lum_next_duty(branch_id) 取「待处理接口变动」，一条条改。",
     }

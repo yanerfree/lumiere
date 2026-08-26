@@ -31,7 +31,7 @@ CLEAN = {"name": "${svcName}", "enabled": True, "protocol": "http",
          "config": {"routes": [{"path": "/v1/x", "forward_path": "/",
                                 "preserve_host": False, "isolation_rule_ids": ["${isoId}"]}]}}
 MCP_INITIALIZE = {"id": 1, "jsonrpc": "2.0", "method": "initialize",
-                  "params": {"clientInfo": {"name": "testbench", "version": "1"},
+                  "params": {"clientInfo": {"name": "lumiere", "version": "1"},
                              "capabilities": {}, "protocolVersion": "2024-11-05"}}
 
 

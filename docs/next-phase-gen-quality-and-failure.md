@@ -13,7 +13,7 @@
 
 | # | 事实 | 怎么测出来的 |
 |---|---|---|
-| 1 | **`tb-diagnose` 前端零入口**。后端路由 `POST .../skills/tb-diagnose`、MCP 工具 `tb_get_failed_scenarios`、`SKILL.md` 三样都齐，但前端没有任何地方调它 —— 失败诊断能力从未被使用过 | `grep -rn "tb-diagnose" frontend/src`：只有 SkillManage 的列表展示；对比 `tb-case-generate`(AISidebar)、`tb-quality-review`(CaseManagement) 都有入口 |
+| 1 | **`lum-diagnose` 前端零入口**。后端路由 `POST .../skills/lum-diagnose`、MCP 工具 `lum_get_failed_scenarios`、`SKILL.md` 三样都齐，但前端没有任何地方调它 —— 失败诊断能力从未被使用过 | `grep -rn "lum-diagnose" frontend/src`：只有 SkillManage 的列表展示；对比 `lum-case-generate`(AISidebar)、`lum-quality-review`(CaseManagement) 都有入口 |
 | 2 | **项目级前置数据机制零采用**。`automation_resources` 表 0 行，而写死 UUID 的场景变量还有 26 条（8 条用例、4 个变量名） | 直接查库 |
 | 3 | **没有「只重跑失败步骤」**。跑就是整条重跑 | `grep rerun\|retry_failed\|重跑` 在 api_test.py / api_test_runner.py 无命中 |
 | 4 | **场景不记录「有没有跑通过」**。`api_test_steps` 有 `last_status`，但 `api_test_scenarios` 没有整链验证记录（在哪个环境、什么时候、全绿没有） | 查 information_schema |
@@ -33,7 +33,7 @@
 
 | # | 起草时 | 现在 | 这是 bug 还是口径变了 |
 |---|---|---|---|
-| 1 | `tb-diagnose` 前端零入口 | **整个能力下线了** —— `ai_capabilities.py:49` 标 `deprecated`，归因归外部 CC（`tb_submit_analysis`），平台只按规则出现象、由人确认结论 | **口径变了**（2026-08-15「生成归 CC，平台做呈现+回推通道」）。所以 C1「把 tb-diagnose 接上」**作废**，不是待办 |
+| 1 | `lum-diagnose` 前端零入口 | **整个能力下线了** —— `ai_capabilities.py:49` 标 `deprecated`，归因归外部 CC（`lum_submit_analysis`），平台只按规则出现象、由人确认结论 | **口径变了**（2026-08-15「生成归 CC，平台做呈现+回推通道」）。所以 C1「把 lum-diagnose 接上」**作废**，不是待办 |
 | 2 | 前置数据机制零采用，`automation_resources` 0 行、写死 UUID 的场景变量 26 条 | **9 条资源，写死 UUID 只剩 1 条**。而且执行期会照 `create_def` 自动补建（见 loop-spec §2.8） | 需求已落地。A2 基本完成，剩「写死 UUID 那 1 条」和"换个干净环境能不能跑通"的验收 |
 | 3 | 没有「只重跑失败步骤」 | **仍然没有** | 待办（B1 下半） |
 | 4 | 场景不记录整链验证 | **仍然没有** —— `scenario_verification` 表不存在，`api_test_scenarios` 也没有验证态列 | 待办（Phase 0 + A1，仍是最高优先） |
@@ -92,7 +92,7 @@
 2. 把 8 条用例里的 literal UUID 场景变量改成引用。
 3. 跑一遍确认 5 条场景仍全绿 —— **这一步才算真验证了那套机制**，之前只在我自己造的
    场景里验过。
-4. 顺手把 `tb_upsert_automation_resource` 的用法写进 CC 的 onboarding 提示。
+4. 顺手把 `lum_upsert_automation_resource` 的用法写进 CC 的 onboarding 提示。
 
 **验收**：删掉某个资源 → 预检当场报"缺 upstreamId"，而不是等到第 7 步报"变量未解析"。
 
@@ -103,7 +103,7 @@
 猜错的代价是整条场景白写。
 
 **做什么**：某条场景验证全绿后，把每一步的**实测契约**（真实 method / 状态码 /
-请求体形状）回写到「API 接口」模块，标记来源=实测。下次生成时 `tb_list_api_tree`
+请求体形状）回写到「API 接口」模块，标记来源=实测。下次生成时 `lum_list_api_tree`
 优先给实测契约，而不是文档里的。
 
 **验收**：故意把接口文档里的 method 写错 → 生成出来的步骤用的是实测的那个。
@@ -138,21 +138,21 @@
 （我这次就亲手制造过一次：编辑器往返把 `in [200,204]` 改成 `== "200,204"`）。
 
 **做什么**
-- MCP 增 `tb_patch_scenario_steps(scenario_id, steps=[{sort_order, ...只传要改的字段}])`，
+- MCP 增 `lum_patch_scenario_steps(scenario_id, steps=[{sort_order, ...只传要改的字段}])`，
   按 `sort_order` 定点改，不动其它步骤。
-- 配套 `tb_rerun_failed_steps(scenario_id, env_id)`：只跑失败步骤及其**依赖前置**
+- 配套 `lum_rerun_failed_steps(scenario_id, env_id)`：只跑失败步骤及其**依赖前置**
   （靠 `variables_extract` 反查依赖链），不整条重跑。
 
 **收益**：改一步的成本从"重生成 11 步 + 重跑 11 步"降到"改 1 步 + 跑 2~3 步"。
 
-**验收**：故意改坏第 7 步 → `tb_rerun_failed_steps` 只跑第 1(登录)、7 步。
+**验收**：故意改坏第 7 步 → `lum_rerun_failed_steps` 只跑第 1(登录)、7 步。
 
 > **2026-08-21 复核：上半做了、下半没做。**
 > 定点改步骤已经有了，但形态跟这里写的不一样：不是新增
-> `tb_patch_scenario_steps`，而是 `tb_sync_orchestrated_scenario(mode='patch')`
+> `lum_patch_scenario_steps`，而是 `lum_sync_orchestrated_scenario(mode='patch')`
 > **按 step name 匹配**（不是 `sort_order`）。按 name 更稳 —— 插一步之后
 > sort_order 全变，而 name 不变。
-> `tb_rerun_failed_steps`（只跑失败步骤及其依赖前置）**仍然没有**，跑就是整条重跑。
+> `lum_rerun_failed_steps`（只跑失败步骤及其依赖前置）**仍然没有**，跑就是整条重跑。
 
 ### B2. 已验证片段库 🟡
 
@@ -167,20 +167,20 @@
 
 - 429 已在 `d8ac5cb` 修完（有 CLI 通道时立刻降级，不再干等 ~98s）。
 - 新模型 `temperature` 400 也已修。
-- 剩下：给 `tb_list_api_tree` / `tb_get_case` 这类高频只读工具加短 TTL 缓存，
+- 剩下：给 `lum_list_api_tree` / `lum_get_case` 这类高频只读工具加短 TTL 缓存，
   CC 一轮生成里往往要重复拉好几次。
 
 ---
 
 ## 五、Track C —— 失败优化
 
-### C1. ~~把 tb-diagnose 接上~~ ❌ 作废（2026-08-21）
+### C1. ~~把 lum-diagnose 接上~~ ❌ 作废（2026-08-21）
 
-> **这一整节不要照着做。** `tb-diagnose` 在 2026-08-15「生成归 CC、平台做呈现 +
+> **这一整节不要照着做。** `lum-diagnose` 在 2026-08-15「生成归 CC、平台做呈现 +
 > 回推通道」那次定位调整里下线了（`ai_capabilities.py:49` 标 `deprecated`，
-> `POST .../skills/tb-diagnose` 也摘了）。**归因由外部 Claude Code 做**
+> `POST .../skills/lum-diagnose` 也摘了）。**归因由外部 Claude Code 做**
 > —— 它手上有需求和代码，平台手上只有现象；平台按规则出"现象初判"，
-> 结论由 `tb_submit_analysis` 回填、由人确认。
+> 结论由 `lum_submit_analysis` 回填、由人确认。
 > 给平台再接一个"平台自己判根因"的按钮，是往回走。
 >
 > 下面原文保留备查，其中**仍然成立的只有一条**：三分类
@@ -190,7 +190,7 @@
 
 **做什么**
 1. 运行结果面板（刚做的吸底面板）加「诊断失败原因」按钮，调已有的
-   `POST .../skills/tb-diagnose`。
+   `POST .../skills/lum-diagnose`。
 2. 诊断结果按 skill 里已定义的三分类展示：`script_bug` / `system_bug` / `env_issue`，
    每类给对应的下一步动作：
    - `script_bug` → 一键"让 CC 按建议修这一步"（接 B1 的定点修改）

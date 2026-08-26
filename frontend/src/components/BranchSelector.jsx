@@ -18,27 +18,27 @@ function buildDiffPrompt(branchName, stats) {
 两个 git 版本号：从 <填旧版本 tag，如 v1.0.0> 到 <填新版本 tag，如 v2.0.0>。
 
 按这个顺序：
-1. tb_list_projects / tb_list_branches 定位到分支「${branchName}」
-2. tb_list_project_notes(project_id) —— 先读坑，别重踩
-3. tb_list_cases(branch_id, pending_only=true) —— 这批用例各欠哪几维
-4. tb_list_branch_endpoints(branch_id) —— 拿平台这一半（用例依赖了哪些端点、哪些字段）
+1. lum_list_projects / lum_list_branches 定位到分支「${branchName}」
+2. lum_list_project_notes(project_id) —— 先读坑，别重踩
+3. lum_list_cases(branch_id, pending_only=true) —— 这批用例各欠哪几维
+4. lum_list_branch_endpoints(branch_id) —— 拿平台这一半（用例依赖了哪些端点、哪些字段）
    ⚠ 必读返回里的「覆盖不到的」：手工步骤和 UI 脚本里没有结构化 method/url，
      这套反查探不到它们。纯 UI 改版在这份端点表上一个字都不会变。
 5. 本机 git diff <旧>..<新>，读改动的 router / schema：
    改了哪些 url、哪些响应字段、新增了哪些状态值、**新增了哪些端点**
-6. 求交集 → tb_apply_endpoint_diff(branch_id, changes=[...], from_ref=..., to_ref=...)
+6. 求交集 → lum_apply_endpoint_diff(branch_id, changes=[...], from_ref=..., to_ref=...)
    kind: removed（没了）/ field_changed（字段变了，要写变成什么）/ new_state（新增状态值）
         / renamed（改名挪位置 → 要改不是要废）/ added（新端点 → 待补用例）
    **新端点也要报**：它不命中任何老用例，但那是「该补用例」堆 —— 不报就零覆盖，
    而且永远不会报错（没有任何信号说这里本来该有覆盖）。
-7. tb_next_duty(branch_id) 一轮轮干到完，最后 tb_check_branch 交我验收。
+7. lum_next_duty(branch_id) 一轮轮干到完，最后 lum_check_branch 交我验收。
 
 三条红线：
 · 预期按新版本的**需求**写，不是打开新版本跑一遍照着改 ——
   那是把实现抄了一遍，新版本引入的 bug 会被固化成「预期」，而且步骤/接口/UI
   三份产物同源，会一致地一起错，全绿，没人看得出来。判不出来就带着判断来问我。
 · 「我在页面上找不到」≠「这个功能没了」：入口挪到二级菜单、改名、拆成两个页面，
-  在 UI 上都长得像没了。别自己废 —— 走 tb_request_deprecate 交正反两面证据。
+  在 UI 上都长得像没了。别自己废 —— 走 lum_request_deprecate 交正反两面证据。
 · 照抄堆内容没变也**必须在新版本上真跑一遍** ——
   「接口签名没变、底层行为变了」只有这一跑抓得到。`
 }

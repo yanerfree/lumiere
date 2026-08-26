@@ -21,7 +21,7 @@ def test_压测页面的写法value():
 
 
 def test_接口场景那边的写法expected():
-    """tb_sync_orchestrated_scenario 的断言用 expected。从那边搬过来的场景
+    """lum_sync_orchestrated_scenario 的断言用 expected。从那边搬过来的场景
     不能因为字段名不同就每一发都失败。"""
     ok, why = _r()._check_assertion({"type": "status", "operator": "eq", "expected": 200}, 200, "")
     assert ok and why is None

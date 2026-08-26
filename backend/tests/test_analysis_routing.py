@@ -93,7 +93,7 @@ def test_自证不给它免检的错觉():
 def test_工具描述把规则写全了():
     """CC 只照描述调参 —— 描述里没有，规则等于不存在。"""
     from app.mcp import TOOL_CATALOG
-    d = {t["name"]: t["description"] for t in TOOL_CATALOG}["tb_submit_analysis"]
+    d = {t["name"]: t["description"] for t in TOOL_CATALOG}["lum_submit_analysis"]
     for k in ("liveVerified", "codeRefs", "issue", "requirement_unclear"):
         assert k in d
     assert "不是所有归因都要等人" in d and "甩锅没有收益" in d
@@ -155,7 +155,7 @@ def test_抽中的仍然算自证_不能把CC拦下来():
 
 
 def test_真正在等人的只有两种():
-    """`tb_list_pending_confirm` 默认列的就是这两种。自证放行的混进来的后果：
+    """`lum_list_pending_confirm` 默认列的就是这两种。自证放行的混进来的后果：
     队列里绝大多数不需要人动，人扫两眼就再也不看了。"""
     assert set(WAITING_ON_HUMAN) == {"needs_human", "self_serve_sampled"}
 

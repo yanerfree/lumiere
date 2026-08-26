@@ -7,7 +7,7 @@
 
 替换发生在**执行前的源码文本**上（和替换 `os.getenv("X", "默认")` 默认值同一处），
 所以：
-  · 本地直接 pytest 跑，`${}` 是字面量 —— 要跑就先渲染一遍（见 tb_get_sync_spec 里
+  · 本地直接 pytest 跑，`${}` 是字面量 —— 要跑就先渲染一遍（见 lum_get_sync_spec 里
     那段 3 行本地渲染；平台跑的是同一套替换）
   · 替换进去的文案要转义：反斜杠和两种引号都转，Python 里 `\\'` 在双引号串里、
     `\\"` 在单引号串里都合法，所以不用知道外面是哪种引号
@@ -116,7 +116,7 @@ def unresolved_hint(content: str) -> str:
                 f"不会留在正文里。所以真因是**这条执行路径没做文案渲染**"
                 f"（没调 ui_text_render.render），不是你少写占位。"
                 f"要改的是那条路，别改脚本。")
-    return ("两条任选：tb_upsert_i18n_terms 登记 key+zh+en，"
+    return ("两条任选：lum_upsert_i18n_terms 登记 key+zh+en，"
             "或占位里补上 ${键|中文原文}。")
 
 

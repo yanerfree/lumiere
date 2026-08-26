@@ -37,7 +37,7 @@ AI 审完，人只在两个地方出现。**
 2. **不做定时扫、不做每次执行后扫、不做每次回推后扫。** 一个版本对一次账。
    平台反复扫自己那一半，产不出任何新信息，只产噪音。
 3. **平台不推，CC 拉。** MCP 是 CC 发问、平台回答，反过来没有通道。所以清单落进平台后
-   挂到 `tb_next_duty` 队列，CC 每轮开工问一句就知道干到哪了 ——
+   挂到 `lum_next_duty` 队列，CC 每轮开工问一句就知道干到哪了 ——
    **清单必须落平台，不能留在 CC 的上下文里**：它一关会话就没了，续不上。
 
 ---
@@ -46,9 +46,9 @@ AI 审完，人只在两个地方出现。**
 
 ### 红线 1 · 反查全链路只读，只写清单和标签
 
-`tb_list_branch_endpoints` / `tb_apply_endpoint_diff` 及其页面**不得有任何路径**能改
-`steps` / 断言 / `review_status` / 三维状态。改用例还是走 `tb_update_case`、
-`tb_sync_orchestrated_scenario`，一条条过原有门禁。
+`lum_list_branch_endpoints` / `lum_apply_endpoint_diff` 及其页面**不得有任何路径**能改
+`steps` / 断言 / `review_status` / 三维状态。改用例还是走 `lum_update_case`、
+`lum_sync_orchestrated_scenario`，一条条过原有门禁。
 
 **为什么**：这批用例是 v1.0 审过的成果。一个"自动帮你改"的工具改坏了，没人看得出来 ——
 它改的正是断言，而断言坏了的表现就是**变绿**。
@@ -81,12 +81,12 @@ AI 审完，人只在两个地方出现。**
 留占位由你补 —— **平台不知道 v1.0/v2.0 对应哪两个 tag，这是唯一需要你给的信息**。
 
 ```
-tb_list_projects()                          → project_id
-tb_list_branches(project_id)                → branch_id (v2.0)
-tb_list_project_notes(project_id)           → 先读坑，别重踩
-tb_list_cases(branch_id, pending_only=true) → 这批用例各欠哪几维
+lum_list_projects()                          → project_id
+lum_list_branches(project_id)                → branch_id (v2.0)
+lum_list_project_notes(project_id)           → 先读坑，别重踩
+lum_list_cases(branch_id, pending_only=true) → 这批用例各欠哪几维
 
-【新】tb_list_branch_endpoints(branch_id)
+【新】lum_list_branch_endpoints(branch_id)
       → {method, url, 断言字段路径, 期望状态码} → 用例编号 / 步骤名 / 断言序号
 
 （本机）git diff v1.0.0..v2.0.0 + 看改动的 router / schema
@@ -94,7 +94,7 @@ tb_list_cases(branch_id, pending_only=true) → 这批用例各欠哪几维
 
 （CC 求交集）
 
-【新】tb_apply_endpoint_diff(branch_id, changes=[
+【新】lum_apply_endpoint_diff(branch_id, changes=[
         {url:"/subscriptions/provider", method:"POST", kind:"removed"},
         {url:"/provider-unified", method:"POST", kind:"field_changed",
          detail:"响应去掉 quota，新增 quotaDetail.limit"},
@@ -103,41 +103,41 @@ tb_list_cases(branch_id, pending_only=true) → 这批用例各欠哪几维
       ])
       → 落清单：命中 N 条（该废 / 要改），未命中 = 照抄堆
       → 命中的那些，预期落款打回「待重新确认」
-      → 清单进 tb_next_duty 队列
+      → 清单进 lum_next_duty 队列
 ```
 
 ### 阶段 B · 要改堆（每条都是这一串，CC 自己转）
 
 ```
-tb_next_duty(branch_id)                → 「待处理接口变动 N 条」，取第一条
-tb_get_case(case_id)
-tb_list_api_tests(branch_id) → tb_get_api_test(scenario_id)
+lum_next_duty(branch_id)                → 「待处理接口变动 N 条」，取第一条
+lum_get_case(case_id)
+lum_list_api_tests(branch_id) → lum_get_api_test(scenario_id)
                                        → 清单指的是哪一步
 
 （本机）读 v2.0 的 PRD / docs / OpenAPI / 代码校验分支   ← 红线 2
-tb_get_sync_spec(kind='api_scenario')
-tb_list_global_data(project_id, env_id, probe=true)
+lum_get_sync_spec(kind='api_scenario')
+lum_list_global_data(project_id, env_id, probe=true)
 
-tb_update_case(case_id, steps=[...], expected_result="...",
+lum_update_case(case_id, steps=[...], expected_result="...",
                expected_confirmed_note="依据 v2.0 docs/xx.md §3.5 + 实测确认")
-tb_upsert_scenario_variables(case_id, variables=[...])      # 有新变量才调
-tb_sync_orchestrated_scenario(..., source_case_id=case_id, mode='patch',
+lum_upsert_scenario_variables(case_id, variables=[...])      # 有新变量才调
+lum_sync_orchestrated_scenario(..., source_case_id=case_id, mode='patch',
                               steps=[只改动的那几步])
 
-tb_run_api_test(scenario_ids, env_id)
-tb_check_assertion_bite(case_id, skip_steps="操作:提交审批", env_id)
+lum_run_api_test(scenario_ids, env_id)
+lum_check_assertion_bite(case_id, skip_steps="操作:提交审批", env_id)
 
 # target_level=full 才有这三步
-tb_render_ui_script(case_id, lang='zh', env_id) → 本机改+调
-tb_sync_ui_script(case_id, content="...")
-tb_run_ui_script(case_id, env_id)
+lum_render_ui_script(case_id, lang='zh', env_id) → 本机改+调
+lum_sync_ui_script(case_id, content="...")
+lum_run_ui_script(case_id, env_id)
 ```
 
 跑红了才走：
 
 ```
-tb_get_ui_script_result(case_id)        → 截图路径 + 流量 + run_id + 现象初判
-tb_submit_analysis(run_id, cause=..., ...)
+lum_get_ui_script_result(case_id)        → 截图路径 + 流量 + run_id + 现象初判
+lum_submit_analysis(run_id, cause=..., ...)
    # 脚本/用例过期/环境/数据/flaky → CC 自己改，不等人
    # product_defect → 要 liveVerified + codeRefs + issue 三样齐
 ```
@@ -145,31 +145,31 @@ tb_submit_analysis(run_id, cause=..., ...)
 ### 阶段 C · 送审（CC 自己送，被打回自己改）
 
 ```
-tb_review_case(case_id, run_first=true, env_id)   → 六维 + mustFix
+lum_review_case(case_id, run_first=true, env_id)   → 六维 + mustFix
    → 不过 → 回阶段 B → 再送（平台记着第几轮、上次说了什么）
-tb_check_deliverable(case_id)                     → blockers / risks / notes
+lum_check_deliverable(case_id)                     → blockers / risks / notes
 ```
 
 ### 阶段 D · 照抄堆（两次调用，不是建计划）
 
 ```
-tb_run_api_test(scenario_ids="id1,...,idN", env_id)   # 一次调用跑完，DEBUG 口径
-tb_run_ui_scripts_batch(case_ids="...", env_id)       # full 的那些，REGRESSION 口径
+lum_run_api_test(scenario_ids="id1,...,idN", env_id)   # 一次调用跑完，DEBUG 口径
+lum_run_ui_scripts_batch(case_ids="...", env_id)       # full 的那些，REGRESSION 口径
 ```
 
 **内容没变也必须在 v2.0 上真跑一遍** —— "接口签名没变、底层行为变了"只有这一跑抓得到。
 跑红的当场退回要改堆（说明对账漏了）。
 
-⚠️ **不要用 `tb_create_plan` + `tb_run_plan` 推状态** —— 计划执行路径不写维度状态，
+⚠️ **不要用 `lum_create_plan` + `lum_run_plan` 推状态** —— 计划执行路径不写维度状态，
 见 §7.1。计划是「全部审完之后出正式回归报告」用的。
 
 ### 阶段 E · 你验收（一次看完）
 
 ```
-tb_check_branch(branch_id)          → 可交付 / 有阻塞 / 有脆弱点 / 待人审
-tb_list_pending_confirm(project_id) → CC 认为是 v2.0 缺陷、等你拍板的
-tb_check_env_hygiene(project_id, branch_id)
-tb_add_project_note(project_id, ...)   # CC 收尾写回这一轮的坑
+lum_check_branch(branch_id)          → 可交付 / 有阻塞 / 有脆弱点 / 待人审
+lum_list_pending_confirm(project_id) → CC 认为是 v2.0 缺陷、等你拍板的
+lum_check_env_hygiene(project_id, branch_id)
+lum_add_project_note(project_id, ...)   # CC 收尾写回这一轮的坑
 ```
 
 ### 你在整条链上出现三次
@@ -215,7 +215,7 @@ completed 时，`sync_review_status`（`script_run_service.py:245`）一次性�
 1. **未被对账清单命中**
 2. **内容与源分支逐字一致** —— 平台自己比 `steps` / 接口场景 / UI 脚本正文，不听 CC 声明
 3. **v2.0 上跑绿**
-4. **断言咬得住**（`tb_check_assertion_bite` 过）
+4. **断言咬得住**（`lum_check_assertion_bite` 过）
 
 **为什么这个论证闭合**：清单命中的是「端点变了 / 字段变了 / 新增了状态值」。一条用例
 **没被命中**就意味着它碰的接口和字段 v2.0 全没动、新增的东西也不在它身上 ——
@@ -246,12 +246,12 @@ deprecate_reason   JSONB {reason, evidence, requestedBy, requestedAt,
 
 ### 三个入口
 
-- **CC 提请** —— 独立工具 `tb_request_deprecate(case_id, reason, evidence)`。
-  **不塞进 `tb_update_case`**：塞进去会被顺手带过（改标题时把用例一起废了），
+- **CC 提请** —— 独立工具 `lum_request_deprecate(case_id, reason, evidence)`。
+  **不塞进 `lum_update_case`**：塞进去会被顺手带过（改标题时把用例一起废了），
   而且这里要硬校验证据。
 - **人确认** —— 列表页一列「待废审」徽标，点开确认/驳回 + 看得见理由和证据；
   详情页顶部提示条同样两个按钮。**一条一条点，不做批量。**
-- **AI 审** —— 合进 `tb_review_case`，不新开工具。这条用例有待决废弃请求时，
+- **AI 审** —— 合进 `lum_review_case`，不新开工具。这条用例有待决废弃请求时，
   它不审六维，改审「该不该废」。理由：CC 每轮本来就对每条调它，合进去不用判断调哪个；
   而且审一条要废的用例的六维质量本身没意义。
 
@@ -268,7 +268,7 @@ deprecate_reason   JSONB {reason, evidence, requestedBy, requestedAt,
 | 结论 | 处置 |
 |---|---|
 | 确认没了（正反都过） | 批准废弃，直接生效，留痕 `decidedBy=ai` |
-| 还在（在别处找到了） | 驳回 → 进 `tb_next_duty`：「这是要改，不是要废」 |
+| 还在（在别处找到了） | 驳回 → 进 `lum_next_duty`：「这是要改，不是要废」 |
 | **探不出来**（进不去页面 / 权限不够 / 页面报错） | **落人，不许自己拍** |
 
 AI 批准直接生效的依据：废弃可逆（撤销回草稿）+ 全程留痕 + 有上面三条门槛。
@@ -280,7 +280,7 @@ AI 批准直接生效的依据：废弃可逆（撤销回草稿）+ 全程留痕
 
 ### 7.1 计划执行路径不写维度状态 —— 现存的洞
 
-`tb_create_plan` + `tb_run_plan` 走 `app/engine/tasks/execution.py:290`，只调了
+`lum_create_plan` + `lum_run_plan` 走 `app/engine/tasks/execution.py:290`，只调了
 `record_run`（记执行、进通过率、出报告），**没调 `apply_case_status`**。
 所以走计划跑，哪怕全绿，`api_status` / `ui_status` 一动不动，用例永远进不了待审 ——
 你会看到一份 100% 通过的报告和一批还是草稿的用例。
@@ -311,12 +311,12 @@ target_level=full      → lifecycle=draft    manual=completed review=None
 
 ### 7.3 `deprecated` 不被任何地方排除
 
-实查 `tb_list_cases` / `tb_check_branch` / `tb_check_deliverable` / plan：
+实查 `lum_list_cases` / `lum_check_branch` / `lum_check_deliverable` / plan：
 **没有一处过滤 `lifecycle_status='deprecated'`**。现在废掉一条用例，它照样进待办队列、
 照样进回归、照样算进通过率分母。这个洞不补，废弃审核做出来也没用。
 
 → 待做 7：待办队列、交付门禁、批量回归、通过率统计全部排除 deprecated；
-但 `tb_list_cases` 显式传状态时要查得到（不然废了就再也找不着，撤销都撤不了）。
+但 `lum_list_cases` 显式传状态时要查得到（不然废了就再也找不着，撤销都撤不了）。
 
 ### 7.4 `Case` 没记「我是从哪条复制来的」
 
@@ -346,7 +346,7 @@ CC 改了步骤或预期的话平台本来会自动清掉它，这里补的是"�
 | 2 | 复制状态修复（lifecycle/review 置回草稿） | §7.2，和 3 一起改 |
 | 3 | 复制时记来源用例 + 内容指纹 | §7.4，是 §5 条件 2 的前提 |
 | 4 | 复制窗口的可复制提示语（分支名自动填，git 版本号留占位） | §3 阶段 A |
-| 5 | `tb_list_branch_endpoints` + `tb_apply_endpoint_diff` | 全套的前提 |
+| 5 | `lum_list_branch_endpoints` + `lum_apply_endpoint_diff` | 全套的前提 |
 | 6 | 照抄堆自动过审（四条件 + 撤销机制） | §5 |
 | 7 | 废弃审核（字段/三入口/探测判据） + `deprecated` 各处排除 | §6 + §7.3 |
 
@@ -354,7 +354,7 @@ CC 改了步骤或预期的话平台本来会自动清掉它，这里补的是"�
 活体验证走的是真库真接口：复制 → 对账 → 照抄堆结算 → 补交撤销 → 废弃提请/审核/人工确认/撤销
 → 各处排除，前端三处入口用 Playwright 走了真浏览器。跑出来修掉的三个问题：
 四条件判定的返回被写成了二元组（第三个值括进了字符串组，一调就 ValueError）、
-`tb_list_cases` 漏了 deprecated 过滤、建计划那条路径的拦截加错了端点。
+`lum_list_cases` 漏了 deprecated 过滤、建计划那条路径的拦截加错了端点。
 
 ---
 
@@ -368,7 +368,7 @@ CC 改了步骤或预期的话平台本来会自动清掉它，这里补的是"�
 新版本加一个端点，它不命中任何老用例 → 不进清单 → **新功能零覆盖，而且永远不报错**
 （没有任何信号会说"这里本来该有覆盖"）。
 
-→ 加 `kind=added`，落 `endpoint_diff_batches.pending_new`，进 `tb_next_duty` 的
+→ 加 `kind=added`，落 `endpoint_diff_batches.pending_new`，进 `lum_next_duty` 的
 「待补用例」队列。它不碰任何老用例。
 
 ### 2. spec 级用例原来没有过审通路
@@ -387,7 +387,7 @@ CC 改了步骤或预期的话平台本来会自动清掉它，这里补的是"�
 所以纯 UI 改版（页面拆分、改名、入口挪走）在端点表上一个字都不会变 ——
 那批用例一条都不会命中，而「没命中」会被当成「接口没动、可以照抄」。
 
-→ 两处补救：`tb_list_branch_endpoints` 的返回里加一节**「覆盖不到的」**，
+→ 两处补救：`lum_list_branch_endpoints` 的返回里加一节**「覆盖不到的」**，
 把这些用例显式列出来；`target_level=full` 的用例自动过审时**UI 那一维也必须跑绿**
 （条件 1 对它是白送的，唯一还能抓到 UI 变化的就是真跑一遍）。
 
@@ -423,7 +423,7 @@ CC 改了步骤或预期的话平台本来会自动清掉它，这里补的是"�
 已经盖上的那个「通过」还挂着，而它通过的依据（内容与上一版逐字一致）已经不成立。
 **顶着「已通过」的错内容是最难发现的假绿** —— 没有任何信号会说它失效了。
 
-两道防线：`tb_update_case` 改内容时立刻撤回；结算时对所有自动过审的用例
+两道防线：`lum_update_case` 改内容时立刻撤回；结算时对所有自动过审的用例
 **重算指纹**，对不上就撤回。后者是**路径无关**的 —— 改内容的路不止一条
 （改步骤/预期/标题、回推接口场景、回推 UI 脚本），逐个挂钩子漏一条就留一个假绿。
 

@@ -51,11 +51,11 @@ def test_全链路档大_但仍然挡住那几条岔路():
     fl = next(p for p in PROFILES if p["key"] == "fullloop")
     tools = set(fl["tools"])
     for forbidden, why in [
-        ("tb_generate_api_test", "凭文档造场景，绕开亲手验证"),
-        ("tb_create_scenario_task", "需求文档流水线是另一条路，不碰被测系统"),
-        ("tb_confirm_and_generate", "同上"),
-        ("tb_push_skill", "Skill 存取跟这条链无关"),
-        ("tb_get_doc_spec", "写文档是另一件活"),
+        ("lum_generate_api_test", "凭文档造场景，绕开亲手验证"),
+        ("lum_create_scenario_task", "需求文档流水线是另一条路，不碰被测系统"),
+        ("lum_confirm_and_generate", "同上"),
+        ("lum_push_skill", "Skill 存取跟这条链无关"),
+        ("lum_get_doc_spec", "写文档是另一件活"),
     ]:
         assert forbidden not in tools, f"{forbidden} 不该进全链路档：{why}"
     # 也不能大到跟全量没区别。**按"排除了几个"判，不按比例判** ——
@@ -71,20 +71,20 @@ def test_全链路档覆盖整条链的每一步():
     """少任何一步，人就得退回去选「全量」—— 那这一档就白加了。"""
     fl = set(next(p for p in PROFILES if p["key"] == "fullloop")["tools"])
     for step, tool in [
-        ("写用例", "tb_create_case"),
-        ("回填接口场景", "tb_sync_orchestrated_scenario"),
-        ("回填 UI 脚本", "tb_sync_ui_script"),
-        ("组计划", "tb_create_plan"),
-        ("跑一轮", "tb_run_plan"),
-        ("读报告", "tb_get_report_summary"),
-        ("看失败证据", "tb_get_ui_script_result"),
-        ("提归因", "tb_submit_analysis"),
+        ("写用例", "lum_create_case"),
+        ("回填接口场景", "lum_sync_orchestrated_scenario"),
+        ("回填 UI 脚本", "lum_sync_ui_script"),
+        ("组计划", "lum_create_plan"),
+        ("跑一轮", "lum_run_plan"),
+        ("读报告", "lum_get_report_summary"),
+        ("看失败证据", "lum_get_ui_script_result"),
+        ("提归因", "lum_submit_analysis"),
     ]:
         assert tool in fl, f"全链路缺了「{step}」这一步（{tool}）"
 
 
 def test_平台不再提供凭文档造场景的工具():
-    """原来这条测的是"live 档不含 tb_generate_api_test" —— 靠档位把它挡在外面。
+    """原来这条测的是"live 档不含 lum_generate_api_test" —— 靠档位把它挡在外面。
 
     2026-08-15 那个工具连同「接口测试」模块整个下线了，于是这条要测的东西变了：
     不是"某一档挡住它"，而是**它根本不该再被注册回来**。
@@ -94,15 +94,15 @@ def test_平台不再提供凭文档造场景的工具():
     （scenario_variables.case_id NOT NULL），不绑用例就拿不到凭据，实跑必挂在
     「变量未解析」。生成归外部 Claude Code，平台只做呈现和回推通道。
     """
-    assert "tb_generate_api_test" not in NAMES
+    assert "lum_generate_api_test" not in NAMES
 
 
 def test_归因档位不含任何写用例或脚本的工具():
     """红线 3：CC 的归因不改任何状态。工具范围要把它兜死，不能只靠自觉。"""
     triage = next(p for p in PROFILES if p["key"] == "triage")
     forbidden = {
-        "tb_create_case", "tb_sync_ui_script", "tb_sync_orchestrated_scenario",
-        "tb_upsert_scenario_variables", "tb_create_api_node", "tb_run_plan",
+        "lum_create_case", "lum_sync_ui_script", "lum_sync_orchestrated_scenario",
+        "lum_upsert_scenario_variables", "lum_create_api_node", "lum_run_plan",
     }
     assert not (set(triage["tools"]) & forbidden)
 
@@ -111,7 +111,7 @@ def test_每个档位都能定位到项目():
     """连项目都列不出来的档位，进去第一步就卡住。"""
     for p in PROFILES:
         if p["tools"] is not None:
-            assert "tb_list_projects" in p["tools"], p["key"]
+            assert "lum_list_projects" in p["tools"], p["key"]
 
 
 def test_每个档位都写清了这是干什么活的():
@@ -195,7 +195,7 @@ def test_接入指令留着模块占位符():
     """唯一一个要人填的空。**不能省** —— "干哪个模块"是平台唯一不知道的事，
     删了它指令就变成一句没有对象的空话，CC 只能自己挑一个模块开工。
 
-    （原来这条还断言指令里有 tb_list_cases / 清单 / 证据 三句纪律。纪律搬走了，
+    （原来这条还断言指令里有 lum_list_cases / 清单 / 证据 三句纪律。纪律搬走了，
     见 test_接入指令短_只带上下文不复述纪律 和 test_这些纪律在instructions里也有一份。）
     """
     from app.mcp.profiles import MODULE_SLOT, render_prompt
@@ -229,8 +229,8 @@ def test_下线的流水线工具没有偷偷回来():
     """入口下线之后工具还留着的话，CC 走「全量」档仍能开出一个任务，
     而平台上已经没有页面能看它跑到哪了 —— 比不下线更糟。
     """
-    dead = {"tb_create_scenario_task", "tb_confirm_and_generate", "tb_get_scenario_task",
-            "tb_query_coverage_matrix", "tb_get_generation_stats"}
+    dead = {"lum_create_scenario_task", "lum_confirm_and_generate", "lum_get_scenario_task",
+            "lum_query_coverage_matrix", "lum_get_generation_stats"}
     back = dead & NAMES
     assert not back, f"这些工具又被注册回来了：{sorted(back)}"
     assert not any(p["key"] == "docgen" for p in PROFILES), "docgen 档位又回来了"
@@ -256,7 +256,7 @@ def test_接入指令短_只带上下文不复述纪律():
     抄回来的代价不是长，是它变成第四个孤岛：instructions 改了、工具描述改了，
     没人会想起来还有一份躺在 profiles 里。而纪律真正的家有三个，都比它强 ——
     instructions 一连上就生效（不用人粘贴）、工具描述随工具一起发、
-    工具返回值在人需要它的那一刻才出现（tb_next_duty 直接说下一步调谁）。
+    工具返回值在人需要它的那一刻才出现（lum_next_duty 直接说下一步调谁）。
 
     指令只干工具干不了的那件事：把地址/项目/分支填好，给个开头。
     """
@@ -277,7 +277,7 @@ def test_接入指令短_只带上下文不复述纪律():
 def test_接入指令不点名本档范围外的工具():
     """删纪律顺带修掉的那个 bug，钉在这儿别复发。
 
-    纪律是无条件拼给每一档的，里面点名的工具却按档发：「先调 tb_list_cases」
+    纪律是无条件拼给每一档的，里面点名的工具却按档发：「先调 lum_list_cases」
     曾同时发给归因 / Mock / 接口库 / Skill 四档，而这四档的 Key 里没有这个工具 ——
     `tools/list` 看不见、硬调也会被 `on_call_tool` 拒掉。CC 照着指令做只能撞空，
     而撞空之后它会自己找替代路子，那就是分档要挡的岔路。
@@ -290,7 +290,7 @@ def test_接入指令不点名本档范围外的工具():
         if p["tools"] is None:
             continue
         got = render_prompt(p["key"], mcp_url="http://h/mcp/")
-        outside = sorted(set(re.findall(r"tb_[a-z_]+", got)) - set(p["tools"]))
+        outside = sorted(set(re.findall(r"lum_[a-z_]+", got)) - set(p["tools"]))
         assert not outside, f"{p['key']} 的指令点名了本档范围外的工具：{outside}"
 
 
@@ -309,7 +309,7 @@ def test_这些纪律在instructions里也有一份():
         "页面上用户能做的事", "碎片", "完整流程",          # 怎么挑
         "一挂全挂", "互不依赖", "切换之后", "访问不通",     # 合还是拆 / 状态
         "对象 + 做了什么 + 预期结果", "异常场景",           # 标题
-        "tb_list_cases",                                   # 动手前判重
+        "lum_list_cases",                                   # 动手前判重
         # 报清单四列。断言整行而不是光找"用户在哪儿看得到"五个字 ——
         # 只判单词的话，把列去掉、解释留着，守卫照样绿
         "场景名称 | 这条验什么（一句话） | 用户在哪儿看得到 | 库里已有吗",

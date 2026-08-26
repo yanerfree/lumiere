@@ -1,7 +1,7 @@
 """CC 自己搬目录 —— 「这个目录 cc 为什么不能编辑」。
 
 外部 CC 的原话：建 21 条用例时 submodule 传得不一致（3 条漏传落在了模块根目录），
-发现之后**改不了**：`tb_update_case` 只有标题/步骤/预期，没有 module/submodule，
+发现之后**改不了**：`lum_update_case` 只有标题/步骤/预期，没有 module/submodule，
 只能让人去界面上一条条拖。漏传是笔误，笔误不该每次都惊动人。
 
 三条纪律钉在这里：
@@ -100,7 +100,7 @@ def test_目录不存在会自动建():
 def test_工具描述和规范都写了():
     from app.mcp import TOOL_CATALOG
     from app.mcp.tools.sync import _SPEC_CASE
-    d = {t["name"]: t["description"] for t in TOOL_CATALOG}["tb_update_case"]
+    d = {t["name"]: t["description"] for t in TOOL_CATALOG}["lum_update_case"]
     assert "module" in d and "submodule" in d
     assert "放错目录自己搬" in _SPEC_CASE
     assert "编号不跟着变" in _SPEC_CASE, "不写这句，CC 会以为搬完编号也该跟着改"

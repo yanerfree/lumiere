@@ -209,7 +209,7 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
     const next = on ? [...chosen, p.key] : chosen.filter(k => k !== p.key)
     setChosen(next)
     // 工具永远 = 选中那几件活的**并集**，重算而不是增量加减。
-    // 增量减法会把公共工具（tb_list_projects 之类几乎每件活都要）顺手拿走，
+    // 增量减法会把公共工具（lum_list_projects 之类几乎每件活都要）顺手拿走，
     // 别的活悄悄就不完整了 —— 人只点了一下，坏的是别处。
     const keep = new Set(next)
     setSel([...new Set(acts.filter(o => keep.has(o.key)).flatMap(o => o.tools))])
@@ -490,7 +490,7 @@ export default function MCPTools() {
   const PROMPT_CARDS = ['fullloop', 'live', 'triage']
 
   const onlineCount = projectKeys.filter(k => k.lastUsedAt && Date.now() - new Date(k.lastUsedAt).getTime() < 30 * 60 * 1000).length
-  const mcpConfig = JSON.stringify({ mcpServers: { testbench: { type: "streamable-http", url: mcpUrl, headers: { Authorization: "Bearer <你的API Key>" } } } }, null, 2)
+  const mcpConfig = JSON.stringify({ mcpServers: { lumiere: { type: "streamable-http", url: mcpUrl, headers: { Authorization: "Bearer <你的API Key>" } } } }, null, 2)
 
   return (
     <div style={{ maxWidth: 960 }}>
@@ -517,7 +517,7 @@ export default function MCPTools() {
                 指令解决的就是这一句开头 —— 地址、项目分支、这档要干的活，四行。
                 **纪律不在里面**（原来抄了三组八条，1075 字）：它们在 MCP
                 instructions 里，CC 一连上就读，不用人记得粘贴；细流程在各工具的
-                描述和返回值里（tb_next_duty 直接告诉它下一步调谁）。 */}
+                描述和返回值里（lum_next_duty 直接告诉它下一步调谁）。 */}
             <Tooltip title="复制一段可以直接粘给 Claude Code 的话：连接地址 + 项目分支 + 这次要干的活">
               <Button size="small" type="primary" icon={<CopyOutlined />}
                 disabled={!fullloopPrompt}

@@ -1,7 +1,7 @@
 """TypeScript Playwright 执行器 — 用 `npx playwright test` 跑 .spec.ts 脚本。
 
 统一 UI 脚本执行入口：生成产物是 TypeScript `.spec.ts`，必须用 Playwright Test CLI 执行，
-不能喂给 pytest。此模块被 executor.execute_single_case（tb_run_ui_script / /run）复用，
+不能喂给 pytest。此模块被 executor.execute_single_case（lum_run_ui_script / /run）复用，
 消除"生成 TS 却用 pytest 跑"的执行器精分。
 
 FIXTURE_SHIM / GLOBAL_SETUP / 错误解析复用 verify_tool，保证生成期 verify 与运行期一致。
@@ -129,7 +129,7 @@ def run_typescript_playwright(
     sandbox = None
     try:
         import tempfile
-        sandbox = tempfile.mkdtemp(prefix="tb_ts_run_")
+        sandbox = tempfile.mkdtemp(prefix="lum_ts_run_")
         link_node_modules(sandbox)
 
         tests_dir = Path(sandbox) / "tests"

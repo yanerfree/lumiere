@@ -93,7 +93,7 @@ def test_规范里这就是默认写法():
     from app.mcp.tools.sync import _SPEC_UI_SCRIPT as ui
 
     assert '"${services.action.more|更多}"' in ui
-    assert "tb_render_ui_script(case_id" in ui, "本地跑不了这条必须给解法，否则「本地先跑通」的纪律就破了"
+    assert "lum_render_ui_script(case_id" in ui, "本地跑不了这条必须给解法，否则「本地先跑通」的纪律就破了"
 
 
 def test_本地跑有工具可用():
@@ -103,17 +103,17 @@ def test_本地跑有工具可用():
     from app.mcp.profiles import PROFILES
 
     cat = {t["name"]: t["description"] for t in TOOL_CATALOG}
-    assert "tb_render_ui_script" in cat
-    d = cat["tb_render_ui_script"]
+    assert "lum_render_ui_script" in cat
+    d = cat["lum_render_ui_script"]
     assert "textUnresolved" in d, "没换掉的键要回给调用方"
     # 一个文件直接跑 —— 用户的判据：下载下来就该能跑，不该有"代价"
     assert "直接 pytest 跑的文件" in d and "语种开关" in d
     assert "凭据默认不烧" in d, "凭证脱敏是既有纪律，别悄悄开后门"
     ui = next(p for p in PROFILES if p["key"] == "uiscript")
-    assert "tb_render_ui_script" in ui["tools"]
+    assert "lum_render_ui_script" in ui["tools"]
 
     from app.mcp.tools.sync import _SPEC_UI_SCRIPT as spec
-    assert "tb_render_ui_script(case_id" in spec
+    assert "lum_render_ui_script(case_id" in spec
 
 
 def test_渲染出来的文件三样都烧进去():
@@ -130,7 +130,7 @@ def test_渲染出来的文件三样都烧进去():
 
 
 def test_凭据默认不烧进返回内容():
-    """同族工具（tb_get_merged_variables / tb_list_global_data）一直对凭证脱敏，
+    """同族工具（lum_get_merged_variables / lum_list_global_data）一直对凭证脱敏，
     这里不能开后门；要自包含得显式传 include_credentials。"""
     import inspect
 
@@ -292,7 +292,7 @@ def test_裸下标查不到要抛不要返回键名():
             tea_i18n.TEXT["ns:zzz"]
             raise AssertionError("裸下标查不到必须抛")
         except KeyError as e:
-            assert "tb_upsert_i18n_terms" in str(e), "报错要说清怎么修"
+            assert "lum_upsert_i18n_terms" in str(e), "报错要说清怎么修"
     finally:
         sys.path.remove(d)
         sys.modules.pop("tea_i18n", None)

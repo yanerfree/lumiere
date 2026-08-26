@@ -1,18 +1,18 @@
 ---
-name: tb-diagnose
+name: lum-diagnose
 description: 分析测试失败原因，3 分类仲裁 + 可行动的修复建议
 version: 1
 tools:
-  - tb_get_failed_scenarios
-  - tb_get_case
-  - tb_list_cases
+  - lum_get_failed_scenarios
+  - lum_get_case
+  - lum_list_cases
 ---
 
 # 失败诊断 Skill
 
 ## Step 1 — 收集失败信息
 
-1. 调用 `tb_get_failed_scenarios` 获取报告中的失败用例
+1. 调用 `lum_get_failed_scenarios` 获取报告中的失败用例
 2. 收集每个失败用例的：步骤、前置条件、预期结果、实际错误
 
 ## Step 2 — 三分类仲裁

@@ -9,7 +9,7 @@
 2. 同一函数的 `not_ready` 判 `("not_started", "draft", "debugging")` 且**排除 manual**
    → 手动维度还在「调试中」也照样判可交付。实测 TC-FWGL-00002 就是这样：
    manual=debugging、进不了「待审」，门禁却说它可交付。
-3. tb_list_cases 的工具说明里写着可选值是
+3. lum_list_cases 的工具说明里写着可选值是
    `not_started/draft/debugging/pending_review/executable` ——
    **CC 直接读这段文字**，拿废弃的值去过滤，永远查不到东西，还以为是真没有。
 

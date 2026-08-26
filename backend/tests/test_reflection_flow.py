@@ -118,7 +118,7 @@ def reviewer_system():
 
 
 def test_MCP工具的返回标注必须跟真实返回一致():
-    """活体自测撞出来的：`tb_list_api_tests` 标注 `-> list[dict]`、实际返回
+    """活体自测撞出来的：`lum_list_api_tests` 标注 `-> list[dict]`、实际返回
     `{scenarios, total, usage}`。FastMCP 照标注生成 outputSchema，于是 CC 真调时
     客户端拿数组的 schema 去校验对象，直接
     `RuntimeError: Invalid structured content returned by tool ...`。

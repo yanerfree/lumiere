@@ -6,7 +6,7 @@
 所以第二阶段从来不存在，门禁只是"P0 不许声明 target_level=full"。
 
 实测（真 MCP 连接）：改成 target_level=spec 建 P0 → 放行；紧接着
-tb_sync_orchestrated_scenario + tb_sync_ui_script 全部成功，中间没有任何人确认过。
+lum_sync_orchestrated_scenario + lum_sync_ui_script 全部成功，中间没有任何人确认过。
 **三件套照样同源直出，门禁拦的只是一次调用里的声明。**
 
 补上这两列，让"人确认过没有"成为可查的事实：

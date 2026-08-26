@@ -1,5 +1,5 @@
 ---
-name: tb-scenario-self-review
+name: lum-scenario-self-review
 description: 对生成的测试用例进行四维度质量自评
 version: 1
 inputs:

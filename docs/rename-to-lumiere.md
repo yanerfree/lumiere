@@ -1,6 +1,7 @@
 # 改名：testBench → Lumiere（窗口作业）
 
-> **状态：第 1 步（显示层/文案/文档）2026-08-26 已做完并提交；第 2 步起未执行。**
+> **状态：第 1~4 步 + 第 8 步 2026-08-26 已做完。剩第 5（库名）、6（部署命名）、
+> 7（仓库改名）—— 这三步都要停服务或动 GitHub，见 §8。**
 > 盘点数据是 2026-08-26 实测的，隔久了先重跑 §2 的命令再动手。
 >
 > 第 1 步能提前做是因为它**对活体 MCP 客户端零影响**：后端起的时候没带 `--reload`，
@@ -115,13 +116,13 @@ grep -c 'name="tb_' backend/app/mcp/__init__.py                            # 59 
 | 步 | 做什么 | 怎么确认这步成了 |
 |---|---|---|
 | ~~1~~ | ~~显示层 + UI 文案 + 文档~~ **已做（41 文件，08-26）** | 已验：登录页/顶栏/标签页都是新名，1390 单测过，前端 build 过 |
-| 2 | MCP 工具名 `tb_*` → `lum_*`（`_register` 出口 + profiles + tools + docs） | `pytest backend/tests/test_mcp_profiles.py` —— 它钉了「档位里的名字都真注册过」，改漏一边就红 |
-| 3 | 预置 skill 目录 `tb-*` → `lum-*`（9 个） | 「AI 能力→模型」页 9 个档位都在、都能绑模型 |
-| 4 | alembic 迁移：§2 B 那三处（带 where，写 downgrade 反向映射） | `scripts/check_name_drift.py --strict` 退出 0 |
+| ~~2~~ | ~~MCP 工具名 `tb_*` → `lum_*`~~ **已做（08-26）** | 已验：`tools/list` 真连回 55 个 `lum_`、0 个 `tb_`；页面工具明细展开 59 个名字全 `lum_` |
+| ~~3~~ | ~~预置 skill 目录 `tb-*` → `lum-*`（9 个）~~ **已做（08-26）** | 已验：3 个档位都绑着模型，`cap-lum-quality-review` → `['lum-quality-review']`（档位是 3 个不是 9 个 —— 9 是预置 skill 数，只有质量评审有专用档位） |
+| ~~4~~ | ~~alembic 迁移 `zzv0lumren`~~ **已做（08-26）** | 已验：`check_name_drift.py --strict` 退出 0；upgrade→downgrade→比对备份逐字节一致→再 upgrade |
 | 5 | 库名 + `.env` + compose + conftest + config 默认值 | 后端起得来、页面有数据 |
 | 6 | 部署命名（systemd / nginx / `/opt` / 离线包名） | `systemctl start lumiere` + 页面能开 |
 | 7 | 仓库改名 + 两个远端 `git remote set-url` | `git fetch` 两个远端都通 |
-| 8 | 加封样测试（见 §5 第 3 条） | 新测试绿 |
+| ~~8~~ | ~~加封样测试~~ **已做（08-26）** | `backend/tests/test_name_seal.py`（两堵墙 + 白名单自检 10 项）；故意往 `config.py` 塞一行旧名，两堵墙都红，删掉就绿 |
 
 ## 4. 做完必须全量回归
 
@@ -131,10 +132,18 @@ DATABASE_URL=…/testbench_test_2 backend/.venv/bin/python -m pytest tests/ -q  
 cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库里没有漂移
 ```
 
+**08-26 改完实跑：** backend `1390 passed`；根目录 `493 passed`（比基线 482 多的 11 条
+是别的窗口补的模块闸门用例，不是改名带来的）；`check_name_drift.py --strict` 退出 0。
+新增 12 条封样 + 5 条 MCP 端点用例，全绿。
+
 跑完还要**手工验三样**（自动化覆盖不到）：
 
-1. **真连一次 MCP**：拿 `uag-cc使用` 那把 Key 连上，`tools/list` 应该是 55 个 `lum_` 名字、
-   0 个 `tb_`，随便调一个只读工具通。这是"重连就行"这个前提的唯一验证点。
+1. **真连一次 MCP**：`tools/list` 应该是 55 个 `lum_` 名字、0 个 `tb_`，
+   随便调一个只读工具通。这是"重连就行"这个前提的唯一验证点。
+   **08-26 已验**：`serverInfo.name = "Lumiere"`，55 个工具全 `lum_`，
+   `lum_list_projects` 正常返回。**注意地址是 `:18800/mcp/` 不是 `:8756/mcp/`** ——
+   主端口那份 mount 早就删了（`app/main.py` 里有说明），打错端口拿到的是
+   `{"detail":"Not Found"}` 和 0 个工具，很容易误判成"改名把 MCP 改坏了"。
 2. **页面走查**：顶栏、登录页、浏览器标签、「AI 能力→模型」、MCP 工具页的配置片段。
 3. **长驻服务**：`deploy/start-ai-services.sh`，顶栏「服务 N/17」里 claude-proxy 是活的
    （它挂了 429 就只能靠重试）。
@@ -143,14 +152,22 @@ cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库�
 
 1. **根目录那套 0 条打 MCP 端点** —— 223+76+101+73 条里没有一条走 `/mcp`。
    工具改名后"能不能连上、`tools/list` 对不对"没有任何自动化能答。
-   **要补**：一条 API 级用例，建 Key → `tools/list` → `tools/call` 一个只读工具。
-   这条跟改名无关也该有。
+   **已补**：`tests/integration/mcp/test_mcp_endpoint.py` 5 条 —— 匿名 401、
+   假 Key 401、握手报 `Lumiere`、`tools/list` 全 `lum_` 且都在注册表里、
+   `tools/call` 只看得见自己项目。写的时候踩到两个坑，都写在文件头了：
+   lifespan 必须同一个 task 进出（不然 anyio 报 cancel scope 跨 task），
+   以及每条用例开头要 `engine.dispose()` —— `db_session` 的 `drop_all` 会让
+   app 引擎池里的旧连接失效，中间件是 fail closed 的，**报出来是 401，
+   看着像认证写错了**。
 2. **库里那份名字没人管** —— 测试跑的是每次重建的空库，生产数据不在里面，
    所以工具名/skill 名漂了单测永远绿。**已补**：`backend/scripts/check_name_drift.py`
    （今天加的；现在跑：59 个工具、9 个预置 skill，库里引用的都存在）。
-3. **改完之后加一条封样**：全仓不该再出现 `testBench|TestBench|testbench`，
-   白名单 = 讲历史的文档段落 + alembic 老迁移 + `key_prefix` 的说明。
-   现在加会红，所以放在第 8 步。防的是以后又混回来。
+3. **改完之后加一条封样**：**已补** `backend/tests/test_name_seal.py`。两堵独立的墙
+   （品牌名大小写不敏感 / `tb_`·`tb-` 只管小写，大写 `TB_USERNAME` 是 UAG 的环境变量）。
+   白名单分三种、每条都写了理由，另有 10 条参数化用例盯着「白名单指向的文件还在不在」——
+   没这一条，白名单会越滚越长，最后墙上全是洞而没人知道哪个洞还有用。
+   只扫 `git ls-files`：工作区里 `.mock_state/`、egg-info、playwright 快照都带着旧名字，
+   它们自己会重新生成，拦它们只会天天假红（而且 rglob 会读到 `.env`）。
 
 ## 6. 回滚
 
@@ -161,3 +178,14 @@ cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库�
 
 `User-Agent: testBench/1.0`（`ApiManagement.jsx:32`、`ApiStepList.jsx:161`）改之前
 先问 UAG 那边 —— 被测系统的日志或白名单可能认这个串，这个我验证不了。
+
+## 8. 剩下没做的（都要停服务或动 GitHub）
+
+| 步 | 为什么留着 |
+|---|---|
+| 5 库名 `testbench` → `lumiere` | `ALTER DATABASE` 要求无活连接：停后端 → 改 → 改 `.env`（**这个文件只有你能改**）→ 起。还要同步 `docker-compose.yml`、`config.py` 默认值、两套 `conftest` 的 `testbench_test*`。封样里这一类命中是按「连接串/`psql -d` 里的库名」放过的 |
+| 6 部署命名 + `pyproject.toml` 包名 | `deploy/*`、`DEPLOY.md` 约 25 处；`name = "testbench-backend"` 改了要重装 venv（editable 安装的包名变了） |
+| 7 仓库改名 | GitHub 网页上改（这一步只有你能做），然后 `git remote set-url` 两个远端。改完 `/home/dreamer/testBench` 这个路径和 `tests/README.md` 里的 `cd testBench` 才能跟着改 |
+| `User-Agent: testBench/1.0` | 等 UAG 回话，见 §7 |
+| 项目名 `tb-self-shared-project` | 项目列表卡片上看得见，但它是**数据行的标识**不是品牌名（描述已经改成「Lumiere 自测链共用的长期项目」）。要改是改一条业务数据，跟改名作业不是一回事 |
+| 存量 Key 前缀 `tb_xxxxx` | 3 把在用的 Key。改 `key_prefix` = 吊销已发出去的 Key。新发的已经是 `lum_` |

@@ -39,13 +39,13 @@ async def generate_doc_with_screenshots(
     project_id: uuid.UUID,
     language: str = "zh",
 ) -> AsyncIterator[DocGenEvent]:
-    """执行 tb-doc-generate Skill：通用 Web 截图 + AI 写文档。"""
+    """执行 lum-doc-generate Skill：通用 Web 截图 + AI 写文档。"""
 
     session_id = uuid.uuid4().hex[:12]
     shot_dir = SCREENSHOT_DIR / str(project_id) / session_id
     shot_dir.mkdir(parents=True, exist_ok=True)
 
-    yield DocGenEvent(type="skill_start", data={"skill": "tb-doc-generate", "totalSteps": 5})
+    yield DocGenEvent(type="skill_start", data={"skill": "lum-doc-generate", "totalSteps": 5})
 
     # Step 1: 启动浏览器并登录
     yield DocGenEvent(type="step_start", data={"step": 1, "title": "启动浏览器并登录"})
@@ -163,7 +163,7 @@ def _load_format_template(doc_type: str) -> str:
     import re
 
     fallback = "按标准 Markdown 格式输出"
-    skill_path = Path(__file__).resolve().parent.parent / "skills" / "preset" / "tb-doc-generate" / "SKILL.md"
+    skill_path = Path(__file__).resolve().parent.parent / "skills" / "preset" / "lum-doc-generate" / "SKILL.md"
     if not skill_path.exists():
         return fallback
     try:

@@ -3,7 +3,7 @@
 # Version: 6.3.0
 # Date: 2026-04-11T04:55:50.210Z
 
-project_name: testBench
+project_name: Lumiere
 user_skill_level: intermediate
 planning_artifacts: "{project-root}/_bmad-output/planning-artifacts"
 implementation_artifacts: "{project-root}/_bmad-output/implementation-artifacts"

@@ -348,7 +348,7 @@ id**，于是挪出「订阅管理/跨租户订阅/跨租户订阅」—— 套�
 | 这一侧 | 问的是 | "同一位置已有"意味着 |
 |---|---|---|
 | 页面「+ 新建模块」 | 我能不能**建**这个模块？ | 冲突。用现成的。 |
-| `tb_create_case` / `tb_update_case` 的 module+submodule | 这条用例**放哪儿**？ | **成功。就放那儿。** |
+| `lum_create_case` / `lum_update_case` 的 module+submodule | 这条用例**放哪儿**？ | **成功。就放那儿。** |
 
 规则 2 按第一种问法写，却也接在了第二种上。后果是**每个目录只装得下第一条用例**：
 第二条起，用完全相同的 module+submodule 再传就被硬拒，而提示是
@@ -356,7 +356,7 @@ id**，于是挪出「订阅管理/跨租户订阅/跨租户订阅」—— 套�
 参数上也没有第二种写法能表达"往里面加"。CC 试了四种写法全被拒，
 只能给每条用例另起一个二级目录，于是 4 条本该同目录的用例散成了
 「MCP Hub」「MCP Hub 内置工具」「MCP Hub 高危工具」「MCP Hub 接入指引」四个。
-`tb_update_case` 搬家撞同一堵墙 —— **目标目录存在才叫搬家**，于是搬不动。
+`lum_update_case` 搬家撞同一堵墙 —— **目标目录存在才叫搬家**，于是搬不动。
 
 按 `RULES.md` ① 复核一遍就该发现：硬拦要求"不存在任何合法写法能长成这样"，
 而往已有模块里放用例是**唯一**的合法写法。这条判据在那条路上从根上不成立。
@@ -381,7 +381,7 @@ id**，于是挪出「订阅管理/跨租户订阅/跨租户订阅」—— 套�
 
 #### 同一条路上的第二个：只传 submodule 会一层层往下套
 
-`tb_update_case` 里 `cur_module` 兜底取的是**用例当前所在目录的名字**（叶子名），
+`lum_update_case` 里 `cur_module` 兜底取的是**用例当前所在目录的名字**（叶子名），
 既拿去查重、又拿去写目录。两者要的不是一个东西 —— 查重的范围就是所在那一层
 （`check_one` 按 `CaseFolder.name == module` 扫），写目录要的却是**顶级模块**。
 
@@ -423,7 +423,7 @@ id**，于是挪出「订阅管理/跨租户订阅/跨租户订阅」—— 套�
 | 4 | 用例列表「审核中」派生状态 | `GET .../ai-review/in-progress` + 列表那一列。**不进 `review_status` 枚举**，那个字段牵连门禁筛选一大片 |
 | 5 | 报告页一行一次审核 + 类型列 + 发起人过滤 | `ReviewReport.jsx`。默认只看人发起的 |
 | 6 | 模块报告页（结论/共性问题/覆盖缺口/覆盖分布/逐条折叠） | 同上的 Drawer。抽审的报告顶上明写「不能代表整个模块」 |
-| 7 | 模块体检 + CC 可调 | `services/review/checkup.py` + MCP `tb_module_checkup`。传 `observed_actions` 才准 |
+| 7 | 模块体检 + CC 可调 | `services/review/checkup.py` + MCP `lum_module_checkup`。传 `observed_actions` 才准 |
 | 8 | 确认框（范围+环境+检查项展示） | `CaseManagement.jsx`。**九项检查故意不可勾选** —— 能勾就能放水 |
 | 9 | 「无法审核」结论 + 没真跑不得 approved | `run_outcome.py` + `score_and_verdict`。三分归因：脚本错打回 / 系统 bug 开单不打回 / 环境问题无法审核 |
 | 10 | 操作/验证步骤↔脚本 缺一即 blocker | `step_coverage.py`。**锚点比对不是数数**，理由和三条反例写在模块头 |
@@ -552,11 +552,11 @@ TC-DYGL-00016 的 `def test_` 在第 10361 字符、第一个 `expect()` 在第 
 
 §14 的六条修完之后还剩四条**只做了缓解、没解决**的。这一节记的是已经在跑的行为。
 
-**① 单条审核超时，现在查得到。** `tb_review_case` 还是一次同步 await（静态审多数
+**① 单条审核超时，现在查得到。** `lum_review_case` 还是一次同步 await（静态审多数
 十几秒，为它背一个轮询循环不划算），但它现在**在批次台账上留一行**
 `kind="cc_inline"` 的账：既是"正在审"的标记，也是防重复的锁。超时后 CC 再调一次
 会被挡下并拿到 `{"status": "in_progress", "startedMinutesAgo": …}`，而不是又触发
-一次分钟级真跑。另开只读工具 `tb_review_check(case_id)` 查状态和上一次的结论 ——
+一次分钟级真跑。另开只读工具 `lum_review_check(case_id)` 查状态和上一次的结论 ——
 它**不触发**评审。
 
 `cc_inline` 是**专门开的 kind，不是复用 `single`**：`single` 是人在详情页点

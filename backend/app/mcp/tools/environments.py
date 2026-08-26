@@ -36,7 +36,7 @@ async def get_merged_variables(session: AsyncSession, env_id: str) -> dict:
        它的描述里写着"排查『变量未解析』先查这里"——结果这个"先查"的入口自己一直是坏的。
 
     2. **凭证要脱敏**。返回里带着 ADMIN_PASSWORD 这类明文值。
-       同族的 tb_list_global_data 一直是脱敏的，这条不脱等于开了个后门：
+       同族的 lum_list_global_data 一直是脱敏的，这条不脱等于开了个后门：
        外部 CC 要的是"有哪些键可以引用"，不是密码本身
        —— 脚本里写 `${ADMIN_PASSWORD}`，值由平台执行时注入。
        所以只修 dict 不脱敏是**把一个崩溃换成一次泄漏**，两件事得一起做。

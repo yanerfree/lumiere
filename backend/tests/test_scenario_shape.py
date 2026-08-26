@@ -160,7 +160,7 @@ def test_规范里前置了这四条():
     assert "对照组拆成两条" in spec
     assert "写完必须读回来" in spec
     assert "不是控制面的状态字段" in spec
-    assert "tb_upsert_automation_resource" in spec, \
+    assert "lum_upsert_automation_resource" in spec, \
         "数据面入口每个项目不一样，平台不硬编码 —— 得告诉 CC 摸清了写进共享数据"
 
 

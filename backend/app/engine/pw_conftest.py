@@ -404,7 +404,7 @@ def _write_i18n_module(sandbox_dir: str, locale: str, mapping: dict[str, dict] |
         "        raise KeyError(\n"
         "            f'文案键 {ref!r} 不在平台注入的词典里。裸下标 TEXT[键] 查不到会直接抛 ——\\n'\n"
         "            f'返回键名的话，「不应出现」那类断言会假绿（键名匹配不到任何元素）。\\n'\n"
-        "            f'两条任选：把这个键登记进项目词典（tb_upsert_i18n_terms），\\n'\n"
+        "            f'两条任选：把这个键登记进项目词典（lum_upsert_i18n_terms），\\n'\n"
         "            f'或改用 TEXT.get({ref!r}, \"中文原文\")（查不到退回中文，不抛）。')\n\n"
         f"TEXT = _Text({_json.dumps(flat, ensure_ascii=False)})\n\n"
         "def t(ref: str, zh: str = None) -> str:\n"

@@ -34,7 +34,7 @@ def test_带中文原文的占位说明是漏渲染_不是叫人补占位():
 
 def test_没写中文原文的仍然叫人登记():
     hint = unresolved_hint('page.get_by_text("${cases.nav.title}").click()')
-    assert "tb_upsert_i18n_terms" in hint and "没做文案渲染" not in hint
+    assert "lum_upsert_i18n_terms" in hint and "没做文案渲染" not in hint
 
 
 # ── ② 执行路径必须渲染文案 ────────────────────────────────────────
@@ -63,7 +63,7 @@ def test_四条执行路径都要渲染文案():
 # ── ③ 步骤键名：读回来的必须能原样写回去 ──────────────────────────
 
 def test_驼峰步骤键有别名_读改写不丢东西():
-    """tb_get_api_test 吐驼峰、写回只认下划线 —— 于是"读回来改一个 URL 再存回去"
+    """lum_get_api_test 吐驼峰、写回只认下划线 —— 于是"读回来改一个 URL 再存回去"
     会把所有 variables_extract 静默丢掉，然后报「存在悬空变量引用」。
     """
     for camel in ("variablesExtract", "groupName", "waitMs",
@@ -128,7 +128,7 @@ def test_截断要能被看出来():
 # ── ⑤ 报告工具：照着提示做不该报参数错 ────────────────────────────
 
 def test_报告工具只给reportId也能调():
-    """tb_run_plan 返回的是 taskId + reportId，提示写着"拿 reportId 来查"，
+    """lum_run_plan 返回的是 taskId + reportId，提示写着"拿 reportId 来查"，
     而这两个工具此前只认 plan_id —— 照提示做一定报参数错。
     """
     from app.mcp.tools import test_reports

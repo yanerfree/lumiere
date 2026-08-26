@@ -7,7 +7,7 @@
 而库里 `scenario-*` 有 111 条调用记录（8-09 那几天在跑场景生成）。
 **页面说不清，人就只能猜**，猜完就照着猜的结论去砍功能。
 
-记账原来只有三处（tb-case-generate / tb-quality-review / scenario-*），
+记账原来只有三处（lum-case-generate / lum-quality-review / scenario-*），
 文档生成、探索 Charter、正则生成、接口场景编排这四条链路一次都没记过 ——
 它们不是"没被用"，是"没被数"。这两件事在页面上长得一模一样，而
 **「没被数」当成「没被用」是会误删功能的**，比不显示更坏。

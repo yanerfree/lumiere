@@ -7,7 +7,7 @@
 - **不要删 `app/services/ai/llm_client.py` 里的 429 两层处理**（退避重试 + 降级 CLI 通道）。文本主路此前零重试，一个 429 会打死整条场景生成；原因和验证方法都写在文档里。
 - 换 AI 模型**不需要改代码**：走「AI 服务配置 → AI 能力→模型」页面即可（下拉是动态拉网关的）。
 - **接口场景只有一种：绑用例的编排链。** 「接口测试」模块（单接口·凭文档 AI 造）
-  2026-08-15 已下线，`tb_generate_api_test` 一并摘除。**别加回来** —— 场景变量只能挂在
+  2026-08-15 已下线，`lum_generate_api_test` 一并摘除。**别加回来** —— 场景变量只能挂在
   用例上（`scenario_variables.case_id` NOT NULL），不绑用例的场景结构上就跑不了。
   理由和实测数据见下方文档的「§11 接口测试模块下线」。
 - **建 MCP Key 必须绑项目。** Key 的 `project_id` 现在管两件事：工具范围**和数据范围**
@@ -34,7 +34,7 @@
   有封样测试盯着；也**不要求对方仓库为我们加任何字段/文件/钩子**。要做回写先跟仓库主人谈，
   别从这个模块长出来。**配置在「QA 场景清单」页里配，不在编辑项目弹窗**；只有仓库地址必填，
   分支/清单路径/脚本范围留空 = 自动识别，**别给它们塞 uag-qa 的默认值**（见文档 §3）。
-- **别把项目 skill 放进 `app/skills/preset/`**。那个目录只放平台侧执行的 `tb-*`（会被当 prompt 喂后端 LLM、要绑模型档位）；客户端侧执行的 skill 走 DB，见下方文档。混了会让「AI 能力→模型」页冒出绑不上模型的空档位。
+- **别把项目 skill 放进 `app/skills/preset/`**。那个目录只放平台侧执行的 `lum-*`（会被当 prompt 喂后端 LLM、要绑模型档位）；客户端侧执行的 skill 走 DB，见下方文档。混了会让「AI 能力→模型」页冒出绑不上模型的空档位。
 
 ## 测试：**两套，都要跑**
 
@@ -63,10 +63,10 @@ cd /home/dreamer/testBench && DATABASE_URL='postgresql+asyncpg://postgres:postgr
 | AI 网关真面目、429 限流怎么绕、新模型怎么维护、模型选型实测数据、长驻服务依赖 | [docs/ai-gateway-and-models.md](docs/ai-gateway-and-models.md) |
 | AI 测试生成用法 | [docs/ai-test-generation-guide.md](docs/ai-test-generation-guide.md) |
 | AI 质量改进计划 | [docs/ai-quality-improvement-plan.md](docs/ai-quality-improvement-plan.md) |
-| **AI 评审（六维·逐条）怎么判、为什么能替人工待审** | [backend/app/skills/preset/tb-quality-review/SKILL.md](backend/app/skills/preset/tb-quality-review/SKILL.md) + [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) 附节 |
+| **AI 评审（六维·逐条）怎么判、为什么能替人工待审** | [backend/app/skills/preset/lum-quality-review/SKILL.md](backend/app/skills/preset/lum-quality-review/SKILL.md) + [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) 附节 |
 | **审核怎么发起/排队/结果看哪里、模块命名规则**（改这块之前先读；含三个已撤销的设计） | [docs/review-spec.md](docs/review-spec.md) |
 | **审核机制对外可借鉴版**（判据/元规则/流程/踩坑，不依赖本平台表结构，可直接发人） | [docs/review-mechanism.md](docs/review-mechanism.md) + 同名 `.html` 单页 |
-| 项目 Skill 怎么传上来 / 给别的项目取用、跟内置 tb-* 的边界 | [docs/skill-sharing.md](docs/skill-sharing.md) |
+| 项目 Skill 怎么传上来 / 给别的项目取用、跟内置 lum-* 的边界 | [docs/skill-sharing.md](docs/skill-sharing.md) |
 | **LLM Mock 智能应答**：指令契约（MODE:/SAY:）、护栏回显协议、开关前后页面为什么长得不一样 | [docs/llm-mock-smart-contract.md](docs/llm-mock-smart-contract.md) |
 | 下阶段做什么：生成效率 / 生成质量 / 失败优化（含现状实测盘点） | [docs/next-phase-gen-quality-and-failure.md](docs/next-phase-gen-quality-and-failure.md) |
 | **CC ↔ 平台闭环的边界规则、红线、Story 清单**（改这一块之前先读） | [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) |

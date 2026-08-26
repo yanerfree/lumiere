@@ -4,7 +4,7 @@ Revision ID: zzs0rvhash
 Revises: zzr0aiusage
 
 为什么必须落库：`ai_review` 轮次只记结论,不记"当时看的是哪份内容"。
-`tb_sync_orchestrated_scenario` / `tb_sync_ui_script` 把脚本整个覆盖掉之后,
+`lum_sync_orchestrated_scenario` / `lum_sync_ui_script` 把脚本整个覆盖掉之后,
 旧轮次的 findings 文本原样留着,没有任何标记提示"这是对着已经被替换掉的内容
 算出来的"——活体验证时真撞上:一份 49 分打回的记录,写着"UI 脚本没有 def test_
 入口",取出当前脚本一看,那个入口就在文件里。原地复评直接 83 分 approved,

@@ -1,7 +1,7 @@
 """项目 Skill API —— 客户端(Claude Code)侧执行的 skill，推上来、取下去、管理员可改可删。
 
 URL 空间刻意跟平台内置的 `/api/skills` 分开：
-  /api/skills                      → 内置 tb-*（平台侧执行，见 skill_manage.py）
+  /api/skills                      → 内置 lum-*（平台侧执行，见 skill_manage.py）
   /api/projects/{pid}/skills       → 项目 skill（客户端侧执行，本文件）
 分开的理由不是洁癖：内置 skill 会被 skill_executor 当 prompt 喂给后端 LLM、
 还要在「AI 能力→模型」里绑档位；项目 skill 两件都不参与。混一个列表会让

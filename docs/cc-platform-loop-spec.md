@@ -21,7 +21,7 @@
 | 失败**分类**（是什么） | 不做 | **平台确定性规则** |
 | 失败**归因**（为什么） | **CC** | 只存，不判 |
 | 状态写入（通过率、维度状态） | 不能 | **唯一写入口** |
-| 用例/脚本**评审**（值不值得进回归） | 自审（`tb_review_case`，回推完自己先过一遍） | **同一套判据、同一份代码**：证据由平台收集、判定写在代码里（有 blocker 一律不过、加权 <80 不过），模型只出判断题的答案 |
+| 用例/脚本**评审**（值不值得进回归） | 自审（`lum_review_case`，回推完自己先过一遍） | **同一套判据、同一份代码**：证据由平台收集、判定写在代码里（有 blocker 一律不过、加权 <80 不过），模型只出判断题的答案 |
 
 ### 三条红线
 
@@ -159,8 +159,8 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 ### 2.7 调试执行 vs 记账执行
 
 `script_runs` 加 `run_mode`（`regression` / `debug`）。通过率、报告口径只算 `regression`。
-- `tb_run_ui_script`（单条，语义就是"聚焦调试用"）→ 默认 `debug`
-- `tb_run_ui_scripts_batch`（批量回归）→ 默认 `regression`
+- `lum_run_ui_script`（单条，语义就是"聚焦调试用"）→ 默认 `debug`
+- `lum_run_ui_scripts_batch`（批量回归）→ 默认 `regression`
 
 跟工具现有语义正好对齐，不用改调用方。
 
@@ -175,9 +175,9 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 
 **为什么必须分两块**：合并的后果是逼人把探测出来的 id 填成环境变量字面量——**那正是"变量不许写死"禁的事，只是换个地方写死**。分块的理由是「存值 vs 存找法」，**跟谁来维护无关**。
 
-**自动化数据的定位（2026-08-08 修正）**：它的主要写入方**从来就是 CC**（`tb_upsert_automation_resource`），页面只是查看和兜底。曾把它描述成"人来配 exists_check"，那是错的——那个描述等于把它讲成环境变量的翻版。
+**自动化数据的定位（2026-08-08 修正）**：它的主要写入方**从来就是 CC**（`lum_upsert_automation_resource`），页面只是查看和兜底。曾把它描述成"人来配 exists_check"，那是错的——那个描述等于把它讲成环境变量的翻版。
 
-**为什么全平台 0 行**：闭环缺一环——CC 登记完拿不到回音。`tb_list_global_data` 只列静态定义，**不跑探测、不返回 `create_def`**，CC 无从知道"这个环境里现在缺不缺、缺了当初是怎么造的"。没有反馈，这功能进不了它的工作流。
+**为什么全平台 0 行**：闭环缺一环——CC 登记完拿不到回音。`lum_list_global_data` 只列静态定义，**不跑探测、不返回 `create_def`**，CC 无从知道"这个环境里现在缺不缺、缺了当初是怎么造的"。没有反馈，这功能进不了它的工作流。
 
 **`create_def` 的执行归属，2026-08-21 复核后改口径。** 早前这里写的是"平台不执行 `create_def`，造数据归 CC"（同时撤回了更早的"人工补建按钮"方案）。**现在平台在执行期会真补建**，理由是原来那条口径漏了一种情形：`${资源名}` 是写在 JSON 步骤里的，链子**自己没有 if/else**——底座缺失时它只会红在"变量未解析"上，而"缺了就去造"这件事 CC 只能在**下一轮**做。于是二十条链一起红，等 CC 回来。既然 `create_def` 里已经登记了"当初是怎么造的"，那就该由跑的人现场补上。
 
@@ -185,7 +185,7 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 
 | 入口 | 行为 | 在哪 |
 |---|---|---|
-| 页面 / 预检 / `tb_list_global_data(probe=true)` | **只探不建**，报 `state` + `canCreate` | `precheck_service._check_one` |
+| 页面 / 预检 / `lum_list_global_data(probe=true)` | **只探不建**，报 `state` + `canCreate` | `precheck_service._check_one` |
 | 接口场景执行前 / UI 脚本执行前 | 探到 `missing` **且**有 `create_def` → 照它补建 → 复探一次 | `api_test_runner._resolve_automation_resources` → `_auto_create_resource` |
 
 只认 `missing`（探测请求成功且明确没匹配上）。`unknown`（401 / 5xx / 超时 / 没配 url）一律不动——一次 token 过期就照着建，会在被测环境里造一堆重复底座，而且 `keep=true` 没人清理。
@@ -225,7 +225,7 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 | 平台侧 AI 自愈 / 自动改脚本 | 自愈 = 带失败上下文的生成，难度只高不低；且和红线 1 的三条下线理由（慢、污染被测环境、广度未验）完全同构 |
 | **平台执行 `create_def` 自动补建** | 造数据归 CC（见 §2.8）。平台只报"缺了什么 + 当初怎么造的" |
 | i18n `t()` 运行时 | 不进第一刀。词典现在 33 条且无消费方，先把回推链跑顺 |
-| `repair_queue` 表 + `tb_claim_repairs` + 自愈次数计数器 | 为"多 CC 实例并发领任务、无人值守失控"这个不存在的场景做工程。**现在是一个人，人就是护栏。** 待修清单 = 执行历史上一个筛选条件 |
+| `repair_queue` 表 + `lum_claim_repairs` + 自愈次数计数器 | 为"多 CC 实例并发领任务、无人值守失控"这个不存在的场景做工程。**现在是一个人，人就是护栏。** 待修清单 = 执行历史上一个筛选条件 |
 | 定时调度（cron / celery / APScheduler） | 会引入一个需要长驻、需要监控、会静默死掉的组件；已有两个长驻进程的维护成本。触发用 CC 的 `/loop` 或本地 crontab |
 | 缺陷系统对接（Jira / 禅道） | CC 端有 `gh` 和文件系统，issue 在那边提，平台只存 `issue_url` 回链。**平台一行代码不用写** |
 | 「病历」概念 + `case_file_events` 独立页签 | 三条时间线（病历 / 执行历史 / 生成档案）说的是同一件事，只需要一条 |
@@ -237,9 +237,9 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 ## 3. 代码库现状核查（2026-08-08 实测，不是推测）
 
 ### 已通
-- `tb_sync_ui_script` 回推 → 页签渲染 → 平台执行 `passed 5.3s`；写死地址/凭据被硬拦截
-- `tb_sync_orchestrated_scenario` 接口场景回推，硬拦截悬空 `${x}`
-- `tb_create_case` / `tb_upsert_scenario_variables` / `tb_get_sync_spec` / `tb_list_global_data`
+- `lum_sync_ui_script` 回推 → 页签渲染 → 平台执行 `passed 5.3s`；写死地址/凭据被硬拦截
+- `lum_sync_orchestrated_scenario` 接口场景回推，硬拦截悬空 `${x}`
+- `lum_create_case` / `lum_upsert_scenario_variables` / `lum_get_sync_spec` / `lum_list_global_data`
 - `POST /plans/{id}/execute` 批量执行 + 报告
 - `scripts` 表版本 + `activate` 回滚（**零 AI 风险的自愈，能力已有，UI 上不显眼**）
 - 项目级共享资源 `exists_check` 执行前探测注入
@@ -251,10 +251,10 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 | **执行历史 type 参数** | 前端传用例 `type`（`api`/`e2e`），后端要脚本类型（`ui`/`api`）。TC-XMGL-00001 库里 2 条 UI 记录，页面显示 0 条。**e2e 类型用例永远查不到** |
 | **`captured_requests`（HAR）** | 平台执行 UI 脚本**不录网络流量**。`tea_capture` patch 的是 httpx，Playwright 浏览器流量不经过它。`script_runs` 也没有这个列 |
 | **`failure_type`** | **从来没落过库**。只存在于 `step_generator.py`（已下线的平台生成管道）。前端那几个 script_bug/system_bug 标签，生成入口下线后已永远不会出现 |
-| **`tb_get_ui_script_result`** | 只返回 `screenshots_count`（数字），**CC 看不到截图** |
-| **MCP 测试计划工具** | **一个都没有**。`tb_get_report_summary` / `tb_get_failed_scenarios` 要 `plan_id`，但没有 `tb_list_plans` → **这两个工具实际上是死的** |
-| **`tb_generate_ui_script`** | 平台侧生成工具**还挂在 MCP 上**（页面入口已删）。留着就是留一条暗路，违反红线 1 |
-| **`tb_list_cases`** | 不支持按维度状态筛（REST 支持 `uiStatus=xxx`，MCP 没透出）→ CC 无法断点续跑 |
+| **`lum_get_ui_script_result`** | 只返回 `screenshots_count`（数字），**CC 看不到截图** |
+| **MCP 测试计划工具** | **一个都没有**。`lum_get_report_summary` / `lum_get_failed_scenarios` 要 `plan_id`，但没有 `lum_list_plans` → **这两个工具实际上是死的** |
+| **`lum_generate_ui_script`** | 平台侧生成工具**还挂在 MCP 上**（页面入口已删）。留着就是留一条暗路，违反红线 1 |
+| **`lum_list_cases`** | 不支持按维度状态筛（REST 支持 `uiStatus=xxx`，MCP 没透出）→ CC 无法断点续跑 |
 | **需求溯源** | 只渲染裸编号 `R3`。`requirement_points` 有 107 条，含标题 + `quote_text` + 字符偏移锚点 |
 | **`case_file_events`** | 全平台 0 行，无任何写入方，能力总览却标"已完成" |
 | **AI 能力注册表** | 14 项中 **4 项已死**：`ui-script` / `ui-script-repair` / `pytest-script` / `toolbox-regex`（前端入口已删或从无调用方）。**`ui_script` 整个类别现在是空的** |
@@ -302,12 +302,12 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 
 | # | Story | 依赖 | 大小 |
 |---|---|---|---|
-| **A0** | **执行记账补齐**（新增，主线关键路径）：`script_runs` 一次性加 `report_scenario_id` / `run_mode` / `attempt` / `captured_requests` / `failure_phenomenon`（**单 migration**）；plan / adhoc / Python-SSE 三条路补写 `ScriptRun` 行；`_execute` / `_execute_adhoc` 透传 `user_id`（`executed_by` 是 NOT NULL FK）；`tb_run_ui_script`→debug，batch→regression | — | **M** |
+| **A0** | **执行记账补齐**（新增，主线关键路径）：`script_runs` 一次性加 `report_scenario_id` / `run_mode` / `attempt` / `captured_requests` / `failure_phenomenon`（**单 migration**）；plan / adhoc / Python-SSE 三条路补写 `ScriptRun` 行；`_execute` / `_execute_adhoc` 透传 `user_id`（`executed_by` 是 NOT NULL FK）；`lum_run_ui_script`→debug，batch→regression | — | **M** |
 | **A1** | `type` 污染两处都改：`CaseDetail.jsx:1792`（执行历史）+ `:2182`（「快速执行」→ `POST /run?type=e2e` → `get_active_script(cid,"e2e")` 空 → 404） | A0 | S |
-| **A2** | 摘平台侧 UI 生成**四个口子**：`tb_generate_ui_script`、`POST .../scripts/generate`、`POST .../scripts/generate-stream`、`mcp/__init__.py:138` prompt 里教 CC 调它那句；注册表 4 项标 deprecated | — | S |
+| **A2** | 摘平台侧 UI 生成**四个口子**：`lum_generate_ui_script`、`POST .../scripts/generate`、`POST .../scripts/generate-stream`、`mcp/__init__.py:138` prompt 里教 CC 调它那句；注册表 4 项标 deprecated | — | S |
 | **A3** | HAR 录制（`pw_conftest.py:27` + `ts_runner.py:145` / `scripts.py:373` **两份孪生 playwright.config**）+ **4 个采集点**（跟着 `_collect_screenshots` 走，不跟着 sandbox 走）+ 白名单改黑名单 + **body 字段级脱敏**（`requestBody` 现在原样留 8000 字符，登录密码会明文入库再经 A5 送进 CC 上下文）+ 体积上限 | A0 | **M** |
 | **A4** | `failure_triage.py` 输出六类现象 + `evidence_hints`。**超时分支不能依赖 HAR**（Playwright 只在 `context.close()` flush，进程被 kill 时 HAR 缺失/截断）。单测用真实失败 fixture | A3 | M |
-| **A5** | `tb_get_ui_script_result` 返回截图**临时文件路径** + HAR 摘要 + 失败步骤上下文 | A0/A3 | S |
+| **A5** | `lum_get_ui_script_result` 返回截图**临时文件路径** + HAR 摘要 + 失败步骤上下文 | A0/A3 | S |
 | **V1+V2** | 合并为一条（`_check_one` 一次改完）：`list_global_data(project_id, env_id=None, probe=False)`——**`check_resources` 要 `env_id`，原写法照抄会崩**；三态化 `exists`/`missing`/`unknown`；带 `create_def`（**要脱敏**，它记着当初怎么造的，大概率带 Authorization）；probe **并发 + 超时压到 5s**（现在串行 15s×N，MCP 调用会先超时）。**执行注入行为不变**（`api_test_runner.py:513` 的 `exists=False` → 不注入 → 步骤报错，这个行为是对的） | — | S |
 | **V3** | 自动化数据页文案改实话 | — | XS |
 
@@ -321,9 +321,9 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 
 | # | Story | 大小 |
 |---|---|---|
-| B1 | MCP 计划四件套：`tb_list_plans` / `tb_create_plan` / `tb_run_plan` / `tb_list_reports`（救活现有两个死工具） | S |
+| B1 | MCP 计划四件套：`lum_list_plans` / `lum_create_plan` / `lum_run_plan` / `lum_list_reports`（救活现有两个死工具） | S |
 | B2 | `script_runs` 加 `cc_analysis`（结构化：`failure_type` + `evidence` + `confidence` + `proposed_fix_target` + 署名 + `run_id`）；**无 evidence 拒收** | S |
-| B3 | `tb_submit_analysis` MCP 工具 | S |
+| B3 | `lum_submit_analysis` MCP 工具 | S |
 | B4 | 平台确认入口：`confirmed_cause` + `confirmed_note`（必填），**机器永不覆盖**；页面一个下拉 + 一句理由 | S |
 | B5 | 回推证据门禁：payload 带 `evidence{duration_ms, assertion_count}`，缺失拒收；**断言数为 0 硬拦截**；`assertion_profile` 软警告 | S |
 | B6 | `CC归因 vs 人确认` 一致率指标（按 failure_type 分桶） | S |
@@ -334,10 +334,10 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 | # | Story | 大小 |
 |---|---|---|
 | C1 | 用例加 `target_level`（spec / spec+api / full） | XS |
-| C2 | `tb_list_cases` 支持按维度状态筛选 → CC 断点续跑 | XS |
+| C2 | `lum_list_cases` 支持按维度状态筛选 → CC 断点续跑 | XS |
 | C3 | 入库四道闸（语义去重 / 断言强度 / P0 配额 15% / 覆盖倾斜告警） | M |
 | C4 | P0 强制两阶段（人只确认「预期结果」一列） | M |
-| C5 | `/tb-regression` skill（**走 `tb_push_skill` 存 DB，不要放 `app/skills/preset/`**，CLAUDE.md 明令） | M |
+| C5 | `/lum-regression` skill（**走 `lum_push_skill` 存 DB，不要放 `app/skills/preset/`**，CLAUDE.md 明令） | M |
 
 ### 独立线 · UX 清晰度（Sally 方案）
 
@@ -366,9 +366,9 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 2. **计划执行一批 → 每条用例在 `script_runs` 各有一行**，`run_mode='regression'`，且 `report_scenario_id` 能反查到报告
 3. 执行历史对有 N 条记录的用例显示 N 条（N>0），type 切换后数量正确
 4. 重试 3 次的用例 → `script_runs` 有 3 行，`attempt` 分别为 1/2/3
-5. `tb_get_ui_script_result` 返回截图路径，**CC 用 Read 打开能看到图**
-6. `POST .../scripts/generate` / `generate-stream` / `tb_generate_ui_script` 三个口子均已下线；「AI 能力→模型」页**不出现空档位**，且文本档模型未被静默改动
-7. `tb_list_global_data(probe=true, env_id=X)` 对一个已登记资源返回 `exists` + 探到的 values；把 token 改坏 → 返回 **`unknown` 而不是 `missing`**；执行时变量注入行为不变
+5. `lum_get_ui_script_result` 返回截图路径，**CC 用 Read 打开能看到图**
+6. `POST .../scripts/generate` / `generate-stream` / `lum_generate_ui_script` 三个口子均已下线；「AI 能力→模型」页**不出现空档位**，且文本档模型未被静默改动
+7. `lum_list_global_data(probe=true, env_id=X)` 对一个已登记资源返回 `exists` + 探到的 values；把 token 改坏 → 返回 **`unknown` 而不是 `missing`**；执行时变量注入行为不变
 
 ### 第一刀 · 分类器（A3/A4）——封样混淆矩阵
 
@@ -408,7 +408,7 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 | AC3 执行历史返回全部记录（不按脚本类型过滤） | ✅ |
 | AC4 `retryCount=2` 的失败用例 → `attempt` 1/2/3 三行 | ✅ |
 | AC5 证据包返回**可 Read 打开**的截图路径 | ✅ 打开确认是失败当时的真实页面；返回体 4952 字节（若塞 base64 约 170 万 token） |
-| AC6 平台侧生成四个口子全下线 | ✅ 三个 REST 均 404；MCP 36 工具不含 `tb_generate_ui_script` |
+| AC6 平台侧生成四个口子全下线 | ✅ 三个 REST 均 404；MCP 36 工具不含 `lum_generate_ui_script` |
 | AC7 共享资源探测三态化 + 执行注入行为不变 | ✅ exists/missing/unknown 各命中一条 |
 | AC-分类器 封样 8 条无跨类错 | ✅ 11 passed |
 
@@ -431,7 +431,7 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 | AC1 无 `evidence` 的归因被拒收 | ✅ 另外两条反面也拦住了：低置信配具体 cause、引用"第 9 张截图"但只有 1 张 + 捏造的请求 |
 | AC2 归因写入后用例状态一个字节不变 | ✅ `cc_analysis` 已入库、`confirmed_cause` 仍为空 |
 | AC3 人确认后状态才变；不写理由被拒 | ✅ 400 |
-| AC4 `tb_list_plans` 吐出 planId，`tb_get_report_summary` 用该 id 能返回数据 | ✅ 这两个工具此前**实际是死的** |
+| AC4 `lum_list_plans` 吐出 planId，`lum_get_report_summary` 用该 id 能返回数据 | ✅ 这两个工具此前**实际是死的** |
 | AC5 断言数为 0 被硬拦 | ✅ |
 | AC6 一致率可算且枚举值未被 camelCase 破坏 | ✅ |
 | AC7 12 并发建用例 0 失败 | ✅ 此前 8 并发挂 1 个 |
@@ -451,7 +451,7 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 1. CC 提交无 `evidence` 的归因 → 被拒收
 2. CC 归因写入后，用例的 `ui_status` / 通过率 / 报告结论**一个字节都没变**
 3. 人在页面确认后，状态才变
-4. `tb_list_plans` 能拿到 plan_id，`tb_get_report_summary` 用该 id 能返回数据
+4. `lum_list_plans` 能拿到 plan_id，`lum_get_report_summary` 用该 id 能返回数据
 
 ### ✅ 第三刀实测结果（2026-08-08，8/8 通过）
 
@@ -460,7 +460,7 @@ P0 的人工介入点**刻意选得极窄**——不让人审全文（会疲劳�
 | AC1 中断重跑只处理还欠着的 | ✅ 三维全完成的不再被捡回来 |
 | AC2 单批 >15% P0 被整批打回 / 10% 放行 | ✅ |
 | AC3 P0 一次性三件套被拒 / 只要步骤放行 | ✅ |
-| AC4 `/tb-regression` skill 存 DB、`kind=client`、没混进 `preset`、能完整取回 | ✅ |
+| AC4 `/lum-regression` skill 存 DB、`kind=client`、没混进 `preset`、能完整取回 | ✅ |
 
 **去重这条被实测逼着改了两次，结论值得记下来**：
 
@@ -521,7 +521,7 @@ AI 诊断」按钮、把已经能用的探索测试写成"规划中"。
 AI 调用点，这页自己多一行；下线一个，自己挪到"已下线"。手写清单和真相分家不会
 再发生。已下线的**不删掉、连原因一起摆出来**，免得过阵子又被人加回来。
 
-顺带封掉一条暗路：`POST /skills/tb-diagnose`（平台侧 AI 失败诊断）**前端从来没有
+顺带封掉一条暗路：`POST /skills/lum-diagnose`（平台侧 AI 失败诊断）**前端从来没有
 调用方**，且和三层判断直接冲突 —— 现象归平台规则、归因归 CC、结论归人，平台再
 自己诊断一份就是第四个声音。按红线 3 摘掉路由，`execute_diagnose` 留着但已无入口。
 
@@ -591,7 +591,7 @@ session，互相看不见。结果任务跑完了页面还显示「0/11」，人
 
 | key | 清单原来说 | 实际 | 处理 |
 |---|---|---|---|
-| `tb-case-generate` | 用例管理 / **AI 侧栏** | `AISidebar.jsx` **没有任何页面引用**；真入口是「从接口生成」→ TestForgeModal | 改 where，**删掉这个无引用组件** |
+| `lum-case-generate` | 用例管理 / **AI 侧栏** | `AISidebar.jsx` **没有任何页面引用**；真入口是「从接口生成」→ TestForgeModal | 改 where，**删掉这个无引用组件** |
 | `doc-optimize` | 文档管理 | `POST /documents/{id}/optimize` **没有前端调用方**；页面上的「重新生成」走的是带截图那条 | 标 deprecated + 写清"实现在、没入口" |
 | `api-test-optimize` | 接口测试步骤 | 入口是选中场景后的「AI 优化」抽屉 | where 写具体 |
 
@@ -604,7 +604,7 @@ session，互相看不见。结果任务跑完了页面还显示「0/11」，人
 上方，并指出想完全不碰系统就走「Claude Code 命令」。
 
 顺带把这轮验过的 AI 能力质量记一笔（都是真跑）：
-- **用例质量评审**：四维度打分 + 每维具体到条 + 改进建议里会引用 `tb_sync_orchestrated_scenario`，说明 prompt 带了平台边界知识。
+- **用例质量评审**：四维度打分 + 每维具体到条 + 改进建议里会引用 `lum_sync_orchestrated_scenario`，说明 prompt 带了平台边界知识。
 - **探索测试章程**：目标 + 风险区域 + 10 个带严重度的检查点，还想到"无接口文档时借 Network 面板反推"。
 - **需求文档质检**：给一份自造的需求打 52 分，指出的"下线后按钮变「上线」"vs"已下线时「下线」按钮禁用"**确实是真矛盾**。
 
@@ -778,14 +778,14 @@ AI 能力清单里 `doc-optimize` 一直标着「暂无入口」。查下来实�
 | 失败归因：看证据、提判断 | 10 | 拿证据包判断为什么挂，提交到待确认队列 |
 | 跑回归、看结果 | 13 | 组计划、跑一轮、看通过率和失败分布 |
 | 需求文档批量生成用例 | 8 | 喂需求文档走 AI 流水线 |
-| 只有接口文档，连不上系统 | 8 | 退而求其次那条路（`tb_generate_api_test` 只在这一档露面） |
-| ↑ 这两档已下线 | — | 需求流水线整体下线；`tb_generate_api_test` 见 §11，该档收敛成「维护接口库」 |
+| 只有接口文档，连不上系统 | 8 | 退而求其次那条路（`lum_generate_api_test` 只在这一档露面） |
+| ↑ 这两档已下线 | — | 需求流水线整体下线；`lum_generate_api_test` 见 §11，该档收敛成「维护接口库」 |
 | 写操作/演示/验收文档 | 5 | 拿规范在本地实操截图 |
 | Skill 取用与共享 | 4 | 推/取客户端侧 skill |
 
 两个档位是靠**排除**定义的，这才是分档真正在挡的东西：
 
-- `live` **不含 `tb_generate_api_test`**。实测踩过：CC 看到它觉得凭文档造更省事就走了它，
+- `live` **不含 `lum_generate_api_test`**。实测踩过：CC 看到它觉得凭文档造更省事就走了它，
   正好绕开"亲手跑一遍"。instructions 里写了"默认先活体验证"也拦不住 ——
   **软约束对模型是建议，工具范围才是墙**。
 - `triage` **不含任何写用例/脚本的工具**。红线 3 说 CC 归因不改任何状态，
@@ -798,10 +798,10 @@ AI 能力清单里 `doc-optimize` 一直标着「暂无入口」。查下来实�
 逼你想清楚"它是干哪件活的"）、`all` 必须是 `None` 而不是列全量清单（否则以后新增工具老 Key 就少一个）。
 
 活体验证走的是真 MCP 连接（18800），关键那条是**藏起来 ≠ 调不了**：
-用 `live` 档的 Key 直接 `tools/call tb_generate_api_test` → 被 `on_call_tool` 拒；
+用 `live` 档的 Key 直接 `tools/call lum_generate_api_test` → 被 `on_call_tool` 拒；
 用 `triage` 档的 Key 直接建用例 → 被拒；不限范围的 Key 仍看得到 42 个（没误伤）；
 改档位同一条连接立刻生效。页面侧 17 项：8 个档位都在、切档数字从 19/42 变 10/42、
-归因档列表里看不到 `tb_create_case`、「按这个范围建 Key」把档位带过去。
+归因档列表里看不到 `lum_create_case`、「按这个范围建 Key」把档位带过去。
 
 ### ✅ 补：工具范围从 Key 级挪到项目级（2026-08-10）
 
@@ -841,14 +841,14 @@ raw = project_scope or legacy_scope                   # ❌ 项目明确设成�
 `fullloop` = live ∪ uiscript ∪ regression ∪ triage = 31/42，覆盖
 写用例 → 回填接口场景和 UI 脚本 → 组计划跑一轮 → 读报告 → 提归因。
 它比别的档大得多是**有意的**：这一档挡的不是"工具多"，而是那几条会把人带偏的岔路 ——
-`tb_generate_api_test`（凭文档造）、需求文档流水线（不碰被测系统的另一条路）、Skill 存取、文档规范。
+`lum_generate_api_test`（凭文档造）、需求文档流水线（不碰被测系统的另一条路）、Skill 存取、文档规范。
 `test_每个档位都比全量小得多` 因此对它例外，改由两条更贴题的测替代：
 链上每一步都在（少一步人就得退回选全量，这一档就白加了）、那几条岔路一条都没漏进去。
 
 **交互形态：走过四次弯路，都记下来**
 
 1. **9 张档位卡二选一** —— 说明文字确实同时可见了，但换来更糟的问题：
-   **只能"全部"或"恰好某一档"**，想在 `live` 档基础上多开一个 `tb_run_plan` 做不到。
+   **只能"全部"或"恰好某一档"**，想在 `live` 档基础上多开一个 `lum_run_plan` 做不到。
    （用户原话：「很不方便啊」）
 2. 改成勾选之后，**把勾选框藏在「只开放勾选的」这个模式后面** ——
    默认打开页面一个勾选框都看不到，跟改之前长得一模一样。
@@ -872,7 +872,7 @@ raw = project_scope or legacy_scope                   # ❌ 项目明确设成�
   「被大档带进来的」：勾了全链路后子档全显示成已勾，再点全链路取消 —— 子档还"勾着"，
   工具一个都减不掉，**按钮看着像坏了**。反推只用在初次加载（库里只存工具清单）。
   被大档带进来的活标「已包含」，不装成人自己勾的。
-- **取消一件活要重算并集，不能做增量减法**。定位类工具（`tb_list_projects` 之类）
+- **取消一件活要重算并集，不能做增量减法**。定位类工具（`lum_list_projects` 之类）
   几乎每件活都要，直接减掉会把别的活悄悄弄不完整 —— 人只点了一下，坏的是别处。
   实测：勾 docgen+skill 共 11 个，取消 skill 掉到 7，docgen 跟着废了。
 - **关掉「不限制」要落到推荐档，不能原样留着 42 个全勾**。人关掉它就是想收窄，
@@ -924,7 +924,7 @@ raw = project_scope or legacy_scope                   # ❌ 项目明确设成�
 
 - `has_confirmed_expected` 在唯一调用点（`mcp/tools/test_cases.py`）写死 `False`；
 - 产品里没有任何地方能让人去"确认预期结果"；
-- 两个回推工具（`tb_sync_orchestrated_scenario` / `tb_sync_ui_script`）**一个门禁都没有**。
+- 两个回推工具（`lum_sync_orchestrated_scenario` / `lum_sync_ui_script`）**一个门禁都没有**。
 
 拿真 MCP 连接当一个真实 CC 走了一遍，实测：
 
@@ -1034,7 +1034,7 @@ raw = project_scope or legacy_scope                   # ❌ 项目明确设成�
    「断言未过：期望状态码 500，实际 200」「断言配置有问题：status 没有给比较值」。
 
 3. **断言字段名两边不一样，配错了会静默把每一发都判失败。**
-   压测页面写 `value`，接口场景/回推那边写 `expected`（见 `tb_sync_orchestrated_scenario`）。
+   压测页面写 `value`，接口场景/回推那边写 `expected`（见 `lum_sync_orchestrated_scenario`）。
    用后者配压测断言，`str(200) == ""` 恒假 → **每一发都算失败**，而原因还显示成状态码。
    现在两种写法都认；断言压根没给值的，明说是"断言配置有问题"，
    别让人以为是被测系统坏了。
@@ -1050,16 +1050,16 @@ raw = project_scope or legacy_scope                   # ❌ 项目明确设成�
 一次性把 41 个都调一遍（4 个刻意不调，见下），标准是**返回内容对得上它自己的描述**，
 不是"返回了 200"。
 
-**捡到一个一直坏着的工具：`tb_get_merged_variables`。**
+**捡到一个一直坏着的工具：`lum_get_merged_variables`。**
 
 它对**每一个环境**都直接报错：
-`Error calling tool 'tb_get_merged_variables': structured_content must be a dict or None. Got list: [...]`
+`Error calling tool 'lum_get_merged_variables': structured_content must be a dict or None. Got list: [...]`
 —— service 返回 list，而工具签名标的是 `-> dict`，FastMCP 按签名校验，于是必挂。
 它的描述里写着「排查『变量未解析』先查这里」，结果这个"先查"的入口自己一直是坏的；
 而且它同时在 `live` 和 `uiscript` 两个主力档位里。
 
 **修的时候必须连脱敏一起做**：返回里带着 `ADMIN_PASSWORD` 这类明文值。
-同族的 `tb_list_global_data` 一直是脱敏的，这条不脱等于**把一个崩溃换成一次凭证泄漏**。
+同族的 `lum_list_global_data` 一直是脱敏的，这条不脱等于**把一个崩溃换成一次凭证泄漏**。
 外部 CC 要的是"有哪些键可以引用"，不是密码本身 —— 脚本里写 `${ADMIN_PASSWORD}`，
 值由平台执行时注入。现在 MCP 侧密码显示成 `***`，`BASE_URL` / 账号名照常给（盖了它 CC 就不知道打哪儿了），
 平台自己的环境管理页不受影响（那是另一个端点，管理员本来就该看得见）。
@@ -1073,24 +1073,24 @@ raw = project_scope or legacy_scope                   # ❌ 项目明确设成�
 
 | 工具 | 为什么这次不调 |
 |---|---|
-| `tb_run_plan` | 会触发平台执行器跑回归、进通过率口径，不该在别人的数据上跑 |
-| `tb_create_scenario_task` / `tb_confirm_and_generate` | 一次几分钟 AI + 产出几十条用例，各自单独验过 |
-| `tb_run_ui_scripts_batch` | 批量真起浏览器；单条 `tb_run_ui_script` 已覆盖同一条路径 |
+| `lum_run_plan` | 会触发平台执行器跑回归、进通过率口径，不该在别人的数据上跑 |
+| `lum_create_scenario_task` / `lum_confirm_and_generate` | 一次几分钟 AI + 产出几十条用例，各自单独验过 |
+| `lum_run_ui_scripts_batch` | 批量真起浏览器；单条 `lum_run_ui_script` 已覆盖同一条路径 |
 
 顺带确认了几条**硬约束真的硬**（不是写在描述里好看的）：悬空 `${变量}` 被
-`tb_sync_orchestrated_scenario` 拒收、写死服务地址被 `tb_sync_ui_script` 拒收、
-低置信配具体 cause 被 `tb_submit_analysis` 拒收。7 条单测钉住修复。
+`lum_sync_orchestrated_scenario` 拒收、写死服务地址被 `lum_sync_ui_script` 拒收、
+低置信配具体 cause 被 `lum_submit_analysis` 拒收。7 条单测钉住修复。
 临时用例/接口场景/计划/Skill/共享资源全部按精确 id 清理，残留 0。
 
 ### ✅ 补：148 个 GET 端点全量扫一遍（2026-08-09，139/139）
 
-上一条（`tb_get_merged_variables` 一直坏着没人发现）的教训是：**没人系统调过的接口，
+上一条（`lum_get_merged_variables` 一直坏着没人发现）的教训是：**没人系统调过的接口，
 坏了也不会有人知道**。所以把平台所有 GET 端点扫了一遍。
 
 方法上有两条讲究，不然扫了等于没扫：
 
 - **路径参数用真实 id 填**，不是造假 UUID。假 id 只能测出 404，测不出序列化崩溃 ——
-  而 `tb_get_merged_variables` 那个 bug 正是只有拿真数据才暴露。
+  而 `lum_get_merged_variables` 那个 bug 正是只有拿真数据才暴露。
 - **判据只认服务器自己的问题**（5xx / 422 / 静默错误结构）。404、403 不算 ——
   那可能只是这条数据不存在或没权限。
 
@@ -1309,7 +1309,7 @@ It looks like you are using Playwright Sync API inside the asyncio loop.
 此时调 sync API 必挂。那句报错完全看不出该怎么改，而且要等到执行那一步才出现 ——
 中间隔着排队和几十秒。
 
-规范（`tb_get_sync_spec(kind="ui_script")`）里写的本来就是正确写法
+规范（`lum_get_sync_spec(kind="ui_script")`）里写的本来就是正确写法
 （`def test_xxx(page: Page)`，全文没提过 `sync_playwright`），**是我没照规范写**。
 但门禁当时只查"写死地址/写死凭据/有没有测试函数"，查不出这一条。
 所以把它加进回推门禁：入库就挡住，并直接给出能照抄的写法。6 条单测封样。
@@ -1624,7 +1624,7 @@ Excel 装得下什么决定了按钮做什么 —— 存储结构泄漏到了界
 
 ### 9.1 提取路径不认 `$.` 前缀 —— 而且报错指错地方
 
-`tb_sync_orchestrated_scenario` 的参数说明写的是 `variables_extract:{name:jsonpath}`。
+`lum_sync_orchestrated_scenario` 的参数说明写的是 `variables_extract:{name:jsonpath}`。
 外部 CC 照着写 `$.data.token` 完全合理 —— 而 `_extract_value` 是 JSONPath-lite，
 只认 `data.token`。后果是**静默**取不到值：
 
@@ -1642,7 +1642,7 @@ UI 侧只注 `SV_x`。CC 写 `os.getenv("PROJ_NAME")` 拿到空串，**不报错
 表现成"填了个空项目名"。抽成 `add_bare_names()`，五条执行路径共用
 （MCP UI 执行 / 页面运行验证 ×2 / 批量执行 / 计划执行 / 执行前预检）。
 
-### 9.3 `tb_run_plan` 直接崩：`name 'flaky_service' is not defined`
+### 9.3 `lum_run_plan` 直接崩：`name 'flaky_service' is not defined`
 
 `execution_service` 里这个 import 写在 `_will_run_automated` 函数内，
 而 `start_execution` 也用它。**计划里只要有一条不是 executable 的用例**
@@ -1653,7 +1653,7 @@ UI 侧只注 `SV_x`。CC 写 `os.getenv("PROJ_NAME")` 拿到空串，**不报错
 
 进回归的门槛是「该维度状态 = 可执行」，而这个状态**只有人能推**
 （CC 不改状态是红线 3）。此前三步都在暗示"它会跑"：
-`tb_create_plan` 说「1 条用例」、`tb_run_plan` 说「totalScenarios: 1」、
+`lum_create_plan` 说「1 条用例」、`lum_run_plan` 说「totalScenarios: 1」、
 报告里一条 pending —— 实际一条都没跑。
 
 改成两个工具都如实返回 `willRun` / `blockedCases` / `skippedAsManual`，
@@ -1666,7 +1666,7 @@ UI 侧只注 `SV_x`。CC 写 `os.getenv("PROJ_NAME")` 拿到空串，**不报错
 
 ### 9.5 顺带发现、未修
 
-`tb_create_case` 的自动拆步骤（`_split_coarse_steps`）会把
+`lum_create_case` 的自动拆步骤（`_split_coarse_steps`）会把
 「填写名称，点击确定」拆成两步，**并给拆出来的新步骤填上
 「操作完成，页面状态更新」** —— 这正是入库门禁 `_FUZZY_WORDS` 要拦的模糊词，
 平台自己注进去的。拆步骤本身是对的，填充文案不对。
@@ -1679,7 +1679,7 @@ UI 侧只注 `SV_x`。CC 写 `os.getenv("PROJ_NAME")` 拿到空串，**不报错
 
 **① 计划/回归/批量执行路径压根不做文案渲染。** `_run_new_style_script`
 （`execution.py` 和 `adhoc_execution.py` 共用的那个）只烧了 `os.getenv` 默认值，
-没调 `ui_text_render.render`。后果：同一份脚本 `tb_run_ui_script` 跑绿
+没调 `ui_text_render.render`。后果：同一份脚本 `lum_run_ui_script` 跑绿
 （MCP 那条路渲染了），进计划直接 `status=error` / 0ms / 拒绝执行 ——
 而报错叫人「占位里补上 `${键|中文原文}`」，脚本里写的本来就是那个。
 `executor.py` 里那句「连'某条执行路径压根忘了渲染'也一起拦住」的注释预言中了：
@@ -1687,14 +1687,14 @@ UI 侧只注 `SV_x`。CC 写 `os.getenv("PROJ_NAME")` 拿到空串，**不报错
 （渲染过它一定会退回中文，不可能还留在正文里），并且四条路都渲染 ——
 `test_silent_key_mismatch.py` 里有一条结构性断言钉住这件事。
 
-**② `tb_upsert_scenario_variables` 收 `value` 当没看见。** 正确键名是
+**② `lum_upsert_scenario_variables` 收 `value` 当没看见。** 正确键名是
 `value_template`，写成 `value` 时存进去是空串，而返回是「新增 1、更新 1」、
 `errors: []`。六步接口链全挂在「变量未解析」上。现在：`value` 收成别名但**回显**
 说改了什么；空值、不认识的 kind、拼错的字段一律报错不入库。
 （`kind` 写错原来会静默变 `literal` —— 把 `random` 拼成 `rand` 的人以为存的是
 「每次换新的」，拿到的是「整段固定」。）
 
-**③ `tb_get_api_test` → `tb_sync_orchestrated_scenario` 不能读改写。**
+**③ `lum_get_api_test` → `lum_sync_orchestrated_scenario` 不能读改写。**
 读回来是驼峰（`variablesExtract` / `groupName` / `waitMs`…），写回只认下划线。
 改一个 URL 再存回去，**所有提取被静默丢掉**，然后报「存在悬空变量引用」。
 现在两边互认，并回 `keysAliasedFromCamel` / `keysIgnored` 说清做了什么手脚。
@@ -1705,14 +1705,14 @@ UI 侧只注 `SV_x`。CC 写 `os.getenv("PROJ_NAME")` 拿到空串，**不报错
 第四个参数（脚本）调用方从来没传。这四问值钱就值钱在"事实是平台数的、不是模型猜的"，
 掺一条假的等于砸自己招牌。现在查库传进去。
 
-**⑤ `tb_proxy_capture` 跑起来了但一条没抓到时没有任何提示。**
+**⑤ `lum_proxy_capture` 跑起来了但一条没抓到时没有任何提示。**
 「把浏览器代理指过去」这句只在 `running: false` 那个分支里 —— 最常见的情况
 （代理开着、浏览器没走它）反而没有。另外没有过滤：前端跑 Vite 时
 实测 156 条里只有 9 条是 `/api/`，`limit=50` 全被 `.jsx?t=` 热更新占满。
 现在加了 `url_contains` / `method`（在**全量**记录上筛再取 limit），
 过滤后 0 条会列出实际抓到的目标，截断会明说砍了几条。
 
-**⑥ `tb_run_plan` 说「拿 reportId 调 `tb_get_report_summary`」，那个工具要 `plan_id`。**
+**⑥ `lum_run_plan` 说「拿 reportId 调 `lum_get_report_summary`」，那个工具要 `plan_id`。**
 照提示做一定报参数错，而错误指向调用方。现在两个报告工具 `plan_id` / `report_id`
 给一个就行（只有 reportId 时自己反查计划）。
 
@@ -1764,9 +1764,9 @@ t=1s 那个无关 5xx 还在窗内，于是把"选择器过期"判成"系统挂�
 ### 10.3 维度 C：混合计划 —— 最大的一个洞
 
 **MCP 回推的接口场景根本进不了计划回归。** 回归执行器只认 `scripts` 表的 api 脚本，
-而 `tb_sync_orchestrated_scenario` 写的是 `api_test_scenarios`。
+而 `lum_sync_orchestrated_scenario` 写的是 `api_test_scenarios`。
 实测：全平台 **8 条有接口场景的用例，0 条有 api 脚本** —— CC 这条链的接口产物
-一条都进不了回归，只能 `tb_run_api_test` 即席跑，不进通过率。
+一条都进不了回归，只能 `lum_run_api_test` 即席跑，不进通过率。
 
 连带三个：
 1. 建计划说「1 条会跑」、跑计划说「0 条会跑」—— 两个工具当场自相矛盾，
@@ -1861,7 +1861,7 @@ AI 造的是 `${ADMIN_USER}/${ADMIN_PASS}`，各环境里实际叫 `ADMIN_USERNA
 
 **留**（用例侧在用，一行没动）：`api_test_scenarios`/`api_test_steps` 两张表、
 `api_test_runner.py` 执行引擎、list/get/create/update/steps CRUD、`/run`、`/generate`、
-`api_test_folders`、计划执行、报告、分支复制、`tb_sync_orchestrated_scenario`。
+`api_test_folders`、计划执行、报告、分支复制、`lum_sync_orchestrated_scenario`。
 
 **删**：
 - 前端 `pages/api-test/` 七个文件 2085 行 + 菜单项 + 路由 + i18n
@@ -1870,7 +1870,7 @@ AI 造的是 `${ADMIN_USER}/${ADMIN_PASS}`，各环境里实际叫 `ADMIN_USERNA
   文件夹增删改 ×4、`/copy`、`/new-version`、`/split`、`/ai-optimize` + apply、
   `/run-step/{step_id}`；列表的 `kind` 参数（它存在的唯一理由就是分这两类）
 - `services/ai/api_test_optimizer.py`
-- MCP `tb_generate_api_test`；`apidoc` 档位收敛回「维护接口库」
+- MCP `lum_generate_api_test`；`apidoc` 档位收敛回「维护接口库」
   （原名「只有接口文档，连不上系统」，配的就是这个工具）
 - `api-test-optimize` 能力标 `deprecated`；**`api-test-generate` 保持在线** ——
   用例详情「探索测试流量 → 编排为接口测试」走的是同一个 `/generate`
@@ -1890,7 +1890,7 @@ AI 造的是 `${ADMIN_USER}/${ADMIN_PASS}`，各环境里实际叫 `ADMIN_USERNA
    只加 NOT NULL 不改 SET NULL，删用例会直接撞非空约束报错。
 
 连带改的调用方（不改就会从"约定"变成"运行时崩"）：
-- `tb_sync_orchestrated_scenario` 的 `source_case_id` 从「强烈建议」变**必填**，
+- `lum_sync_orchestrated_scenario` 的 `source_case_id` 从「强烈建议」变**必填**，
   入口挡一道并说清为什么，别让 CC 撞一个看不懂的 `IntegrityError`
 - 同一函数里「取不到用例就回退 `AT-#### max+1`」那条兜底**删掉** ——
   它会在用例 id 不存在时照建，然后撞外键。现在直接报「用例不存在」
@@ -1924,7 +1924,7 @@ AI 造的是 `${ADMIN_USER}/${ADMIN_PASS}`，各环境里实际叫 `ADMIN_USERNA
 |---|---|
 | `DELETE /{scenario_id}` | 用例侧只删步骤不删场景；删用例已由外键 CASCADE 带走 |
 | `PUT /{scenario_id}` + `VALID_STATUS_TRANSITIONS` | 草稿/已发布/已废弃那个下拉是模块页的控件，用例侧从不改场景本体 |
-| `tb_list_api_tests` 的 `standalone` 分组 | NOT NULL 之后恒为空。留一个永远空的分组只会让人以为"另一类还在" |
+| `lum_list_api_tests` 的 `standalone` 分组 | NOT NULL 之后恒为空。留一个永远空的分组只会让人以为"另一类还在" |
 | `source_api_ids` 列 | 唯一写入方是生成服务的 `api_ids`，而它只有模块的生成弹窗会传 → 落库恒 None |
 | `edited_after_generate` 列 | 唯一读者是 `/stats/quality`，那个端点已随模块删掉 → 只写不读 |
 | `pre_steps` 列 | **执行器从头到尾不读它**。配了不生效，比没有更糟 |
@@ -2075,7 +2075,7 @@ v1.0 → v2.0 复制分支之后，「哪些用例能照抄 / 要改 / 该废」
 | 1 | Claude Code 里 | 说一句话起活 | **CC 永远不动** —— 没有调度 | **没有** |
 | 2 | CC 的对话里 | 确认要建的用例清单 | CC 停着等 | 有（但被滥用了，见变化 3） |
 | 3 | 用例管理页「AI 审核」 | 点按钮发起批量审核 | CC 只能一条条自审，**绕过队列** | **没有** |
-| 4 | 计划页 | 建计划、点执行 | 无 —— CC 已有 `tb_create_plan` / `tb_run_plan` | 没有 |
+| 4 | 计划页 | 建计划、点执行 | 无 —— CC 已有 `lum_create_plan` / `lum_run_plan` | 没有 |
 | 5 | 报告页失败那行 | 选原因 + 写理由 | 那条停在待确认，CC 不能往下走 | 有 |
 | 6 | 用例列表/详情 | 废弃审批：确认或驳回 | 挂在「待废审」，不进也不出 | 有 |
 | 7 | P0 用例 | 只看「预期结果」一列并确认 | 平台硬拦，P0 不许一次性直出三件套 | 有 |
@@ -2088,15 +2088,15 @@ v1.0 → v2.0 复制分支之后，「哪些用例能照抄 / 要改 / 该废」
 
 现状：人每轮说一句话 → CC 干一轮 → 停住 → 等人下次再说。
 
-改成：人第一次说 `/loop /tb-round <模块>`，之后 CC 自己按间隔醒，每次醒来先调
-`tb_next_duty`；七个队列都空就说「这一轮干净」接着睡；有事才叫人。
+改成：人第一次说 `/loop /lum-round <模块>`，之后 CC 自己按间隔醒，每次醒来先调
+`lum_next_duty`；七个队列都空就说「这一轮干净」接着睡；有事才叫人。
 
-**新增 `/tb-round` skill**，把一轮的顺序固化（现在靠 CC 每次自己记，忘一步链就断）：
-`tb_next_duty` → 按它给的「建议顺序」逐队列处置 → 每条完事 `tb_check_deliverable`
-→ 一轮末 `tb_check_branch` 收口。
+**新增 `/lum-round` skill**，把一轮的顺序固化（现在靠 CC 每次自己记，忘一步链就断）：
+`lum_next_duty` → 按它给的「建议顺序」逐队列处置 → 每条完事 `lum_check_deliverable`
+→ 一轮末 `lum_check_branch` 收口。
 
-⚠ **走 `tb_push_skill` 存 DB，不放 `app/skills/preset/`**（CLAUDE.md 明令 —— 那个目录只放
-平台侧当 prompt 执行的 `tb-*`，混进去会让「AI 能力→模型」页冒出绑不上模型的空档位）。
+⚠ **走 `lum_push_skill` 存 DB，不放 `app/skills/preset/`**（CLAUDE.md 明令 —— 那个目录只放
+平台侧当 prompt 执行的 `lum-*`，混进去会让「AI 能力→模型」页冒出绑不上模型的空档位）。
 
 触发仍然靠 CC 自己的循环能力。**平台不建调度**，理由见 §2.11：会引入一个需要长驻、
 需要监控、会静默死掉的组件。
@@ -2105,7 +2105,7 @@ v1.0 → v2.0 复制分支之后，「哪些用例能照抄 / 要改 / 该废」
 
 **这是现在就在发生的问题，不是将来的隐患。**
 
-`tb_review_case` 直接调 `reviewer.review_case`，**完全不经过 `review/queue.py`**。于是
+`lum_review_case` 直接调 `reviewer.review_case`，**完全不经过 `review/queue.py`**。于是
 CC 自己推进一批时只能逐条送审，而 review-spec §5 建那条队列要防的两件事一件都吃不到：
 
 - **同环境串行**：两条脚本共用租户/账号，A 跑到一半 B 把 A 要用的数据删了 → A 莫名报错
@@ -2113,8 +2113,8 @@ CC 自己推进一批时只能逐条送审，而 review-spec §5 建那条队列
 - **熔断**：环境一挂，连续 3 条环境类失败本该暂停整个队列；逐条调的话 20 条会一条接一条
   全标「无法审核」，看起来像用例集体坏了。
 
-改法：新增 `tb_review_batch(branch_id, case_ids|module, env_id, run_first)`，
-**复用现成的 `queue.enqueue`**，只做入队并回 `batchId`；配 `tb_review_batch_status(batch_id)`
+改法：新增 `lum_review_batch(branch_id, case_ids|module, env_id, run_first)`，
+**复用现成的 `queue.enqueue`**，只做入队并回 `batchId`；配 `lum_review_batch_status(batch_id)`
 读进度（复用 `queue.queue_view`）。**不新写任何调度逻辑。**
 
 一个细节要照顾到（review-spec §5）：**人工发起的插到 CC 自审前面** —— 人在等结果，CC 不在等。
@@ -2123,7 +2123,7 @@ CC 自己推进一批时只能逐条送审，而 review-spec §5 建那条队列
 #### 变化 3 · 报清单收窄（点位 2）
 
 现状自相矛盾：instructions ⑦ 要求**任何写库工具**调用前都先报清单等确认，而
-`tb_update_case` 的描述写着「**你写错了自己改，别喊人**」。两处打架，CC 照哪条都不对。
+`lum_update_case` 的描述写着「**你写错了自己改，别喊人**」。两处打架，CC 照哪条都不对。
 
 判据改成**按动作的可逆性分**，不按"是不是写库"分：
 
@@ -2170,18 +2170,18 @@ CC 自己推进一批时只能逐条送审，而 review-spec §5 建那条队列
 |---|---|
 | 平台侧定时调度（cron / celery / APScheduler） | 同 §2.11。触发用 CC 的 `/loop` |
 | CC 自己写维度状态 / 通过率 / 报告结论 | 红线 2、红线 3。`confirmed_cause` 仍是唯一人工写入口 |
-| 把 `tb_review_case` 也改成入队 | 单条自审就该是同步返回的 —— CC 回推完立刻要知道过没过。队列是给批量用的 |
+| 把 `lum_review_case` 也改成入队 | 单条自审就该是同步返回的 —— CC 回推完立刻要知道过没过。队列是给批量用的 |
 | 抽检比例做成可配置 | 又一个能被调成 0 的开关。写死 10%，要改改代码 |
 
 ### 13.5 验收标准
 
-1. `tb_review_batch` 入队 3 条 → `script_runs` 里三条的执行时间**不重叠**（串行成立）
+1. `lum_review_batch` 入队 3 条 → `script_runs` 里三条的执行时间**不重叠**（串行成立）
 2. 把环境地址改坏 → 连续 3 条环境类失败 → 批次自动暂停，剩下的不白跑
 3. 人在页面发起的批次，排在 CC 已入队的批次**前面**
 4. 同一条用例提交 20 次 `self_serve` 归因 → 抽中与否**每次都一样**（哈希可复现）
 5. 抽中的那条：CC 照旧被告知「你自己改」，同时它出现在待确认队列里
 6. `agreement_stats` 能把抽检样本和人主动确认的分开报
-7. 报清单收窄后：`tb_update_case` 改一个错字**不再要求先报清单**
+7. 报清单收窄后：`lum_update_case` 改一个错字**不再要求先报清单**
 
 ### ✅ 13.6 活体验证结果（2026-08-24）
 
@@ -2191,7 +2191,7 @@ CC 自己推进一批时只能逐条送审，而 review-spec §5 建那条队列
 
 | 验收 | 结果 |
 |---|---|
-| 入队后同一时刻只有一条在跑 | ✅ 观察到最多 1 条 running，顺序 00001→00002。**这就是逐条调 `tb_review_case` 拿不到的东西** |
+| 入队后同一时刻只有一条在跑 | ✅ 观察到最多 1 条 running，顺序 00001→00002。**这就是逐条调 `lum_review_case` 拿不到的东西** |
 | 重复入队被合并 | ✅ 第二次入队两条全被合并，不跑两遍 |
 | 落库 `actor_kind='cc'` | ✅ 人发起的才排得到前面 |
 | 一条用例都没有时明确报错 | ✅ 不静默建空批次 |
@@ -2203,10 +2203,10 @@ CC 自己推进一批时只能逐条送审，而 review-spec §5 建那条队列
 **途中撞出来一个真问题（已修）**：证据包按 `case_id` 取的是**最近一次**执行，
 而 TC-DYGL-00013 有 6 次接口执行、**最近一次是 passed** —— 于是
 `error_summary`/`stdout` 全空，一个 evidence 指针都写不出来，
-而 `tb_submit_analysis` 又明确拒收 passed 的执行。
+而 `lum_submit_analysis` 又明确拒收 passed 的执行。
 **报告里指着失败那一次，证据包却给最新那一次**，中间这个错位不补，
-复跑过的用例就永远归不了因。修法：`tb_get_ui_script_result` 加 `run_id` 入参
-（`tb_get_failed_scenarios` 给的那个），并校验它确实属于这条用例
+复跑过的用例就永远归不了因。修法：`lum_get_ui_script_result` 加 `run_id` 入参
+（`lum_get_failed_scenarios` 给的那个），并校验它确实属于这条用例
 （张冠李戴的话 evidence 校验反而会通过 —— 它只核"这次执行里有没有这条请求"）。
 最近一次是 passed 时返回里明说一句，省一趟。
 

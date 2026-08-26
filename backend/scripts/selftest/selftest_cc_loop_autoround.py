@@ -57,11 +57,11 @@ async def seg1_evidence(session) -> None:
     lr = out.get("last_run") or {}
     check(bool(lr), "证据包拿到了 last_run")
     check(lr.get("script_type") == "api", "返回里说清了这次是哪一维", lr.get("script_type"))
-    check(bool(lr.get("run_id")), "带 run_id（tb_submit_analysis 的必填入参）")
+    check(bool(lr.get("run_id")), "带 run_id（lum_submit_analysis 的必填入参）")
 
     # **归因要的是失败那一次，不是最近那一次。** 这条用例可能已经被复跑过 ——
     # 活体第一次跑就撞到：6 次接口执行、最近一次 passed，证据包里什么指针都写不出来，
-    # 而 tb_submit_analysis 又拒收 passed 的执行。所以按 run_id 钉住那一次。
+    # 而 lum_submit_analysis 又拒收 passed 的执行。所以按 run_id 钉住那一次。
     fail_rid = (await session.execute(text(
         "select id from script_runs where case_id=:c and status<>'passed' "
         "order by created_at desc limit 1"), {"c": str(case_id)})).scalar_one()

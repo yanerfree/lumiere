@@ -1,5 +1,5 @@
 ---
-name: tb-scenario-expand
+name: lum-scenario-expand
 description: 将单个测试点展开为完整的功能测试场景用例（页面操作视角，Playwright 友好）
 version: 2
 inputs:

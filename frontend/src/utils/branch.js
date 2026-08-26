@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 
-const EVENT_NAME = 'tb-branch-change'
+const EVENT_NAME = 'lum-branch-change'
 
 export function getBranchId(projectId) {
   return localStorage.getItem(`branch_${projectId}`) || null

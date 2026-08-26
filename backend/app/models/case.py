@@ -212,7 +212,7 @@ class Case(Base):
     # UI 脚本正文 —— 只盖手工步骤的话，CC 改了接口断言指纹照旧，防线等于没有。
     content_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
-    # 断言咬合（tb_check_assertion_bite）**最后一次的结论**。
+    # 断言咬合（lum_check_assertion_bite）**最后一次的结论**。
     # 存它是为了让照抄堆自动过审的条件 4「断言咬得住」在库里**查得到** ——
     # 那个检查是一次真跑（跳掉动作步看断言会不会红），结论此前只回给 CC、不落库，
     # 于是"断言有效"这件事只能听 CC 自称，而自称正是这条链上最不能信的一环。

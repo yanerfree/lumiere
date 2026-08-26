@@ -145,16 +145,16 @@ def parse_frontmatter(content: str) -> dict:
 
 
 def detect_declared_tools(content: str) -> list[str]:
-    """从 frontmatter 的 tools 列表里挑出平台 MCP 工具（tb_ 前缀）。
+    """从 frontmatter 的 tools 列表里挑出平台 MCP 工具（lum_ 前缀）。
 
-    用途：一个客户端 skill 如果声明了大量 tb_* 工具，它其实处在边界上
+    用途：一个客户端 skill 如果声明了大量 lum_* 工具，它其实处在边界上
     （既在客户端跑、又强依赖平台数据）。列出来让人看见，不做拦截。
     """
     meta = parse_frontmatter(content)
     tools = meta.get("tools")
     if not isinstance(tools, list):
         return []
-    return [str(t) for t in tools if str(t).startswith("tb_")]
+    return [str(t) for t in tools if str(t).startswith("lum_")]
 
 
 # ── 打包 / 解包 ──────────────────────────────────────────────

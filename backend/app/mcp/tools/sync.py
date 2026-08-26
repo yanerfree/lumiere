@@ -1,9 +1,9 @@
 """MCP 回推同步工具 —— 把 Claude Code 活体验证过的成果显式写回 Lumiere。
 
-范围（已与用户确认）：步骤用例 由 tb_create_case 负责；本模块负责另外三类回推——
-  1. 用例编排的接口场景     tb_sync_orchestrated_scenario（核心新通道）
-  2. 场景变量               tb_upsert_scenario_variables / tb_list_scenario_variables
-  3. (只读) 项目级可引用数据 tb_list_global_data
+范围（已与用户确认）：步骤用例 由 lum_create_case 负责；本模块负责另外三类回推——
+  1. 用例编排的接口场景     lum_sync_orchestrated_scenario（核心新通道）
+  2. 场景变量               lum_upsert_scenario_variables / lum_list_scenario_variables
+  3. (只读) 项目级可引用数据 lum_list_global_data
 
 核心纪律（用户强调）：脚本里**不允许写死数据变量**。所有取值只能来自
   ① 场景变量（${名字} / ${SV_名字}）
@@ -12,10 +12,10 @@
 本模块在入库前做「悬空引用硬拦截 + 疑似写死软警告」把这条纪律落地。
 
 口径（2026-08-15 起只剩一种，历史包袱写在这里免得再有人翻出来）：
-  接口场景 = 本模块 tb_sync_orchestrated_scenario 回推的那种：与某功能用例绑定
+  接口场景 = 本模块 lum_sync_orchestrated_scenario 回推的那种：与某功能用例绑定
   （source_case_id）、你亲手验证过的多步 E2E 链、共享该用例的场景变量。
 
-  此前还有「单接口·凭文档 AI 造」（tb_generate_api_test，无 source_case_id），
+  此前还有「单接口·凭文档 AI 造」（lum_generate_api_test，无 source_case_id），
   连同「接口测试」页面一起下线了 —— 不绑用例就拿不到场景变量，结构上跑不了。
   存量 47 条已清，source_case_id 收成 NOT NULL + 外键 CASCADE（迁移 zz9orph1），
   所以 source_case_id **必填**，不传直接被这里挡回去。
@@ -163,7 +163,7 @@ def _carried_evidence(carry: dict, st: dict) -> tuple:
     """这个步骤能不能沿用上一次运行的结果 → (last_status, last_response)。
 
     **定义变了就丢。** 改了 url/断言/提取的步骤，旧的 last_response 已经不代表它了，
-    留着会让 tb_check_env_hygiene 拿过期的 id 去报残留 —— 那比看不见更糟。
+    留着会让 lum_check_env_hygiene 拿过期的 id 去报残留 —— 那比看不见更糟。
     """
     sig, status, resp = carry.get(str(st.get("name") or ""), (None, None, None))
     return (status, resp) if sig is not None and sig == _step_def_sig(st) else (None, None)
@@ -499,7 +499,7 @@ _SPEC_VARIABLES = """## 变量分层（回推纪律的基准，务必分清）
 |---|---|---|---|
 | 环境变量 | 环境管理（人工维护） | 长期 | 全项目 —— 描述"这个环境是什么" |
 | 项目级共享资源 | 自动化数据（CC 造一次并登记） | 长期 | 全项目 —— 只读引用的底座 |
-| 场景变量 | 用例·场景变量（tb_upsert_scenario_variables） | 定义长期、值可每次随机 | 单条用例（UI+接口共用） |
+| 场景变量 | 用例·场景变量（lum_upsert_scenario_variables） | 定义长期、值可每次随机 | 单条用例（UI+接口共用） |
 | 步骤提取物 | 步骤 variables_extract | **仅本次执行** | 本次运行的后续步骤 |
 
 ### 一个值该放哪一层？按顺序问，命中就停
@@ -553,9 +553,9 @@ _SPEC_VARIABLES = """## 变量分层（回推纪律的基准，务必分清）
 **路线 B · 共享基础数据** —— 多条用例都要用、反复重建代价大的底座（上游/负载、
 隔离上下文、长期存在的消费方应用）。三步：
 
-1. `tb_list_global_data` 先查项目里登记过没有；
+1. `lum_list_global_data` 先查项目里登记过没有；
 2. 没有就你造一次（活体验证时顺手造），造完 **不要清理** —— 它要留给后续场景复用；
-3. 用 `tb_upsert_automation_resource` 登记两样：`exists_check`（怎么按名字找到它 +
+3. 用 `lum_upsert_automation_resource` 登记两样：`exists_check`（怎么按名字找到它 +
    抽哪个字段当 id）和 **`create_def`（当初是怎么造的）**。之后每次跑，平台在第一个
    步骤之前探一次并注入 `${资源名}`；**探到"确实没有"就照 create_def 自动补建**，
    补了会在运行结论里明说。所以 create_def 不是备查，是兜底 —— 别省。
@@ -594,12 +594,12 @@ _SPEC_VARIABLES = """## 变量分层（回推纪律的基准，务必分清）
 
 ⚠ **路线 A 必须自己删干净。** 造了不删的链每跑一次留一份，堆多了会反过来毁掉断言 ——
 列表里同类数据一多，`data[0]` 指向别人、满页把本次那条挤到第二页，断言开始时红时绿，
-而人会当成被测系统的缺陷去查。`tb_check_env_hygiene(project_id)` 报两类：
+而人会当成被测系统的缺陷去查。`lum_check_env_hygiene(project_id)` 报两类：
 造了东西却没有清理步骤、最后一次运行没跑到清理（残留 id 和删它的请求都给出来）。
 
 自检标准：**这条链换到一个干净环境还能不能跑通？** 跑不通就说明前置数据没交代清楚。"""
 
-_SPEC_API_SCENARIO = """## 用例编排的接口场景（tb_sync_orchestrated_scenario）
+_SPEC_API_SCENARIO = """## 用例编排的接口场景（lum_sync_orchestrated_scenario）
 
 把你**亲手活体验证过**的接口链显式写回。每个 step 形状：
 ```json
@@ -637,7 +637,7 @@ _SPEC_API_SCENARIO = """## 用例编排的接口场景（tb_sync_orchestrated_sc
 - `data.items[name=${svcName}].id` **按字段值过滤**，取第一条命中的
 - `data.items[*name=${svcName}]` 取**全部命中**（不能再往后接字段），配 `length` 断
   「有且只有一条」—— **验唯一性只有这一种写法**：`[k=v]` 只取第一条，被测系统真收下了
-  第二条同名，断言照样绿（实测就是这么被 tb_check_assertion_bite 抓出来的）
+  第二条同名，断言照样绿（实测就是这么被 lum_check_assertion_bite 抓出来的）
 - 断条数用 `length`，且**只能对列表用**：URL 上带查询条件让服务端过滤，再
   `{"field":"data.items","operator":"length","expected":1}`。
   对 `data.items[k=v]` 用 length 是错的 —— 那取到的是一个对象，长度是它的键数
@@ -654,7 +654,7 @@ variables_extract：`{变量名: 路径}`，供**后续步骤** ${变量名} 用
 **新写的断言先让它红一次再让它绿。** 没红过的断言等于没验证过 ——
 方向写反、路径写错、恒真，三种都是绿的。
 
-跑绿之后用 `tb_check_assertion_bite(case_id, skip_steps='动作步名', env_id)` 收一次：
+跑绿之后用 `lum_check_assertion_bite(case_id, skip_steps='动作步名', env_id)` 收一次：
 它把那个**改状态的动作步**跳掉再跑一遍，后面该红的必须红。
   · `bites` 红了 → 这条断言咬得住这个动作
   · `still_green` 照样绿 → 恒真，改成断动作真正改变的那个东西（状态字段变成什么）
@@ -694,7 +694,7 @@ name 必须和现有步骤完全一致，对不上整批拒绝（怕静默漏改
 
 判据：**这个断言值是被测系统给用户看的文字吗？** 是就套 `${T:}`。
 状态码、枚举值（active/draft）、字段名不用 —— 那些不随语种变。
-词条自己登记：`tb_upsert_i18n_terms`。
+词条自己登记：`lum_upsert_i18n_terms`。
 
 **但先找有没有稳定错误码 —— 有就断码，别断文案。** 实测这个 409 回的是
 `{"error":{"code":"SERVICE_NAME_CONFLICT","message":"service name already exists in this
@@ -731,7 +731,7 @@ _SPEC_SCENARIO_SHAPE = """## 场景怎么切、怎么才算验到了（回推时
 
    **数据面入口叫什么，平台不猜。** 每个项目不一样，你在测的过程中摸清了
    （网关基址、集群前缀、租户隔离前缀这些），就自己写进共享数据：
-   `tb_upsert_automation_resource`。之后所有用例 `${资源名}` 直接取，
+   `lum_upsert_automation_resource`。之后所有用例 `${资源名}` 直接取，
    下一轮你自己也不用再摸一遍。"""
 
 
@@ -743,7 +743,7 @@ _SPEC_TIMING = """## 异步下发怎么办：别插假步骤占时间窗，用 w
 
 **假红比漏测更毒**：它让整份报告不可信，人看两次就不看了。
 
-步骤上有三个字段（`tb_sync_orchestrated_scenario` 的 steps 里直接传）：
+步骤上有三个字段（`lum_sync_orchestrated_scenario` 的 steps 里直接传）：
 
 | 字段 | 干什么 | 什么时候用 |
 |---|---|---|
@@ -780,7 +780,7 @@ _SPEC_ORDER = """## 动手顺序（**这一条错了，后面全歪**）
 **正确顺序**：
 
 1. **先在页面上把这件事做一遍**（用户能做的事，就得从用户的路径进）。
-2. **`tb_proxy_capture` 取这次页面真发的请求** —— 方法、URL、body 都在里面，
+2. **`lum_proxy_capture` 取这次页面真发的请求** —— 方法、URL、body 都在里面，
    不用自己开 devtools 抄（抄错了后面全是错的）。
 3. **先写 UI 脚本**：你刚在页面上走通的那条路，趁手就写下来。
    顺序反过来（先接口后 UI）必然出现"推断页面怎么调"，而推断错了测试还是绿的。
@@ -848,7 +848,7 @@ _SPEC_NAMING = """## 命名规范（**这条最省事**：写规范了，平台�
 写"依然可调通"会被漏掉。写了前缀就是读一个字段，判得准，也不会误报烦你。"""
 
 
-_SPEC_CASE = """## 步骤用例（tb_create_case，非本模块，但一并说明口径）
+_SPEC_CASE = """## 步骤用例（lum_create_case，非本模块，但一并说明口径）
 
 **case_type 看测试对象：**
 - `api` 单接口 —— 测试对象是**某一个接口的参数、权限**
@@ -861,14 +861,14 @@ _SPEC_CASE = """## 步骤用例（tb_create_case，非本模块，但一并说�
 steps 每项含 seq/action/expected；多角色加 [管理员]/[租户] 标记。
 
 改步骤/预期会清掉「预期已确认」。只是**措辞润色**（实质没变）就传
-`tb_update_case(reconfirm=true)`：依据沿用原落款、只重盖时间。实质变了就重新对一遍。
+`lum_update_case(reconfirm=true)`：依据沿用原落款、只重盖时间。实质变了就重新对一遍。
 
-**写不了就说清等什么**：`tb_update_case(blocked_external='等环境变量 X 加上')`。
+**写不了就说清等什么**：`lum_update_case(blocked_external='等环境变量 X 加上')`。
 「我没写」和「外面缺东西我写不了」在看板上长得一模一样，不标注就每轮都要人来问你。
 它不免检任何阻塞，只是归责；条件到位了传空串撤掉。
 
 **跑出来红、但红的原因不在用例（产品 bug）→ 关联上去，别只在对话里说一句**：
-`tb_update_case(bug_refs=[{"ref":"UAG-123 或一句话","url":"可选","status":"open"}])`。
+`lum_update_case(bug_refs=[{"ref":"UAG-123 或一句话","url":"可选","status":"open"}])`。
 它跟 blocked_external 分工不同：那个是"我还写不了"，这个是"我写完了、跑出来是红的"。
 
     关联 open ──▶ 批量回归跳过它（跑了只是刷红），也不计入通过率
@@ -887,7 +887,7 @@ steps 每项含 seq/action/expected；多角色加 [管理员]/[租户] 标记�
    `bug_refs=[]` 只用于关联错了（挂到了不相干的 bug 上）。
 3. 平台不会自己动 status：判 bug 死活、判验没验过，都是你和人的事。
 
-**待办从哪来**：`tb_list_cases(bug_state="blocked")` 拿到所有"关联的 bug 还没验回来"
+**待办从哪来**：`lum_list_cases(bug_state="blocked")` 拿到所有"关联的 bug 还没验回来"
 的用例（返回带每条的 ref），跟你从 git 拉到的**已关闭 issue** 取交集 —— 交集就是
 这一轮该回来调的。`bug_state="fixed"` 是另一回事：抓到过 bug 已验回来的痕迹清单。
 
@@ -896,24 +896,24 @@ steps 每项含 seq/action/expected；多角色加 [管理员]/[租户] 标记�
 
 **模块名怎么起**（实测这两种都发生过，现在会被门禁硬拒）：
 - 一级模块 = **被测系统的功能域**（订阅管理、服务管理、监控），不是"你这一轮在测什么"。
-  想不出该放哪就先 `tb_get_folder_tree` 看现有的，别顺手新开一个。
+  想不出该放哪就先 `lum_get_folder_tree` 看现有的，别顺手新开一个。
 - **看着是两级就别拼成一级**：`监控-请求日志` 要写成 `module="监控", submodule="请求日志"`。
   拼成一级之后「监控」下别的用例找不到家，导航栏也会被长名字撑满。
 - **同一个模块只能有一个写法**：已经有「LLM PROVIDERS」就别再传 `LLM Providers` /
   `llm_providers` / `LLM-PROVIDERS` —— 门禁会告诉你现成的那个名字，用它。
 
-**回推完自己过一遍评审**：`tb_review_case(case_id=...)`。六维打分 + 逐条指到位置，
+**回推完自己过一遍评审**：`lum_review_case(case_id=...)`。六维打分 + 逐条指到位置，
 判定在平台代码里（有 blocker 一律不过、加权低于 80 不过），不是 AI 说了算。
 `mustFix` 里的 blocker 一条都不许留着交上去；改完再调一次复核。
 断言咬不咬得住静态看不出来 —— 拿不准就 `run_first=true` 先真跑一遍再评。
 
-**放错目录自己搬**：`tb_update_case(module="订阅管理", submodule="跨租户订阅")`，
+**放错目录自己搬**：`lum_update_case(module="订阅管理", submodule="跨租户订阅")`，
 目录不存在会自动建；只传 module 就搬到模块根下。建用例时漏传 submodule 是常见笔误
 （实测一个模块 21 条里 3 条落在了根目录），发现了自己搬，不用等人去界面上拖。
 **编号不跟着变**（TC-DYGL-00013 搬完还是这个号）—— 编号是回推、脚本、报告共用的锚点。"""
 
 
-_SPEC_UI_SCRIPT = """## 用例的 UI 脚本（tb_sync_ui_script）
+_SPEC_UI_SCRIPT = """## 用例的 UI 脚本（lum_sync_ui_script）
 
 把你在本地**写好并真跑通过**的 Playwright 脚本回推到某条用例的「UI 测试」页签。
 平台不再自己生成脚本——生成这件事由你（外部 Claude Code）做，平台负责存、跑、留痕。
@@ -947,8 +947,8 @@ def test_创建服务后列表可见(page: Page):
 平台执行时会把该环境的变量注入进程环境，并把 `NAME = os.getenv("NAME", "默认值")`
 这一行的默认值替换成真值——所以**必须写成这个形状**，写 `os.environ["X"]` 拿不到替换。
 
-可用的键：环境变量（BASE_URL / 各角色账号密码 / LOGIN_URL，见 tb_list_global_data）、
-场景变量（`SV_` + 变量名，跟接口场景共用同一份，见 tb_list_scenario_variables）、
+可用的键：环境变量（BASE_URL / 各角色账号密码 / LOGIN_URL，见 lum_list_global_data）、
+场景变量（`SV_` + 变量名，跟接口场景共用同一份，见 lum_list_scenario_variables）、
 `TEST_TOKEN`（平台按用例前置条件自动登录拿到的 token，造数/清理用）。
 
 ### 形状要求
@@ -1004,7 +1004,7 @@ for card in page.locator(".todo-card").all():
 
 **数据不许写死已经有硬拦截，文案是同一件事的另一半。**
 `name="更多"` 换英文环境全挂 —— 实测 9 个脚本 57 处写死中文、只有 5 处用 testid。
-（接口断言同样受语种影响，那边用 `${T:中文}`，见 tb_get_sync_spec(kind='api_scenario')。）
+（接口断言同样受语种影响，那边用 `${T:中文}`，见 lum_get_sync_spec(kind='api_scenario')。）
 
 定位方式按这个顺序选：
 
@@ -1059,15 +1059,15 @@ ctx.add_init_script("() => { localStorage.setItem('stoa-lang','en-US') }")      
 **两种分隔符互认** —— 被测系统里是 `t('subscription:manage.rejectBtn')`，平台词典里
 存的是全点号 `subscription.manage.rejectBtn`，查词时两种拼法指向同一条，随便写哪种。
 
-**本地怎么跑**：调 `tb_render_ui_script(case_id, lang, env_id)` —— 它吐**一个能直接
+**本地怎么跑**：调 `lum_render_ui_script(case_id, lang, env_id)` —— 它吐**一个能直接
 pytest 跑的文件**（文案、环境变量默认值、被测系统的语种开关都烧进去了）。
 凭据默认不烧，返回里 `exportEnv` 告诉你 export 哪几个；要完全自包含传
 `include_credentials=true`。`textUnresolved` 非空就先登记词条或补上 `|中文原文`。
 
 **英文要在本地先验**（不然"本地跑通再回推"这条纪律在文案上是空的）：
-`tb_render_ui_script(case_id, lang="en")` 渲一份跑。别自己写 `def t(s): return s`
+`lum_render_ui_script(case_id, lang="en")` 渲一份跑。别自己写 `def t(s): return s`
 的 stub —— 那种 stub 永远只能跑中文，等于没验。
-词典缺条目就 `tb_upsert_i18n_terms` 登记；回推时扫到硬编码中文只给**软警告**
+词典缺条目就 `lum_upsert_i18n_terms` 登记；回推时扫到硬编码中文只给**软警告**
 （词典总有不全的时候，不硬拦）。
 
 回推时会扫硬编码中文给**软警告**（不硬拦 —— 词典总有不全的时候）。
@@ -1075,9 +1075,9 @@ pytest 跑的文件**（文案、环境变量默认值、被测系统的语种�
 ### 流程
 
 1. 本地写脚本，**先自己跑通**（别回推没验证过的东西）
-2. `tb_sync_ui_script(case_id, content)` 入库
-3. `tb_run_ui_script(case_id, env_id)` 在目标环境上再跑一遍——平台跑通了才算通
-4. 失败看 `tb_get_ui_script_result(case_id)`：状态、耗时、错误摘要、截图数
+2. `lum_sync_ui_script(case_id, content)` 入库
+3. `lum_run_ui_script(case_id, env_id)` 在目标环境上再跑一遍——平台跑通了才算通
+4. 失败看 `lum_get_ui_script_result(case_id)`：状态、耗时、错误摘要、截图数
 """
 
 
@@ -1102,13 +1102,13 @@ async def get_sync_spec(kind: str = "all") -> dict:
         selected = parts
     playbook = (
         "# 回推同步 playbook\n\n"
-        "1. 先 tb_list_global_data 看项目有哪些可引用的全局项（BASE_URL/token/账号/共享资源），"
+        "1. 先 lum_list_global_data 看项目有哪些可引用的全局项（BASE_URL/token/账号/共享资源），"
         "决定哪些走 global_ref、哪些走场景变量、哪些是步骤提取物。\n"
-        "2. tb_upsert_scenario_variables 建/更新该用例的场景变量（部分固定+部分随机用 kind=template）。\n"
-        "3. tb_sync_orchestrated_scenario 回推接口链——步骤里**只用 ${var}，零写死**；"
+        "2. lum_upsert_scenario_variables 建/更新该用例的场景变量（部分固定+部分随机用 kind=template）。\n"
+        "3. lum_sync_orchestrated_scenario 回推接口链——步骤里**只用 ${var}，零写死**；"
         "悬空引用会被硬拦截，疑似写死会软警告。\n"
-        "4. tb_run_api_test 执行，确认变量都被正确解析。\n"
-        "5. 要顺带补 UI 脚本：本地写好跑通 → tb_sync_ui_script 入库 → tb_run_ui_script 在目标环境再跑一遍。\n\n"
+        "4. lum_run_api_test 执行，确认变量都被正确解析。\n"
+        "5. 要顺带补 UI 脚本：本地写好跑通 → lum_sync_ui_script 入库 → lum_run_ui_script 在目标环境再跑一遍。\n\n"
         + "\n\n".join(selected.values())
     )
     return {"kind": kind, "playbook": playbook, "sections": selected}
@@ -1122,7 +1122,7 @@ _STEP_FIELDS = ("name", "method", "url", "headers", "body", "assertions",
                 "variables_extract", "enabled", "group_name",
                 "wait_ms", "retry_timeout_ms", "retry_interval_ms")
 
-# tb_get_api_test 读回来是驼峰，写回去要下划线 —— 两边互认，见入库处的注释。
+# lum_get_api_test 读回来是驼峰，写回去要下划线 —— 两边互认，见入库处的注释。
 _STEP_ALIASES = {"variablesExtract": "variables_extract", "groupName": "group_name",
                  "waitMs": "wait_ms", "retryTimeoutMs": "retry_timeout_ms",
                  "retryIntervalMs": "retry_interval_ms"}
@@ -1326,7 +1326,7 @@ async def sync_orchestrated_scenario(
     # 跑起来必挂在「变量未解析」，建出来也是个死物。
     if not source_case_id:
         return {"error": "source_case_id 必填：接口场景必须绑定某条用例。"
-                         "没有对应用例就先 tb_create_case 建一条 —— 不绑用例的场景"
+                         "没有对应用例就先 lum_create_case 建一条 —— 不绑用例的场景"
                          "拿不到场景变量（凭据、随机数据都在用例上），跑起来必然"
                          "「变量未解析」。"}
 
@@ -1339,7 +1339,7 @@ async def sync_orchestrated_scenario(
         if not isinstance(st, dict):
             return {"error": f"第 {i + 1} 个 step 不是对象"}
         st = dict(st)
-        # **读回来的键名要能原样写回去。** tb_get_api_test 吐驼峰
+        # **读回来的键名要能原样写回去。** lum_get_api_test 吐驼峰
         # （variablesExtract/groupName/waitMs…），这里此前只认下划线 —— 于是
         # "读回来 → 改一个 URL → 存回去"这条最自然的路，会把所有提取和分组**静默丢掉**，
         # 然后报「存在悬空变量引用」：错误指向的是后果（后面 ${id} 没人提供），
@@ -1479,9 +1479,9 @@ async def sync_orchestrated_scenario(
         return {
             "error": "存在悬空变量引用，已拒绝入库（纪律：不允许写死，且引用必须可解析）",
             "dangling": dangling,
-            "hint": "每个 ${x} 必须来自：①该用例场景变量（先 tb_upsert_scenario_variables）"
+            "hint": "每个 ${x} 必须来自：①该用例场景变量（先 lum_upsert_scenario_variables）"
                     "②更早步骤的 variables_extract ③全局/环境键 ④内置(RANDOM_8/TIMESTAMP/SV_RUN_ID)。"
-                    "可引用项见 tb_list_global_data / tb_list_scenario_variables。",
+                    "可引用项见 lum_list_global_data / lum_list_scenario_variables。",
             "allowedSample": sorted(allow)[:30],
         }
 
@@ -1525,7 +1525,7 @@ async def sync_orchestrated_scenario(
         if description:
             scenario.description = description
         # **重推前把上一次运行的证据留住。** 步骤行是删了重建的，于是
-        # last_status / last_response 一并没了 —— 而 tb_check_env_hygiene 判"上次跑到清理没有"
+        # last_status / last_response 一并没了 —— 而 lum_check_env_hygiene 判"上次跑到清理没有"
         # 靠的就是它。实测后果：CC 跑完再 patch 一次，那条链的运行痕迹归零，
         # 工具从此看不见残留（"报 0 条"于是变成一句空话）。
         # 只对**定义没变**的步骤沿用：定义改了，旧结果就是过期的，不该继续代表它。
@@ -1557,7 +1557,7 @@ async def sync_orchestrated_scenario(
         if src_case is None:
             return {"error": f"用例不存在：{source_case_id}。"
                              "接口场景的编号就是用例编号，用例找不到就无从落库。"
-                             "先用 tb_list_cases 确认 case_id，或 tb_create_case 建一条。"}
+                             "先用 lum_list_cases 确认 case_id，或 lum_create_case 建一条。"}
         code = src_case.case_code
         scenario = ApiTestScenario(
             project_id=pid,
@@ -1661,7 +1661,7 @@ async def upsert_scenario_variables(
     - literal:    整段固定
     - random:     value_template 作前缀，执行期加 -{runId}-{rand} 唯一化
     - global_ref: value_template = 全局键名，运行时从合并变量取（项目级引用）
-    - template:   部分固定+部分随机，value_template 内嵌 {{$fn}} 生成器（见 tb_list ...·generators）
+    - template:   部分固定+部分随机，value_template 内嵌 {{$fn}} 生成器（见 lum_list ...·generators）
                   如 svc-{{$string:6}}-{{$city}}"""
     cid = uuid.UUID(case_id)
     variables = _loads(variables)
@@ -1719,7 +1719,7 @@ async def upsert_scenario_variables(
                 and not _is_synthetic_uuid(val):
             antipatterns.append({
                 "name": name, "issue": "literal_uuid",
-                "hint": f"{name} 存的是一个真实资源 UUID。要么用 tb_upsert_automation_resource "
+                "hint": f"{name} 存的是一个真实资源 UUID。要么用 lum_upsert_automation_resource "
                         "登记为项目级前置数据（带 exists_check/create_def），要么在场景开头"
                         "自己创建该资源并 variables_extract 提取 id、末尾清理。",
             })
@@ -1965,7 +1965,7 @@ async def list_global_data(
     probe_note = None
     if probe:
         if not env_id:
-            probe_note = "probe=true 需要 env_id —— 探测要拿该环境的 BASE_URL 和 token。先调 tb_list_environments。"
+            probe_note = "probe=true 需要 env_id —— 探测要拿该环境的 BASE_URL 和 token。先调 lum_list_environments。"
         else:
             from app.services import precheck_service
             rep = await precheck_service.check_resources(session, pid, env_id)
@@ -2009,7 +2009,7 @@ async def upsert_automation_resource(
     """登记一条「共享基础数据」，让后续每次跑都能自动找到它并注入成变量。
 
     用法（路线 B，共享基础数据）——**造数据是你的活，这个工具只负责登记怎么找到它**：
-      1. 先 tb_list_global_data 查项目里登记过没有；
+      1. 先 lum_list_global_data 查项目里登记过没有；
       2. 没有 → **你自己调接口把它造出来**（活体验证时顺手造），造完**不要清理**，
          它要留给后续场景复用；
       3. 造好后（或本来就有）调本工具登记 exists_check —— 写明"怎么按名字/条件找到它 +
@@ -2250,7 +2250,7 @@ def _scan_ui_script(content: str, language: str,
                 f"{len(_naked)} 处文案键词典里没有、又没带中文原文"
                 f"（{'、'.join(_naked[:3])}…）—— 平台会**拒绝执行**这个脚本："
                 f"占位换不掉时正例红在「找不到元素」上、而「不应出现」那类断言会假绿。"
-                f"两条都做：写成 ${{键|中文原文}}，并用 tb_upsert_i18n_terms 登记 key+zh+en。")
+                f"两条都做：写成 ${{键|中文原文}}，并用 lum_upsert_i18n_terms 登记 key+zh+en。")
         _with_hint = [k for k in _missing if _hint[k]]
         if _with_hint:
             warns.append(
@@ -2283,7 +2283,7 @@ def _scan_ui_script(content: str, language: str,
             f"优先用 data-testid 定位；必须用文案时写成占位变量 "
             f"`\"${{services.action.more|更多}}\"` —— 平台按 TEST_LANGUAGE 在执行前替换成"
             f"当前语种，词典缺这个语种就退回竖线后面的中文。"
-            f"详见 tb_get_sync_spec(kind='ui_script') 的「文案纪律」。")
+            f"详见 lum_get_sync_spec(kind='ui_script') 的「文案纪律」。")
 
     for line in content.splitlines():
         if reader in line:
@@ -2389,7 +2389,7 @@ async def sync_ui_script(
         return {
             "error": "脚本没通过入库检查，先改掉下面这些再传（这些问题换个环境就会挂）：",
             "problems": errors,
-            "spec": "调 tb_get_sync_spec(kind='ui_script') 看完整规矩和可抄的模板。",
+            "spec": "调 lum_get_sync_spec(kind='ui_script') 看完整规矩和可抄的模板。",
         }
 
     # 和上一版比，把退化说出来。不拦，但让它**可见** —— 看得见就治得住。
@@ -2424,7 +2424,7 @@ async def sync_ui_script(
         case.ui_scenario = {"steps": steps, "variablesUsed": []}
 
     # 换脚本也是一次内容改动 —— §15② 举的正是这个例子（approved 的用例被
-    # `tb_sync_ui_script` 换过脚本，列表上照旧一枚干净的「通过」）。
+    # `lum_sync_ui_script` 换过脚本，列表上照旧一枚干净的「通过」）。
     # 那条只给了个只读 ⚠，时间线上仍然什么都没有。
     from app.services.review import rounds as _rounds
     await _rounds.record_edit(session, cid, note="回推了 UI 脚本",
@@ -2441,6 +2441,6 @@ async def sync_ui_script(
         "warnings": warns,
         "message": (
             f"已回推到用例「{case.case_code} {case.title}」的 UI 测试页签（v{script.version}）。"
-            f"下一步用 tb_run_ui_script(case_id, env_id) 在目标环境上真跑一遍确认。"
+            f"下一步用 lum_run_ui_script(case_id, env_id) 在目标环境上真跑一遍确认。"
         ),
     }

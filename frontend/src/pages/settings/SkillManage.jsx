@@ -13,7 +13,7 @@ const { Text, Paragraph } = Typography
 
 const SKILLS = [
   {
-    name: 'tb-case-generate',
+    name: 'lum-case-generate',
     title: 'AI 用例生成',
     icon: <FileTextOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
     // 页面入口 2026-08-19 下线：建的是 testforge task JSON,真正生成用例的是
@@ -31,14 +31,14 @@ const SKILLS = [
       'AI 生成 — 按维度逐一生成用例，实时流式输出',
       '解析入库 — 解析 AI 输出，自动去重后写入用例管理',
     ],
-    mcpTools: ['tb_list_api_tree', 'tb_list_cases', 'tb_get_folder_tree', 'tb_create_case'],
+    mcpTools: ['lum_list_api_tree', 'lum_list_cases', 'lum_get_folder_tree', 'lum_create_case'],
   },
   {
-    name: 'tb-script-generate',
+    name: 'lum-script-generate',
     title: 'AI 脚本生成',
     icon: <CodeOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
     // 入口（AIScriptModal）已删除，而且这条从来没有对应的 skill 文件——
-    // 之前标"可用"还带编辑按钮，点了会 404（GET /skills/tb-script-generate 查无此文件）。
+    // 之前标"可用"还带编辑按钮，点了会 404（GET /skills/lum-script-generate 查无此文件）。
     status: 'retired',
     description: '根据已有测试用例，自动生成 pytest + httpx 可执行的自动化测试脚本',
     input: '选中的测试用例（勾选一条或多条）',
@@ -52,7 +52,7 @@ const SKILLS = [
     mcpTools: [],
   },
   {
-    name: 'tb-quality-review',
+    name: 'lum-quality-review',
     title: '质量评审（AI 审核）',
     icon: <SearchOutlined style={{ fontSize: 20, color: '#0ea5a0' }} />,
     // 这条早就是"可用"了，标"规划中 Phase 2"是最反的一条——它是全平台唯一
@@ -62,39 +62,39 @@ const SKILLS = [
     description: '按六维逐条评审用例质量：场景合理性/验证点到位/接口必要性/UI脚本/覆盖遗漏/纪律',
     input: '一条或若干条用例 + 对应的 API 接口定义',
     output: '六维评分 + 问题清单（致命/重要/次要）+ 结论落库到审核标签',
-    where: '用例管理「AI 审核」按钮 / 用例详情「审核」页 / MCP tb_review_case',
-    mcpTools: ['tb_list_cases', 'tb_get_case', 'tb_list_api_tree'],
+    where: '用例管理「AI 审核」按钮 / 用例详情「审核」页 / MCP lum_review_case',
+    mcpTools: ['lum_list_cases', 'lum_get_case', 'lum_list_api_tree'],
   },
   {
-    name: 'tb-explore',
+    name: 'lum-explore',
     title: '探索测试',
     icon: <BugOutlined style={{ fontSize: 20, color: '#4e8af0' }} />,
     // 不是"规划中"：生成章程 → 记录检查点 → 生成总结报告这条链路在
     // app/api/exploratory.py 里已经跑得通，项目菜单也已经有「探索测试」了。
-    // 但它是内联 prompt，不是独立的 skill 文件——GET/PUT /skills/tb-explore
+    // 但它是内联 prompt，不是独立的 skill 文件——GET/PUT /skills/lum-explore
     // 会 404，所以不能标"可用"（那会露出一个点了就 404 的编辑按钮）。
     status: 'inline',
     description: 'AI 辅助人工探索测试：生成章程 → 引导逐项检查 → 记录发现 → 输出报告',
     input: '目标模块 + API 接口 + 已有用例覆盖情况',
     output: '探索测试报告（结论 + 检查点覆盖情况）',
     where: '探索测试 →「AI 生成章程」',
-    mcpTools: ['tb_list_api_tree', 'tb_list_cases'],
+    mcpTools: ['lum_list_api_tree', 'lum_list_cases'],
   },
   {
-    name: 'tb-diagnose',
+    name: 'lum-diagnose',
     title: '失败诊断',
     icon: <FileSearchOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
     status: 'retired',
-    description: '已下线。失败归因改由外部 Claude Code 做（tb_get_failed_scenarios 拿现象和证据 → '
-      + 'tb_submit_analysis 提归因），平台只按规则算"现象"、由人确认"原因"。'
+    description: '已下线。失败归因改由外部 Claude Code 做（lum_get_failed_scenarios 拿现象和证据 → '
+      + 'lum_submit_analysis 提归因），平台只按规则算"现象"、由人确认"原因"。'
       + '平台自己再诊断一份，等于在同一件事上给出第四个声音。',
     input: '—',
     output: '—',
     where: '入口从未存在过（页面上写的那个「AI 诊断」按钮是不存在的）',
-    mcpTools: ['tb_get_failed_scenarios', 'tb_submit_analysis'],
+    mcpTools: ['lum_get_failed_scenarios', 'lum_submit_analysis'],
   },
   {
-    name: 'tb-doc-generate',
+    name: 'lum-doc-generate',
     title: '文档生成',
     icon: <BookOutlined style={{ fontSize: 20, color: '#0ea5a0' }} />,
     status: 'available',

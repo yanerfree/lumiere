@@ -137,7 +137,7 @@ async def generate_api_test(
     yield GenEvent(type="step_start", data={"step": 2, "title": "AI 生成测试场景"})
 
     from pathlib import Path
-    skill_path = Path(__file__).resolve().parent.parent.parent / "skills" / "preset" / "tb-api-case-generate" / "SKILL.md"
+    skill_path = Path(__file__).resolve().parent.parent.parent / "skills" / "preset" / "lum-api-case-generate" / "SKILL.md"
     skill_content = ""
     if skill_path.exists():
         raw = skill_path.read_text(encoding="utf-8")

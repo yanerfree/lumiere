@@ -64,19 +64,19 @@ const TOOLBOX_CSS = `
   box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
 }
 .toolbox-page .ant-btn-primary:not(:disabled) {
-  background: var(--tb-primary) !important;
-  border-color: var(--tb-primary) !important;
+  background: var(--lum-primary) !important;
+  border-color: var(--lum-primary) !important;
 }
 .toolbox-page .ant-btn-primary:not(:disabled):hover {
   filter: brightness(1.08);
 }
 .toolbox-page .ant-btn:not(.ant-btn-primary):not(.ant-btn-text):not(.ant-btn-link):not(:disabled) {
-  color: var(--tb-primary) !important;
-  border-color: var(--tb-border) !important;
+  color: var(--lum-primary) !important;
+  border-color: var(--lum-border) !important;
 }
 .toolbox-page .ant-btn:not(.ant-btn-primary):not(.ant-btn-text):not(.ant-btn-link):not(:disabled):hover {
-  background: var(--tb-pale) !important;
-  border-color: var(--tb-primary) !important;
+  background: var(--lum-pale) !important;
+  border-color: var(--lum-primary) !important;
 }
 .toolbox-page textarea.ant-input,
 .toolbox-page .ant-input,
@@ -88,8 +88,8 @@ const TOOLBOX_CSS = `
 .toolbox-page textarea.ant-input:focus,
 .toolbox-page .ant-input:focus,
 .toolbox-page .ant-input-affix-wrapper-focused {
-  border-color: var(--tb-primary) !important;
-  box-shadow: 0 0 0 3px var(--tb-pale) !important;
+  border-color: var(--lum-primary) !important;
+  box-shadow: 0 0 0 3px var(--lum-pale) !important;
 }
 .toolbox-page .ant-input-number {
   border-radius: 12px !important;
@@ -107,20 +107,20 @@ const TOOLBOX_CSS = `
   border-radius: 0 14px 14px 0 !important;
 }
 .toolbox-page .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) {
-  background: var(--tb-primary) !important;
-  border-color: var(--tb-primary) !important;
+  background: var(--lum-primary) !important;
+  border-color: var(--lum-primary) !important;
 }
 .toolbox-page .ant-switch-checked {
-  background: var(--tb-primary) !important;
+  background: var(--lum-primary) !important;
 }
-.tb-nav-item {
+.lum-nav-item {
   transition: all 0.25s ease !important;
   cursor: pointer;
 }
-.tb-nav-item:hover {
+.lum-nav-item:hover {
   transform: translateX(3px);
 }
-.tb-content-fade {
+.lum-content-fade {
   animation: tbFadeIn 0.25s ease;
 }
 @keyframes tbFadeIn {
@@ -752,7 +752,7 @@ function computeLCS(a, b) {
 }
 
 // ━━━ 认证保存 ━━━
-const AUTH_STORAGE_KEY = type => `tb_auth_saved_${type}`
+const AUTH_STORAGE_KEY = type => `lum_auth_saved_${type}`
 
 function getAuthSaved(type) {
   try { return JSON.parse(localStorage.getItem(AUTH_STORAGE_KEY(type)) || '[]') }
@@ -1487,11 +1487,11 @@ export default function Toolbox() {
 
   return (
     <div className="toolbox-page" style={{
-      '--tb-primary': theme.primary,
-      '--tb-light': theme.light,
-      '--tb-bg': theme.bg,
-      '--tb-pale': theme.pale,
-      '--tb-border': theme.border,
+      '--lum-primary': theme.primary,
+      '--lum-light': theme.light,
+      '--lum-bg': theme.bg,
+      '--lum-pale': theme.pale,
+      '--lum-border': theme.border,
       display: 'flex', flexDirection: 'column',
       height: 'calc(100vh - 70px)',
       background: 'transparent',
@@ -1534,7 +1534,7 @@ export default function Toolbox() {
               const tt = THEMES[t.key]
               const active = activeTool === t.key
               return (
-                <div key={t.key} className="tb-nav-item" onClick={() => setActiveTool(t.key)} style={{
+                <div key={t.key} className="lum-nav-item" onClick={() => setActiveTool(t.key)} style={{
                   padding: '10px 12px', borderRadius: 12, marginBottom: 4,
                   display: 'flex', alignItems: 'center', gap: 10,
                   background: active ? tt.bg : 'transparent',
@@ -1575,7 +1575,7 @@ export default function Toolbox() {
           flex: 1, minWidth: 0, overflow: 'hidden',
           borderRadius: 16,
         }}>
-          <div key={activeTool} className="tb-content-fade" style={{ height: '100%' }}>
+          <div key={activeTool} className="lum-content-fade" style={{ height: '100%' }}>
             <ActiveComponent theme={theme} />
           </div>
         </div>

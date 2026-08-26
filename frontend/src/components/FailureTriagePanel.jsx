@@ -71,7 +71,7 @@ export default function FailureTriagePanel({ projectId, branchId, caseId, run, o
         </div>
       ) : (
         <div style={{ fontSize: 12, color: '#c9cdd4', marginBottom: 10 }}>
-          还没有归因。在 Claude Code 里说：分析用例 {caseId} 最近一次失败并回推（它会先调 tb_get_ui_script_result 拿证据包）
+          还没有归因。在 Claude Code 里说：分析用例 {caseId} 最近一次失败并回推（它会先调 lum_get_ui_script_result 拿证据包）
         </div>
       )}
 

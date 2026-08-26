@@ -260,7 +260,7 @@ async def stream_cli_agent(
 
     model = model_name or settings.ai_ui_model or settings.ai_model or "claude-sonnet-5"
     mcp_cfg = _mcp_config_file()
-    artifacts_dir = tempfile.mkdtemp(prefix="tb-cli-ui-")
+    artifacts_dir = tempfile.mkdtemp(prefix="lum-cli-ui-")
     skill = _load_skill()
 
     task = _build_task_prompt(

@@ -32,22 +32,22 @@ def test_指令里不许再留凭文档推页面的退路():
 def test_指令给出每轮的入口工具():
     """判据在工具自己身上，但**"该在什么时候调它"只有指令说得了**。
 
-    tb_next_duty / tb_check_deliverable 这类不是查询工具，CC 不会自己想到调 ——
+    lum_next_duty / lum_check_deliverable 这类不是查询工具，CC 不会自己想到调 ——
     tools/list 里躺着 57 个名字，没人告诉它"每轮先问该干什么"，它就按自己的
     习惯开工，于是归因队列、失败复跑、交付门禁全靠人在旁边提醒。
     """
     from app.mcp import mcp
 
     ins = mcp.instructions
-    for tool in ("tb_next_duty", "tb_check_deliverable", "tb_module_checkup",
-                 "tb_check_branch"):
+    for tool in ("lum_next_duty", "lum_check_deliverable", "lum_module_checkup",
+                 "lum_check_branch"):
         assert tool in ins, f"指令里没提 {tool} —— CC 不会自己想到调它"
 
 
 def test_指令点名的工具都还活着():
     """下线一个工具时，最容易漏的就是这一万字里的名字。
 
-    tb_generate_api_test 摘除时就漏在几个地方过。指名一个不存在的工具比不提它
+    lum_generate_api_test 摘除时就漏在几个地方过。指名一个不存在的工具比不提它
     更坏：CC 会先试着调、失败，然后自己找替代路子 —— 那正是分档要挡的岔路。
     """
     import re
@@ -55,8 +55,8 @@ def test_指令点名的工具都还活着():
     from app.mcp import TOOL_CATALOG, mcp
 
     alive = {t["name"] for t in TOOL_CATALOG}
-    named = set(re.findall(r"tb_[a-z_]+", mcp.instructions))
-    # 下线的工具允许作为历史交代出现（"原 tb_generate_api_test 已下线"），
+    named = set(re.findall(r"lum_[a-z_]+", mcp.instructions))
+    # 下线的工具允许作为历史交代出现（"原 lum_generate_api_test 已下线"），
     # 靠"下线/摘除"这类字样自证；这里只揪没有交代的裸名字。
     dead = sorted(n for n in named - alive
                   if not re.search(rf"{n}[^\n]{{0,20}}(已下线|下线|摘除)", mcp.instructions))

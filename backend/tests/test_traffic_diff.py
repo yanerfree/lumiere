@@ -126,7 +126,7 @@ def test_审核里真跑并对账():
 def test_规范里把顺序写在最前面():
     from app.mcp.tools.sync import _SPEC_ORDER
     assert "先在页面上把这件事做一遍" in _SPEC_ORDER
-    assert "tb_proxy_capture" in _SPEC_ORDER
+    assert "lum_proxy_capture" in _SPEC_ORDER
     assert "先写 UI 脚本" in _SPEC_ORDER
     assert "provider-unified" in _SPEC_ORDER, "要把真实事故写进去，否则只是句口号"
     assert "fixture" in _SPEC_ORDER and "别在页面上点" in _SPEC_ORDER

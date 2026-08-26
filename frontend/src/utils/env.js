@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 
-const EVENT_NAME = 'tb-env-change'
+const EVENT_NAME = 'lum-env-change'
 
 export function getEnvId(projectId) {
   return localStorage.getItem(`env_${projectId}`) || null

@@ -1,6 +1,6 @@
-"""活体自测 · CC 自己入队批量审核（tb_review_batch，2026-08-24）
+"""活体自测 · CC 自己入队批量审核（lum_review_batch，2026-08-24）
 
-**为什么要有这个工具**：`tb_review_case` 是直调、一条也不排队。CC 推一批时
+**为什么要有这个工具**：`lum_review_case` 是直调、一条也不排队。CC 推一批时
 逐条调 = 并发真跑打同一个环境，而队列要防的两件事一件都吃不到：
 同环境串行（防假打回）、连续环境失败熔断。
 
@@ -150,7 +150,7 @@ async def run_checks(s, bid) -> None:
         print(f"     {it['caseCode']}: status={it['status']} verdict={it['verdict']} "
               f"runState={it['runState']} err={(it.get('error') or '')[:50]}")
 
-    # ★ 主判据：**同一时刻最多一条在跑**。这就是逐条调 tb_review_case 拿不到的东西。
+    # ★ 主判据：**同一时刻最多一条在跑**。这就是逐条调 lum_review_case 拿不到的东西。
     check(max_running <= 1, "同环境串行：同一时刻只有一条在跑",
           f"观察到最多 {max_running} 条同时 running；顺序 {seen_order}")
     check(len(items) == 2, "逐条结果都在")

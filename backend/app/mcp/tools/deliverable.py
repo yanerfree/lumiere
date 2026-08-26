@@ -103,7 +103,7 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
         notes.append({"kind": "blocked_external",
                       "detail": f"这条自述卡在外部条件上：{case.blocked_external}。"
                                 f"下面的阻塞照旧算阻塞 —— 这只是说明责任在谁。"
-                                f"条件到位后用 tb_update_case(blocked_external='') 撤掉。"})
+                                f"条件到位后用 lum_update_case(blocked_external='') 撤掉。"})
 
     target = case.target_level or "spec"
     owed_dims = ["manual"] + (["api"] if target in ("spec_api", "full") else []) \
@@ -173,7 +173,7 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
         notes.append({"kind": "reflection_pending",
                       "detail": "回推时的四个场景级反问还没答（验证点/清晰度/覆盖/预期来源）。"
                                 "规则判不了这四件，只有你答得上。"
-                                "用 tb_sync_orchestrated_scenario(reflections={...}) 补上 —— "
+                                "用 lum_sync_orchestrated_scenario(reflections={...}) 补上 —— "
                                 "不答的话评审会按「自证不全」扣分，这条也算不上可交付。"})
 
     if ai_rejected:
@@ -185,7 +185,7 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
                                 + (f" 必须先改：" + "；".join(
                                     f"{m.get('where')}→{str(m.get('problem'))[:60]}" for m in must[:3])
                                    if must else "")
-                                + " 改完调 tb_review_case 复核。"})
+                                + " 改完调 lum_review_case 复核。"})
 
     not_ready = [d for d in owed_dims if dim_status.get(d) in ("draft", "debugging")]
     if not_ready and not blockers:
@@ -233,7 +233,7 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
                                 "**读需求 + 读实现，然后自己判断**：一致就按它写、不用问人；"
                                 "不一致就按需求写预期、让它红，再提 product_defect 归因交人确认；"
                                 "需求没覆盖就按同类功能/行业惯例判，判不出来才带着判断去问用户。"
-                                "改过步骤或预期会自动清掉这个标记，那种情况把依据重新带上来（tb_update_case 的 expected_confirmed_by / expected_confirmed_note）。"})
+                                "改过步骤或预期会自动清掉这个标记，那种情况把依据重新带上来（lum_update_case 的 expected_confirmed_by / expected_confirmed_note）。"})
     elif not re.search(r"用户|产品|需求|评审|业务|客户|PM", _actor):
         notes.append({"kind": "expected_confirmed_by_self",
                       "detail": f"「预期已确认」的落款是「{_actor}」，看不出是跟人确认的。"
@@ -254,7 +254,7 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
                       "detail": f"target_level={target}，{skipped} 维度不做，但没写为什么。"
                                 f"只有一个 target_level 值时，人分不出你是**判断过不需要**"
                                 f"还是**没想就用了默认值** —— 后者半年后没人敢动它。"
-                                f"用 tb_update_case 的 target_level_reason 补一句。"})
+                                f"用 lum_update_case 的 target_level_reason 补一句。"})
 
     deliverable = not blockers
     return {

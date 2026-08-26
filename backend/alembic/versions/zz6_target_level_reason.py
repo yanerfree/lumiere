@@ -5,7 +5,7 @@
 「他自己会规划吗，用户怎么知道呢，是他规划了没写还是没规划」。
 
 照 expected_confirmed_note 的样子留一句话。回推时 target_level != full 且没带理由，
-tb_create_case 会在 _qualityWarnings 里提醒（**不硬拦** —— 真有确实不需要的，
+lum_create_case 会在 _qualityWarnings 里提醒（**不硬拦** —— 真有确实不需要的，
 写一句话的成本就够了）。
 
 Revision ID: zz6tlreason

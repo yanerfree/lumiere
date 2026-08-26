@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 async def next_duty(session: AsyncSession, branch_id: str, limit: int = 10) -> dict:
     """这一轮该干什么。四个队列，按"堵得最死的先做"排。
 
-    ① 待归因   —— 红了但还没分析：拿证据、判原因、tb_submit_analysis
+    ① 待归因   —— 红了但还没分析：拿证据、判原因、lum_submit_analysis
     ② 待复跑   —— 已经修好/bug 标 fixed 的：跑一遍，绿了单子自动关
     ③ 待补场景 —— 审核时被反复提到的模块级缺口：补用例
     ④ 待自证   —— 回推四问没答的：补 reflections
@@ -52,12 +52,12 @@ async def next_duty(session: AsyncSession, branch_id: str, limit: int = 10) -> d
                "第几次复发": t.recurrence or None,
                "状态": t.status}
         if t.status in ("open", "analyzed"):
-            row["下一步"] = ("拿证据 tb_get_ui_script_result(case_id) → 判原因 → "
-                             "tb_submit_analysis(cause=...)" if t.status == "open"
+            row["下一步"] = ("拿证据 lum_get_ui_script_result(case_id) → 判原因 → "
+                             "lum_submit_analysis(cause=...)" if t.status == "open"
                             else "已归因，等人确认。别自己往下走")
             to_analyze.append(row)
         elif t.status in ("confirmed", "fixing", "verifying"):
-            row["下一步"] = ("改完了就跑一遍：tb_run_ui_script / tb_run_api_test，"
+            row["下一步"] = ("改完了就跑一遍：lum_run_ui_script / lum_run_api_test，"
                              "绿了这张单自动关")
             row["人确认的原因"] = t.confirmed_cause
             to_rerun.append(row)
@@ -78,7 +78,7 @@ async def next_duty(session: AsyncSession, branch_id: str, limit: int = 10) -> d
     to_cover = sorted(gaps.values(), key=lambda x: -x["被提到"])[:limit]
 
     to_selfcheck = [{"caseCode": c.case_code, "caseId": str(c.id),
-                     "下一步": "tb_sync_orchestrated_scenario(reflections={...}) 补上四问"}
+                     "下一步": "lum_sync_orchestrated_scenario(reflections={...}) 补上四问"}
                     for c in cases.values()
                     if (c.api_status != "draft" or c.ui_status != "draft") and reflect.pending(c)]
 
@@ -156,13 +156,13 @@ async def _diff_duties(session: AsyncSession, bid, cases: dict, limit: int):
         removed = [v for v in slot["变动"] if v["kind"] == "removed"]
         if removed:
             slot["下一步"] = ("端点没了 → 先判是真没了还是改名/挪位置。真没了走 "
-                              "tb_request_deprecate(case_id, reason, evidence) 交证据；"
+                              "lum_request_deprecate(case_id, reason, evidence) 交证据；"
                               "**别自己废** —— 「我在页面上找不到」不等于「功能没了」。")
         else:
-            slot["下一步"] = ("读新版本的需求/OpenAPI/代码 → tb_update_case 改预期"
+            slot["下一步"] = ("读新版本的需求/OpenAPI/代码 → lum_update_case 改预期"
                               "（带 expected_confirmed_note 落款）→ "
-                              "tb_sync_orchestrated_scenario(mode='patch') 只改动的那几步 → "
-                              "tb_run_api_test → tb_check_assertion_bite → tb_review_case。"
+                              "lum_sync_orchestrated_scenario(mode='patch') 只改动的那几步 → "
+                              "lum_run_api_test → lum_check_assertion_bite → lum_review_case。"
                               "**预期按新版本的需求写，不是打开新版本跑一遍照着改** —— "
                               "那是把实现抄了一遍，新版本引入的 bug 会被固化成预期。")
         to_revise.append(slot)
@@ -180,8 +180,8 @@ async def _diff_duties(session: AsyncSession, bid, cases: dict, limit: int):
             to_cover_new.append({
                 **pn,
                 "下一步": ("这是新版本的新端点，现有用例一条都没覆盖它。"
-                           "按平常那套来：读需求 → 活体验证 → tb_create_case + "
-                           "tb_sync_orchestrated_scenario。不补的话这块功能零覆盖，"
+                           "按平常那套来：读需求 → 活体验证 → lum_create_case + "
+                           "lum_sync_orchestrated_scenario。不补的话这块功能零覆盖，"
                            "而且**永远不会报错**。"),
             })
 

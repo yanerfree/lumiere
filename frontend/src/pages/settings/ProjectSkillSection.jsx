@@ -1,7 +1,7 @@
 /**
  * 项目 Skill 分区 —— 客户端(Claude Code)侧执行的 skill。
  *
- * 跟同页上方的平台内置 tb-* 是两类东西：内置那批平台自己拿去喂后端 LLM、要绑模型档位；
+ * 跟同页上方的平台内置 lum-* 是两类东西：内置那批平台自己拿去喂后端 LLM、要绑模型档位；
  * 这里的跑在开发者机器的 Claude Code 里，平台只做存取。所以刻意分区呈现，不混一个列表。
  */
 import { useCallback, useEffect, useState } from 'react'
@@ -20,9 +20,9 @@ import { api, getValidToken } from '../../utils/request'
 const { Text, Paragraph } = Typography
 
 const MCP_SNIPPET = `# 在任意项目的 Claude Code 里：
-「把我 .claude/skills 下的 feature-verify 传到 Lumiere」   → tb_push_skill
-「看看 Lumiere 上有哪些 skill 能用」                        → tb_list_skills
-「把 feature-verify 拉到本地」                                → tb_pull_skill`
+「把我 .claude/skills 下的 feature-verify 传到 Lumiere」   → lum_push_skill
+「看看 Lumiere 上有哪些 skill 能用」                        → lum_list_skills
+「把 feature-verify 拉到本地」                                → lum_pull_skill`
 
 // 粘贴框的起手模板 —— 让人一眼知道 frontmatter 要写什么，name 是从这里读的
 const SKILL_TEMPLATE = `---
@@ -293,7 +293,7 @@ export default function ProjectSkillSection() {
         message="跟上面的平台 Skill 有什么不同？"
         description={
           <div style={{ fontSize: 12, lineHeight: 1.9 }}>
-            上面的 <Text code>tb-*</Text> 是<b>平台侧执行</b>：后端把 SKILL.md 当 prompt 喂给 LLM，每个都要在「AI 能力→模型」里绑模型档位。<br />
+            上面的 <Text code>lum-*</Text> 是<b>平台侧执行</b>：后端把 SKILL.md 当 prompt 喂给 LLM，每个都要在「AI 能力→模型」里绑模型档位。<br />
             这里的是<b>客户端侧执行</b>：跑在开发者机器的 Claude Code 里，用 Bash / Edit / Playwright 等本地工具，平台永不执行它们，也不占模型档位。
           </div>
         }

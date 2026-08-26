@@ -130,7 +130,7 @@ def check_module_placement(name: str, tree: list[dict], parent_name: str | None,
     `creating` 说的是**这次到底在干什么**，规则 2、4 的判法全看它：
 
     · `True`  —— 在**建一个模块**（页面「+ 新建模块」）。"同一位置已经有了"是冲突。
-    · `False` —— 只是**指着一个模块放用例**（`tb_create_case` / `tb_update_case`
+    · `False` —— 只是**指着一个模块放用例**（`lum_create_case` / `lum_update_case`
       的 module+submodule）。"同一位置已经有了"是**要的结果**，不是冲突。
 
     ## 为什么必须分开（2026-08-25 修的 bug）
@@ -141,7 +141,7 @@ def check_module_placement(name: str, tree: list[dict], parent_name: str | None,
     参数上也没有第二种写法能表达"往里面加"。结果是**每个目录只装得下第一条用例**，
     第二条起只能另起一个模块名才进得来：实测 4 条用例被迫散在「MCP Hub」
     「MCP Hub 内置工具」「MCP Hub 高危工具」「MCP Hub 接入指引」四个目录里。
-    `tb_update_case` 搬家撞同一堵墙 —— 目标目录存在才叫搬家，于是搬不动。
+    `lum_update_case` 搬家撞同一堵墙 —— 目标目录存在才叫搬家，于是搬不动。
 
     按 `RULES.md` ①，硬拦要求"不存在任何合法写法能长成这样"；而往已有模块里放用例
     是**唯一**的合法写法，规则 2 用在这条路上从根上就不成立。
@@ -410,7 +410,7 @@ def check_coverage(items: list[dict]) -> dict:
     ## 它原来叫 check_batch，写在这里但**从来没有调用点**
 
     2026-08-08 出生时的想法是"整批入库时拦一次"，可回推是**一条一条**来的
-    （tb_create_case 一次一条），n=1 时两道闸恒不触发。判据没错，错的是家。
+    （lum_create_case 一次一条），n=1 时两道闸恒不触发。判据没错，错的是家。
     真正手里有一批的时刻是**模块评审**：模块体检拿的就是这个模块全部用例
     （连子模块），"这个模块覆盖全不全、有没有遗漏"问的就是这件事。
     2026-08-25 挪过去了，见 `review/checkup.py`。

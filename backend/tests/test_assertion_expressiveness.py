@@ -277,7 +277,7 @@ def test_星号过滤取全部命中():
 
 def test_唯一性只能用星号过滤加length():
     """`[k=v]` 只取第一条 —— 被测系统真收下了第二条同名，断言照样绿。
-    活体跑回推链路时就是这么被 tb_check_assertion_bite 抓出来的（still_green）：
+    活体跑回推链路时就是这么被 lum_check_assertion_bite 抓出来的（still_green）：
     「同名再建应被拒」那一步跳掉之后，「有且只有一条」还是绿的。
     而 length 对整个列表用也不行：被测系统的 `?search=` 不是严格过滤（实测 9 条全回来）。
     """

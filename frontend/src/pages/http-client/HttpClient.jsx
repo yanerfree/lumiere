@@ -442,7 +442,7 @@ export default function HttpClient() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 70px)', background: 'transparent' }}>
       {/* 顶栏 */}
-      <div className="tb-page-strip" style={{ padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
+      <div className="lum-page-strip" style={{ padding: '8px 20px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <SendOutlined style={{ fontSize: 18, color: '#0ea5a0' }} />
           <span style={{ fontWeight: 600, fontSize: 16 }}>HTTP 请求</span>

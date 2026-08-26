@@ -287,7 +287,7 @@ export default function AutomationData() {
           columns={resourceCols}
           dataSource={resources}
           pagination={false}
-          locale={{ emptyText: <Empty description="暂无共享资源。主入口不是人手填 —— Claude Code 活体验证时遇到多条用例共用、重建代价大的底座（上游/负载、隔离上下文），会自己调 tb_upsert_automation_resource 登记到这里。也可点「新增资源」手工补。" /> }}
+          locale={{ emptyText: <Empty description="暂无共享资源。主入口不是人手填 —— Claude Code 活体验证时遇到多条用例共用、重建代价大的底座（上游/负载、隔离上下文），会自己调 lum_upsert_automation_resource 登记到这里。也可点「新增资源」手工补。" /> }}
         />
       </Card>
 
@@ -305,7 +305,7 @@ export default function AutomationData() {
           message={<span style={{ fontSize: 12 }}>
             写用例必须知道、但接口文档里看不出来的那些事 —— 比如「404 有两种，
             上游的 404 和网关无路由的 404 不是一回事，只断状态码会误判成没生效」。
-            人和 Claude Code 都能往里写（CC 用 tb_add_project_note），
+            人和 Claude Code 都能往里写（CC 用 lum_add_project_note），
             动手写用例之前 CC 会先读一遍。
             一条只说一件事、正文 {NOTE_MAX} 字以内 —— 这些内容每次生成都要整个喂给 CC，
             长了直接挤占它的上下文。

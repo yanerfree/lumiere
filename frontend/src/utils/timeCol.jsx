@@ -38,10 +38,10 @@ export function formatTimeFull(v) {
 
 /** 单元格本体，手写表格（测试报告 / 测试计划那种 flex 行）也能直接用 */
 export function TimeCell({ value }) {
-  if (!value) return <span className="tb-time-cell">-</span>
+  if (!value) return <span className="lum-time-cell">-</span>
   return (
     <Tooltip title={formatTimeFull(value)} mouseEnterDelay={0.4}>
-      <span className="tb-time-cell">{formatTime(value)}</span>
+      <span className="lum-time-cell">{formatTime(value)}</span>
     </Tooltip>
   )
 }

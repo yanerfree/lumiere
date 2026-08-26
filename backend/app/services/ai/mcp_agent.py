@@ -141,7 +141,7 @@ async def stream_mcp_agent(
     from app.services.ai.verify_tool import create_verify_tool
 
     execution_id = f"gen-{os.urandom(4).hex()}"
-    artifacts_dir = os.path.join(ARTIFACTS_BASE, "tb-ui-artifacts", execution_id)
+    artifacts_dir = os.path.join(ARTIFACTS_BASE, "lum-ui-artifacts", execution_id)
     os.makedirs(artifacts_dir, exist_ok=True)
 
     bridge = PlaywrightMCPBridge(

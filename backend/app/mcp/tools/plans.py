@@ -1,6 +1,6 @@
 """MCP 工具 — 测试计划（B1）。
 
-补这组的直接原因：`tb_get_report_summary` / `tb_get_failed_scenarios` 都要 `plan_id`，
+补这组的直接原因：`lum_get_report_summary` / `lum_get_failed_scenarios` 都要 `plan_id`，
 而此前**没有任何工具能吐出 plan_id** —— 这两个工具实际上是死的。
 
 边界（docs/cc-platform-loop-spec.md §0）：CC 能建计划、能按触发按钮、能读报告，
@@ -57,8 +57,8 @@ async def list_plans(
     return {
         "total": len(out),
         "plans": out,
-        "usage": "拿 planId 去调 tb_run_plan 触发执行，或 tb_get_report_summary / "
-                 "tb_get_failed_scenarios 看结果（不传 reportId 就是最近一次）。",
+        "usage": "拿 planId 去调 lum_run_plan 触发执行，或 lum_get_report_summary / "
+                 "lum_get_failed_scenarios 看结果（不传 reportId 就是最近一次）。",
     }
 
 
@@ -74,7 +74,7 @@ async def create_plan(
 ) -> dict:
     """新建一个自动化测试计划。case_ids 用逗号分隔。
 
-    只建计划，不执行 —— 触发要另调 tb_run_plan。
+    只建计划，不执行 —— 触发要另调 lum_run_plan。
     """
     ids = [x.strip() for x in (case_ids or "").split(",") if x.strip()]
     if not ids:
@@ -114,7 +114,7 @@ async def create_plan(
 
     note = ""
     if not environment_id:
-        note = " ⚠ 没指定 environment_id —— 执行时拿不到 BASE_URL 和账号，脚本会挂。先调 tb_list_environments。"
+        note = " ⚠ 没指定 environment_id —— 执行时拿不到 BASE_URL 和账号，脚本会挂。先调 lum_list_environments。"
 
     # 进回归的门槛是「该维度状态 = 可执行」，而这个状态**只有人能推**
     # （CC 按红线不改状态）。不说清楚的话，计划建出来、跑起来、报告里
@@ -136,7 +136,7 @@ async def create_plan(
         "willRun": len(uids) - len(blocked),
         "blockedCases": [{"caseCode": c, "status": st} for c, st in blocked],
         "message": f"已建计划「{name}」（{len(uids)} 条用例，其中 {len(uids) - len(blocked)} 条会真的执行）。"
-                   f"调 tb_run_plan 触发执行。{note}",
+                   f"调 lum_run_plan 触发执行。{note}",
     }
 
 
@@ -171,7 +171,7 @@ async def _not_executable(session, cases, test_type: str) -> list[tuple[str, str
 async def run_plan(session: AsyncSession, plan_id: str) -> dict:
     """触发计划执行（平台执行器跑，进通过率口径）。
 
-    立刻返回 taskId，执行是异步的 —— 拿 reportId 去调 tb_get_report_summary 轮询。
+    立刻返回 taskId，执行是异步的 —— 拿 reportId 去调 lum_get_report_summary 轮询。
     """
     from app.engine.task_status import set_task_status
     from app.engine.tasks.execution import run_automated_execution
@@ -219,8 +219,8 @@ async def run_plan(session: AsyncSession, plan_id: str) -> dict:
         "message": (
             f"已在平台执行器上触发：{will_run} 条会真的跑"
             + (f"，{manual} 条不会。" if manual else "。")
-            + "执行是异步的，拿 reportId 调 tb_get_report_summary 看进度和结果；"
-              "失败明细用 tb_get_failed_scenarios。" + extra
+            + "执行是异步的，拿 reportId 调 lum_get_report_summary 看进度和结果；"
+              "失败明细用 lum_get_failed_scenarios。" + extra
         ),
     }
 

@@ -4,7 +4,7 @@
 - 「改 3 个断言要重发 27 步，改 1 处要重发 26 步。费 token 是小事，**重发时容易手误
   引入新问题**才是大事。」→ mode='patch'，按 step name 只改点名的那几步。
 - 「我只是把「订阅 id 不变」补进预期措辞，也要把几百字的依据整段重填，这轮重填了
-  12 条。」→ tb_update_case(reconfirm=true)，措辞润色时沿用原落款。
+  12 条。」→ lum_update_case(reconfirm=true)，措辞润色时沿用原落款。
 
 重填几百字这件事的真正代价不是打字：**重填出来的不是新确认**，人不会真的重读一遍，
 "预期已确认"就退化成走过场。
@@ -160,16 +160,16 @@ def test_工具描述里写了这两个新参数():
     from app.mcp import TOOL_CATALOG
 
     by_name = {t["name"]: t["description"] for t in TOOL_CATALOG}
-    assert "reconfirm" in by_name["tb_update_case"]
-    assert "措辞润色" in by_name["tb_update_case"]
-    assert "patch" in by_name["tb_sync_orchestrated_scenario"]
+    assert "reconfirm" in by_name["lum_update_case"]
+    assert "措辞润色" in by_name["lum_update_case"]
+    assert "patch" in by_name["lum_sync_orchestrated_scenario"]
 
 
 # ── 重推不该把上一次运行的证据抹掉 ────────────────────────────────
 
 def test_定义没变的步骤沿用上一次运行结果():
     """步骤行是**删了重建**的，于是 last_status / last_response 一并没了 ——
-    而 tb_check_env_hygiene 判"上次跑到清理没有"靠的就是它。
+    而 lum_check_env_hygiene 判"上次跑到清理没有"靠的就是它。
     实测后果：CC 跑完再 patch 一次，那条链的运行痕迹归零，工具从此看不见残留，
     "报 0 条"于是变成一句空话。"""
     from app.mcp.tools.sync import _carried_evidence, _step_def_sig

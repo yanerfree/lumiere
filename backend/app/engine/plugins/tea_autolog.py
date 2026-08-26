@@ -130,7 +130,7 @@ def _emit(action: str, phase: str, fn, *a, **kw):
     """跑一步并同时落两个地方 —— 两条执行路径各读一个，缺一个就有一条路看不到步骤。
 
     · `print` 的标记：SSE 流式路径逐行读 stdout，用来做**实时**进度。
-    · `tea_step` 的步骤表：非流式路径（tb_run_ui_script / 批量回归）压根不读 stdout，
+    · `tea_step` 的步骤表：非流式路径（lum_run_ui_script / 批量回归）压根不读 stdout，
       它读 tea_capture 在测试结束时 flush 出来的 `.tea_results/{func}.json`。
       第一版只打了 print，结果非流式路径跑完还是 0 步 —— 实测踩到。
     """

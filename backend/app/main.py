@@ -66,8 +66,8 @@ class MCPAuthMiddleware:
 
     此前这里有一条「没带 bearer 且 MCP_API_KEY 未设 → 直接放行」的分支，
     而 MCP_API_KEY 从来没设过 —— 于是那个口子一直全开。实测（2026-08-21）：
-    不带任何凭据就能 initialize，然后 tb_list_projects 列出全部 6 个项目，
-    再 tb_list_branches 往下读到任意项目的分支和用例。平台监听 0.0.0.0，
+    不带任何凭据就能 initialize，然后 lum_list_projects 列出全部 6 个项目，
+    再 lum_list_branches 往下读到任意项目的分支和用例。平台监听 0.0.0.0，
     同局域网里谁都能当它的客户端。
 
     **修法是删掉那条分支，不是"记得去 .env 里设一个 MCP_API_KEY"** ——

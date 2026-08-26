@@ -7,7 +7,7 @@
 页面只回答"配了什么"、回答不了"用了什么"，人就只能猜；
 **照着猜的结论会去砍功能**，所以这件事不是"缺个统计"，是会造成误删。
 
-记账原来只有三处（tb-case-generate / tb-quality-review / scenario-*）。
+记账原来只有三处（lum-case-generate / lum-quality-review / scenario-*）。
 剩下四条链路（文档生成、带截图生成、文档优化、探索 Charter、正则生成、接口场景编排）
 一次都没记过 —— 它们不是"没被用"，是"没被数"。这两件事在界面上长得一模一样，
 所以 `METERED_SINCE` 必须把"从什么时候开始记"标出来。
@@ -100,7 +100,7 @@ def test_入口已经不在的能力要标成下线():
     """
     from app.services.ai_capabilities import CAPABILITY_REGISTRY
     gone = {c["key"]: c for c in CAPABILITY_REGISTRY if c.get("deprecated")}
-    for key in ("tb-case-generate", "scenario-gen"):
+    for key in ("lum-case-generate", "scenario-gen"):
         assert key in gone, f"{key} 的入口已经不在了，清单里还写着在用"
         assert gone[key].get("deprecatedNote"), f"{key} 没写为什么下线 —— 过阵子又会被加回来"
 
@@ -177,7 +177,7 @@ def test_AI审核标签和按钮同名():
     「可是我要改的是 AI 审核啊，没看到这个在哪改」）。标签必须包含按钮上的原词。
     """
     from app.services.ai_capabilities import CAPABILITY_REGISTRY
-    cap = next(c for c in CAPABILITY_REGISTRY if c["key"] == "tb-quality-review")
+    cap = next(c for c in CAPABILITY_REGISTRY if c["key"] == "lum-quality-review")
     assert "AI 审核" in cap["label"], "标签没有用户在页面上实际点的那个词"
 
 
@@ -283,20 +283,20 @@ def test_SkillManage状态跟注册表对齐():
     assert "Tooltip" in jsx.split("from 'antd'")[0], \
         "用了 Tooltip 组件却没在 antd 导入里加上（会整页白屏 pageerror）"
 
-    # 逐条状态必须对：tb-case-generate/tb-script-generate 已下线，
-    # tb-quality-review 可用，tb-explore 是"上线但无独立 skill 文件"的第四态
+    # 逐条状态必须对：lum-case-generate/lum-script-generate 已下线，
+    # lum-quality-review 可用，lum-explore 是"上线但无独立 skill 文件"的第四态
     import re
     def _status_of(name):
         m = re.search(r"name:\s*'%s'.*?status:\s*'(\w+)'" % re.escape(name), jsx, re.DOTALL)
         return m.group(1) if m else None
 
-    assert _status_of("tb-case-generate") == "retired", \
+    assert _status_of("lum-case-generate") == "retired", \
         "AI 用例生成入口已下线，不该显示『可用』"
-    assert _status_of("tb-script-generate") == "retired", \
+    assert _status_of("lum-script-generate") == "retired", \
         "AI 脚本生成没有 skill 文件，标『可用』会露出一个点了 404 的编辑按钮"
-    assert _status_of("tb-quality-review") == "available", \
+    assert _status_of("lum-quality-review") == "available", \
         "质量评审（AI 审核）是全平台唯一高频调用的能力，不该标『规划中』"
-    assert _status_of("tb-explore") == "inline", \
+    assert _status_of("lum-explore") == "inline", \
         "探索测试的章程生成已经上线（内联 prompt），标『规划中』是说反了；" \
         "但也不能标『可用』——那会露出一个查无 skill 文件、点了 404 的编辑按钮"
 

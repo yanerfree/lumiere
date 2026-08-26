@@ -1,11 +1,11 @@
 ---
-name: tb-quality-review
+name: lum-quality-review
 description: 六维逐条评审用例与脚本，替代人工「待审」；判定规则在平台代码里，不由模型下结论
 version: 2
 tools:
-  - tb_get_case
-  - tb_list_cases
-  - tb_get_folder_tree
+  - lum_get_case
+  - lum_list_cases
+  - lum_get_folder_tree
 ---
 
 # 用例评审（v2）
@@ -69,7 +69,7 @@ major >= 2 处         → rejected
 
 - 列表「AI 评审」：勾选了评勾选的，没勾评当前模块（逐条，上限 30 条）
 - 用例详情「AI 评审」：单条，还有「先跑一遍再评」（真跑接口场景，debug 模式不进通过率）
-- MCP `tb_review_case`：**CC 回推完自己先过一遍**，blocker 不许留着交上去
+- MCP `lum_review_case`：**CC 回推完自己先过一遍**，blocker 不许留着交上去
 
 结论落库到 `review_status` / `quality_score` / `review_reason`（含 findings，
 人点开能看到"凭什么不过"）。

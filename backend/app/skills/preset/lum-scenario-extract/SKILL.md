@@ -1,5 +1,5 @@
 ---
-name: tb-scenario-extract
+name: lum-scenario-extract
 description: 从需求文档提取可测试的需求点（带原文逐字引用）
 version: 1
 inputs:

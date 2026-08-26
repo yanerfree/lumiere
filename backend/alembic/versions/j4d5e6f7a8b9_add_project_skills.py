@@ -4,7 +4,7 @@ Revision ID: j4d5e6f7a8b9
 Revises: i3c4d5e6f7a8
 Create Date: 2026-07-31
 
-项目侧 Claude Code 的 skill 推上平台后存这里，与文件系统里的内置 tb-* 分开
+项目侧 Claude Code 的 skill 推上平台后存这里，与文件系统里的内置 lum-* 分开
 （前者客户端执行，后者平台侧执行）。visibility=public 时其它项目可取用。
 skill_versions 存覆盖前快照 —— 写入通道开放，覆盖必须可回滚。
 """

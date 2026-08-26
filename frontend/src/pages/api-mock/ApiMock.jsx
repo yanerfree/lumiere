@@ -93,7 +93,7 @@ export default function ApiMock() {
   return (
     <div style={{ height: 'calc(100vh - 70px)', display: 'flex', flexDirection: 'column' }}>
       {/* 协议标签栏 */}
-      <div className="tb-page-strip" style={{
+      <div className="lum-page-strip" style={{
         display: 'flex', alignItems: 'center', gap: 0, padding: '0 20px',
         flexShrink: 0, height: 42,
       }}>

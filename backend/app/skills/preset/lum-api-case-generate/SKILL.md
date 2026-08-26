@@ -1,5 +1,5 @@
 ---
-name: tb-api-case-generate
+name: lum-api-case-generate
 description: 根据 API 接口定义自动生成接口测试场景（含请求步骤和断言）
 version: 2
 inputs:

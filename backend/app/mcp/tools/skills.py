@@ -3,10 +3,10 @@
 这是**写入的主通道**：外部项目已经连了 MCP、有 API Key、有 allowed_tools 白名单，
 不需要再造一套认证。用法一句话：
 
-    在 A 项目：读本地 .claude/skills/<name>/ → tb_push_skill 推上去
-    在 B 项目：tb_list_skills 看有什么 → tb_pull_skill 拿全文 → 写进本地 .claude/skills/
+    在 A 项目：读本地 .claude/skills/<name>/ → lum_push_skill 推上去
+    在 B 项目：lum_list_skills 看有什么 → lum_pull_skill 拿全文 → 写进本地 .claude/skills/
 
-与内置 tb-* 的边界（别混）：内置那批是**平台侧执行**的 prompt（skill_executor 喂
+与内置 lum-* 的边界（别混）：内置那批是**平台侧执行**的 prompt（skill_executor 喂
 后端 LLM，绑 AI 能力档位），本通道存的是**客户端侧执行**的 skill（跑在你机器的
 Claude Code 里，用 Bash/Edit/Playwright）。本通道的东西永不被平台当 prompt 执行。
 """
@@ -117,7 +117,7 @@ async def list_skills(
     return {
         "total": len(items),
         "skills": items,
-        "howToUse": "用 tb_pull_skill(skill_id=...) 拿全文，写进本地 .claude/skills/<name>/SKILL.md",
+        "howToUse": "用 lum_pull_skill(skill_id=...) 拿全文，写进本地 .claude/skills/<name>/SKILL.md",
     }
 
 

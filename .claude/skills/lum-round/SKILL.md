@@ -1,5 +1,5 @@
 ---
-name: tb-round
+name: lum-round
 description: 在 Lumiere 上推进一轮测试活。每次醒来先问平台"该干什么"，按队列逐个处置，一轮末收口。配 /loop 用就是无人值守推进。
 ---
 
@@ -8,12 +8,12 @@ description: 在 Lumiere 上推进一轮测试活。每次醒来先问平台"该
 这份东西存在的理由：顺序**不能靠每轮自己记**。忘一步链就断，而断了不报错 ——
 上一轮就是「归因交上去了、没人复跑」，单子一直挂着，看起来像没事。
 
-`<branch_id>` 从 `tb_list_branches` 拿。全程**不要自己关跟进单**：跑绿了平台自动关。
+`<branch_id>` 从 `lum_list_branches` 拿。全程**不要自己关跟进单**：跑绿了平台自动关。
 
 ## 第 0 步 · 先问该干什么
 
 ```
-tb_next_duty(branch_id=<branch_id>)
+lum_next_duty(branch_id=<branch_id>)
 ```
 
 它回七个队列 + 「建议顺序」。**照它给的顺序做**，别自己排 —— 那个顺序是按
@@ -26,7 +26,7 @@ tb_next_duty(branch_id=<branch_id>)
 对每条：
 
 ```
-tb_get_ui_script_result(case_id=<case_id>)     # 证据包：截图路径、流量、stdout、平台的现象初判
+lum_get_ui_script_result(case_id=<case_id>)     # 证据包：截图路径、流量、stdout、平台的现象初判
 ```
 
 - 截图是**文件路径**，用 Read 打开真看一眼，别只读 error_summary
@@ -36,7 +36,7 @@ tb_get_ui_script_result(case_id=<case_id>)     # 证据包：截图路径、流�
 判完提交：
 
 ```
-tb_submit_analysis(run_id=..., cause=..., confidence=..., reasoning=..., evidence={...})
+lum_submit_analysis(run_id=..., cause=..., confidence=..., reasoning=..., evidence={...})
 ```
 
 - `evidence` 必须**指到这次执行里真实存在的东西**（哪条请求、第几张截图、error_summary 哪句）。
@@ -49,35 +49,35 @@ tb_submit_analysis(run_id=..., cause=..., confidence=..., reasoning=..., evidenc
 ## 第 2 步 · 待复跑（最便宜，跑一遍就可能关单）
 
 ```
-tb_run_ui_script(case_id=..., env_id=...)   或   tb_run_api_test(scenario_ids=..., env_id=...)
+lum_run_ui_script(case_id=..., env_id=...)   或   lum_run_api_test(scenario_ids=..., env_id=...)
 ```
 
 绿了跟进单自动关。**没绿别标完成**，接着看为什么。
 
 ## 第 3 步 · 待处理接口变动 / 待补用例（版本升级那条线）
 
-- 要改的：读**新版本的需求**改预期 → `tb_update_case`（带 `expected_confirmed_note` 落款）
-  → `tb_sync_orchestrated_scenario(mode='patch')` 只改动的那几步 → `tb_run_api_test`
-  → `tb_check_assertion_bite` → 送审
+- 要改的：读**新版本的需求**改预期 → `lum_update_case`（带 `expected_confirmed_note` 落款）
+  → `lum_sync_orchestrated_scenario(mode='patch')` 只改动的那几步 → `lum_run_api_test`
+  → `lum_check_assertion_bite` → 送审
 - ⚠ **预期按新版本的需求写，不是打开新版本跑一遍照着改** —— 那是把实现抄了一遍，
   新版本引入的 bug 会被固化成预期
-- 端点没了：先判是真没了还是改名/挪位置。真没了走 `tb_request_deprecate` 交证据，
+- 端点没了：先判是真没了还是改名/挪位置。真没了走 `lum_request_deprecate` 交证据，
   **别自己废**（"我在页面上找不到"不等于"功能没了"）
 - 待补用例：新端点谁都没覆盖，按平常那套来（读需求 → 活体验证 → 建用例 → 回推）
 
 ## 第 4 步 · 待补场景 / 待自证
 
 - 待补场景：被提到次数越多越该补
-- 待自证：`tb_sync_orchestrated_scenario(reflections={...})` 补上回推四问 ——
+- 待自证：`lum_sync_orchestrated_scenario(reflections={...})` 补上回推四问 ——
   没答的话审核里「这条在验什么」只能靠猜，`self_coverage` 最高只给 70
 
 ## 第 5 步 · 送审 + 收口
 
-**这一轮动过的用例一起送审，别一条条调 `tb_review_case`：**
+**这一轮动过的用例一起送审，别一条条调 `lum_review_case`：**
 
 ```
-tb_review_batch(branch_id=..., case_ids="逗号分隔", env_id=...)
-tb_review_batch_status(batch_id=...)          # 轮询，别重复入队
+lum_review_batch(branch_id=..., case_ids="逗号分隔", env_id=...)
+lum_review_batch_status(batch_id=...)          # 轮询，别重复入队
 ```
 
 为什么必须走批量：单条那个工具不排队，你并发推一批就是并发真跑打同一个环境 ——
@@ -91,7 +91,7 @@ A 跑到一半 B 把 A 的数据删了，审核会判 A"脚本有问题"。**那
 收口：
 
 ```
-tb_check_branch(branch_id=...)      # 可交付/有阻塞/有脆弱点 各几条
+lum_check_branch(branch_id=...)      # 可交付/有阻塞/有脆弱点 各几条
 ```
 
 ## 一轮结束时说什么
@@ -99,7 +99,7 @@ tb_check_branch(branch_id=...)      # 可交付/有阻塞/有脆弱点 各几条
 三句话：**这轮做了什么**（几条几维）、**卡在哪**（谁在等人：等确认的、等废弃拍板的）、
 **下一轮打算干什么**。
 
-`tb_next_duty` 全空就说"这一轮干净"。
+`lum_next_duty` 全空就说"这一轮干净"。
 
 ## 别做的
 

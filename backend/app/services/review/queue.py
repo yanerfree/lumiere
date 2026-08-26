@@ -222,7 +222,7 @@ async def _run_batch(batch_id: str) -> None:
         if b is None:
             return
         project_id, env_id = b.project_id, b.environment_id
-        cfg = await resolve_ai_config(project_id, s, capability="tb-quality-review")
+        cfg = await resolve_ai_config(project_id, s, capability="lum-quality-review")
         if cfg is None:
             await _finalize(batch_id, status="partial", note="AI 服务未配置，这批没跑")
             return
@@ -366,7 +366,7 @@ async def recover_orphans() -> int:
     收拾方式是**退回 queued 而不是标失败**：已经审完的那几条结论都在库里，
     item 的 status 记着谁审完了，重新排队只会跑剩下的。
 
-    ⚠ **`INLINE_KIND` 的不能退回 queued**。那是 `tb_review_case` 在账本上留的
+    ⚠ **`INLINE_KIND` 的不能退回 queued**。那是 `lum_review_case` 在账本上留的
     在跑标记（MCP 内联跑，不经队列，见 `mcp/tools/review._open_single_batch`）——
     退回 queued 的话，worker 会把它当成一个待跑批次捡走**再真跑一遍**
     （`_run_batch` 固定 `run_first=True`），等于重启一次就凭空多一轮真跑，

@@ -1,6 +1,6 @@
 """平台内置 Skill 管理 API — 列表 + 查看 + 编辑 + 下载。
 
-这里管的是 `app/skills/preset/` 下的 `tb-*`，**平台侧执行**：skill_executor 读
+这里管的是 `app/skills/preset/` 下的 `lum-*`，**平台侧执行**：skill_executor 读
 SKILL.md 当 prompt 喂后端 LLM，每个都在「AI 能力→模型」绑档位。
 项目侧（Claude Code 执行）的 skill 不在这儿，见 api/project_skills.py。
 """

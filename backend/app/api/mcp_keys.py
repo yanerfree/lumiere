@@ -121,7 +121,7 @@ async def create_api_key(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    raw_key = f"tb_{secrets.token_urlsafe(32)}"
+    raw_key = f"lum_{secrets.token_urlsafe(32)}"
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     key_prefix = raw_key[:8]
 

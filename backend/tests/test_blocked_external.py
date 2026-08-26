@@ -1,7 +1,7 @@
 """「卡在外部条件上」—— 看板上分不出"没人写"和"写不了"。
 
 外部 CC 第十一条：TC-DYGL-00015 因为环境变量还没加，场景被硬拒（拒得对），用例停在
-`api_scenario_missing` —— 而这跟「我压根没写场景」在 tb_check_branch 里长得一模一样。
+`api_scenario_missing` —— 而这跟「我压根没写场景」在 lum_check_branch 里长得一模一样。
 于是每轮都要人挨个去问一遍「这条为什么没做」。
 
 一列文本就够，**刻意不做成状态枚举**：状态由执行事实推进（红线），
@@ -65,7 +65,7 @@ def test_前端也看得见():
 def test_工具描述里写了它():
     from app.mcp import TOOL_CATALOG
 
-    d = {t["name"]: t["description"] for t in TOOL_CATALOG}["tb_update_case"]
+    d = {t["name"]: t["description"] for t in TOOL_CATALOG}["lum_update_case"]
     assert "blocked_external" in d and "写不了" in d
 
 

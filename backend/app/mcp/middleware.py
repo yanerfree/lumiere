@@ -1,7 +1,7 @@
 """MCP 中间件 —— 按 API Key 限定该连接能看到什么工具、能碰哪个项目的数据。
 
 两层，各自独立：
-  · **工具范围**（哪些 tb_* 露出来）—— 由 Key 归属项目的 `mcp_allowed_tools` 决定。
+  · **工具范围**（哪些 lum_* 露出来）—— 由 Key 归属项目的 `mcp_allowed_tools` 决定。
   · **数据范围**（能读写哪个项目）—— 由 Key 的 `project_id` 决定，见 `_OWNER_SQL`。
     这一层此前**整层不存在**：Key 上的 project_id 只用来查工具范围，
     工具入参里的 project_id/branch_id/case_id 是调用方随便填的，直接拿去查库。
@@ -9,7 +9,7 @@
     HTTP 侧同样的坑早堵过（见 app/deps/scope.py 开头那段实测记录），MCP 侧漏了。
 
 为什么需要：平台注册了 30+ 个工具，外部 Claude Code 面对全量列表容易挑错
-（当年的典型：该做"活体验证后回推"的场景，却去调 tb_generate_api_test 凭文档造 ——
+（当年的典型：该做"活体验证后回推"的场景，却去调 lum_generate_api_test 凭文档造 ——
 那个工具已下线，但挑错这件事本身不会随它消失）。
 instructions 里的引导是**软约束**，模型不一定听；这里做成**硬约束**——
 范围外的工具在 tools/list 里根本不出现，直接 tools/call 也会被拒。
@@ -171,7 +171,7 @@ async def current_caller_key_name() -> str | None:
 # ── 数据范围：入参里的 id 到底归哪个项目 ──────────────────────────
 #
 # 参数名 → 反查它归属哪个项目的候选 SQL。**一个名字可以有多条候选**：
-# `folder_id` 在 tb_list_cases 里是用例目录（case_folders），在 tb_list_api_tests 里
+# `folder_id` 在 lum_list_cases 里是用例目录（case_folders），在 lum_list_api_tests 里
 # 是接口场景目录（api_test_folders）—— 同名不同表。按 (工具名, 参数名) 硬编码
 # 会在新增工具时漏掉，所以改成**任一候选查到就算它**，全部候选都查不到才当"不是本项目的"。
 #
@@ -219,7 +219,7 @@ _OWNER_SQL: dict[str, tuple[str, ...]] = {
 # 故意**不**校验的 id 参数。每一条都得写清为什么，否则下一个人只会以为是漏了。
 _OWNER_EXEMPT: dict[str, str] = {
     "skill_id": (
-        "跨项目取用 skill 的正规通道。tb_pull_skill 的描述里明写「skill_id(推荐,跨项目取用用它,"
+        "跨项目取用 skill 的正规通道。lum_pull_skill 的描述里明写「skill_id(推荐,跨项目取用用它,"
         "要求该 skill 是 public)」—— 校了等于把 skill 共享整个打死。"
         "同一个工具的 project_id 入参照常受校验（那条是「取自己项目的」）。"
     ),
@@ -232,7 +232,7 @@ def scope_targets(arguments: dict | None) -> list[tuple[str, str]]:
     抽成纯函数是为了能直接测，不用起 MCP、不用连库。三件事在这里做完：
       · 只认 `_OWNER_SQL` 里的参数名，其余（title/steps/keyword…）一概不看；
       · 复数形态既可能是 list 也可能是逗号分隔的字符串
-        （tb_run_api_test 的 scenario_ids 描述就是「逗号分隔的场景UUID列表」）；
+        （lum_run_api_test 的 scenario_ids 描述就是「逗号分隔的场景UUID列表」）；
       · **不是合法 UUID 的值直接丢掉**，不当成"查不到"去拒 ——
         那种是调用方参数写错，该由工具自己报错，不该被伪装成权限问题。
     """
@@ -285,7 +285,7 @@ async def check_data_scope(key_project: str, arguments: dict | None) -> tuple[st
 async def current_caller_project_id() -> str | None:
     """当前 MCP 调用方那把 Key 归属的项目 id。None = 不限制数据范围。
 
-    `tb_list_projects` 用它把列表收窄到本项目 —— 那个工具没有任何 id 入参，
+    `lum_list_projects` 用它把列表收窄到本项目 —— 那个工具没有任何 id 入参，
     `_OWNER_SQL` 那套反查管不到它，只能它自己问。
     """
     try:
@@ -312,7 +312,7 @@ class ToolScopeMiddleware(Middleware):
         # 分不出哪些是它改的、哪些是人改的，出问题就只能靠猜。
         #
         # 身份本来就有（Key 决定，script_runs 的 executed_by 一直在用它），
-        # 只是审计那条路从没问过它。挂在 on_call_tool 上 = 所有 tb_* 工具一次性覆盖。
+        # 只是审计那条路从没问过它。挂在 on_call_tool 上 = 所有 lum_* 工具一次性覆盖。
         #
         # 一次 _lookup_key 同时供审计和两层范围校验用（本来就带 30s 缓存，但没必要查三遍）。
         allowed, uid, key_name, key_project = await _lookup_key()
@@ -354,6 +354,6 @@ class ToolScopeMiddleware(Middleware):
                     f"{param}={value} 不属于本 Key 绑定的项目（或不存在）。"
                     "一把 Key 只能操作它归属的那一个项目 —— 要动别的项目，"
                     "用那个项目自己的 Key，不要改入参硬试。"
-                    "本项目有哪些分支/用例，用 tb_list_branches、tb_list_cases 查。"
+                    "本项目有哪些分支/用例，用 lum_list_branches、lum_list_cases 查。"
                 )
         return await call_next(context)

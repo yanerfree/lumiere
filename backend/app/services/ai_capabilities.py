@@ -48,12 +48,12 @@ CAPABILITY_REGISTRY = [
     # testforge task JSON，真正生成用例的是 CC 侧 /tf-forge。**页面上已经没有这个按钮**，
     # 而这一行还写着"用例管理 → 从接口生成"—— 用户照着它去找，找不到。
     # 端点和 skill 保留（tf-forge 还按老 task 文件跑），所以只下线入口、不删 key。
-    {"key": "tb-case-generate",        "label": "AI 生成接口用例",      "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "页面入口 2026-08-19 下线：改由外部 Claude Code 的 /tf-forge 生成后回推（它自己就能读接口树）。/testforge/* 端点保留"},
+    {"key": "lum-case-generate",        "label": "AI 生成接口用例",      "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "页面入口 2026-08-19 下线：改由外部 Claude Code 的 /tf-forge 生成后回推（它自己就能读接口树）。/testforge/* 端点保留"},
     # 标签必须**和用户点的那个按钮同名**。页面上按钮叫「AI 审核」，这里原来只写
     # 「用例质量评审（单条·六维）」—— 用户想改 AI 审核用的模型，在这一页里找不到它
     # （原话：「可是我要改的是 AI 审核啊，没看到这个在哪改」）。术语对不上就等于没写。
-    {"key": "tb-quality-review",       "label": "AI 审核（用例质量评审·六维）", "category": "text",  "where": "用例管理「AI 审核」按钮 / 用例详情「审核」页 / MCP tb_review_case"},
-    {"key": "tb-diagnose",             "label": "失败诊断",             "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "归因归外部 Claude Code（tb_submit_analysis），平台只按规则出现象、由人确认结论。前端从来没有调用入口"},
+    {"key": "lum-quality-review",       "label": "AI 审核（用例质量评审·六维）", "category": "text",  "where": "用例管理「AI 审核」按钮 / 用例详情「审核」页 / MCP lum_review_case"},
+    {"key": "lum-diagnose",             "label": "失败诊断",             "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "归因归外部 Claude Code（lum_submit_analysis），平台只按规则出现象、由人确认结论。前端从来没有调用入口"},
     # 入口 2026-08-15 双下线：MCP 工具摘了（见 mcp/__init__.py 那段说明：8 个批次
     # 3 个卡在半路、2 个 failed、一个月无人问津），页面也**没有任何路由和菜单**指向
     # pages/scenario-gen —— 库里 111 条调用记录全是 8-09 之前的。

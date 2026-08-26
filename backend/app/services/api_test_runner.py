@@ -329,7 +329,7 @@ def _extract_value(body, path: str):
     - 按字段值过滤：`data.items[name=${svcName}].id` —— 取第一条 name 等于该值的
     - 混用：`data.items[status=pending][0].id`
 
-    **过滤器是为了消灭 `data[0]`。** 下标是另一种写死（见 tb_get_sync_spec 的变量纪律）：
+    **过滤器是为了消灭 `data[0]`。** 下标是另一种写死（见 lum_get_sync_spec 的变量纪律）：
     列表顺序、排序口径、分页一变，`data[0]` 就静默指向别的业务对象，断言照过。
     实测撞到：`/todos` 按 created_at 升序且满页，本次新建的那条压根不在第一页。
     有了过滤器就按业务标识定位，顺序怎么变都对得上。
@@ -382,7 +382,7 @@ def _extract_value(body, path: str):
                 # `[*k=v]` 取**全部命中**，配 length 才能断"有且只有一条"。
                 # 少了它，唯一性根本没法验：`[k=v]` 只取第一条，被测系统真接受了
                 # 第二条同名，断言照样绿 —— 活体跑回推链路时就是这么被
-                # tb_check_assertion_bite 抓出来的（still_green）。
+                # lum_check_assertion_bite 抓出来的（still_green）。
                 # 而 length 对整个列表用又不行：`?search=` 在被测系统里不是严格过滤。
                 val = hits if star else (hits[0] if hits else None)
             else:
@@ -402,7 +402,7 @@ def expected_of(a: dict):
 
     实测代价：CC 新建的 23 步场景**全红**，逐字重跑两次结果相同，而 8/16 建的老场景
     15/15 全绿 —— 差别只有这一个键名。连锁反应还有：清理步骤实际 204 成功却被判 fail，
-    tb_check_env_hygiene 于是报了 3 条"残留"，那 3 个 id 去查全是 404。
+    lum_check_env_hygiene 于是报了 3 条"残留"，那 3 个 id 去查全是 404。
 
     两个键都给的时候 `expected` 优先 —— 那是历史形态 `{value: 字段路径,
     expected: 期望值}`（见 field_of）。**取期望值只许走这一个函数。**

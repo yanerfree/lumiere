@@ -156,7 +156,7 @@ class MockServerManager:
         # ⚠ 只回**解析后的摘要，不回请求头、不回完整报文**。这个端口是不鉴权的，
         #   而请求头里恰恰是最敏感的东西 —— 网关注入的上游 API Key 就在 Authorization 里，
         #   把它摊在一个开放端口上等于把凭据发出去。要看完整报文走平台页面或 MCP
-        #   （tb_llm_mock_requests），那两条路都是要登录/授权的。
+        #   （lum_llm_mock_requests），那两条路都是要登录/授权的。
         @app.get("/__log")
         async def debug_log(limit: int = 50, path: str | None = None):
             return await mgr._debug_log(limit, path)
@@ -461,7 +461,7 @@ class MockServerManager:
             "requests": out,
             "note": "stream 是网关实际发出的值，不是 mock 回的形态 —— 验流式降级看这一格。"
                     "本端点不返回请求头和完整报文（端口不鉴权，鉴权头里有上游 API Key）；"
-                    "要看完整报文走平台「请求日志」页或 MCP tb_llm_mock_requests。",
+                    "要看完整报文走平台「请求日志」页或 MCP lum_llm_mock_requests。",
         }
 
     async def _debug_reset(self, path: str | None) -> dict:

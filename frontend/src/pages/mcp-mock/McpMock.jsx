@@ -476,7 +476,7 @@ export default function McpMock() {
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 70px)', background: 'transparent' }}>
 
       {/* ━━━ 顶栏 ━━━ */}
-      <div className="tb-page-strip" style={{
+      <div className="lum-page-strip" style={{
         padding: '10px 20px',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexShrink: 0,
       }}>
@@ -618,7 +618,7 @@ export default function McpMock() {
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>工具名称 *</div>
           <Input spellCheck={false} value={newToolName} onChange={e => setNewToolName(e.target.value)}
-            placeholder="如 tb_search_users" style={{ fontFamily: MONO }} />
+            placeholder="如 lum_search_users" style={{ fontFamily: MONO }} />
         </div>
         <div>
           <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>描述</div>

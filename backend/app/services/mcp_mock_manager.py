@@ -20,7 +20,7 @@ _TOOLS_FILE = Path(__file__).resolve().parent.parent.parent / ".mock_state" / "m
 
 DEFAULT_TOOLS = [
     {
-        "name": "tb_list_cases",
+        "name": "lum_list_cases",
         "description": "列出测试用例",
         "params": {"branch_id": "string", "page": "integer", "page_size": "integer", "keyword": "string", "folder_id": "string", "priority": "string", "case_type": "string"},
         "mode": "success",
@@ -36,7 +36,7 @@ DEFAULT_TOOLS = [
         },
     },
     {
-        "name": "tb_get_case",
+        "name": "lum_get_case",
         "description": "获取用例详情",
         "params": {"case_id": "string"},
         "mode": "success",
@@ -46,7 +46,7 @@ DEFAULT_TOOLS = [
         "successData": {"id": "mock-001", "caseCode": "TC-DEMO-00001", "title": "用户登录-正常流程", "type": "api", "priority": "P0", "steps": [{"action": "POST /api/auth/login", "expected": "返回 200"}]},
     },
     {
-        "name": "tb_create_case",
+        "name": "lum_create_case",
         "description": "创建测试用例",
         "params": {"branch_id": "string", "title": "string", "module": "string", "case_type": "string", "priority": "string", "preconditions": "string", "steps": "array", "expected_result": "string"},
         "mode": "success",
@@ -56,7 +56,7 @@ DEFAULT_TOOLS = [
         "successData": {"id": "mock-new", "caseCode": "TC-MOCK-00001", "title": "(mock) 新建的用例", "type": "api", "priority": "P2"},
     },
     {
-        "name": "tb_get_folder_tree",
+        "name": "lum_get_folder_tree",
         "description": "获取文件夹树",
         "params": {"branch_id": "string"},
         "mode": "success",
@@ -69,7 +69,7 @@ DEFAULT_TOOLS = [
         ],
     },
     {
-        "name": "tb_list_api_tree",
+        "name": "lum_list_api_tree",
         "description": "获取 API 接口树",
         "params": {"project_id": "string"},
         "mode": "success",
@@ -83,7 +83,7 @@ DEFAULT_TOOLS = [
         ],
     },
     {
-        "name": "tb_get_api_node",
+        "name": "lum_get_api_node",
         "description": "获取 API 节点详情",
         "params": {"node_id": "string"},
         "mode": "success",
@@ -93,7 +93,7 @@ DEFAULT_TOOLS = [
         "successData": {"id": "api-2", "type": "endpoint", "name": "用户登录", "method": "POST", "url": "/api/auth/login", "headers": {"Content-Type": "application/json"}, "body": {"username": "string", "password": "string"}},
     },
     {
-        "name": "tb_list_environments",
+        "name": "lum_list_environments",
         "description": "列出测试环境",
         "params": {},
         "mode": "success",
@@ -103,7 +103,7 @@ DEFAULT_TOOLS = [
         "successData": [{"id": "env-1", "name": "development", "description": "开发环境"}, {"id": "env-2", "name": "staging", "description": "预发布环境"}],
     },
     {
-        "name": "tb_get_merged_variables",
+        "name": "lum_get_merged_variables",
         "description": "获取合并变量",
         "params": {"env_id": "string"},
         "mode": "success",

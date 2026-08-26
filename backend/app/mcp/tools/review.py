@@ -40,7 +40,7 @@ def _fix_lists(findings: list[dict]) -> dict:
 
 
 def _usage_note(review_mode: str | None, verdict: str | None) -> str:
-    return ("rejected 的 blocker 一条都不许留着交上去。改完再调一次 tb_review_case 复核。"
+    return ("rejected 的 blocker 一条都不许留着交上去。改完再调一次 lum_review_case 复核。"
             + (" **这次是静态审的**（没真跑），"
                "「接口场景验的端点页面到底调不调」这类问题它看不出来 —— "
                "带 run_first=true 和 env_id 再审一次才算数。"
@@ -220,7 +220,7 @@ async def review_case(
     ⚠ **这是一次不间断的同步调用，`run_first=True` 时可能跑到分钟级**（先真跑一遍
     接口场景/UI 脚本，再等 LLM 出结论）——中途没有心跳。如果调用方那边先超时中止了，
     **不代表这条没跑完**：评审是跑完就落库，超时只是"没等到响应"，不是"没产出结果"。
-    看不到返回值时**调 `tb_review_check`**（只读、秒回）：它会告诉你这条是还在审
+    看不到返回值时**调 `lum_review_check`**（只读、秒回）：它会告诉你这条是还在审
     （连同已经跑了几分钟），还是已经出结论了、结论是什么。
 
     **别在超时之后直接重调这个工具**：平台会挡下来（返回 `status="in_progress"`），
@@ -269,7 +269,7 @@ async def review_case(
     pid = (await session.execute(
         select(Branch.project_id).where(Branch.id == case.branch_id)
     )).scalars().first()
-    cfg = await resolve_ai_config(pid, session, capability="tb-quality-review")
+    cfg = await resolve_ai_config(pid, session, capability="lum-quality-review")
     if not cfg:
         return {"error": "这个项目还没配 AI 服务，评审跑不了"}
 
@@ -287,11 +287,11 @@ async def review_case(
                      f"（{round(mins, 1)} 分钟前开始），**这次没有重新审**。"
                      + ("上一次调用可能只是在你那边超时了 —— 评审是跑完就落库。"
                         if mine else "人在页面上发起的批量审核会审到它。")),
-            "usage": (f"等一会调 tb_review_check（case_id 同上）看结论，"
-                      f"别重复调 tb_review_case —— 重跑一遍除了白烧一次真跑，"
+            "usage": (f"等一会调 lum_review_check（case_id 同上）看结论，"
+                      f"别重复调 lum_review_case —— 重跑一遍除了白烧一次真跑，"
                       f"还可能撞上上一遍留下的数据、跑出互相矛盾的结论。"
                       f"要是超过 {_INFLIGHT_STALE_MIN} 分钟还是这个状态，"
-                      f"平台会把它当僵尸清掉，那时再调 tb_review_case 就会真的重审。"),
+                      f"平台会把它当僵尸清掉，那时再调 lum_review_case 就会真的重审。"),
         }
 
     batch, item = await _open_single_batch(session, case, pid, env_id, run_first)
@@ -312,17 +312,17 @@ async def review_case(
 async def review_status(session: AsyncSession, case_id: str) -> dict:
     """**这条用例审到哪了 / 上次审出了什么** —— 只读，不触发评审、不碰被测系统。
 
-    专治一件事：`tb_review_case` 那次调用在你那边超时中止了，你不知道它到底跑完没有。
+    专治一件事：`lum_review_case` 那次调用在你那边超时中止了，你不知道它到底跑完没有。
     评审是**跑完就落库**的，超时只是"没等到响应"。这个工具秒回，三种结果：
 
     · `status="in_progress"` —— 还在审（连同已经跑了几分钟）。**接着等，别重调
-      `tb_review_case`**：重跑一遍会撞上上一遍留下的数据，出两条打架的结论。
-    · `status="reviewed"` —— 已经有结论了，返回的形状跟 `tb_review_case` 成功时**一样**
+      `lum_review_case`**：重跑一遍会撞上上一遍留下的数据，出两条打架的结论。
+    · `status="reviewed"` —— 已经有结论了，返回的形状跟 `lum_review_case` 成功时**一样**
       （verdict / mustFix / niceToFix / coverageGaps / reviewMode / runAttribution），
       照着 mustFix 改就行，不用再审一次。
       带 `stale=true` 的话，这个结论是对着**已经被改过的内容**算出来的
       （审完之后场景/脚本又被 sync 覆盖过）—— 那就得重审一次才算数。
-    · `status="not_reviewed"` —— 从来没审过，去调 `tb_review_case`。
+    · `status="not_reviewed"` —— 从来没审过，去调 `lum_review_case`。
 
     参数: case_id(用例UUID)
     """
@@ -342,7 +342,7 @@ async def review_status(session: AsyncSession, case_id: str) -> dict:
             "startedMinutesAgo": round(mins, 1),
             "reviewKind": batch.kind, "actorKind": batch.actor_kind,
             "usage": (f"还在审，已经跑了 {round(mins, 1)} 分钟。"
-                      f"过一会再调一次这个工具；**别调 tb_review_case** —— "
+                      f"过一会再调一次这个工具；**别调 lum_review_case** —— "
                       f"那会被挡下来，或者（超过 {_INFLIGHT_STALE_MIN} 分钟后）真的重跑一遍。"),
         }
 
@@ -352,7 +352,7 @@ async def review_status(session: AsyncSession, case_id: str) -> dict:
         return {
             "caseCode": case.case_code, "status": "not_reviewed",
             "reviewStatus": case.review_status,
-            "usage": "这条从来没被 AI 审过（或者只有人工/系统的结论）。调 tb_review_case 审一次。",
+            "usage": "这条从来没被 AI 审过（或者只有人工/系统的结论）。调 lum_review_case 审一次。",
         }
 
     findings = latest.get("findings") or []
@@ -378,7 +378,7 @@ async def review_status(session: AsyncSession, case_id: str) -> dict:
         "reviewStatus": case.review_status,
         "usage": (_usage_note(latest.get("reviewMode"), latest.get("verdict"))
                   + (" ⚠ **这个结论已经过期**：审完之后这条的接口场景/UI 脚本又被改过，"
-                     "findings 说的可能是已经不存在的内容 —— 重新调 tb_review_case 审一遍。"
+                     "findings 说的可能是已经不存在的内容 —— 重新调 lum_review_case 审一遍。"
                      if latest.get("stale") else "")),
     }
 
@@ -392,9 +392,9 @@ async def review_batch(
     scope: str = "all",
     with_checkup: bool = True,
 ) -> dict:
-    """批量送审 —— **入平台的审核队列，别自己 for 循环调 tb_review_case**。
+    """批量送审 —— **入平台的审核队列，别自己 for 循环调 lum_review_case**。
 
-    为什么必须走队列（review-spec §5）：`tb_review_case` 是直调 `reviewer.review_case`，
+    为什么必须走队列（review-spec §5）：`lum_review_case` 是直调 `reviewer.review_case`，
     一条也不排队。你自己循环推一批的后果是**并发真跑打同一个环境**，而这条队列
     要防的两件事一件都吃不到：
 
@@ -407,7 +407,7 @@ async def review_batch(
     那一类 —— 接口场景验的端点页面根本不调。所以这里没有 run_first 参数。
 
     队列里**人发起的排在 CC 前面**（人在等结果，CC 不在等），所以你入队之后
-    可能要等一会儿；用 tb_review_batch_status 轮询，别重复入队。
+    可能要等一会儿；用 lum_review_batch_status 轮询，别重复入队。
     同一条用例已经在这个环境的活跃批次里排着 → 自动合并，不会跑两遍。
     """
     import uuid as _uuid
@@ -434,7 +434,7 @@ async def review_batch(
     if pid is None:
         return {"error": f"分支不存在: {branch_id}"}
 
-    # module 名 → folder。和 tb_module_checkup 同一套查法（按名字，本分支内）
+    # module 名 → folder。和 lum_module_checkup 同一套查法（按名字，本分支内）
     folder = None
     if module:
         folder = (await session.execute(
@@ -512,8 +512,8 @@ async def review_batch(
         # 被合并掉的要说出来 —— 静默少审几条，和"审完了"长得一样
         "merged": merged or None,
         "truncated": truncated or None,
-        "usage": ("已入队，**这批一定是真跑**。用 tb_review_batch_status(batch_id) 轮询，"
-                  "别重复入队、也别再逐条调 tb_review_case。"
+        "usage": ("已入队，**这批一定是真跑**。用 lum_review_batch_status(batch_id) 轮询，"
+                  "别重复入队、也别再逐条调 lum_review_case。"
                   "人工发起的批次排在你前面，所以可能要等。"
                   + (f" 其中 {len(merged)} 条已经在别的批次里排着了，这次不重复跑。"
                      if merged else "")

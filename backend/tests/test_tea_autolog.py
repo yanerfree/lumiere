@@ -7,7 +7,7 @@ pytest 启动横幅，脚本里 16 个 expect() 验了什么、挂在第几步�
 而 CC 写的是普通 Playwright —— 那就在平台注入的 conftest 里自动把断言和
 goto/click/fill 包一层。中间踩了三个坑，都在下面各有一条测试钉着：
 
-1. 只 print 标记不够 —— 非流式路径（tb_run_ui_script / 批量回归）压根不读 stdout，
+1. 只 print 标记不够 —— 非流式路径（lum_run_ui_script / 批量回归）压根不读 stdout，
    它读 tea_capture flush 出来的 JSON。所以要同时挂进 tea_step 的步骤表。
 2. pytest 默认吞 stdout，标记流不出来 —— 命令要加 `-s`。
 3. 选择器里的中文是**双重转义**（`\\\\u8bf7`），解一次只脱一层，

@@ -370,7 +370,7 @@ def test_探索中发现场景不对要当场改():
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] / "app/mcp/__init__.py").read_text(encoding="utf-8")
     seg = src[src.index("①-1-B"):src.index("①-2")]
-    for k in ("拆成两条", "补一条", "tb_update_case", "重写它"):
+    for k in ("拆成两条", "补一条", "lum_update_case", "重写它"):
         assert k in seg, f"缺「{k}」—— 发现了也不知道该怎么办"
     assert "不用等谁批准" in seg, "没授权就会攒着等确认"
     assert "删掉已有用例" in seg, "没划出真正需要先说的那条边界"

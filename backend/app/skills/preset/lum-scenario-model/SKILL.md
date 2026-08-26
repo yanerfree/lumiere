@@ -1,5 +1,5 @@
 ---
-name: tb-scenario-model
+name: lum-scenario-model
 description: 基于需求点生成四区块场景模型（业务流程/状态转换/角色矩阵/测试点清单）
 version: 1
 inputs:

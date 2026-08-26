@@ -140,7 +140,7 @@ def test_缓存再加一个字段也不会错位(monkeypatch):
 def test_MCP调用把身份和来源都放进了审计上下文(monkeypatch):
     """真跑 on_call_tool，不读源码。
 
-    挂在 on_call_tool 上 = 所有 tb_* 一次性覆盖。少了它，CC 的操作全是匿名；
+    挂在 on_call_tool 上 = 所有 lum_* 一次性覆盖。少了它，CC 的操作全是匿名；
     少了 actor_label，多台 CC 在日志里长得一模一样（Key 只能给自己建，归属人全一样）。
     """
     from app.mcp import middleware as mw
@@ -155,13 +155,13 @@ def test_MCP调用把身份和来源都放进了审计上下文(monkeypatch):
         captured.update(audit.get_audit_context())
         return "ok"
 
-    ctx = SimpleNamespace(message=SimpleNamespace(name="tb_update_case", arguments={}))
+    ctx = SimpleNamespace(message=SimpleNamespace(name="lum_update_case", arguments={}))
     asyncio.run(mw.ToolScopeMiddleware().on_call_tool(ctx, call_next))
 
     assert str(captured.get("user_id")) == uid, "没取 Key 身份 —— 操作人会是「-」"
     assert captured.get("actor_type") == "mcp", "没记来源 —— 分不出是 CC 还是人"
     assert captured.get("actor_label") == "uag-cc使用", "没记 Key 名 —— 分不出是哪台 CC"
-    assert captured.get("trace_id") == "mcp:tb_update_case"
+    assert captured.get("trace_id") == "mcp:lum_update_case"
 
 
 class SQLCapturingSession:

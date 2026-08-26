@@ -51,7 +51,7 @@ async def llm_mock_status(session: AsyncSession) -> dict:
                     "delayMs": r.delay_ms, "finishReason": r.finish_reason} for r in rows],
         "usage": "把被测网关的上游地址指到 upstreamBaseUrl + 你这条路由的 path，"
                  "就能自己决定上游怎么答（慢/429/截断/自定义 token 用量），"
-                 "再用 tb_llm_mock_requests 断言网关到底往上游发了什么。",
+                 "再用 lum_llm_mock_requests 断言网关到底往上游发了什么。",
     }
 
 
@@ -93,7 +93,7 @@ async def upsert_llm_mock_route(
     `smart_role="checker"`（或路径里带 /checker）= 演**网关护栏调用的那个检查模型**：
     它只回判决，并把「本次收到的待检正文有多长、开头是什么」回显进 reason。
     网关到底把什么喂给了护栏，这是唯一的观测点 —— 断言时读
-    `tb_llm_mock_requests` 返回里的 `smartMeta.checkedLen`。
+    `lum_llm_mock_requests` 返回里的 `smartMeta.checkedLen`。
     """
     p = (path or "").strip()
     if not p.startswith("/"):
@@ -135,7 +135,7 @@ async def upsert_llm_mock_route(
         out["smart"] = {
             "role": row.smart_role,
             "usage": "行为由请求正文里的指令决定（SAY: / MODE:xxx），这条路由上的静态响应配置不生效。",
-            "assertOn": "跑完读 tb_llm_mock_requests 的 smartMeta：mode 是哪条指令、"
+            "assertOn": "跑完读 lum_llm_mock_requests 的 smartMeta：mode 是哪条指令、"
                         "stream 是网关实际发出的值、checker 角色还带 checkedLen/verdict。",
         }
     return out
@@ -170,7 +170,7 @@ async def llm_mock_requests(
             "smartMeta": r.smart_meta,
         } for r in rows],
         "total": len(rows),
-        "usage": "断言之前先调 tb_llm_mock_reset 清一次，否则上一轮的记录会混进来 —— "
+        "usage": "断言之前先调 lum_llm_mock_reset 清一次，否则上一轮的记录会混进来 —— "
                  "「上游只应收到 1 次请求」这类断言会假过。",
     }
 
