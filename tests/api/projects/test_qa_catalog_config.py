@@ -122,7 +122,13 @@ class TestQaCatalogConfig:
         assert s["scripts"] == 2                                # 模板不算用例
         assert s["orphanScripts"] == 0                          # 模板里的 XXX-01 不该冒出来
         assert s["claimedButUncovered"] == 0
+        assert s["coveredWithBugs"] == 1                        # AUT-01 有脚本，但脚本头挂着 GL#530
+        assert s["riskMismatch"] == 0
         assert data["orphanScriptList"] == []
+
+        # 页面靠这两个字段找「黑洞域」：SMK-02 是 P0 且待补
+        smk = next(d for d in data["domains"] if d["code"] == "SMK")
+        assert (smk["gap"], smk["p0Gap"]) == (1, 1)
 
         smk01 = next(x for x in data["scenarios"] if x["id"] == "SMK-01")
         assert [c["path"] for c in smk01["scripts"]] == ["api/smoke.sh"]
