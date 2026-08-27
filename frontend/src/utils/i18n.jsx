@@ -7,13 +7,13 @@ const MESSAGES = {
     // 菜单
     'menu.projects': '项目列表',
     'menu.cases': '用例管理',
+    // 菜单项 2026-08-27 下掉，路由和页面保留 —— 键留着，恢复入口时不用再翻一遍
     'menu.apis': 'API 接口',
     'menu.qaCatalog': 'QA 对账',
     'menu.plans': '测试计划',
     'menu.reports': '测试报告',
     'menu.reviewReport': '审核报告',
     'menu.exploratory': '探索测试',
-    'menu.documents': '文档管理',
     'menu.ai': 'AI 智能',
     'menu.ai.capabilities': '能力总览',
     'menu.ai.scenarioGen': 'AI 生成用例',
@@ -96,7 +96,6 @@ const MESSAGES = {
     'menu.reports': 'Test Reports',
     'menu.reviewReport': 'Review Report',
     'menu.exploratory': 'Exploratory',
-    'menu.documents': 'Documents',
     'menu.ai': 'AI',
     'menu.ai.capabilities': 'Capabilities',
     'menu.ai.scenarioGen': 'Scenario Gen',

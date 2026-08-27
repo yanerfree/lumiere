@@ -202,13 +202,9 @@ PROFILES: list[dict] = [
             "lum_list_api_tests", "lum_get_api_test",
         ],
     },
-    {
-        "key": "doc",
-        "label": "写操作/演示/验收文档",
-        "task": "拿平台的文档规范，在本地实操被测系统、截图，产出带图文档",
-        "hint": "平台只给模板和规范，实操和截图都在你本地 —— 它不需要写库权限",
-        "tools": _LOCATE + ["lum_get_doc_spec", "lum_list_cases", "lum_get_case"],
-    },
+    # 原来这里有一档「写操作/演示/验收文档」，配 lum_get_doc_spec。
+    # 那个工具 2026-08-27 随「文档管理」模块一起下线（见 mcp/__init__.py 那段说明），
+    # 档位跟着删 —— 留一个配着不存在的工具的档位，选中它等于什么都没有。
     {
         "key": "skill",
         "label": "Skill 取用与共享",

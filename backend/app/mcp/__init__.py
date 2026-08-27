@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff
 
 mcp = FastMCP(
     name="Lumiere",
@@ -293,26 +293,6 @@ case_type 默认就是 e2e。
   · **多角色的步骤加 [管理员] / [租户] 标记**
   · **P0 占比压在 15% 以内** —— 这条现在真的没人拦你（原来的批量闸门
     随平台侧生成一起停了），全靠你自己分级。什么都 P0 等于没分级。
-
-当用户要求生成操作文档 / 演示文档 / 验收文档时，按以下流程执行：
-
-第一步：取规范
-- 调用 lum_get_doc_spec(doc_type) 获取平台规范：doc_type 传 manual(操作手册)/demo(演示文档)/acceptance(验收文档)
-- 返回的 playbook 是完整可执行的操作指南，template 是必须严格遵循的格式模板
-
-第二步：收集参数（缺什么问用户）
-- system_url(系统地址)、username/password(登录账号)、modules(文档范围)、audience(目标读者)、title(标题)
-
-第三步：实操系统并截图（关键，不能编造）
-- 优先用 Playwright MCP 浏览器工具(browser_navigate/browser_take_screenshot/browser_click/browser_type)真实操作系统
-- 若无浏览器工具，用 Bash 跑 Playwright 脚本代替
-- 截图存到当前项目 docs/screenshots/ 目录：登录页→首页→每个目标模块的列表页和新增弹窗
-
-第四步：按模板写文档并落盘
-- 严格套用 lum_get_doc_spec 返回的 template 的章节编号/层级/顺序
-- 每张截图用相对路径 ![](screenshots/NN_xxx.png) 引用，紧接一行 *图：说明*
-- 操作步骤具体到按钮名称、输入内容、预期结果；禁止模糊词；禁止写死具体 URL
-- 保存为 docs/{title}.md
 
 当用户要求把本项目的 skill 传到平台 / 从平台取 skill 时：
 
@@ -760,15 +740,13 @@ _register(
 )
 
 
-# ── 文档生成规范工具 ──────────────────────────────
-
-_section("文档规范")
-
-_register(
-    documents.get_doc_spec,
-    name="lum_get_doc_spec",
-    description="获取文档生成规范：操作流程 + 格式模板 + 写作规则。外部 Claude Code 用它按平台模板、实操被测系统、截图贴图生成操作/演示/验收文档。参数: doc_type(manual操作手册/demo演示文档/acceptance验收文档，默认manual)",
-)
+# lum_get_doc_spec（发文档模板给外部 CC，让它实操系统截图写文档）2026-08-27
+# 随「文档管理」模块一起下线，**别加回来**。它和平台侧生成共用同一份
+# lum-doc-generate/SKILL.md 切片当模板（_load_format_template），那份 SKILL.md
+# 已经删了 —— 单留这个工具就是发一份不存在的模板。
+# 下线理由见 docs/cc-platform-loop-spec.md §14：不是"没人用"，是这条产物没有
+# 对照物 —— 文档写得对不对没有任何东西能判，而平台这边连它有没有被写出来都不知道。
+# 要写文档就在 Claude Code 里直接写，那边有真浏览器、有仓库、有需求。
 
 
 # ── 回推同步工具（活体验证成果写回）──────────────────

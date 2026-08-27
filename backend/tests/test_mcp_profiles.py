@@ -34,16 +34,29 @@ def test_全量档位是不限制而不是列全部工具():
     assert allp["tools"] is None
 
 
-def test_单件活的档位都比全量小得多():
+def test_单件活的档位都比全量挡掉更多():
     """分档的收益就是这个数。一档接近全量就说明它没在分。
 
     `fullloop` 例外，单独由下面那条测 —— 它是把四段拼成一整条链，
     本来就大；拿"小"当唯一标准会逼着把它拆回去，而拆回去正是它要解决的问题
     （想干整条链的人只能选「全量」，分档对他等于没发生）。
+
+    **按"排除了几个"判，不按比例判** —— 跟下面那条同一个道理。
+    这里原来写的是 `len(tools) < len(NAMES) * 0.6`，2026-08-27 下线
+    `lum_get_doc_spec` 之后它红了：`live` 从 35/59 变成 35/58，档位一个工具
+    没多放，分母小了一个百分比就自己越线。**那是假红** —— 守卫盯错了东西。
+    分母会随着下线一直缩，比例这个判据只要不改就会周期性地假红一次，
+    而每次都只能靠调阈值糊过去，调着调着这条守卫就什么都不守了。
+
+    阈值 15：当下最小的单件活档是 `live`（排除 23 个），留出往下再删几个工具
+    的余量；同时任何"其实等于全量"的档（只象征性排除三五个）都会被挡下。
     """
     for p in PROFILES:
         if p["tools"] is not None and p["key"] != "fullloop":
-            assert len(p["tools"]) < len(NAMES) * 0.6, p["key"]
+            excluded = set(NAMES) - set(p["tools"])
+            assert len(excluded) >= 15, (
+                f"{p['key']} 只排除了 {len(excluded)} 个工具，跟「全量」没差多少 —— "
+                "这一档到底在分什么？")
 
 
 def test_全链路档大_但仍然挡住那几条岔路():
@@ -55,14 +68,18 @@ def test_全链路档大_但仍然挡住那几条岔路():
         ("lum_create_scenario_task", "需求文档流水线是另一条路，不碰被测系统"),
         ("lum_confirm_and_generate", "同上"),
         ("lum_push_skill", "Skill 存取跟这条链无关"),
-        ("lum_get_doc_spec", "写文档是另一件活"),
     ]:
         assert forbidden not in tools, f"{forbidden} 不该进全链路档：{why}"
     # 也不能大到跟全量没区别。**按"排除了几个"判，不按比例判** ——
     # 比例的分母是全部工具数，砍掉 5 个 docgen 之后分母变小，比例自己就涨了，
     # 而全链路档一个岔路都没多放。守卫该盯的是"还挡着几条岔路"，不是百分比。
+    #
+    # 这个数 2026-08-27 从 5 降到 4：`lum_get_doc_spec` 随「文档管理」整个下线，
+    # 从注册表里消失了 —— **不是全链路档把它放进来了**。它那一条改由
+    # `test_平台不再提供文档生成工具` 用 "not in NAMES" 盯着，比"不在这一档里"更硬
+    # （工具都没了，"不在某档里"是恒真的，留在这儿等于少一条守卫）。
     excluded = set(NAMES) - tools
-    assert len(excluded) >= 5, (
+    assert len(excluded) >= 4, (
         f"全链路档只排除了 {len(excluded)} 个工具（{sorted(excluded)}）——"
         "接近全量了，重新想想它到底排除了什么")
 
@@ -81,6 +98,19 @@ def test_全链路档覆盖整条链的每一步():
         ("提归因", "lum_submit_analysis"),
     ]:
         assert tool in fl, f"全链路缺了「{step}」这一步（{tool}）"
+
+
+def test_平台不再提供文档生成工具():
+    """lum_get_doc_spec 2026-08-27 随「文档管理」模块下线。
+
+    原来这条是在「全链路档不含它」的岔路清单里 —— 工具删掉之后那种写法恒真，
+    留着等于没测（跟下面那条 lum_generate_api_test 撞过同一个坑）。
+    改成测"它根本没被注册回来"。
+
+    下线的不只是这个工具：它和平台侧生成共用 lum-doc-generate/SKILL.md 切片当模板，
+    那份文件已删 —— 单留工具就是发一份不存在的模板。
+    """
+    assert "lum_get_doc_spec" not in NAMES
 
 
 def test_平台不再提供凭文档造场景的工具():

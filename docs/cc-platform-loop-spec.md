@@ -2219,3 +2219,146 @@ CC 自己推进一批时只能逐条送审，而 review-spec §5 建那条队列
 （`branches` 没有 `is_active`、`cases.source` NOT NULL）—— 改用 ORM；
 setup 半路挂掉时事务是坏的，不先 `rollback()` 清理语句一条都执行不了，
 于是在库里留了个空分支。清理现在先回滚，并顺手收历次残骸。
+
+---
+
+## 14. 「文档管理」模块下线 + 「API 接口」入口下掉（2026-08-27）
+
+两件事一起做的，但**性质不一样，别当成一件**：
+
+- **「API 接口」只下入口** —— 菜单项没了，路由、页面、接口库表、MCP 那几个工具全在。
+- **「文档管理」是整个模块下线** —— 页面、路由、后端路由、生成服务、SKILL.md、
+  MCP 工具、档位全删；表和迁移留着。
+
+### 14.1 「API 接口」为什么只下入口
+
+单接口要验什么，用例那边已经全覆盖得到：`case_type=api` 的步骤用例负责
+「某个接口的参数/权限」，绑用例的接口场景负责真跑。菜单里那个「API 接口」点进去
+是**同一批接口的另一种看法** —— 多一条路，进去的人反而要先选一次。
+
+**但接口库本身是活的**，别顺手连它一起删：MCP 的 `lum_list_api_tree` /
+`lum_create_api_node` 在写它，「维护接口库」那一档（`apidoc`）就是干这个的，
+编排接口场景之前查「这个接口怎么调」也走它。所以：
+
+| | 处理 |
+|---|---|
+| `App.jsx` 里 `menu.apis` 菜单项 | 删（连原因一起写在原地） |
+| `/projects/:projectId/apis` 路由 + 页面 | **原样保留**，存了书签的照样能进 |
+| `i18n.jsx` 的 `menu.apis` 键 | **留着**，恢复入口时不用再翻一遍 |
+| 接口库表 / MCP 工具 / `apidoc` 档位 | 一个字没动 |
+
+### 14.2 「文档管理」为什么整个下
+
+不是"没人用"。是**这条产物没有对照物**：
+
+- 截图靠通用启发式点菜单（"找找看有没有叫这个名字的入口"），认不准就截一堆列表页；
+- 文字是 AI 看着那些图编的，**没有需求做对照** —— 写得对不对，没有任何东西能判；
+- 平台这边连"它有没有被写出来"都不知道，产物落在 `documents` 表里就没有下游了。
+
+跟红线 1 是同一个道理，只是这次的判据更硬：**测试产物至少还能拿去跑一遍见红绿，
+文档产物连红绿都没有。** 要文档就在 Claude Code 里自己实操系统写 ——
+那边有真浏览器、有仓库、有需求。
+
+### 14.3 删了什么，留了什么
+
+**删掉的（`git rm`，不是注释掉）**：
+
+| 文件 | 行数 | 是什么 |
+|---|---|---|
+| `frontend/src/pages/documents/Documents.jsx` | 624 | 模块页 |
+| `backend/app/api/documents.py` | 688 | `/api/projects/{id}/documents/*` 整组路由 |
+| `backend/app/services/doc_generator.py` | 549 | 平台侧驱动浏览器截图 + AI 写文档 |
+| `backend/app/mcp/tools/documents.py` | 83 | `lum_get_doc_spec` |
+| `backend/app/skills/preset/lum-doc-generate/SKILL.md` | 303 | 模板 + 平台侧 prompt |
+
+连带删掉的：`App.jsx` 菜单项和 import、`i18n.jsx` 的 `menu.documents`（这个键
+**没留** —— 跟 `menu.apis` 不一样，那边入口还会回来，这边不会）、`main.py` 的
+`include_router`、`mcp/__init__.py` 的注册 + instructions 里那一整段文档流程、
+`profiles.py` 的 `doc` 档位。
+
+**留着的**：
+
+| 留着的 | 为什么 |
+|---|---|
+| `documents` 表 + 5 条迁移 + model | 库里 5 条真数据（最后写入 2026-07-01）。删表是毁数据，跟下线是两件事。⚠ 见 §14.6 —— 光"不删"是不够的 |
+| `ai_capabilities.py` 三条 key（`doc-generate` / `-screenshots` / `doc-optimize`） | **标 `deprecated: True` + `deprecatedNote`，不删**。删了 `category_of()` 会走 `.get(cap,"text")` 兜底静默降档；而且"曾经有过这个能力、为什么没了"本身该留在清单里 |
+| `SkillManage.jsx` 的 `lum-doc-generate` 卡片 | 改 `status: 'retired'`。**标"可用"会露出一个点了就 404 的编辑按钮** —— SKILL.md 文件本身已经删了，跟 `lum-script-generate` 当初一模一样的坑 |
+| `METERED_SINCE` 里那三条 | 纯展示，历史用量还要按它归档 |
+
+### 14.4 `lum_get_doc_spec` 是被连坐的 —— 这一条要说清楚
+
+它不是平台侧生成，它是**发模板给外部 CC、让 CC 自己实操系统写文档**那条通道
+（Model B），方向上恰恰是对的、也是当初专门建的。
+
+它跟着一起下，**唯一原因是它没有独立的模板来源**：`_load_format_template()`
+是从 `lum-doc-generate/SKILL.md` 里切片出来的，而那份 SKILL.md 已经删了。
+留着它 = **发一份不存在的模板**，比没有更糟。
+
+要恢复这条通道，正确做法是**给它写一份自己的模板**（不寄生在平台侧生成的 SKILL.md
+上），而不是把整个模块加回来。
+
+### 14.5 盯着这次改动的封样测试（都改了，没有一条被放宽）
+
+删横切的东西，最容易留下的不是编译错误，是**恒真的断言**：
+
+| 测试 | 原来断什么 | 改成什么 |
+|---|---|---|
+| `test_endpoint_auth.py` | `/documents/tasks/{task_id}` 在「故意公开」白名单里 | 从白名单删掉。那条测试会核「白名单里每条都真的是路由」，不删就是**必红** |
+| `test_ai_usage_visibility.py` | `api/documents.py` 要在 AI 用量清单里 | 换成注释；另加一条断 `lum-doc-generate` 卡片状态必须是 `retired` |
+| `test_mcp_profiles.py` | 全链路档不含 `lum_get_doc_spec` | **工具都没了，"不在某档里"是恒真的**。改成 `"lum_get_doc_spec" not in NAMES` —— 更硬，且能挡住"哪天又被注册回来" |
+
+**顺带修掉两条会周期性假红的守卫**（不是这次改坏的，是这次撞出来的）：
+
+- `test_单件活的档位都比全量小得多` 原来判 `len(tools) < len(NAMES) * 0.6`。
+  下线一个工具之后 `live` 从 35/59 变成 35/58，**档位一个工具都没多放，
+  分母小了一个百分比就自己越线** —— 假红。分母会随着每次下线继续缩，
+  这个判据不改就会周期性假红，而每次只能靠调阈值糊过去，调着调着就什么都不守了。
+  改成按**排除了几个**判（阈值 15，当下最小的 `live` 排除 23 个，留了余量）。
+- `test_全链路档大_但仍然挡住那几条岔路` 的 `excluded >= 5` 改成 `>= 4`。
+  少的那一个正是 `lum_get_doc_spec` —— **它从注册表里消失了，不是被放进了这一档**，
+  而它那一条已经升级成上面那个 `not in NAMES`。
+
+### 14.6 差点把那 5 条数据删掉：模型没人 import 了
+
+`Document` 模型原本是靠 `api/documents.py` 那条 import 链进 `Base.metadata` 的。
+路由文件一删，**模型还在，但没有任何地方 import 它** —— metadata 里就没有这张表了。
+后果不是"少个功能"，是三件事：
+
+1. **`alembic revision --autogenerate` 会提议 `op.drop_table('documents')`**。
+   模型里没有、库里有 → autogenerate 认为这张表该删。合进去就是把那 5 条数据删掉，
+   而 diff 上只有一行。`alembic/env.py` 里那句
+   「**不 import 的话 autogenerate 会提议 DROP 掉它们**」写的就是这个坑，
+   只是这次是从相反方向踩进去的：不是忘了加 import，是删掉了唯一那条 import。
+2. `Base.metadata.create_all` 建的测试库里不再有这张表。
+3. `tests/unit/core/test_schema_invariants.py` 的 CASCADE 封样直接红
+   （`表名对不上，模型改过？缺：['documents']`）—— **是它先把这件事喊出来的**，
+   不然这个洞会一直躺到某次 autogenerate。
+
+修法：`app/models/__init__.py` 里显式 import 一次（那个文件此前是空的），
+并在 docstring 里写明它只放"没有别的地方会 import 它"的模型。
+放这儿而不是 `env.py`，是因为 `env.py` 和 `app.main` 两条路都会经过 `app.models`
+包的 `__init__` —— 一处补上，autogenerate 和运行时都盖到。
+
+**这条留给下一次下线用**：删一个模块的路由文件时，先问一句
+「这个模块的模型还有别人 import 吗」。表留着 ≠ 数据安全。
+
+后端单测 **1413 条全过**；根目录那套（打真接口）**498 条全过**
+（`DATABASE_URL` 用的独占库 `lumiere_test_doctakedown`）。
+
+### 14.7 页面自测（Playwright，断到内容不看状态码）
+
+| 验的 | 结果 |
+|---|---|
+| 左侧菜单里「API 接口」「文档管理」都没了 | ✅ |
+| 其余入口一个没少（下错比没下更糟） | ✅ 用例管理/测试计划/测试报告/探索测试都在 |
+| 老书签 `/projects/:id/documents` | ✅ 落到用例页且有正文 —— 全站没有兜底 404，不留重定向就是一片空白内容区 |
+| `/projects/:id/apis` 仍可直达 | ✅ 说好只下入口，页面原样在 |
+| 「能力总览」三条 doc-* 挪进「已下线 / 已封存」段 | ✅ 4 在用 / 9 已下线，在用段不再出现「文档管理」 |
+| 「Skill 管理」`lum-doc-generate` 卡片 | ✅ 标「已下线」、**没有「编辑」按钮**（SKILL.md 已删，露出来点下去就是 404） |
+| 页面 JS 报错 | ✅ 无 |
+
+**踩到一次假象，记一笔**：8756 上跑的后端是主仓的代码，不是这个 worktree 的。
+直接开页面看到的还是「7 在用 / 6 已下线」—— 那是**后端没重启**，不是改动没生效。
+分清这件事的办法是直接 import worktree 的 `CAPABILITY_REGISTRY` 数一遍
+（4 / 9），再把响应里的 `registry` 换成它验渲染路径。
+不分清就会得出"改了没用"的结论，然后回去改本来是对的代码。

@@ -96,12 +96,19 @@ const SKILLS = [
   {
     name: 'lum-doc-generate',
     title: '文档生成',
-    icon: <BookOutlined style={{ fontSize: 20, color: '#0ea5a0' }} />,
-    status: 'available',
-    description: '自动操作系统截图 + AI 写文档，支持平台直接生成和 Claude Code 两种方式',
-    input: '被测系统地址 + 账号密码 + 文档范围 + 目标读者',
-    output: '带截图的 Markdown 操作手册，可导出 HTML / ZIP',
-    where: '项目菜单「文档管理」→ 生成按钮',
+    icon: <BookOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
+    // 「文档管理」模块 2026-08-27 整体下线（docs/cc-platform-loop-spec.md §14）。
+    // 页面、路由、后端 /api/projects/{id}/documents/*、doc_generator.py、
+    // 这条 SKILL.md、MCP 的 lum_get_doc_spec 一并删了 —— 所以这里必须标
+    // retired：标"可用"会露出一个点了就 404 的编辑按钮（跟 lum-script-generate
+    // 当初一模一样的坑）。
+    status: 'retired',
+    description: '已下线。平台侧驱动浏览器截图 + AI 写文档这条路做得不好：'
+      + '截图靠通用启发式点菜单，认不准就截一堆列表页；文字是 AI 看图编的，'
+      + '没有需求做对照。要文档就在 Claude Code 里自己实操系统写，那边有真浏览器。',
+    input: '—',
+    output: '—',
+    where: '入口 2026-08-27 下线（原「文档管理」→ 生成按钮）',
     mcpTools: [],
   },
 ]

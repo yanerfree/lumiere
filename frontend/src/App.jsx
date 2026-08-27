@@ -46,12 +46,11 @@ import AICapabilities from './pages/settings/AICapabilities'
 import SkillManage from './pages/settings/SkillManage'
 import MCPTools from './pages/settings/MCPTools'
 import Exploratory from './pages/exploratory/Exploratory'
-import Documents from './pages/documents/Documents'
 import SystemServices from './pages/settings/SystemServices'
 
 const { Header, Sider, Content } = Layout
 
-// 「接口测试」模块 2026-08-15 下线后，老书签的落点。
+// 已下线模块（「接口测试」2026-08-15、「文档管理」2026-08-27）的老书签落点。
 // 不能写成 <Navigate to="../cases">：这些路由挂在 AppLayout 内层的第二个 <Routes> 里，
 // 相对路径的基准不是 /projects/:projectId，实测会跳到 /cases（丢掉项目前缀）—— 照样白屏。
 function RedirectToCases() {
@@ -112,7 +111,12 @@ function AppLayout() {
       key: 'g-design', icon: <FileTextOutlined />, label: t('menu.group.design'),
       children: [
         { key: `/projects/${projectId}/cases`, icon: <FileTextOutlined />, label: t('menu.cases') },
-        { key: `/projects/${projectId}/apis`, icon: <ApiOutlined />, label: t('menu.apis') },
+        // 「API 接口」菜单项 2026-08-27 下掉：单接口要验什么，用例那边
+        // （case_type=api 的步骤用例 + 绑用例的接口场景）已经全覆盖得到，
+        // 这个入口点进去只是同一批接口的另一种看法，多一条路反而要选。
+        // **只下入口** —— 接口库本身还在用：MCP 的 lum_list_api_tree /
+        // lum_create_api_node 在写它，「维护接口库」那一档就是干这个的；
+        // 路由 /projects/:projectId/apis 和页面都原样保留，存了书签的照样能进。
         { key: `/projects/${projectId}/qa-catalog`, icon: <FileSearchOutlined />, label: t('menu.qaCatalog') },
       ],
     },
@@ -125,7 +129,6 @@ function AppLayout() {
         // 不是设计期的东西。挂在用例导航的铅笔旁边太隐蔽，而它要能被跟进。
         { key: `/projects/${projectId}/review-report`, icon: <SearchOutlined />, label: t('menu.reviewReport') },
         { key: `/projects/${projectId}/exploratory`, icon: <BugOutlined />, label: t('menu.exploratory') },
-        { key: `/projects/${projectId}/documents`, icon: <FileTextOutlined />, label: t('menu.documents') },
       ],
     },
     {
@@ -333,7 +336,10 @@ function AppLayout() {
             <Route path="/projects/:projectId/settings/skills" element={<SkillManage />} />
             <Route path="/projects/:projectId/settings/mcp-tools" element={<MCPTools />} />
             <Route path="/projects/:projectId/exploratory" element={<Exploratory />} />
-            <Route path="/projects/:projectId/documents" element={<Documents />} />
+            {/* 「文档管理」2026-08-27 下线（见 docs/cc-platform-loop-spec.md §14）。
+                和「接口测试」那次同一个处理：留重定向而不是直接删路由，
+                全站没有兜底 404，存了书签的人点进来会看到一片空白内容区。 */}
+            <Route path="/projects/:projectId/documents" element={<RedirectToCases />} />
             {/* 「接口测试」模块 2026-08-15 下线（见 docs/cc-platform-loop-spec.md §11）。
                 留一条重定向而不是直接删路由：全站没有兜底 404，存了书签的人点进来
                 会看到一片空白内容区 —— 不报错也不说话，比 404 还难判断发生了什么。

@@ -63,11 +63,14 @@ CAPABILITY_REGISTRY = [
     # 「探索测试流量 → 编排为接口测试」走的是同一个 /generate 端点。
     {"key": "api-test-generate",       "label": "接口场景编排生成",     "category": "text",      "where": "用例详情 → 探索流量 →「编排为接口测试」"},
     {"key": "pytest-script",           "label": "pytest 脚本生成",      "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "入口是已删除的 AIScriptModal"},
-    {"key": "doc-generate",            "label": "文档生成",             "category": "text",      "where": "文档管理 →「新建文档」"},
-    {"key": "doc-generate-screenshots","label": "文档带截图生成",       "category": "text",      "where": "文档管理 →「新建文档」勾选自动截图"},
-    # 2026-08-09 接上入口：原来只有「重新生成」（会重新登录重新截图），
-    # 这条"保留截图只重写文字"的路没有任何调用方。现在两个按钮并列，各说各的代价。
-    {"key": "doc-optimize",            "label": "文档优化",             "category": "text",      "where": "文档管理 → 优化文字"},
+    # 「文档管理」模块 2026-08-27 整体下线（docs/cc-platform-loop-spec.md §14）：
+    # 页面 / 路由 / api/documents.py / services/doc_generator.py / lum-doc-generate
+    # 那份 SKILL.md / MCP 的 lum_get_doc_spec 全删了，documents 表和迁移留着不动。
+    # **三条 key 都不删** —— 见上面那段：删了 category_of() 会走 .get(cap,"text") 兜底，
+    # 而且页面上"曾经有过这个能力、为什么没了"这件事本身要留在清单里。
+    {"key": "doc-generate",            "label": "文档生成",             "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "2026-08-27 随「文档管理」下线：平台侧驱动浏览器截图 + AI 看图编文字，写得对不对没有对照物。要文档在 Claude Code 里自己实操系统写"},
+    {"key": "doc-generate-screenshots","label": "文档带截图生成",       "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "同上，截图那条支路一并下线"},
+    {"key": "doc-optimize",            "label": "文档优化",             "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "同上。它是「保留截图只重写文字」那条路，随模块一起没了"},
     {"key": "exploratory-charter",     "label": "探索测试 Charter 生成","category": "text",      "where": "探索测试 →「AI 生成章程」"},
     # 2026-08-09 实测：这条功能一直是通的（页面上「正则测试 → AI 生成」真能出结果），
     # 之前标成"已下线"是因为端点直接 complete() 没带 capability —— 档位绑了模型也不生效。

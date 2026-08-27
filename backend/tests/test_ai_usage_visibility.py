@@ -40,7 +40,7 @@ def test_原来没记账的链路都补上了():
     """一条一条对：谁在调 AI，谁就得留下调用记录。"""
     root = Path(__file__).resolve().parents[1] / "app"
     checks = {
-        "api/documents.py": ["doc-generate", "doc-generate-screenshots", "doc-optimize"],
+        # api/documents.py 2026-08-27 随「文档管理」整个删掉，三条 doc-* 能力标 deprecated。
         "api/exploratory.py": ["exploratory-charter"],
         "api/toolbox.py": ["toolbox-regex"],
         "services/ai/api_scenario_gen_service.py": ["api-test-generate"],
@@ -296,6 +296,9 @@ def test_SkillManage状态跟注册表对齐():
         "AI 脚本生成没有 skill 文件，标『可用』会露出一个点了 404 的编辑按钮"
     assert _status_of("lum-quality-review") == "available", \
         "质量评审（AI 审核）是全平台唯一高频调用的能力，不该标『规划中』"
+    assert _status_of("lum-doc-generate") == "retired", \
+        "「文档管理」2026-08-27 整个下线（含 SKILL.md 文件本身），标『可用』" \
+        "会露出一个点了就 404 的编辑按钮"
     assert _status_of("lum-explore") == "inline", \
         "探索测试的章程生成已经上线（内联 prompt），标『规划中』是说反了；" \
         "但也不能标『可用』——那会露出一个查无 skill 文件、点了 404 的编辑按钮"
