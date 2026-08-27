@@ -46,10 +46,13 @@ const ACTION_CONFIG = {
   refresh_token_reuse_detected: { label: '令牌复用', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
 }
 
-const TARGET_TYPES = ['user', 'project', 'branch', 'case', 'plan', 'environment', 'channel']
+// api_node 是 2026-08-27 补上的：接口库那张表以前的写入一个字都不记，
+// 于是「接口库还在被 MCP 写吗」这种问题只能靠猜。筛这一项就能直接看见
+// 是页面点的还是 MCP 写的（看「操作人」列那个 CC · xxx 来源标签）。
+const TARGET_TYPES = ['user', 'project', 'branch', 'case', 'api_node', 'plan', 'environment', 'channel']
 const TARGET_TYPE_LABELS = {
   user: '用户', project: '项目', branch: '分支配置', case: '用例',
-  plan: '计划', environment: '环境', channel: '通知渠道',
+  api_node: '接口库', plan: '计划', environment: '环境', channel: '通知渠道',
 }
 
 /** 详情抽屉里的一行「标签 值」。标签定宽，值换行时不会跑到标签下面。 */

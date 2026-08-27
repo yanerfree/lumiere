@@ -85,8 +85,8 @@ export default function BranchSelector({ projectId }) {
       if (stats) {
         const parts = []
         if (stats.cases) parts.push(`用例 ${stats.cases.cases} 条`)
-        if (stats.apis) parts.push(`API 接口 ${stats.apis.nodes} 个`)
-        if (stats.apiTest) parts.push(`接口测试 ${stats.apiTest.scenarios} 个场景`)
+        if (stats.apis) parts.push(`接口库 ${stats.apis.nodes} 个节点`)
+        if (stats.apiTest) parts.push(`接口场景 ${stats.apiTest.scenarios} 个`)
         message.success(`分支已创建${parts.length ? '，已复制：' + parts.join('、') : ''}`)
       } else {
         message.success('分支已创建')
@@ -159,8 +159,10 @@ export default function BranchSelector({ projectId }) {
               <Form.Item name="copyModules" label="复制模块" initialValue={['cases', 'apis', 'api_test']}>
                 <Checkbox.Group options={[
                   { label: '用例管理（文件夹+用例）', value: 'cases' },
-                  { label: 'API 接口（接口树）', value: 'apis' },
-                  { label: '接口测试（文件夹+场景+步骤）', value: 'api_test' },
+                  // 这两条挨着放，措辞必须把「文档」和「可执行」分开写清楚 ——
+                  // 原来叫「API 接口」和「接口测试」，只差一个字，真被搞混过（2026-08-27）。
+                  { label: '接口库（接口文档树·不可执行）', value: 'apis' },
+                  { label: '接口场景（绑用例的编排链·可执行）', value: 'api_test' },
                 ]} />
               </Form.Item>
             ) : null}

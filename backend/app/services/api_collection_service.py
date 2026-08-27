@@ -1,11 +1,41 @@
-"""API 接口管理 — 服务层"""
+"""接口库（API 接口文档）— 服务层。
+
+**这里的每个写操作都要留痕**，别再往下加不记账的写函数。
+
+2026-08-27 撞过一次：有人问「接口库还在被 MCP 写吗」，而这张表当时**一个字
+都不记** —— 操作日志里查不到任何 api_node 的行，于是只能靠"库里 12 个节点全
+叫『新建接口』，那是页面新建的默认名，而 `lum_create_api_node` 的 name 是必填
+参数不可能长这样"这种**间接推断**来回答。推断碰巧对了，但那是运气：
+一个查不出来的事实，等于一个可以随便断言的事实，谁写在注释里就算谁的。
+
+记了之后这就是「操作日志 → 对象类型=接口库」筛一下的事，
+来源那一列直接分得出「页面点的」还是「MCP 写的」（actor_type 由
+`app/mcp/middleware.py` 的 on_call_tool 统一注入，所有 lum_* 工具都带）。
+"""
 
 import uuid
 
 from sqlalchemy import select, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.audit import write_audit_log
 from app.models.api_collection import ApiNode
+
+
+async def _audit_node(session: AsyncSession, action: str, node: ApiNode, **extra) -> None:
+    """记一条接口库的写操作。见文件头 —— 这张表的写入必须能被查出来。"""
+    changes = {"nodeType": node.node_type}
+    if node.node_type == "endpoint":
+        # url 一起记：接口库里真正会被人误会的就是"有没有填 url"
+        # （录了一堆只有名字、没有 url 的空节点，看上去像"有接口"）。
+        changes["method"] = node.method
+        changes["url"] = node.url or ""
+    changes.update(extra)
+    await write_audit_log(
+        session, action=action, target_type="api_node",
+        target_id=node.id, target_name=node.name,
+        project_id=node.project_id, changes=changes,
+    )
 
 
 async def list_tree(session: AsyncSession, project_id: uuid.UUID, branch_id: uuid.UUID | None = None) -> list[dict]:
@@ -46,6 +76,7 @@ async def create_node(
     session.add(node)
     await session.flush()
     await session.refresh(node)
+    await _audit_node(session, "create", node)
     return _to_dict(node)
 
 
@@ -55,11 +86,16 @@ async def update_node(
     node = await session.get(ApiNode, node_id)
     if not node:
         return None
+    touched = []
     for k, v in data.items():
         if v is not None and hasattr(node, k):
             setattr(node, k, v)
+            touched.append(k)
     await session.flush()
     await session.refresh(node)
+    # 记改了哪几个字段，不记新旧值 —— body/headers 可能很大，
+    # 塞进 changes 会把审计表撑爆，而"谁改了它"这个问题只需要字段名。
+    await _audit_node(session, "update", node, fields=",".join(touched) or "-")
     return _to_dict(node)
 
 
@@ -67,6 +103,9 @@ async def delete_node(session: AsyncSession, node_id: uuid.UUID) -> bool:
     node = await session.get(ApiNode, node_id)
     if not node:
         return False
+    # 删之前先记账：delete + flush 之后 node 上的属性会过期，
+    # 那时候再读就只剩一条查不出对象名的空日志。
+    await _audit_node(session, "delete", node)
     # DB 外键 ON DELETE CASCADE 会级联删除子节点
     await session.execute(delete(ApiNode).where(ApiNode.id == node_id))
     await session.flush()
@@ -99,6 +138,7 @@ async def duplicate_node(
     session.add(node)
     await session.flush()
     await session.refresh(node)
+    await _audit_node(session, "create", node, via="duplicate")
     return _to_dict(node)
 
 
@@ -203,6 +243,9 @@ async def import_postman(
         await session.refresh(root)
         await _parse(items, root.id)
         await session.flush()
+        # 整批记一条，不是每个节点一条：一个 Postman collection 动辄上百个接口，
+        # 逐条记会把操作日志冲成一片，反而看不出"谁导入过什么"。
+        await _audit_node(session, "import", root, imported=count)
 
     return count
 
@@ -219,6 +262,13 @@ async def batch_sort(session: AsyncSession, items: list[dict]):
             )
         )
     await session.flush()
+    # 拖排序也算写。整批记一条 —— 拖一次动十几个节点，
+    # 逐条记只会把日志刷满，而"谁动过这棵树"一条就够回答。
+    # 借第一个节点解出 project_id（多一次主键查询，只在真拖过时走）。
+    if items:
+        first = await session.get(ApiNode, items[0]["id"])
+        if first is not None:
+            await _audit_node(session, "reorder", first, nodes=len(items))
 
 
 def _to_dict(node: ApiNode) -> dict:
