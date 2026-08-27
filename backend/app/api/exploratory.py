@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.common import BaseSchema
 from app.core.exceptions import NotFoundError
-from app.deps.auth import get_current_user, require_project_role
+from app.deps.auth import require_project_role
 from app.deps.db import get_db
 from app.models.user import User
 from app.models.exploratory import ExploratorySession, ExploratoryFinding
@@ -64,7 +64,7 @@ def _session_to_dict(s: ExploratorySession) -> dict:
 async def list_sessions(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
 ):
     result = await session.execute(
         select(ExploratorySession)
@@ -100,7 +100,7 @@ async def get_session(
     project_id: uuid.UUID,
     session_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
 ):
     exp = await session.get(ExploratorySession, session_id)
     if not exp or exp.project_id != project_id:

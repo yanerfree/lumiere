@@ -12,7 +12,13 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import AppError, NotFoundError
-from app.deps.auth import get_current_user, require_role
+from app.deps.auth import get_current_user, require_project_role, require_role
+
+# 项目级 AI 配置带 {project_id}，此前只校验登录 → 任意登录用户可把**别人项目**的 AI 通道
+# 改到自己的端点，用例/需求随生成请求外泄。补项目级成员校验。
+# （系统级 /api/ai-providers 的读仍是登录即可——那是给所有人挑通道用的。）
+_AIC_READ = ("project_admin", "developer", "tester", "guest")
+_AIC_WRITE = ("project_admin", "developer", "tester")
 from app.deps.db import get_db
 from app.models.ai_provider_config import AIProviderConfig, ProjectAIConfig
 from app.models.user import User
@@ -355,7 +361,7 @@ async def _do_test_connection(
 async def get_project_ai_config(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_role(*_AIC_READ)),
 ):
     result = await session.execute(
         select(ProjectAIConfig).where(ProjectAIConfig.project_id == project_id)
@@ -407,7 +413,7 @@ async def select_system_config_for_project(
     project_id: uuid.UUID,
     provider_config_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_role(*_AIC_WRITE)),
 ):
     provider = await session.get(AIProviderConfig, provider_config_id)
     if not provider:
@@ -454,7 +460,7 @@ async def create_project_custom_config(
     project_id: uuid.UUID,
     body: ProjectCustomConfigCreate,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_role(*_AIC_WRITE)),
 ):
     await session.execute(
         update(ProjectAIConfig).where(ProjectAIConfig.project_id == project_id).values(is_active=False)
@@ -492,7 +498,7 @@ async def test_project_custom_config(
     project_id: uuid.UUID,
     config_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_role(*_AIC_WRITE)),
 ):
     config = await session.get(ProjectAIConfig, config_id)
     if not config or config.project_id != project_id:
@@ -515,7 +521,7 @@ async def delete_project_custom_config(
     project_id: uuid.UUID,
     config_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_role(*_AIC_WRITE)),
 ):
     config = await session.get(ProjectAIConfig, config_id)
     if not config or config.project_id != project_id:
