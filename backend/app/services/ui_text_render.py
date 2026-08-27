@@ -41,6 +41,11 @@ def text_key(ref: str) -> str | None:
 
     门禁和渲染共用这一个判据 —— 各写一份正则的代价已经付过一次了。
     """
+    if ref.startswith("SEL:"):
+        # 选择器占位 ${SEL:键} 归 ui_selector_render 管，**不是文案键**。
+        # 不排掉的话 `SEL:用例列表.新建按钮` 会被当成命名空间叫 SEL 的文案键，
+        # 被文案门禁硬拦成"这个键词典里没有"—— 而人根本找不到该去哪登记它。
+        return None
     if ref.startswith("T:") and _looks_key(ref[2:]):
         ref = ref[2:]                  # 历史写法；命名空间真叫 T 的话另说，没有这种
     return ref if _looks_key(ref) else None

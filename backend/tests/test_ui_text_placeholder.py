@@ -116,17 +116,24 @@ def test_本地跑有工具可用():
     assert "lum_render_ui_script(case_id" in spec
 
 
-def test_渲染出来的文件三样都烧进去():
-    """用户的判据：下载下来就该能直接跑。所以文案、os.getenv 默认值、
-    被测系统的语种开关，三样都得在同一个文件里 —— 少任何一样本地就是红的。
-    （第一版只渲染了文案，本地跑照样红：脚本英文了、系统还说中文。）"""
+def test_渲染出来的文件四样都烧进去():
+    """用户的判据：下载下来就该能直接跑。所以选择器、文案、os.getenv 默认值、
+    被测系统的语种开关，四样都得在同一个文件里 —— 少任何一样本地就是红的。
+    （第一版只渲染了文案，本地跑照样红：脚本英文了、系统还说中文。）
+
+    **顺序也封在这里：先选择器、再文案。** 登记表的值本身可以带文案占位
+    （`text=${services.action.more|更多}`），顺序反了那一层就换不掉，
+    而换不掉的占位让「不应出现」那类断言假绿。"""
     import inspect
 
     from app.mcp.tools import ui_scripts
     src = inspect.getsource(ui_scripts.render_ui_script)
-    assert "render(script.content" in src, "① 文案"
-    assert "os.getenv" in src and "build_run_env" in src, "② 环境变量默认值"
-    assert "add_init_script" in src and "def context(context)" in src, "③ 语种开关写进同一个文件"
+    assert "_render_sel(session, cid, script.content)" in src, "① 选择器（从原文起算）"
+    assert "render(_content0" in src, "② 文案（吃选择器渲染的产物，顺序不能反）"
+    assert src.index("_render_sel(") < src.index("render(_content0"), "顺序：先选择器再文案"
+    assert "os.getenv" in src and "build_run_env" in src, "③ 环境变量默认值"
+    assert "add_init_script" in src and "def context(context)" in src, "④ 语种开关写进同一个文件"
+    assert "selectorsUnresolved" in src, "没解析出来的选择器要回给调用方"
 
 
 def test_凭据默认不烧进返回内容():

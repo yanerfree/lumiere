@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, documents, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff, qa_catalog, selectors
 
 mcp = FastMCP(
     name="Lumiere",
@@ -293,26 +293,6 @@ case_type 默认就是 e2e。
   · **多角色的步骤加 [管理员] / [租户] 标记**
   · **P0 占比压在 15% 以内** —— 这条现在真的没人拦你（原来的批量闸门
     随平台侧生成一起停了），全靠你自己分级。什么都 P0 等于没分级。
-
-当用户要求生成操作文档 / 演示文档 / 验收文档时，按以下流程执行：
-
-第一步：取规范
-- 调用 lum_get_doc_spec(doc_type) 获取平台规范：doc_type 传 manual(操作手册)/demo(演示文档)/acceptance(验收文档)
-- 返回的 playbook 是完整可执行的操作指南，template 是必须严格遵循的格式模板
-
-第二步：收集参数（缺什么问用户）
-- system_url(系统地址)、username/password(登录账号)、modules(文档范围)、audience(目标读者)、title(标题)
-
-第三步：实操系统并截图（关键，不能编造）
-- 优先用 Playwright MCP 浏览器工具(browser_navigate/browser_take_screenshot/browser_click/browser_type)真实操作系统
-- 若无浏览器工具，用 Bash 跑 Playwright 脚本代替
-- 截图存到当前项目 docs/screenshots/ 目录：登录页→首页→每个目标模块的列表页和新增弹窗
-
-第四步：按模板写文档并落盘
-- 严格套用 lum_get_doc_spec 返回的 template 的章节编号/层级/顺序
-- 每张截图用相对路径 ![](screenshots/NN_xxx.png) 引用，紧接一行 *图：说明*
-- 操作步骤具体到按钮名称、输入内容、预期结果；禁止模糊词；禁止写死具体 URL
-- 保存为 docs/{title}.md
 
 当用户要求把本项目的 skill 传到平台 / 从平台取 skill 时：
 
@@ -760,15 +740,13 @@ _register(
 )
 
 
-# ── 文档生成规范工具 ──────────────────────────────
-
-_section("文档规范")
-
-_register(
-    documents.get_doc_spec,
-    name="lum_get_doc_spec",
-    description="获取文档生成规范：操作流程 + 格式模板 + 写作规则。外部 Claude Code 用它按平台模板、实操被测系统、截图贴图生成操作/演示/验收文档。参数: doc_type(manual操作手册/demo演示文档/acceptance验收文档，默认manual)",
-)
+# lum_get_doc_spec（发文档模板给外部 CC，让它实操系统截图写文档）2026-08-27
+# 随「文档管理」模块一起下线，**别加回来**。它和平台侧生成共用同一份
+# lum-doc-generate/SKILL.md 切片当模板（_load_format_template），那份 SKILL.md
+# 已经删了 —— 单留这个工具就是发一份不存在的模板。
+# 下线理由见 docs/cc-platform-loop-spec.md §14：不是"没人用"，是这条产物没有
+# 对照物 —— 文档写得对不对没有任何东西能判，而平台这边连它有没有被写出来都不知道。
+# 要写文档就在 Claude Code 里直接写，那边有真浏览器、有仓库、有需求。
 
 
 # ── 回推同步工具（活体验证成果写回）──────────────────
@@ -826,6 +804,41 @@ _register(
 )
 
 _register(
+    selectors.upsert_selectors,
+    name="lum_upsert_selectors",
+    description=(
+        "【登记选择器·UI 脚本别再写字面量】把 UI 定位用的选择器登记成**项目公共资产**"
+        "（按 key upsert）。脚本里写 `page.locator(\"${SEL:用例列表.新建按钮}\")`，"
+        "平台执行前替换成登记表里那条 —— 前端改名只改这一行，全项目脚本跟着好；"
+        "写在正文里就得逐条改 N 遍，而**改漏了当场不报错**，等回归红了才发现，"
+        "那时已经分不清是产品坏了还是脚本过期了。本地跑先 lum_render_ui_script 渲一份。\n"
+        "kind 是**稳定性等级**不是分类：testid/id/role/semantic 稳，structure 会飘，"
+        "text 换语种必挂（选择器值里写 ${键|中文} 占位），**style 样式类最脆**"
+        "（`.card.card-pad`、`.ant-modal` 是给人看好看的，改版随手就变）。不传自动判。\n"
+        "⚠ **前端压根没给抓手时写 status='gap' + gap_note + blocked_cases，"
+        "别硬塞一个样式类当 active。** 该做的是去被测前端仓补 data-testid 并提 MR；"
+        "gap 行会进 lum_next_duty 的「待补 testid」队列留痕，MR 合了回来把 selector 填上、"
+        "status 改 active，blocked_cases 里那几条用例会自动变成「回来写 UI」的待办，"
+        "直到真推了脚本才消失。不留痕的话「没抓手」就只是一句"
+        "口头的\"以后再说\"，然后永远没有以后。\n"
+        "参数: project_id, items([{key(必填), selector, kind, module, description, "
+        "status(active/gap), gap_note, blocked_cases([用例编号])}])"
+    ),
+)
+
+_register(
+    selectors.list_selectors,
+    name="lum_list_selectors",
+    description=(
+        "【看选择器登记表 + 两笔欠账】列出项目登记的选择器（含按稳定性分档的条数），"
+        "外加 **待整改**：项目里哪些 UI 脚本正文还写死着脆弱的样式类选择器、各几处 —— "
+        "换成 ${SEL:键} 回推之后它自己从清单上消失。缺 testid 的口子看 status='gap' 那些"
+        "（也在 lum_next_duty 里）。写 UI 脚本前先调一次，别自己现编选择器。"
+        "参数: project_id(项目UUID), module(可选), status(可选 active/gap)"
+    ),
+)
+
+_register(
     sync.list_global_data,
     name="lum_list_global_data",
     description="【回推前查】汇总项目级**可引用**全局数据（全局变量+各环境变量键+自动化共享资源，凭证脱敏），帮你判断哪些走 global_ref、哪些别写死。**传 probe=true + env_id 会在该环境上真探测一遍共享资源**，每条给出 state：exists=探到了(附 extract 抽出的 values) / missing=确实没有，照它的 createDef 你自己调接口造出来（造完不用改配置，existsCheck 下次自然探得到）/ unknown=平台没查成(401、5xx、超时)，**别动它**——一次 token 过期就照 createDef 补建，会在被测环境造出一堆重复底座且 keep=true 没人清理。**补建按入口分，别记成一句全局结论**：这个工具（以及页面、预检）**只探不建**，只告诉你缺了什么、当初怎么造的；而**接口场景/UI 脚本真正执行之前**，探到 missing 且登记过 createDef 的，平台会**照它补建再复探一次**（见 api_test_runner 的 _auto_create_resource，补了会在运行结论里明说）。所以这里报 missing 不等于跑的时候还缺。参数: project_id(项目UUID), env_id(可选，probe=true 时必填), probe(默认false)",
@@ -852,6 +865,25 @@ _register(
     skills.pull_skill,
     name="lum_pull_skill",
     description="【把平台上的 skill 取到本地】拿一个 skill 的全文和附属文件，返回里带 writeTo 落盘路径(.claude/skills/<name>/SKILL.md)，照着写文件即可。定位二选一：skill_id(推荐,跨项目取用用它,要求该 skill 是 public)，或 project_id + name(取自己项目的,不受 public 限制)。参数: skill_id(可选), project_id(可选), name(可选)",
+)
+
+
+_section("QA 仓对账")
+
+_register(
+    qa_catalog.get_qa_review,
+    name="lum_get_qa_review",
+    description="【QA 那边取评审结论】拿平台对 QA 仓某个**域**做的 AI 评审全文。"
+                "它答的是 QA 自己的 check-coverage.sh 答不了的那一层：脚本头写了 @scenario 就算「已覆盖」，"
+                "但**正文到底有没有验到那件事** —— 只 curl 一下看 200、只断状态码不看内容、"
+                "改了数据不读回来确认，在门禁那边全是绿的。"
+                "返回里的 `evidence` 是从脚本正文**原样抄**的锚点，直接 grep 就能定位到要改的那一句。"
+                "⚠ **平台对 QA 仓永远只读**：这里只把结论递给你，不会往那个仓库写任何东西；"
+                "拿到之后放不放进仓库、放哪，是你那边的决定。**结论是建议，不是门禁**，"
+                "平台这边没有任何东西会因为它变红或变绿。"
+                "不传 domain = 列出每个域最近一次评了什么（带 verdict 和一句话结论），再按域取全文。"
+                "参数: project_id(项目UUID), domain(可选，域码如 'MCP'), review_id(可选，复核历史结论用), "
+                "format(md=Markdown全文，默认 / json=结构化的 scriptGaps/envMissing/nextUp)",
 )
 
 

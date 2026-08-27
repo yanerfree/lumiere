@@ -86,9 +86,18 @@ async def next_duty(session: AsyncSession, branch_id: str, limit: int = 10) -> d
     # 上下文就没了，续不上），所以从 endpoint_diff_* 两张表读回来。
     to_revise, to_cover_new, awaiting_human = await _diff_duties(session, bid, cases, limit)
 
+    # ⑧⑨ 选择器登记表带来的两个队列。**这一对是配套的，缺一个就断链**：
+    # 「待补 testid」说的是被测前端缺抓手（UI 脚本写不下去），
+    # 「回来写 UI」说的是抓手补上了、但当初为它让路的那几条用例还没人回来写完。
+    # 后者是整件事最容易烂尾的地方 —— 前端 MR 一合，"缺 testid"这个借口就消失了，
+    # 而没人会主动想起还有几条用例欠着。所以它自消：**真有 active 的 UI 脚本才出队**。
+    from app.mcp.tools.selectors import selector_gaps_for_branch
+    to_fix_testid, to_resume_ui = await selector_gaps_for_branch(session, bid)
+
     counts = {"待归因": len(to_analyze), "待复跑": len(to_rerun),
               "待处理接口变动": len(to_revise), "待补用例": len(to_cover_new),
               "待补场景": len(to_cover), "待自证": len(to_selfcheck),
+              "待补 testid": len(to_fix_testid), "回来写 UI": len(to_resume_ui),
               "等人拍板的废弃": len(awaiting_human)}
     order = [k for k, v in counts.items() if v]
     return {
@@ -100,11 +109,17 @@ async def next_duty(session: AsyncSession, branch_id: str, limit: int = 10) -> d
         "待补用例": to_cover_new[:limit] or None,
         "待补场景": to_cover,
         "待自证": to_selfcheck[:limit],
+        "待补 testid": to_fix_testid[:limit] or None,
+        "回来写 UI": to_resume_ui[:limit] or None,
         "等人拍板的废弃": awaiting_human[:limit] or None,
         "usage": "待归因堵得最死（不判原因，后面全卡着）；待复跑最便宜（跑一遍就可能关单）；"
                  "待处理接口变动是版本升级对账算出来的，一条条改（**预期按新版本的需求写，"
                  "不是按新版本的实测抄**）；待补用例是新版本的新端点，谁都没覆盖它；"
-                 "待补场景是攒出来的欠账，被提到次数越多越该补。"
+                 "待补场景是攒出来的欠账，被提到次数越多越该补；"
+                 "**待补 testid 是要去被测前端仓提 MR 的**（不是在平台里改），"
+                 "合了之后把那条选择器改成 active；"
+                 "**回来写 UI 是最容易烂尾的一条** —— 抓手已经有了、"
+                 "当初为它让路的用例还欠着 UI 脚本，写完跑通它自己出队。"
                  "**别自己关单**：跑绿了平台自动关；要强行放过就人工关闭并写原因。",
     }
 
