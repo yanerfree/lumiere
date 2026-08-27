@@ -1,7 +1,7 @@
 """给角色列加 CHECK 约束：固化合法取值，DB 层兜底
 
 Revision ID: zzw0roleck
-Revises: zzv0lumren
+Revises: zzw0selreg
 
 权限大改「先固化 + 留接口」的第一步：把「角色只能是这几个值」从口头约定变成
 数据库约束。应用层 Pydantic 也拦一道，但那只挡走 API 的写；直接 SQL / 脚本 / 将来
@@ -18,7 +18,7 @@ Revises: zzv0lumren
 from alembic import op
 
 revision = "zzw0roleck"
-down_revision = "zzv0lumren"
+down_revision = "zzw0selreg"
 branch_labels = None
 depends_on = None
 
