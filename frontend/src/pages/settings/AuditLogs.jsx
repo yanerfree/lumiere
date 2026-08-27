@@ -110,11 +110,13 @@ export default function AuditLogs() {
 
   const columns = [
     {
-      title: '操作人', dataIndex: 'username', width: 132, align: 'center',
+      // 180 不是随手加的：最长的一条 actorLabel 是「ai-admin项目使用」(8 拉丁 + 4 汉字)，
+      // 11px 下标签整体约 134px，加两侧单元格 padding 32 → 166 才刚够。留到 180。
+      title: '操作人', dataIndex: 'username', width: 180, align: 'center',
       // 光有 username 分不出是哪台 CC —— 建 Key 的接口只能给自己建，
       // 所有 CC 的 Key 归属人都是同一个（通常是 admin）。actorLabel 是那把 Key 的名字，
       // 它才是「哪个连接」的身份，所以跟人名并列显示，而不是藏进详情。
-      // 标签另起一行而不是跟人名并排：并排时这一列得留到 230px 才不截断，
+      // 标签另起一行而不是跟人名并排：并排时这一列得留到 280px 才不截断，
       // 每行还高低不齐；只有小半数行有标签，那些宽度全是白占的。
       render: (v, r) => (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
@@ -123,7 +125,7 @@ export default function AuditLogs() {
             <Tooltip title={`外部 Claude Code 通过 MCP 调用${r.actorLabel ? `，连接：${r.actorLabel}` : '（该 Key 未命名）'}`}>
               <Tag style={{
                 color: '#7c5cbf', background: 'rgba(124,92,191,0.08)', border: 'none',
-                fontSize: 11, margin: 0, maxWidth: 116, overflow: 'hidden',
+                fontSize: 11, margin: 0, maxWidth: 148, overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>CC · {r.actorLabel || '未命名'}</Tag>
             </Tooltip>

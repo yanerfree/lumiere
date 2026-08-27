@@ -2236,16 +2236,36 @@ setup 半路挂掉时事务是坏的，不先 `rollback()` 清理语句一条都
 「某个接口的参数/权限」，绑用例的接口场景负责真跑。菜单里那个「API 接口」点进去
 是**同一批接口的另一种看法** —— 多一条路，进去的人反而要先选一次。
 
-**但接口库本身是活的**，别顺手连它一起删：MCP 的 `lum_list_api_tree` /
-`lum_create_api_node` 在写它，「维护接口库」那一档（`apidoc`）就是干这个的，
-编排接口场景之前查「这个接口怎么调」也走它。所以：
+> **⚠ 更正（同日，用户问「mcp 用的不是场景的嘛」之后查的）。**
+> 这一节原来写的是「接口库本身是活的，MCP 的 `lum_list_api_tree` /
+> `lum_create_api_node` 在写它」。**不对 —— 库里没有任何 MCP 写入的痕迹。**
+>
+> | 查的 | 结果 |
+> |---|---|
+> | `api_nodes` 总数 / 最后写入 | **12 条**，最后 **2026-07-10**（7 周前） |
+> | 这 12 条叫什么 | 全是 `新建接口` / `新建文件夹` —— 页面点"新建"的默认名 |
+> | 7 个 `endpoint` 的 `url` | **一个都没填**（`count(*) filter (where url='') = 7`） |
+> | MCP 写过什么 | `audit_logs` 里 `actor_type='mcp'` **只有 `case`**：159 条，最新今天 |
+> | 绑用例的接口场景 | **52 条，52 条都绑了用例**，最新今天 |
+>
+> `lum_create_api_node` 的 `name` 是必填参数，MCP 调用不可能留下
+> 「新建接口」这种页面默认名 —— 所以这 12 条**全是人在页面上点出来的空壳**。
+> 结论倒过来说：**MCP 用的是用例 + 绑用例的接口场景，不是接口库**，
+> 跟「接口场景只有一种：绑用例的编排链」那条红线本来就是一致的。
+>
+> 那为什么还留着路由和页面？理由换了一个：**只是让存了书签的人别白屏**，
+> 不是「还在被用」。工具和 `apidoc` 档位也留着 —— 它们是只读查询为主
+> （`lum_get_api_node` 在"编排前查这个接口怎么调"时确实有用），
+> 删工具是另一件事，要单独决定，别夹在下入口这一笔里做掉。
+
+所以：
 
 | | 处理 |
 |---|---|
 | `App.jsx` 里 `menu.apis` 菜单项 | 删（连原因一起写在原地） |
 | `/projects/:projectId/apis` 路由 + 页面 | **原样保留**，存了书签的照样能进 |
 | `i18n.jsx` 的 `menu.apis` 键 | **留着**，恢复入口时不用再翻一遍 |
-| 接口库表 / MCP 工具 / `apidoc` 档位 | 一个字没动 |
+| 接口库表 / MCP 工具 / `apidoc` 档位 | 一个字没动（见上面的更正：留着的理由不是"在被写"） |
 
 ### 14.2 「文档管理」为什么整个下
 
@@ -2362,3 +2382,114 @@ setup 半路挂掉时事务是坏的，不先 `rollback()` 清理语句一条都
 分清这件事的办法是直接 import worktree 的 `CAPABILITY_REGISTRY` 数一遍
 （4 / 9），再把响应里的 `registry` 换成它验渲染路径。
 不分清就会得出"改了没用"的结论，然后回去改本来是对的代码。
+
+## 15. 「探索测试」下线（2026-08-27）
+
+用户的原话是「**具体还要看这个功能做的怎么样，如果不太好直接下掉，
+如果还可以就抽出来一个 mcp**」。查完是前者，理由不是"没人用"（那是结果不是原因），
+是**它的输出跟被测系统没有关系**。
+
+### 15.1 它实际产出什么
+
+链路是四步：建会话 →「AI 生成章程」→ 人逐项勾检查点 → 生成总结报告。
+`POST /sessions/{id}/generate-charter` 喂给模型的上下文只有两样：
+
+```python
+api_tree = await api_endpoints.list_api_tree(session, str(project_id))
+endpoints = [n for n in api_tree if n.get("type") == "endpoint"]
+api_text = "\n".join(f"- {ep['method']} {ep['url']} ({ep['name']})" for ep in endpoints[:20])
+# → f"目标模块: {target_module}\n时间限制: {n}分钟\n\n项目API接口:\n{api_text or '（无录入）'}"
+```
+
+**而接口库全库 7 个 `endpoint` 的 `url` 一个都没填**（见 §14.1 的更正表）。
+有探索会话的那个项目里两个接口，拼出来的原文逐字是：
+
+```
+- GET  (新建接口)
+- GET  (新建接口)
+```
+
+也就是说模型真正拿到的上下文**就是模块名那几个字**。出来的东西自然长这样
+（库里那条真章程的原文，不是编的）：
+
+| 检查点 | |
+|---|---|
+| 1 用户创建功能 | 必填字段验证、重复用户检测、特殊字符处理 |
+| 2 用户信息查询 | 列表展示、搜索过滤、分页功能、权限隔离 |
+| 6 边界值与异常处理 | 空值、超长输入、SQL注入、XSS攻击、并发操作 |
+
+**换任何一个系统的"用户管理"模块，这份章程逐字都成立。** 它不是探索的结果，
+是"用户管理该测什么"的通用清单 —— 那种清单模型不看系统也写得出来，
+所以它没有把任何信息从被测系统里搬出来。
+
+### 15.2 章程之后没有执行
+
+章程只是文字。勾检查点（`complete-checkpoint`）、写发现（`findings`）
+全是人手填的表单，平台不驱动浏览器、不发请求、不截图。
+`ExploratoryFinding.screenshot_url` 有这个字段，唯一那条发现里是空的。
+
+留下的痕迹：**3 个会话、0 个检查点被勾过、1 条发现**，
+全在 2026-06-26 一天里（自测），之后两个月没人碰。
+`0/8`、`0/10` 这两个数说的就是「章程生成完，人没有接着往下走」。
+
+### 15.3 那"抽成 MCP"呢 —— 已经有了，而且是活的
+
+探索这件事的价值在**真去点一遍**，不在"列一份该测什么"。
+外部 Claude Code 本来就能点（Playwright / `lum_proxy_capture` 看页面真发了什么），
+而对账那半边平台早就有了：
+
+```
+lum_module_checkup(branch_id, module, observed_actions=[...])
+```
+
+`observed_actions` 就是「你在页面上探到的可操作项」，
+返回的 `coverageGaps` 是拿它跟现有用例对账出来的 ——
+**「页面上有这个操作、用例里一条都没覆盖」是最硬的缺口**，
+而这正是探索测试想要的产物。区别在于：
+
+| | 探索测试（下线的） | `lum_module_checkup` |
+|---|---|---|
+| 输入 | 模块名（接口库是空的） | 真在页面上探到的可操作项 |
+| 产出 | 通用检查清单 | 跟现有用例求差集的缺口 |
+| 谁去点 | 人，手填表单 | CC 自己点 |
+| 落到哪 | `exploratory_findings`（1 条） | 直接变成待补用例 |
+
+所以**不新写 MCP 工具** —— 再抽一个只会跟 `lum_module_checkup` 抢同一件事，
+「同一件事上给出第二个声音」这个坑 `lum-diagnose` 那张卡上已经写过一次了。
+
+### 15.4 删了什么，留了什么
+
+| | 处理 |
+|---|---|
+| `frontend/src/pages/exploratory/Exploratory.jsx`（319 行） | 删 |
+| `backend/app/api/exploratory.py`（390 行） | 删（含 `include_router`） |
+| `App.jsx` 菜单项 + `BugOutlined` 导入 + `i18n.jsx` 的 `menu.exploratory` | 删 |
+| `/projects/:projectId/exploratory` 路由 | **改成 `RedirectToCases`** —— 全站没有兜底 404，直接删路由 = 老书签白屏 |
+| `exploratory_sessions` / `exploratory_findings` 两张表 + 迁移 + 3+1 条数据 | **留着**。删表是毁数据，跟下线是两件事 |
+| `app/models/exploratory.py` | **留着，并且补进 `app/models/__init__.py`** —— 见 §14.6，唯一那条 import 链（`api/exploratory.py`）删掉之后 autogenerate 会提议 `DROP TABLE`。`exploratory_sessions` 还在 `_MUST_CASCADE` 里，不补就是那三条后果原样再来一遍 |
+| `exploratory-charter` 能力 key | **标 `deprecated` 不删** —— 删了 `category_of()` 会静默降档 |
+| `SkillManage` 的 `lum-explore` 卡 | `inline` → `retired`，`where` 写明入口哪天下的 |
+
+### 15.5 顺带废掉了 SkillManage 的第四态 `inline`
+
+那一态（"已上线在跑，但没有独立 skill 文件、编辑按钮会 404"）**只为 `lum-explore` 存在**。
+卡片改成 `retired` 之后它没有使用者了，数据和渲染分支一起收掉，
+封样测试反过来守两句：`status === 'inline'` 和 `status: 'inline'` 都不许再出现 ——
+**留着死分支就是给下一个人一个"省事标 inline"的口子**（标了就绕开了
+"available 必须真有 SKILL.md"这条）。
+
+### 15.6 改了三处封样守卫，都不是放宽
+
+| 守卫 | 原来 | 现在 | 为什么 |
+|---|---|---|---|
+| `test_原来没记账的链路都补上了` | 断言 `api/exploratory.py` 里记了 `exploratory-charter` | 整条删掉，原地留注释 | 文件没了，留着断言就是必红 |
+| `assert "Tooltip" in jsx.split(...)` | 无条件要求 antd 导入里有 `Tooltip` | 条件式：用了才要求导入，**没用则要求删掉** | 收掉 `inline` 之后这页最后一处 `<Tooltip>` 也没了，无条件断言会红在"没导入一个没人用的组件"上 —— 守卫盯错了东西。真正要防的是**用了却没导入**（整页白屏 pageerror） |
+| `assert _status_of("lum-explore") == "inline"` | — | `== "retired"` | 状态跟着改 |
+
+第一版的 `assert "'inline'" not in jsx` **自己红了一次**：它把我写在原地的
+"为什么收掉 inline"那句注释也匹配上了。改成只断 `status === 'inline'` /
+`status: 'inline'` 两种真代码写法 —— **禁的是用法，不是禁提这个词**，
+不然下一个人只会看到一句"别用 inline"而不知道为什么。
+
+`scripts/selftest/scan_overflow.py` 里「探索测试」「文档管理」两条路由也一并摘掉：
+它们现在重定向到用例页，**留着不会红，只会把用例页重复扫两遍并冒充成两个页面的"已检查"**。

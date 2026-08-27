@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, Tag, Space, Typography, Alert, Steps, Collapse, Button, Drawer, Input, message, Tooltip } from 'antd'
+import { Card, Tag, Space, Typography, Alert, Steps, Collapse, Button, Drawer, Input, message } from 'antd'
 import {
   ThunderboltOutlined, FileTextOutlined, CodeOutlined, SearchOutlined,
   BugOutlined, FileSearchOutlined, BookOutlined, CheckCircleOutlined,
@@ -68,17 +68,18 @@ const SKILLS = [
   {
     name: 'lum-explore',
     title: '探索测试',
-    icon: <BugOutlined style={{ fontSize: 20, color: '#4e8af0' }} />,
-    // 不是"规划中"：生成章程 → 记录检查点 → 生成总结报告这条链路在
-    // app/api/exploratory.py 里已经跑得通，项目菜单也已经有「探索测试」了。
-    // 但它是内联 prompt，不是独立的 skill 文件——GET/PUT /skills/lum-explore
-    // 会 404，所以不能标"可用"（那会露出一个点了就 404 的编辑按钮）。
-    status: 'inline',
-    description: 'AI 辅助人工探索测试：生成章程 → 引导逐项检查 → 记录发现 → 输出报告',
-    input: '目标模块 + API 接口 + 已有用例覆盖情况',
-    output: '探索测试报告（结论 + 检查点覆盖情况）',
-    where: '探索测试 →「AI 生成章程」',
-    mcpTools: ['lum_list_api_tree', 'lum_list_cases'],
+    icon: <BugOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
+    status: 'retired',
+    description: '已下线。它生成的章程唯一的输入是接口库，而全库 7 个 endpoint 的 url '
+      + '一个都没填 —— 模型实际拿到的上下文就是模块名那几个字，出来的检查点'
+      + '（"必填校验/边界值/权限隔离/SQL注入"）换个系统照样成立，跟被测系统没有关系。'
+      + '章程之后也没有任何执行：勾检查点、写发现全靠人手填，3 个会话 0 个检查点被勾过。'
+      + '探索归外部 Claude Code：它真能在页面上点一遍，'
+      + '把探到的可操作项喂 lum_module_checkup(observed_actions=…) 跟现有用例对账。',
+    input: '—',
+    output: '—',
+    where: '入口 2026-08-27 下线（原「探索测试」→「AI 生成章程」）',
+    mcpTools: ['lum_module_checkup', 'lum_proxy_capture'],
   },
   {
     name: 'lum-diagnose',
@@ -172,8 +173,10 @@ export default function SkillManage() {
             key={skill.name}
             size="small"
             style={{
-              borderLeft: skill.status === 'available' ? '3px solid #0ea5a0'
-                : skill.status === 'inline' ? '3px solid #4e8af0' : '3px solid rgba(0,0,0,0.15)',
+              // 第四态 'inline'（已上线但没有独立 skill 文件）2026-08-27 随 lum-explore
+              // 一起收掉了 —— 它只为那一张卡存在。真再出现"功能活着但没 skill 文件"
+              // 的情况，照着 git 历史加回来，别为了省事标成 available（编辑按钮会 404）。
+              borderLeft: skill.status === 'available' ? '3px solid #0ea5a0' : '3px solid rgba(0,0,0,0.15)',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -195,13 +198,7 @@ export default function SkillManage() {
                   ? <Tag color="cyan" icon={<CheckCircleOutlined />}>可用</Tag>
                   : skill.status === 'retired'
                     ? <Tag color="default">已下线</Tag>
-                    : skill.status === 'inline'
-                      // 功能是活的，但走的是内联 prompt，不是这页管的独立 skill 文件——
-                      // 标"可用"会露出一个点了 404 的编辑按钮，标"规划中"又是撒谎。
-                      ? <Tooltip title="功能已经上线在跑，只是没有做成这页能编辑的独立 skill 文件（走的是接口里的内联 prompt）">
-                          <Tag color="blue">已上线（无独立 Skill 文件）</Tag>
-                        </Tooltip>
-                      : <Tag icon={<ClockCircleOutlined />}>{skill.phase} 规划中</Tag>
+                    : <Tag icon={<ClockCircleOutlined />}>{skill.phase} 规划中</Tag>
                 }
               </Space>
             </div>

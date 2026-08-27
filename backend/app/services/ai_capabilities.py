@@ -60,8 +60,10 @@ CAPABILITY_REGISTRY = [
     # 实现、7 张表、/api/scenario-gen/* 全部保留（49 条老用例还挂着 task id）。
     {"key": "scenario-gen",            "label": "功能场景测试生成",     "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "2026-08-15 入口 + MCP 工具双下线（仪式太重，用户用脚投票）。实现和 7 张表保留，只是没有任何页面/工具能发起"},
     # 「接口测试」模块 2026-08-15 下线，但这条 key 还活着 —— 用例详情里
-    # 「探索测试流量 → 编排为接口测试」走的是同一个 /generate 端点。
-    {"key": "api-test-generate",       "label": "接口场景编排生成",     "category": "text",      "where": "用例详情 → 探索流量 →「编排为接口测试」"},
+    # 入口名字校正（2026-08-27）：页签实际叫「本次流量」，registry 里原来写的
+    # 「探索流量」在页面上根本搜不到；「探索测试」下线之后这个词还会被读成
+    # "指向那个已删模块"。它跟探索测试无关 —— 是用例运行验证时抓到的真实请求。
+    {"key": "api-test-generate",       "label": "接口场景编排生成",     "category": "text",      "where": "用例详情 →「本次流量」页签 →「编排为接口测试」"},
     {"key": "pytest-script",           "label": "pytest 脚本生成",      "category": "text",      "where": "已下线",            "deprecated": True, "deprecatedNote": "入口是已删除的 AIScriptModal"},
     # 「文档管理」模块 2026-08-27 整体下线（docs/cc-platform-loop-spec.md §14）：
     # 页面 / 路由 / api/documents.py / services/doc_generator.py / lum-doc-generate
@@ -71,7 +73,7 @@ CAPABILITY_REGISTRY = [
     {"key": "doc-generate",            "label": "文档生成",             "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "2026-08-27 随「文档管理」下线：平台侧驱动浏览器截图 + AI 看图编文字，写得对不对没有对照物。要文档在 Claude Code 里自己实操系统写"},
     {"key": "doc-generate-screenshots","label": "文档带截图生成",       "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "同上，截图那条支路一并下线"},
     {"key": "doc-optimize",            "label": "文档优化",             "category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "同上。它是「保留截图只重写文字」那条路，随模块一起没了"},
-    {"key": "exploratory-charter",     "label": "探索测试 Charter 生成","category": "text",      "where": "探索测试 →「AI 生成章程」"},
+    {"key": "exploratory-charter",     "label": "探索测试 Charter 生成","category": "text",      "where": "已下线", "deprecated": True, "deprecatedNote": "2026-08-27 随「探索测试」下线：它唯一的输入是接口库（全库 7 个 endpoint 的 url 一个都没填），实际拿到的上下文就是模块名四个字，出来的章程换个系统照样成立。探索这件事归外部 Claude Code：真在页面上点一遍，把探到的可操作项喂 lum_module_checkup(observed_actions=…) 跟现有用例对账"},
     # 2026-08-09 实测：这条功能一直是通的（页面上「正则测试 → AI 生成」真能出结果），
     # 之前标成"已下线"是因为端点直接 complete() 没带 capability —— 档位绑了模型也不生效。
     # 现在走 resolve_ai_config，标签和现实对上了。

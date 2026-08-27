@@ -5,7 +5,7 @@ import {
   FolderOutlined, FileTextOutlined, UnorderedListOutlined, BarChartOutlined,
   SettingOutlined, UserOutlined, FileSearchOutlined, ApiOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, BellOutlined, RobotOutlined,
-  ThunderboltOutlined, BugOutlined, ToolOutlined, SendOutlined,
+  ThunderboltOutlined, ToolOutlined, SendOutlined,
   NodeIndexOutlined, SearchOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
   DeploymentUnitOutlined,
@@ -45,7 +45,6 @@ import I18nMessages from './pages/settings/I18nMessages'
 import AICapabilities from './pages/settings/AICapabilities'
 import SkillManage from './pages/settings/SkillManage'
 import MCPTools from './pages/settings/MCPTools'
-import Exploratory from './pages/exploratory/Exploratory'
 import SystemServices from './pages/settings/SystemServices'
 
 const { Header, Sider, Content } = Layout
@@ -114,9 +113,14 @@ function AppLayout() {
         // 「API 接口」菜单项 2026-08-27 下掉：单接口要验什么，用例那边
         // （case_type=api 的步骤用例 + 绑用例的接口场景）已经全覆盖得到，
         // 这个入口点进去只是同一批接口的另一种看法，多一条路反而要选。
-        // **只下入口** —— 接口库本身还在用：MCP 的 lum_list_api_tree /
-        // lum_create_api_node 在写它，「维护接口库」那一档就是干这个的；
-        // 路由 /projects/:projectId/apis 和页面都原样保留，存了书签的照样能进。
+        //
+        // ⚠ 更正（同日）：这里原来写的是「接口库还在被 MCP 写」—— **不对，查过了**。
+        // 库里 12 个节点全叫「新建接口」「新建文件夹」（页面点"新建"的默认名，
+        // MCP 那个工具的 name 是必填的，不可能长这样），7 个 endpoint 的 url
+        // **一个都没填**，最后一次写入 2026-07-10。MCP 真正在写的是用例
+        // （audit_logs 里 159 条，最新今天）和绑用例的接口场景（52 条，最新今天）。
+        // 路由和页面仍然保留，但保留的理由只是「存了书签的别白屏」，不是「还在被用」。
+        // 见 docs/cc-platform-loop-spec.md §14.1。
         { key: `/projects/${projectId}/qa-catalog`, icon: <FileSearchOutlined />, label: t('menu.qaCatalog') },
       ],
     },
@@ -128,7 +132,6 @@ function AppLayout() {
         // 审核报告放在「执行与产出」下 —— 它是产出（哪些模块审过了、还缺哪类用例），
         // 不是设计期的东西。挂在用例导航的铅笔旁边太隐蔽，而它要能被跟进。
         { key: `/projects/${projectId}/review-report`, icon: <SearchOutlined />, label: t('menu.reviewReport') },
-        { key: `/projects/${projectId}/exploratory`, icon: <BugOutlined />, label: t('menu.exploratory') },
       ],
     },
     {
@@ -335,7 +338,10 @@ function AppLayout() {
             <Route path="/projects/:projectId/settings/ai-capabilities" element={<AICapabilities />} />
             <Route path="/projects/:projectId/settings/skills" element={<SkillManage />} />
             <Route path="/projects/:projectId/settings/mcp-tools" element={<MCPTools />} />
-            <Route path="/projects/:projectId/exploratory" element={<Exploratory />} />
+            {/* 「探索测试」2026-08-27 下线（见 docs/cc-platform-loop-spec.md §15）。
+                同「文档管理」那次的处理：留重定向而不是直接删路由，
+                全站没有兜底 404，存了书签的人点进来会看到一片空白内容区。 */}
+            <Route path="/projects/:projectId/exploratory" element={<RedirectToCases />} />
             {/* 「文档管理」2026-08-27 下线（见 docs/cc-platform-loop-spec.md §14）。
                 和「接口测试」那次同一个处理：留重定向而不是直接删路由，
                 全站没有兜底 404，存了书签的人点进来会看到一片空白内容区。 */}
