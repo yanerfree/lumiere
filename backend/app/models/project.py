@@ -14,7 +14,11 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
+from app.core.permissions import PROJECT_ROLES_ALL
 from app.models.user import Base
+
+# 合法项目角色取值（新旧两套名，兼容期）内联成 SQL，DB 层兜底
+_PROJECT_ROLES_SQL = ", ".join(f"'{r}'" for r in PROJECT_ROLES_ALL)
 
 
 class Project(Base):
@@ -71,6 +75,7 @@ class ProjectMember(Base):
     __tablename__ = "project_members"
     __table_args__ = (
         UniqueConstraint("project_id", "user_id", name="uq_member_project_user"),
+        CheckConstraint(f"role IN ({_PROJECT_ROLES_SQL})", name="ck_member_role_valid"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

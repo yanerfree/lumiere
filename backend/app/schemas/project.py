@@ -3,6 +3,7 @@ from datetime import datetime
 
 from pydantic import Field
 
+from app.core.permissions import PROJECT_ROLES_ALL
 from app.schemas.common import BaseSchema
 
 
@@ -55,19 +56,21 @@ class ProjectResponse(BaseSchema):
 
 
 # ---- 项目成员 ----
-
-PROJECT_ROLES = ("project_admin", "developer", "tester", "guest")
+# 兼容期：新名 manager/member/viewer 与旧名 project_admin/developer/tester/guest 都收，
+# 取值同源于 core/permissions.PROJECT_ROLES_ALL，两处认名一致（见该文件「兼容期」说明）。
+PROJECT_ROLES = PROJECT_ROLES_ALL
+_ROLE_PATTERN = r"^(" + "|".join(PROJECT_ROLES_ALL) + r")$"
 
 
 class AddMemberRequest(BaseSchema):
     """添加项目成员请求"""
     user_id: uuid.UUID
-    role: str = Field(pattern=r"^(project_admin|developer|tester|guest)$")
+    role: str = Field(pattern=_ROLE_PATTERN)
 
 
 class UpdateMemberRequest(BaseSchema):
     """更新成员角色请求"""
-    role: str = Field(pattern=r"^(project_admin|developer|tester|guest)$")
+    role: str = Field(pattern=_ROLE_PATTERN)
 
 
 class MemberResponse(BaseSchema):

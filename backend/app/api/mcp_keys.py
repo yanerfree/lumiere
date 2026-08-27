@@ -16,6 +16,7 @@ from app.schemas.common import BaseSchema
 from app.deps.db import get_db
 from app.deps.auth import get_current_user, require_project_role
 from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.permissions import canonical_project_role
 from app.models.user import User
 from app.models.mcp_api_key import McpApiKey
 from app.models.project import Branch, Project, ProjectMember
@@ -82,7 +83,9 @@ async def _assert_can_bind_project(
     )).scalar_one_or_none()
     if member is None:
         raise ForbiddenError(code="NOT_PROJECT_MEMBER", message="未绑定到该项目，不能把 Key 归到此项目")
-    if member.role not in _BIND_ROLES:
+    # 走规范名匹配，新旧名互认（同 require_project_role）：manager/member/tester 都能发，viewer/guest 不能
+    allowed = {canonical_project_role(r) for r in _BIND_ROLES}
+    if canonical_project_role(member.role) not in allowed:
         raise ForbiddenError(code="PROJECT_ROLE_DENIED", message="当前项目角色无权把 Key 归到此项目")
 
 

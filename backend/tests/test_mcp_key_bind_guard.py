@@ -76,3 +76,17 @@ async def test_guest_member_rejected():
 async def test_write_role_members_allowed():
     for role in _BIND_ROLES:  # project_admin / developer / tester
         await _assert_can_bind_project(_FakeSession(_Member(role)), _User("user"), PID)
+
+
+@pytest.mark.asyncio
+async def test_new_name_write_members_allowed():
+    # 归一后：新名 manager / member 也能发 Key（等价于 project_admin / developer）
+    for role in ("manager", "member"):
+        await _assert_can_bind_project(_FakeSession(_Member(role)), _User("user"), PID)
+
+
+@pytest.mark.asyncio
+async def test_new_name_viewer_rejected():
+    # 新名只读 viewer 与旧名 guest 同样被拒
+    with pytest.raises(ForbiddenError):
+        await _assert_can_bind_project(_FakeSession(_Member("viewer")), _User("user"), PID)
