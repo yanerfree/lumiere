@@ -216,3 +216,64 @@ async def test_tools_call_reads_own_project(mcp_http, issued_key):
     assert not result.get("isError"), result
     text = "".join(c.get("text", "") for c in result["content"])
     assert project_name in text, f"没看到自己的项目 {project_name}：{text[:300]}"
+
+
+async def test_revoked_key_is_denied(mcp_http, client, db_session):
+    """页面上「删除」一把 Key 是**软删**：行永久留在库里，只把 `is_active` 翻成 False。
+
+    所以「列表里看不见了」和「这把钥匙真的开不了门了」是两件事，各由一处代码
+    保证：列表接口自己带 `is_active == True`（看不见），认证墙
+    `MCPAuthMiddleware` 也带一句 `is_active == True`（开不了门）。**这条钉的是
+    后一句。**
+
+    为什么不能靠 `test_bogus_key_is_denied` 顺带覆盖：那条用的是瞎编的 token，
+    走的是「hash 在库里查不到」这条分支。把认证墙里 `is_active == True` 整句
+    删掉，它照样绿 —— 而库里那几十把已吊销的 Key 会一起复活，页面上还是看不见。
+    **看不见的复活，比看得见的漏洞更难发现。**
+    """
+    from sqlalchemy import select
+
+    from app.models.mcp_api_key import McpApiKey
+
+    admin = await create_test_user(db_session, username=f"mcprev_{uuid.uuid4().hex[:6]}",
+                                   role="admin")
+    headers, _ = make_auth_headers(admin)
+    r = await client.post("/api/projects", headers=headers,
+                          json={"name": f"mcp-rev-{uuid.uuid4().hex[:8]}"})
+    assert r.status_code in (200, 201), r.text
+    project_id = r.json()["data"]["id"]
+
+    r = await client.post("/api/mcp-keys", headers=headers,
+                          json={"name": "pytest-revoke-key", "project_id": project_id})
+    assert r.status_code in (200, 201), r.text
+    created = r.json()["data"]
+    raw_key, key_id = created["key"], created["id"]
+
+    # 吊销前：这把钥匙是好的（否则下面的 401 证明不了任何事）
+    result = await McpSession(mcp_http, raw_key).handshake()
+    assert result["serverInfo"]["name"] == "Lumiere", result["serverInfo"]
+
+    # 页面上的「删除」就是这个接口
+    r = await client.delete(f"/api/mcp-keys/{key_id}", headers=headers)
+    assert r.status_code == 200 and r.json().get("data", {}).get("revoked"), r.text
+
+    # 行还在库里 —— 这正是「页面上看不见了但 psql 查得到」的原因
+    row = (await db_session.execute(
+        select(McpApiKey).where(McpApiKey.id == uuid.UUID(key_id)))).scalar_one_or_none()
+    assert row is not None, "吊销把整行删掉了？那 last_used_at 这类审计痕迹就没了"
+    assert row.is_active is False, f"吊销之后 is_active 还是 {row.is_active}"
+
+    # 列表接口里看不见了
+    r = await client.get("/api/mcp-keys", headers=headers)
+    assert r.status_code == 200, r.text
+    listed = [k["id"] for k in r.json()["data"]]
+    assert key_id not in listed, "吊销的 Key 还出现在列表里"
+
+    # 而且真的开不了门了
+    resp = await mcp_http.post("/mcp/", headers={
+        **MCP_HEADERS, "Authorization": f"Bearer {raw_key}"},
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                         "clientInfo": {"name": "revoked", "version": "1"}}})
+    assert resp.status_code == 401, \
+        f"吊销的 Key 居然还能握手：{resp.status_code} {resp.text[:200]}"
