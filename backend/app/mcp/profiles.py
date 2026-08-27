@@ -217,6 +217,15 @@ PROFILES: list[dict] = [
         "tools": ["lum_list_projects", "lum_list_skills", "lum_pull_skill", "lum_push_skill"],
     },
     {
+        "key": "qareview",
+        "label": "QA 仓：取域评审结论",
+        "task": "把平台对某个域的评审结论拿回本地，照 evidence 里的锚点 grep 定位，逐条改脚本",
+        "hint": "**平台对 QA 仓永远只读**，这一档也只有「拿」没有「写」—— "
+                "结论是建议不是门禁，改不改由仓库主人定。刻意不含任何写平台库的工具：读结论的人"
+                "跟写用例的人不是同一拨，给他全链路那一档等于把别人的用例库也一并交出去",
+        "tools": ["lum_list_projects", "lum_get_qa_review"],
+    },
+    {
         "key": "all",
         "label": "全量（不限制）",
         "task": "开放所有工具",

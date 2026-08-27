@@ -329,3 +329,384 @@ def test_评审模块不写QA仓():
 
     for bad in ("_run_git", "git push", "subprocess", "worktree", "checkout"):
         assert bad not in src, f"{bad} 不该出现在域评审模块里"
+
+
+class TestBrief:
+    """人话那一段。它的失败模式跟细节那边不一样：**空着比错着更坏**。
+
+    「给人看」那一页空白，人不会去点隔壁那页 —— 他只会得出"这个域没问题"。
+    所以模型不给 brief 时必须退回 summary，绝不能留空。
+    """
+
+    def test_模型给了就原样收下(self):
+        out = qr.parse_result('{"verdict":"bad","brief":{"headline":"标着已覆盖的有 5 条 P0 这次一条都没跑",'
+                              '"points":["a","b"],"nextStep":"先把环境补齐"},"summary":"s"}')
+
+        assert out["brief"]["headline"].startswith("标着已覆盖")
+        assert out["brief"]["points"] == ["a", "b"]
+        assert out["brief"]["nextStep"] == "先把环境补齐"
+
+    def test_模型没给就退回summary而不是留空(self):
+        out = qr.parse_result('{"verdict":"ok","summary":"这个域的脚本普遍有读回"}')
+
+        assert out["brief"]["headline"] == "这个域的脚本普遍有读回"
+
+    def test_老记录读出来也要有brief(self):
+        """**存的时候兜底不够，读的时候还得兜一次。**
+
+        brief 是后加的字段，库里那些老 result 根本没有它，parse 那道兜底对它们
+        从来没执行过。实测就这么踩了：老记录读出来 brief={}，页面「给人看」那页
+        整版空白 —— 正是这个字段要防的那件事。
+        """
+        assert qr.brief_of({"verdict": "risky", "summary": "老记录只有 summary"}) == {
+            "headline": "老记录只有 summary", "points": [], "nextStep": "", "solid": []}
+        assert qr.brief_of(None)["headline"] == ""
+
+    def test_points给成一句话也吃得下(self):
+        out = qr.parse_result('{"verdict":"ok","brief":{"points":"就一条"},"summary":"s"}')
+
+        assert out["brief"]["points"] == ["就一条"]
+
+    def test_最多留三条(self):
+        out = qr.parse_result('{"verdict":"ok","brief":{"points":["1","2","3","4","5","6"]},"summary":"s"}')
+
+        # 3 条封顶：24 个域挨个看，每多一条就是多一屏
+        assert len(out["brief"]["points"]) == 3
+
+
+class TestMarkdown:
+    """导出的那份 Markdown —— **QA 那边取结论的唯一形态**（我们只生成，他自己来拉）。
+
+    盯的是"两周后还能不能复核"：评的是哪个 commit、在哪个环境上评的、
+    哪几份脚本进了模型。少一样，这份结论就没法判断还算不算数。
+    """
+
+    def _review(self, **kw):
+        from datetime import datetime, timezone
+
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="MCP", domain_name="MCP 能力", status="done",
+            environment_name="uag-138:3000", commit_sha="dae9b4fc41501345f5a8", branch="main",
+            actor="admin", scenario_count=53, script_count=2,
+            result={
+                "verdict": "risky", "summary": "细节给动手的人看",
+                "brief": {"headline": "已覆盖打了折", "points": ["P0 有 5 条这次没执行"],
+                          "nextStep": "补环境变量"},
+                "scriptGaps": [{"id": "MCP-04", "path": "api/mcp/x.sh", "severity": "blocker",
+                                "problem": "只断了不含明文", "evidence": "assert_not_contains \"$SECRET\"",
+                                "fix": "补一条读回断言"}],
+                "envMissing": [{"name": "UAG_APIKEY", "scripts": ["config/env.sh"]}],
+                "catalogGaps": [], "nextUp": [{"id": "MCP-05", "why": "P0 R=9"}],
+                "reviewedScripts": [{"path": "api/mcp/x.sh", "truncated": False}],
+                "scenarioCount": 53,
+            },
+        )
+        r.created_at = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+        for k, v in kw.items():
+            setattr(r, k, v)
+        return r
+
+    def test_带齐复核这份结论要的三样(self):
+        md = qr.to_markdown(self._review())
+
+        assert "dae9b4fc41" in md          # 评的是哪个 commit
+        assert "uag-138:3000" in md        # 在哪个环境上评的
+        assert "api/mcp/x.sh" in md        # 哪几份脚本进了模型
+
+    def test_判据锚点原样带出去(self):
+        """接手的人拿它直接 grep 定位；没有它，"断言不够"就只是一句评价。"""
+        md = qr.to_markdown(self._review())
+
+        assert 'assert_not_contains "$SECRET"' in md
+
+    def test_老记录导出也不能是空的人话页(self):
+        r = self._review()
+        r.result.pop("brief")
+
+        assert "细节给动手的人看" in qr.to_markdown(r)
+
+    def test_人话和细节都在同一份里(self):
+        md = qr.to_markdown(self._review())
+
+        assert "已覆盖打了折" in md and "细节给动手的人看" in md
+
+    def test_明写只读(self):
+        """这份东西会流到 QA 那边去。他必须一眼看见平台没动过他的仓库。"""
+        md = qr.to_markdown(self._review())
+
+        assert "没有对该仓库做任何写操作" in md
+        assert "建议" in md and "门禁" in md
+
+    def test_截断的脚本要标出来(self):
+        r = self._review()
+        r.result["reviewedScripts"] = [{"path": "a.sh", "truncated": True}]
+
+        assert "已截断" in qr.to_markdown(r)
+
+
+class TestCoverage:
+    """**截了多少，必须报出来。**
+
+    MCP 域实测：75 条场景只有 60 条进了 prompt、14 份脚本只读进 11 份，
+    而页面上写的是「场景 75 条」—— 读的人只会以为这 75 条都评过了。
+    额度有限、先给 P0/高风险，这没问题；**把截断说成全量才是问题**。
+    """
+
+    def _md(self, coverage, **res):
+        from datetime import datetime, timezone
+
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="MCP", domain_name="MCP 能力", status="done",
+            environment_name="uag-138:3000", commit_sha="0da11d75fa", branch="main",
+            actor="admin", scenario_count=75, script_count=11,
+            result={"verdict": "bad", "summary": "s", "brief": {"headline": "h"},
+                    "reviewedScripts": [], "coverage": coverage, **res},
+        )
+        r.created_at = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+        return qr.to_markdown(r)
+
+    def test_场景被截了要在导出里明说(self):
+        md = self._md({"scenariosTotal": 75, "scenariosShown": 60,
+                       "scriptsTotal": 11, "scriptsRead": 11, "scriptsTruncated": 0})
+        assert "75" in md and "60" in md
+        assert "15 条这次没评" in md
+
+    def test_脚本没读全也要明说(self):
+        md = self._md({"scenariosTotal": 20, "scenariosShown": 20,
+                       "scriptsTotal": 14, "scriptsRead": 11, "scriptsTruncated": 7})
+        assert "14 份脚本" in md and "11 份" in md
+
+    def test_没截断就别吓唬人(self):
+        """**没截的时候一个字都不该冒出来。** 每份结论都挂个 ⚠，读的人两天就学会跳过它。"""
+        md = self._md({"scenariosTotal": 20, "scenariosShown": 20,
+                       "scriptsTotal": 3, "scriptsRead": 3, "scriptsTruncated": 0})
+        assert "这次没评" not in md and "没读到的那几份" not in md
+
+    def test_老记录没有coverage也不能炸(self):
+        """coverage 也是后加的字段，库里那批老结论里没有 —— 导出不能因此 500。"""
+        md = self._md(None)
+        assert "MCP" in md and "这次没评" not in md
+
+
+class TestBlame:
+    """**「谁动手」必须由结论自己带，别让读的人自己分栏。**
+
+    上一轮实测就是这个坑：MCP 域 6 条问题里有 2 条根子是「我们这条环境记录里
+    没有 UAG_APIKEY」，跟 QA 的脚本一点关系没有 —— 混在同一张表里，看的人
+    先把它当成"人家脚本写得不行"，理解半天才反应过来是配置的事。
+    更糟的是，这份变量名单只反映**我们这侧**记着什么，**推不出** QA 自己跑的时候也缺。
+    """
+
+    def test_认不出来的落script(self):
+        """宁可多审一条，也别把该发给仓库主人的漏进"不是你的事"那堆里。"""
+        g = qr.by_blame([{"id": "A"}, {"id": "B", "blame": "什么鬼"}, {"id": "C", "blame": "env"}])
+        assert [x["id"] for x in g["script"]] == ["A", "B"]
+        assert [x["id"] for x in g["env"]] == ["C"]
+        assert g["catalog"] == []
+
+    def test_parse认blame白名单(self):
+        out = qr.parse_result('```json{"verdict":"risky","scriptGaps":['
+                              '{"id":"X","blame":"env"},{"id":"Y","blame":"胡说"},{"id":"Z"}]}```')
+        assert [x["blame"] for x in out["scriptGaps"]] == ["env", "script", "script"]
+
+    def test_导出按谁动手分栏且环境那类不写成脚本的错(self):
+        from datetime import datetime, timezone
+
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="MCP", domain_name="MCP 能力", status="done",
+            environment_name="uag-138:3000", commit_sha="0da11d75fa", branch="main",
+            actor="admin", scenario_count=75, script_count=11,
+            result={
+                "verdict": "risky", "summary": "s",
+                "brief": {"headline": "h", "points": ["p"], "solid": ["接口层那几条断言是硬的"]},
+                "scriptGaps": [
+                    {"id": "MCP-41", "blame": "script", "severity": "major",
+                     "problem": "反面断言恒真", "path": "a.sh"},
+                    {"id": "MCP-28", "blame": "env", "severity": "blocker",
+                     "problem": "没有数据面 apikey，整条 skip", "path": "b.sh"},
+                ],
+                "envMissing": [{"name": "UAG_APIKEY", "scripts": ["config/env.sh"]}],
+                "reviewedScripts": [], "coverage": None,
+            },
+        )
+        r.created_at = datetime(2026, 8, 27, 13, 0, tzinfo=timezone.utc)
+        md = qr.to_markdown(r)
+        assert "QA 的脚本要改（1 条）" in md
+        assert "不是脚本的问题：环境没铺东西（1 条）" in md
+        # 结论词后面必须跟释义，光一个词读的人各猜各的
+        assert "部分没验到" in md and "断言太松" in md
+        # 凭什么这么说 —— 别人第一个念头
+        assert "这条断言能不能失败" in md and "脚本一份都没真跑" in md
+        # 撑得住的部分要说出来，整页只有坏消息读的人会当成全域不能用
+        assert "接口层那几条断言是硬的" in md
+        # 环境那一列不是对 QA 的意见
+        assert "不是脚本的问题" in md and "QA 自己的 runner 里有没有，平台看不到" in md
+
+
+class TestBatching:
+    """脚本装不下的时候，是**分批读完**还是**截掉多的**。
+
+    这两件事在页面上长得一样，都显示成"评过了"。截掉的那版实测：
+    MCP 域 47 份脚本只进去 11 份，8 份还被截了正文 —— 而"没读到"的地方
+    模型不下结论，于是呈现出来就是"没发现问题"。
+    """
+
+    @staticmethod
+    def _mk(n: int, size: int) -> list[dict]:
+        return [{"path": f"s{i}.sh", "content": "x" * size, "truncated": False}
+                for i in range(n)]
+
+    def test_一份都不许丢(self):
+        scripts = self._mk(30, 20_000)          # 600KB，怎么切都得切
+        batches = qr.split_batches(scripts)
+        assert len(batches) > 1
+        got = [s["path"] for b in batches for s in b]
+        assert got == [s["path"] for s in scripts]      # 顺序和份数都不变
+
+    def test_装得下就一批(self):
+        assert len(qr.split_batches(self._mk(3, 1_000))) == 1
+
+    def test_没有脚本也回一批空的(self):
+        # 回 [] 的话 run_review 一次都不调，这个域会静悄悄地"评完了"
+        assert qr.split_batches([]) == [[]]
+
+    def test_单份超预算也单独成批(self):
+        # 一份就比 BATCH_SCRIPT_BYTES 还大：得让它自己占一批，不能因为塞不下就丢
+        big = [{"path": "big.sh", "content": "x" * (qr.BATCH_SCRIPT_BYTES + 5_000),
+                "truncated": False},
+               {"path": "small.sh", "content": "y", "truncated": False}]
+        batches = qr.split_batches(big)
+        assert [s["path"] for b in batches for s in b] == ["big.sh", "small.sh"]
+
+    def test_单份上限装得下实测最大的脚本(self):
+        # 2026-08-27 量过 uag-qa 109 份：中位数 5.3KB、p90 11.6KB、最大 17.7KB。
+        # 这个数掉回 6000 的话，全仓一半的脚本会被截 —— 而截断的不下结论。
+        assert qr.MAX_SCRIPT_BYTES >= 18_000
+
+    def test_合批取最坏的结论(self):
+        merged = qr.merge_results([
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [], "nextUp": []},
+            {"verdict": "bad", "scriptGaps": [], "catalogGaps": [], "nextUp": []},
+            {"verdict": "risky", "scriptGaps": [], "catalogGaps": [], "nextUp": []},
+        ])
+        # 平均一下会把最要命的那批稀释掉：5 批里 1 批"多数没验到"，整个域就不能当数
+        assert merged["verdict"] == "bad"
+
+    def test_合批去重且按严重度排(self):
+        same = {"id": "MCP-07", "path": "a.sh", "problem": "没读回来确认",
+                "severity": "minor", "blame": "script"}
+        merged = qr.merge_results([
+            {"verdict": "risky", "scriptGaps": [dict(same)], "catalogGaps": [], "nextUp": []},
+            {"verdict": "risky", "catalogGaps": [], "nextUp": [],
+             "scriptGaps": [dict(same),
+                            {"id": "MCP-11", "path": "b.sh", "problem": "断言恒真",
+                             "severity": "blocker", "blame": "script"}]},
+        ])
+        assert len(merged["scriptGaps"]) == 2
+        assert merged["scriptGaps"][0]["id"] == "MCP-11"     # blocker 排前面
+
+    def test_分批的payload要说清这是第几批(self):
+        md = qr.build_payload({"code": "MCP", "name": "MCP 能力"},
+                              [{"id": "MCP-01", "title": "t"}],
+                              self._mk(1, 10), "e", [], [], batch=(2, 5))
+        assert "第 2 批" in md and "切成了 5 批" in md
+        # 最关键的一句：别对没给你的脚本下"没验到"的结论
+        assert "别对没给你的脚本说" in md
+
+    def test_不分批时不提批次(self):
+        md = qr.build_payload({"code": "MCP"}, [], self._mk(1, 10), "e", [], [])
+        assert "批" not in md
+
+    def test_markdown要说清是全读了还是抽的(self):
+        from datetime import datetime, timezone
+
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="MCP", domain_name="MCP 能力", status="done", environment_name="e",
+            commit_sha="abc", branch="main", actor="a", scenario_count=75, script_count=47,
+            result={"verdict": "risky", "summary": "s",
+                    "brief": {"headline": "h", "points": [], "solid": []},
+                    "scriptGaps": [], "envMissing": [], "reviewedScripts": [],
+                    "coverage": {"scenariosTotal": 75, "scenariosShown": 75,
+                                 "scriptsTotal": 47, "scriptsRead": 47,
+                                 "scriptsTruncated": 0, "batches": 5}},
+        )
+        r.created_at = datetime(2026, 8, 27, tzinfo=timezone.utc)
+        md = qr.to_markdown(r)
+        assert "分 5 批" in md and "47 份全读了" in md
+        # 全读完了就不许再挂"只读进 N 份"那种警告
+        assert "只读进" not in md
+
+
+class TestMergePayloadCounts:
+    """收口那一步的数字：让模型自己数，就会数出跟页面对不上的数。
+
+    实测撞到过：brief 写「清单要商量：17 处」，页面那一栏底下只列 1 条 ——
+    17 数的是 catalogGaps，1 数的是 scriptGaps 里 blame=catalog 的。
+    两个数都对，摆在同一屏里就是打架。所以条数由代码算好喂进去，模型只抄。
+    """
+
+    def _merged(self):
+        return {
+            "verdict": "risky",
+            "scriptGaps": [
+                {"id": "X-01", "blame": "script", "severity": "major", "oneLine": "a"},
+                {"id": "X-02", "severity": "minor", "oneLine": "b"},          # 缺 blame → 算 script
+                {"id": "X-03", "blame": "env", "severity": "major", "oneLine": "c"},
+                {"id": "X-04", "blame": "catalog", "severity": "minor", "oneLine": "d"},
+            ],
+            "catalogGaps": [{"scenario": "s1", "why": "w1"}, {"scenario": "s2", "why": "w2"}],
+        }
+
+    def test_三堆的条数要算好喂给模型(self):
+        txt = qr._merge_payload({"code": "MCP", "name": "MCP 能力"}, self._merged(), 5, 47)
+        assert "- 脚本要改：2 条" in txt          # 含那条没写 blame 的
+        assert "- 环境要铺：1 条" in txt
+        # 清单那堆 = blame=catalog(1) + catalogGaps(2)，页面上摆在一起就得一起数
+        assert "- 清单要商量：3 条" in txt
+
+    def test_收口的指令要禁止自己数(self):
+        assert "不许自己数" in qr._MERGE_SYSTEM
+
+
+class TestPartialBatchFailure:
+    """一批挂掉不许把另外几批读到的东西一起扔了，但**必须说出来**。
+
+    实测撞到过：5 批里 3 批同吃网关 429（那次降级通道没加载到），
+    gather 抛出去，已读完的两批结果跟着没了，页面只剩一句"评审失败"。
+    """
+
+    def _rec(self, cov):
+        from datetime import datetime, timezone
+
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="MCP", domain_name="MCP 能力", status="done",
+            environment_name="e", commit_sha="abc123", branch="main", actor="cc",
+            scenario_count=75, script_count=47,
+            result={"verdict": "risky", "summary": "x", "scriptGaps": [], "envMissing": [],
+                    "reviewedScripts": [], "coverage": cov},
+        )
+        r.created_at = datetime(2026, 8, 27, 10, 0, tzinfo=timezone.utc)
+        return r
+
+    def test_有批次没读成要在markdown里说出来(self):
+        r = self._rec({
+            "scenariosTotal": 75, "scenariosShown": 75, "scriptsTotal": 47,
+            "scriptsRead": 47, "scriptsTruncated": 0, "batches": 5, "batchesFailed": [2, 4],
+        })
+        md = qr.to_markdown(r)
+        assert "第 2 批" in md and "第 4 批" in md
+        assert "没读成" in md
+        # 「没抓到问题」不能被当成「没问题」
+        assert "不包括它们" in md
+
+    def test_全读成了就不提批次失败(self):
+        r = self._rec({
+            "scenariosTotal": 10, "scenariosShown": 10, "scriptsTotal": 3,
+            "scriptsRead": 3, "scriptsTruncated": 0, "batches": 2, "batchesFailed": [],
+        })
+        assert "没读成" not in qr.to_markdown(r)

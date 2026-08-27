@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff, selectors
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff, qa_catalog, selectors
 
 mcp = FastMCP(
     name="Lumiere",
@@ -865,6 +865,25 @@ _register(
     skills.pull_skill,
     name="lum_pull_skill",
     description="【把平台上的 skill 取到本地】拿一个 skill 的全文和附属文件，返回里带 writeTo 落盘路径(.claude/skills/<name>/SKILL.md)，照着写文件即可。定位二选一：skill_id(推荐,跨项目取用用它,要求该 skill 是 public)，或 project_id + name(取自己项目的,不受 public 限制)。参数: skill_id(可选), project_id(可选), name(可选)",
+)
+
+
+_section("QA 仓对账")
+
+_register(
+    qa_catalog.get_qa_review,
+    name="lum_get_qa_review",
+    description="【QA 那边取评审结论】拿平台对 QA 仓某个**域**做的 AI 评审全文。"
+                "它答的是 QA 自己的 check-coverage.sh 答不了的那一层：脚本头写了 @scenario 就算「已覆盖」，"
+                "但**正文到底有没有验到那件事** —— 只 curl 一下看 200、只断状态码不看内容、"
+                "改了数据不读回来确认，在门禁那边全是绿的。"
+                "返回里的 `evidence` 是从脚本正文**原样抄**的锚点，直接 grep 就能定位到要改的那一句。"
+                "⚠ **平台对 QA 仓永远只读**：这里只把结论递给你，不会往那个仓库写任何东西；"
+                "拿到之后放不放进仓库、放哪，是你那边的决定。**结论是建议，不是门禁**，"
+                "平台这边没有任何东西会因为它变红或变绿。"
+                "不传 domain = 列出每个域最近一次评了什么（带 verdict 和一句话结论），再按域取全文。"
+                "参数: project_id(项目UUID), domain(可选，域码如 'MCP'), review_id(可选，复核历史结论用), "
+                "format(md=Markdown全文，默认 / json=结构化的 scriptGaps/envMissing/nextUp)",
 )
 
 

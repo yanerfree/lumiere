@@ -214,6 +214,9 @@ _OWNER_SQL: dict[str, tuple[str, ...]] = {
     # 审核批次自己带 project_id。不校的话 A 项目的 Key 能拿 B 项目的 batchId
     # 读出逐条结论和用例编号 —— 和当初"随便填 branch_id 就能改别人用例"同一个洞。
     "batch_id": ("select project_id from review_batches where id = :v",),
+    # QA 域评审结论自己带 project_id。这条尤其不能漏 —— 结论里逐条列着别人 QA 仓的
+    # 脚本路径和判据原文，A 项目的 Key 拿 B 项目的 reviewId 读出来，泄的是**第三方仓库**的内容。
+    "review_id": ("select project_id from qa_catalog_reviews where id = :v",),
 }
 
 # 故意**不**校验的 id 参数。每一条都得写清为什么，否则下一个人只会以为是漏了。

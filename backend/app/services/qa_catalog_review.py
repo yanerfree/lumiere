@@ -44,10 +44,20 @@ from app.services.ai import llm_client
 
 logger = logging.getLogger(__name__)
 
-MAX_SCENARIOS = 60          # 一个域最多这么多条场景进 prompt。实测最大的域 26 条，够用
-MAX_SCRIPTS = 14            # 脚本正文最多带这么多份
-MAX_SCRIPT_BYTES = 6_000    # 单份脚本截断长度：QA 脚本中位数 2.4KB，6K 能装下九成
-TOTAL_SCRIPT_BYTES = 56_000  # 所有脚本正文合计上限
+# ── 额度 ──────────────────────────────────────────────────────
+# 这几个数原来是拍脑袋定的，注释里还写着"中位数 2.4KB、6K 能装下九成"。
+# 2026-08-27 真去量了一遍 uag-qa（109 份脚本）：**中位数 5.3KB、p90 11.6KB、最大 17.7KB**。
+# 也就是说 6K 的单份上限把**一半的脚本截了**，而截断的脚本是不下"没验到"结论的 ——
+# 于是「没发现问题」里有一大块其实是「没读到」。这两件事在页面上长得一模一样。
+# 现在的定法：单份装得下最大的那份；一次调用的总量按批切；批数封顶防跑飞。
+MAX_SCENARIOS = 200         # 场景清单一行一条，200 行也就 20KB。最大的域 75 条
+MAX_SCRIPTS = 60            # 一个域最多读这么多份（实测最大的域 MCP 47 份）
+MAX_SCRIPT_BYTES = 18_000   # 单份上限：实测最大 17.7KB，这个数下全仓 0 份被截
+TOTAL_SCRIPT_BYTES = 480_000  # 一个域所有脚本正文合计上限（MCP 域实测 409KB）
+BATCH_SCRIPT_BYTES = 90_000  # **一次模型调用**带多少脚本正文。超了就分批，不是丢弃
+MAX_BATCHES = 8             # 批数封顶：真有域超了，宁可少读也别把额度烧穿
+BATCH_CONCURRENCY = 3       # 同时在飞几批。5 批一起打网关实测 5 个 429 全降级到 CLI 通道
+                            # —— 那条通道慢，而且网关是全平台共用的，别一个域把它占满
 MAX_SOURCED_LIBS = 20       # 顺带读几份被 source 的公共库（只用来认变量，不进 prompt）
                             # 要跟着 source 链往下走，6 份打不住：uag-qa 的 MCP 域一趟 11 份
 
@@ -274,23 +284,70 @@ _SYSTEM = """你在评审一个黑盒验收仓里**某一个域**的自动化覆
    没有删除后的越权访问）。
 3. **待补的那些先做哪条**。只在标记为「待补」的场景里挑，结合 P/R 和上面两条给顺序。
 
+**每条结论必须自报「谁动手」（`blame`），这是给人看那页的分栏依据：**
+
+- `script` —— **改脚本就能解决**。断言写得站不住、验错了东西、改完不读回来。
+  这一类才是真正要发给仓库主人的。
+- `env` —— **改脚本解决不了**，要在真正跑套件的地方铺东西（密钥、库连接、数据面能力）。
+  脚本本身可能写得很对，只是在这个环境里自己 `skip` 了。
+  ⚠ 「这个环境缺某个变量」是**我们这侧的环境记录**里没有这个名字，
+  **不等于 QA 自己跑的时候也没有** —— 所以这一类一律 `blame=env`，
+  措辞只能是「在这个环境里跑不起来 / 会跳过」，**不许**写成「脚本没验」「覆盖是假的」。
+- `catalog` —— 脚本和环境都没错，是清单认领的口径不对（认领了做不到的、该拆没拆）。
+
 硬要求：
 - 每条结论必须能指到**具体的场景 ID 或脚本路径**，并说清"哪一行/哪个动作"让你这么判。
   说不出来的宁可不说。
+- **`solid` 不许空着**：撑得住的那部分也要说。整页只有坏消息，读的人会当成"全域都不能用"，
+  下次就不看了。
+- **每条 `scriptGaps` 都要给 `oneLine`：≤20 字，人话，一眼看完。**
+  人看的那一页**只显示这一行**，`problem` 那段技术描述根本不出现在他眼前。
+  这里有 24 个域，他不是来读你的分析的，是来决定"这个域要不要停下来处理"。
+  不许出现路径、表名、字段名、函数名、状态码 —— 那些留给 `problem`。
 - **不要写放到哪个项目都成立的话**（"建议补充异常场景""缺少安全测试""覆盖率偏低"）。
   那种话说了等于没说。
 - 不许建议我们去改这个仓库的流程、加字段、加钩子 —— 仓库是别人的，我们只读。
 - 没截断的脚本才下"没验到"的结论；正文标了「已截断」的，拿不准就别列。
 - 每一项最多 6 条。
 
+## 你要写给两拨人看，分开写，别混
+
+**`brief`（给人看）** —— 读它的是测试经理/项目经理，三十秒决定"要不要停下来处理"。
+只说**结论和后果**：这个域的"已覆盖"能不能当真、最要命的是哪一件、下一步做什么。
+- 不出现脚本路径、变量名、函数名、断言写法、HTTP 状态码 —— 一个都不要。
+- **不许出现 `ok` / `risky` / `bad` 这三个原词**。结论词页面上另有中文（都验到了 /
+  部分没验到 / 多数没验到）摆在旁边，你再写一遍英文，读的人还得自己对一次。
+- 每一条都必须是下面 `scriptGaps` / 环境缺口里**某一条的人话版**，
+  不许出现细节里没有的新说法（那就是编的）。
+- 要带数字（几条、什么优先级）。"覆盖率偏低""建议加强"这类话一律不许写。
+- **数字得跟你自己列出来的条数对得上**：脚本那条 = `scriptGaps` 里 `blame` 是
+  `script` 的条数；环境那条 = `blame` 是 `env` 的条数；清单那条 = `catalogGaps`
+  的条数**加上** `blame` 是 `catalog` 的条数。页面会把这三堆分栏摆在你这句话底下，
+  数字对不上，人第一眼看到的就是"这页的数打架" —— 那比不写数字更糟。
+- **每条点出「这是谁的事」**：脚本要改的、环境要铺的、清单要商量的，读的人不该自己去分。
+
+**其余各项（给 AI / 动手整改的人看）** —— 读它的是接手改脚本的工程师或 Claude Code。
+要具体到能直接动手：哪个文件、哪一句断言、改成什么。
+- `evidence` 从脚本正文里**原样抄**一小段（≤3 行）当判据锚点，让接手的人一搜就定位。
+  抄不出来就留空，**不许编**一段仓库里没有的代码。
+
 只输出 JSON，不要任何解释：
 ```json
 {
   "verdict": "ok | risky | bad",
-  "summary": "两句话说清这个域的覆盖到底靠不靠得住",
+  "brief": {
+    "headline": "一句话（≤40字）：这个域标着「已覆盖」的那些，能不能当真",
+    "points": ["最多 3 条，每条 ≤50 字：哪件事没保住 + 后果是什么 + 是谁的事"],
+    "nextStep": "一句话：下一步最该做的那一件事",
+    "solid": ["1-3 条，每条 ≤40 字：这个域**撑得住**的是哪部分（人话，不带路径）"]
+  },
+  "summary": "两句话说清这个域的覆盖到底靠不靠得住（可以带术语，给动手的人看）",
   "scriptGaps": [
     {"id": "AGT-11", "path": "scenarios/agt/x.sh", "severity": "blocker|major|minor",
+     "blame": "script|env|catalog",
+     "oneLine": "挂起的 Agent 还调得动，脚本没查",
      "problem": "脚本只断了 HTTP 200，没有检查被挂起的 Agent 是否真被拒",
+     "evidence": "assert_status 200 \"$resp\"",
      "fix": "断言响应体 code == 403 且数据面返回为空"}
   ],
   "catalogGaps": [{"scenario": "...", "why": "..."}],
@@ -302,10 +359,20 @@ _STATE_CN = {"covered": "已覆盖", "gap": "待补", "deprecated": "已废弃"}
 
 
 def build_payload(domain: dict, scenarios: list[dict], scripts: list[dict],
-                  env_name: str, env_keys: list[str], env_missing: list[dict]) -> str:
-    """拼给模型的 user 消息。**只放变量名，不放变量值。**"""
+                  env_name: str, env_keys: list[str], env_missing: list[dict],
+                  batch: tuple[int, int] | None = None) -> str:
+    """拼给模型的 user 消息。**只放变量名，不放变量值。**
+
+    `batch=(第几批, 共几批)`：脚本太多装不进一次调用时分批读，场景清单每批都给全的
+    （不给全的话，模型不知道这批脚本认领的场景在整个域里是什么位置）。
+    """
     head = f"域：{domain.get('code')} {domain.get('name') or ''}".strip()
-    lines = [head, "", "## 场景清单"]
+    lines = [head]
+    if batch:
+        lines += ["", f"⚠ 这个域的脚本一次装不下，切成了 {batch[1]} 批，**这是第 {batch[0]} 批**。",
+                  "场景清单是全的，脚本正文只有这一批。**只对下面出现的脚本下结论**，",
+                  "别对没给你的脚本说「没验到」—— 那些在别的批里，有人读。"]
+    lines += ["", "## 场景清单"]
     shown = scenarios[:MAX_SCENARIOS]
     for s in shown:
         bits = [s["id"], s.get("title") or "", s.get("priority") or "—",
@@ -326,7 +393,15 @@ def build_payload(domain: dict, scenarios: list[dict], scripts: list[dict],
     if env_missing:
         lines.append("脚本引用了、这个环境里没有的变量名："
                      + "、".join(x["name"] for x in env_missing[:20]))
-        lines.append("（这一条是代码算出来的，不用你再算；判「能不能跑起来」时可以直接用。）")
+        # ⚠ 这行话改过一次。原来写的是"判「能不能跑起来」时可以直接用"，
+        # 结果模型拿它当铁证，把「我们的环境记录里没这个名字」写成了「场景层一条没跑、
+        # 已覆盖是假的」—— 而这份名单只反映**我们这侧**环境记录里有什么，
+        # QA 自己的 runner 里有没有，我们根本看不到。把它当铁证就是拿自己的配置缺口
+        # 去判别人的脚本，最冤的一种误报。
+        lines.append("（这是代码算的，不用你再算。但它只说明**我们这侧**的环境记录里没有"
+                     "这个名字，**不能**推出 QA 自己跑的时候也没有 —— 由它得出的结论"
+                     "一律 `blame=env`，措辞只能到「在这个环境里会跳过」，"
+                     "不许升级成「脚本没验到」或「覆盖是假的」。）")
 
     lines += ["", "## 脚本正文"]
     if not scripts:
@@ -359,7 +434,12 @@ def parse_result(text: str) -> dict:
         out = []
         for x in (data.get(key) or [])[:6]:
             if isinstance(x, dict):
-                out.append({k: str(v)[:600] for k, v in x.items() if v is not None})
+                row = {k: str(v)[:600] for k, v in x.items() if v is not None}
+                b = (row.get("blame") or "").strip().lower()
+                # 认不出来就落 script：这一栏是「要发给仓库主人的」，
+                # 宁可多审一条，也别把该发的漏进"不是你的事"那一堆里
+                row["blame"] = b if b in ("script", "env", "catalog") else "script"
+                out.append(row)
             elif x:
                 out.append({"problem": str(x)[:600]})
         return out
@@ -367,11 +447,47 @@ def parse_result(text: str) -> dict:
     verdict = str(data.get("verdict") or "").strip().lower()
     return {
         "verdict": verdict if verdict in ("ok", "risky", "bad") else "risky",
+        "brief": _brief(data.get("brief"), data.get("summary")),
         "summary": str(data.get("summary") or "")[:800],
         "scriptGaps": _rows("scriptGaps"),
         "catalogGaps": _rows("catalogGaps"),
         "nextUp": _rows("nextUp"),
     }
+
+
+def _brief(raw, summary) -> dict:
+    """人话那一段。**模型不给就退回 summary，不留空**。
+
+    留空的后果是页面上「给人看」那一页整版空白，而人不会去点隔壁那页 ——
+    他只会得出"这个域没问题"。老记录（没有 brief 字段的）走的也是这条退路。
+    """
+    d = raw if isinstance(raw, dict) else {}
+    points = d.get("points")
+    if isinstance(points, str):
+        points = [points]
+    solid = d.get("solid")
+    if isinstance(solid, str):
+        solid = [solid]
+    return {
+        "headline": str(d.get("headline") or "")[:120] or str(summary or "")[:120],
+        # 3 条封顶（原来是 4）。24 个域挨个看，每多一条就是多一屏。
+        "points": [str(x)[:160] for x in (points or [])[:3] if x],
+        "nextStep": str(d.get("nextStep") or "")[:200],
+        "solid": [str(x)[:120] for x in (solid or [])[:3] if x],
+    }
+
+
+def brief_of(result: dict | None) -> dict:
+    """**读的时候**再兜一次底。存的时候兜过了还不够——
+
+    `brief` 是后加的字段，库里那些老记录的 `result` 里根本没有这一项，
+    parse 那道兜底对它们从来没执行过。实测：老记录读出来 `brief` 是 `{}`，
+    页面「给人看」那页整版空白 —— 正是这个字段要防的那件事，自己踩了一遍。
+
+    所以凡是把结论往外送的地方（页面 / 导出 / MCP）都走这里，别直接 `result["brief"]`。
+    """
+    res = result or {}
+    return _brief(res.get("brief"), res.get("summary"))
 
 
 # ── 编排 ──────────────────────────────────────────────────────
@@ -411,21 +527,190 @@ def take_scripts(loader, paths: list[str]) -> list[dict]:
     return out
 
 
+def split_batches(scripts: list[dict]) -> list[list[dict]]:
+    """按字节把脚本切成几批，每批塞进一次模型调用。
+
+    **切的是调用，不是内容** —— 每一份脚本都会被读到，只是不在同一次对话里。
+    这跟原来那种"超了就丢掉"的做法差一个性质：丢掉的那些，页面上看不出来。
+    """
+    if not scripts:
+        return [[]]
+    out: list[list[dict]] = [[]]
+    used = 0
+    for sc in scripts:
+        n = len((sc.get("content") or "").encode("utf-8"))
+        if out[-1] and used + n > BATCH_SCRIPT_BYTES:
+            if len(out) >= MAX_BATCHES:
+                break
+            out.append([])
+            used = 0
+        out[-1].append(sc)
+        used += n
+    return out
+
+
+_SEV_RANK = {"blocker": 0, "major": 1, "minor": 2}
+_VERDICT_RANK = {"bad": 0, "risky": 1, "ok": 2}
+
+
+def _gap_key(g: dict) -> str:
+    return "|".join(str(g.get(f) or "")[:60]
+                    for f in ("id", "path", "scenario", "problem", "why"))
+
+
+def merge_results(parts: list[dict]) -> dict:
+    """把分批的结果并成一份。
+
+    verdict 取**最坏**的那一批：47 份脚本分 5 批读，只要有一批判「多数没验到」，
+    整个域就不能拿去当「都验到了」用 —— 平均一下会把最要命的那批稀释掉。
+    """
+    out: dict = {"verdict": "ok", "summary": "", "brief": {},
+                 "scriptGaps": [], "catalogGaps": [], "nextUp": []}
+    seen: set[str] = set()
+    for part in parts:
+        v = part.get("verdict")
+        if _VERDICT_RANK.get(v, 9) < _VERDICT_RANK.get(out["verdict"], 9):
+            out["verdict"] = v
+        for key in ("scriptGaps", "catalogGaps", "nextUp"):
+            for g in part.get(key) or []:
+                k = key + "|" + _gap_key(g)
+                if k in seen:
+                    continue
+                seen.add(k)
+                out[key].append(g)
+    out["scriptGaps"].sort(key=lambda g: _SEV_RANK.get(g.get("severity"), 9))
+    out["summary"] = " ".join((p.get("summary") or "").strip() for p in parts).strip()[:800]
+    out["brief"] = _brief(None, out["summary"])
+    return out
+
+
+_MERGE_SYSTEM = """同一个域的脚本太多，分了几批读，下面是**已经合并好**的全部结论。
+你只做一件事：把它们收成**一份给人看的 brief** 和一句 summary。不重新评审，不加新发现。
+
+- 只许用下面清单里已经有的说法，**一个新说法都不许加**（加了就是编的）。
+- brief 里不许出现脚本路径、变量名、函数名、断言写法、HTTP 状态码。
+- brief 里不许出现 `ok` / `risky` / `bad` 这三个原词（页面另有中文结论词）。
+- `points` 最多 3 条，每条 ≤50 字，每条要点出「这是谁的事」：脚本要改 / 环境要铺 / 清单要商量。
+- `solid` 不许空：撑得住的那部分也要说，1-3 条。
+- 要带数字（几条、什么优先级）。"覆盖率偏低""建议加强"这类哪都成立的话一律不许写。
+- **数字只许抄我在「按谁动手分」那三行里给你的**，不许自己数、不许估。页面会把这三堆
+  分栏摆在你这句话底下，说「清单 17 处」底下却只列 1 条，人第一眼看到的就是
+  "这页的数打架" —— 那比不写数字更糟。
+
+只输出 JSON：
+```json
+{"brief": {"headline": "≤40字", "points": ["…"], "nextStep": "…", "solid": ["…"]},
+ "summary": "两句话，给动手的人看，可以带术语"}
+```"""
+
+
+def _merge_payload(domain: dict, merged: dict, batches: int, scripts: int) -> str:
+    gaps = merged.get("scriptGaps") or []
+    n = {b: sum(1 for g in gaps if (g.get("blame") or "script") == b)
+         for b in ("script", "env", "catalog")}
+    lines = [f"域：{domain.get('code')} {domain.get('name') or ''}".strip(),
+             f"（{scripts} 份脚本分 {batches} 批读完，下面是合并后的全部结论）", "",
+             f"## 合并后的结论：{merged.get('verdict')}", "",
+             # 数交给代码算，模型只负责抄 —— 让它自己数就会数出跟页面对不上的数
+             "## 按谁动手分（写 points 时数字照抄这三行，别自己数）",
+             f"- 脚本要改：{n['script']} 条",
+             f"- 环境要铺：{n['env']} 条",
+             f"- 清单要商量：{n['catalog'] + len(merged.get('catalogGaps') or [])} 条",
+             "", "## 抓到的问题"]
+    for g in merged.get("scriptGaps") or []:
+        lines.append(f"- [{g.get('blame')}][{g.get('severity')}] {g.get('id') or ''} "
+                     f"{g.get('oneLine') or ''}｜{g.get('problem') or ''}")
+    if merged.get("catalogGaps"):
+        lines += ["", "## 清单口径"]
+        lines += [f"- {g.get('scenario') or ''}：{g.get('why') or ''}"
+                  for g in merged["catalogGaps"]]
+    if merged.get("nextUp"):
+        lines += ["", "## 待补里先做哪条"]
+        lines += [f"- {g.get('id') or ''}：{g.get('why') or ''}" for g in merged["nextUp"]]
+    lines += ["", "## 各批自己写的 summary", merged.get("summary") or "（空）"]
+    return "\n".join(lines)
+
+
 async def run_review(*, domain: dict, scenarios: list[dict],
                      scripts: list[dict], env_name: str, env_keys: list[str],
                      lib_texts: list[str], lib_paths: list[str] | None = None,
                      ai_config=None) -> dict:
-    """真正评一次。返回落库用的 result；抛异常交给调用方标 failed。"""
+    """真正评一次。返回落库用的 result；抛异常交给调用方标 failed。
+
+    脚本装不进一次调用就**分批调、再合并**（`split_batches` / `merge_results`），
+    不是截掉多的那些。原来那版是截：MCP 域 47 份脚本只进去 11 份，
+    页面照样写「场景 75 条」—— 「没发现问题」和「没读到」在页面上长得一样。
+    """
     missing = env_gaps(scripts, set(env_keys), lib_texts, lib_paths)
-    user = build_payload(domain, scenarios, scripts, env_name, env_keys, missing)
-    resp = await llm_client.complete(
-        [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
-        config=ai_config, max_tokens=2400, temperature=0)
-    out = parse_result(resp.content or "")
+    batches = split_batches(scripts)
+
+    async def _one(part: list[dict], mark: tuple[int, int] | None) -> dict:
+        user = build_payload(domain, scenarios, part, env_name, env_keys, missing, mark)
+        resp = await llm_client.complete(
+            [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
+            config=ai_config, max_tokens=2400, temperature=0)
+        return parse_result(resp.content or "")
+
+    if len(batches) == 1:
+        out = await _one(batches[0], None)
+    else:
+        n = len(batches)
+        # 并发发出去，但**限流**。分批是为了每批读得完整，不是为了排队 ——
+        # 串行会把一个域的耗时乘上批数，人在页面上等的就是这个数。
+        # 但也不能全放出去：5 批一起打，网关实测直接 5 个 429，全降级到 CLI 通道
+        gate = asyncio.Semaphore(BATCH_CONCURRENCY)
+
+        async def _guarded(part: list[dict], mark: tuple[int, int]) -> dict:
+            async with gate:
+                return await _one(part, mark)
+
+        # `return_exceptions=True` 不是"容错"顺手加的：**一批挂掉不该把另外四批读到的
+        # 东西一起扔了**。实测撞过一次 —— 5 批里 3 批同时吃到网关 429（那次降级通道
+        # 因为工作目录不对没加载到，见下面那条 raise 的注释），gather 抛出来，
+        # 已经读完的 2 批结果跟着没了，页面上只剩一句"评审失败"，得整个域重跑 10 分钟。
+        raw = await asyncio.gather(*[_guarded(b, (i + 1, n)) for i, b in enumerate(batches)],
+                                   return_exceptions=True)
+        good = [r for r in raw if not isinstance(r, BaseException)]
+        lost = [(i + 1, r) for i, r in enumerate(raw) if isinstance(r, BaseException)]
+        for idx, err in lost:
+            logger.warning("QA 域评审：第 %d/%d 批没读成 domain=%s：%r",
+                           idx, n, domain.get("code"), err)
+        # 全挂才算失败。**部分挂了必须让页面看得见**：少读一批就是少读十几份脚本，
+        # 而"少读了"和"没问题"在页面上长得一模一样 —— 这是这套评审最要防的一件事。
+        if not good:
+            raise lost[0][1]
+        out = merge_results(good)
+        out["batchesFailed"] = [i for i, _ in lost]
+        # 合并那一趟**只看结论、看不到脚本正文** —— 它没法编出一段仓库里没有的代码
+        try:
+            resp = await llm_client.complete(
+                [{"role": "system", "content": _MERGE_SYSTEM},
+                 {"role": "user", "content": _merge_payload(domain, out, n, len(scripts))}],
+                config=ai_config, max_tokens=900, temperature=0)
+            m = parse_result(resp.content or "")
+            out["brief"] = m["brief"]
+            out["summary"] = m["summary"] or out["summary"]
+        except Exception:  # noqa: BLE001
+            # 收口这一步挂了不算评审失败：分批的结论都在，人话那段退回拼接的 summary
+            logger.exception("QA 域评审：分批收口失败，退回拼接版 domain=%s", domain.get("code"))
     out["envMissing"] = missing
     out["reviewedScripts"] = [{"path": s["path"], "truncated": s["truncated"]} for s in scripts]
     # 页面要说清"这次读了多少"：只读了 14 份里的 5 份却说"这个域没问题"是骗人的
     out["scenarioCount"] = len(scenarios)
+    # **上限截了多少，必须报出来。** MCP 域涨到 75 条场景那次实测：60 条进了 prompt、
+    # 15 条模型根本没看见，14 份脚本只读进 11 份、其中 7 份正文还被截断 ——
+    # 而页面上写的是「场景 75 条」，读的人只会以为这 75 条都评过了。
+    # 截断本身不是 bug（额度有限），**把截断说成全量才是**。
+    out["coverage"] = {
+        "scenariosTotal": len(scenarios),
+        "scenariosShown": min(len(scenarios), MAX_SCENARIOS),
+        "scriptsTotal": len({c["path"] for s in scenarios for c in (s.get("scripts") or [])}),
+        "scriptsRead": len(scripts),
+        "scriptsTruncated": sum(1 for s in scripts if s.get("truncated")),
+        "batches": len(batches),
+        # 没读成的批次号。非空 = 这一趟的"没发现问题"里有一块是"没读到"
+        "batchesFailed": out.pop("batchesFailed", []),
+    }
     return out
 
 
@@ -441,6 +726,216 @@ def finish(review: QaCatalogReview, result: dict | None, error: str | None) -> N
     review.finished_at = datetime.now(timezone.utc)
 
 
+# 词换过两轮，都是同一个毛病：**用一个词概括，读的人就得猜。**
+#   第一版「靠得住 / 有水分 / 撑不住」—— "水"在哪？"撑"的是什么？
+#   第二版「能信 / 信一半 / 不能信」—— 信什么？信一半是哪一半？
+# 问题不在词好不好听，在于**这一栏根本不是一个形容词能装下的东西**。
+# 它答的是一个很具体的问题：*脚本头写了 `@scenario X`，它到底验没验 X？*
+# 所以现在不概括了，直接把那句话写出来 —— 「都验到了 / 部分没验到 / 多数没验到」。
+# 这三个短语里没有一个字需要读的人再解释一遍。
+VERDICT_CN = {"ok": "都验到了", "risky": "部分没验到", "bad": "多数没验到"}
+VERDICT_WHY = {
+    "ok": "脚本声明覆盖的场景，读下来都真在验那件事",
+    "risky": "一部分场景脚本认领了、但没真验：断言太松，或在这个环境里压根没跑",
+    "bad": "认领的那几条主要场景，多数没真验 —— 「已覆盖」这一栏当不了数",
+}
+
+# 「谁动手」。人最先想知道的不是严重度，是"这条要不要我处理" ——
+# 上一版三类混在一张表里，读的人自己在心里分栏，分完还得怀疑分对了没有。
+BLAME_CN = {
+    "script": ("QA 的脚本要改", "断言写得站不住：跑绿了也证明不了它认领的那件事"),
+    "env": ("不是脚本的问题：环境没铺东西",
+            "脚本可能写得很对，只是在这个环境里自己跳过了。"
+            "⚠ 我们只看得到**自己这侧**的环境记录，QA 跑的时候有没有，这儿判不了"),
+    "catalog": ("清单口径要商量", "脚本和环境都没错，是认领的口径对不上"),
+}
+BLAME_ORDER = ("script", "env", "catalog")
+
+
+def by_blame(rows: list[dict]) -> dict[str, list[dict]]:
+    """按「谁动手」分栏。认不出来的落 script（宁可多审一条，别漏发给仓库主人）。"""
+    out: dict[str, list[dict]] = {k: [] for k in BLAME_ORDER}
+    for g in rows or []:
+        out[g.get("blame") if g.get("blame") in out else "script"].append(g)
+    return out
+
+
+def to_markdown(r: QaCatalogReview) -> str:
+    """把一次评审渲染成一份**能直接拿走的** Markdown 报告。
+
+    这是 QA 那边取结论的唯一形态：**我们只生成文本，谁要谁自己拉**（`GET .../export`
+    或 MCP 的 `lum_get_qa_review`）。平台不会替他往 QA 仓里放文件 —— 那条线
+    `docs/qa-repo-readonly-catalog.md` §1 已经封死了，这里也不能从侧面开口子。
+
+    所以报告里必须自带三样，缺一样就没法复核：评的是哪个 commit、在哪个环境上评的、
+    哪几份脚本进了模型（还有哪几份被截断）。少了它们，两周后没人说得清这份结论
+    是对着哪一版脚本下的。
+    """
+    res = r.result or {}
+    b = brief_of(res)
+    L: list[str] = []
+    L.append(f"# QA 域评审 · {r.domain} {r.domain_name or ''}".rstrip())
+    L.append("")
+    L.append(f"- 结论：**{VERDICT_CN.get(res.get('verdict'), res.get('verdict') or '—')}**"
+             f"（{res.get('verdict') or '—'}）"
+             f" —— {VERDICT_WHY.get(res.get('verdict'), '')}".rstrip(" —"))
+    L.append(f"- QA 仓：`{r.branch or '—'}` @ `{(r.commit_sha or '')[:10] or '—'}`")
+    L.append(f"- 评审环境：{r.environment_name or '—'}（只拿变量名对账，不跑任何脚本）")
+    L.append(f"- 场景 {res.get('scenarioCount') or r.scenario_count} 条 · "
+             f"进模型的脚本 {len(res.get('reviewedScripts') or [])} 份")
+    L.append(f"- {r.actor or '—'} 发起于 "
+             f"{r.created_at.strftime('%Y-%m-%d %H:%M') if r.created_at else '—'}")
+    L.append("")
+
+    L.append("## 一句话（给人看）")
+    L.append("")
+    L.append(b.get("headline") or res.get("summary") or "—")
+    for x in b.get("points") or []:
+        L.append(f"- {x}")
+    if b.get("nextStep"):
+        L.append("")
+        L.append(f"**下一步**：{b['nextStep']}")
+    L.append("")
+
+    # 别人第一次看到这份结论，第一个念头是"你凭什么这么说" —— 先答了再往下看。
+    L.append("## 我是怎么看的")
+    L.append("")
+    L.append("1. 读清单里这个域的场景 —— 它**说要验**什么；")
+    L.append("2. 读认领了这些场景的脚本正文 —— 它**实际在验**什么；")
+    L.append("3. 一条条对，只问一个问题：**这条断言能不能失败？**"
+             "（改坏了会红，才算真在验；恒真的断言跑绿等于没跑。）")
+    L.append("")
+    cov0 = res.get("coverage") or {}
+    if cov0.get("scriptsRead"):
+        bat = cov0.get("batches") or 1
+        L.append(f"这一趟读了 **{cov0['scriptsRead']} 份脚本的正文**"
+                 + (f"（一次装不下，分 {bat} 批读完再合并）" if bat > 1 else "")
+                 + "、" + f"**{cov0.get('scenariosShown', 0)} 条场景**。")
+        L.append("")
+    L.append("**没做的事**：脚本一份都没真跑（只读正文），也没碰 QA 仓一个字。")
+    L.append("")
+
+    if b.get("solid"):
+        L.append("## 撑得住的部分")
+        L.append("")
+        for x in b["solid"]:
+            L.append(f"- {x}")
+        L.append("")
+
+    if res.get("summary"):
+        L.append("## 结论详述")
+        L.append("")
+        L.append(res["summary"])
+        L.append("")
+
+    L.append("## 抓到的问题（按谁动手分）")
+    L.append("")
+    L.append("> 脚本头写了 `@scenario`，但正文没验到那件事 —— `check-coverage.sh` 查不了这一层。")
+    L.append("")
+    rows = res.get("scriptGaps") or []
+    if not rows:
+        L.append("（这一轮没抓到）")
+    groups = by_blame(rows)
+    last_blame = None
+    for g in [x for k in BLAME_ORDER for x in groups[k]]:
+        blame = g.get("blame") if g.get("blame") in BLAME_CN else "script"
+        if blame != last_blame:
+            title, why = BLAME_CN[blame]
+            L.append(f"### {title}（{len(groups[blame])} 条）")
+            L.append("")
+            L.append(f"> {why}")
+            L.append("")
+            last_blame = blame
+        L.append(f"#### {g.get('id') or '—'} · {g.get('severity') or '—'}"
+                 + (f" · {g['oneLine']}" if g.get("oneLine") else ""))
+        L.append("")
+        if g.get("path"):
+            L.append(f"- 脚本：`{g['path']}`")
+        L.append(f"- 问题：{g.get('problem') or '—'}")
+        if g.get("evidence"):
+            L.append("- 判据（脚本原文）：")
+            L.append("")
+            L.append("  ```bash")
+            for line in str(g["evidence"]).splitlines()[:6]:
+                L.append(f"  {line}")
+            L.append("  ```")
+        if g.get("fix"):
+            L.append(f"- 建议改成：{g['fix']}")
+        L.append("")
+
+    L.append("## 这些名字我们这侧的环境记录里没有（**不是脚本的问题**）")
+    L.append("")
+    L.append(f"> 脚本引用的、或 `config` 里声明「要从外面传」的，而我们这条 "
+             f"**{r.environment_name or '所选环境'}** 记录里没有。代码算的，不是模型猜的。")
+    L.append(">")
+    L.append("> **这一列不构成对 QA 的意见。** 它只说明我们这侧没记着这些名字；"
+             "QA 自己的 runner 里有没有，平台看不到、也不该替他判。")
+    L.append("")
+    miss = res.get("envMissing") or []
+    if not miss:
+        L.append("（脚本要的变量这个环境都有）")
+    for v in miss:
+        L.append(f"- `{v.get('name')}` — {'、'.join(v.get('scripts') or []) or '—'}")
+    if miss:
+        L.append("")
+        L.append("⚠ 两件事别搞混：**在平台这边补上变量不会让 QA 的脚本真跑起来**"
+                 "（值要在真正跑套件的地方注入）；而平台这边没记着，也不等于那边缺。"
+                 "所以由这一列推出的结论一律只到「在这个环境里会跳过」，"
+                 "上面那节里它们都归在「不是脚本的问题」下。")
+    L.append("")
+
+    L.append("## 清单本身漏了什么")
+    L.append("")
+    L.append("> 建议而已 —— 清单是 QA 自己维护的，这边只读。")
+    L.append("")
+    cg = res.get("catalogGaps") or []
+    if not cg:
+        L.append("（没看出明显缺的一环）")
+    for g in cg:
+        L.append(f"- **{g.get('scenario') or g.get('problem') or '—'}** — {g.get('why') or ''}".rstrip(" —"))
+    L.append("")
+
+    L.append("## 待补的先做哪条")
+    L.append("")
+    nx = res.get("nextUp") or []
+    if not nx:
+        L.append("（这个域没有待补的场景）")
+    for i, g in enumerate(nx, 1):
+        L.append(f"{i}. **{g.get('id') or '—'}** — {g.get('why') or g.get('problem') or ''}")
+    L.append("")
+
+    L.append("## 这次读了什么")
+    L.append("")
+    cov = res.get("coverage") or {}
+    if cov.get("scenariosTotal", 0) > cov.get("scenariosShown", 0):
+        L.append(f"> ⚠ 这个域共 {cov['scenariosTotal']} 条场景，进模型的只有前 "
+                 f"{cov['scenariosShown']} 条（P0/P1 和高风险优先），"
+                 f"**其余 {cov['scenariosTotal'] - cov['scenariosShown']} 条这次没评**。")
+        L.append("")
+    if cov.get("scriptsTotal", 0) > cov.get("scriptsRead", 0):
+        L.append(f"> ⚠ 这个域挂了 {cov['scriptsTotal']} 份脚本，这次只读进 "
+                 f"{cov['scriptsRead']} 份 —— 没读到的那几份不在下面这张表里。")
+        L.append("")
+    if (cov.get("batches") or 1) > 1:
+        L.append(f"> 这个域的脚本一次装不进一轮对话，分了 {cov['batches']} 批读，"
+                 f"每批都拿到完整场景清单，最后合并 —— **{cov.get('scriptsRead')} 份全读了**，"
+                 "不是抽了几份。")
+        L.append("")
+    if cov.get("batchesFailed"):
+        bad = "、".join(f"第 {i} 批" for i in cov["batchesFailed"])
+        L.append(f"> ⚠ **{bad}没读成**（网关限流或超时），那几批里的脚本这一趟等于没看 —— "
+                 "下面「没抓到问题」的部分不包括它们。重跑一次这个域就补上了。")
+        L.append("")
+    for sc in res.get("reviewedScripts") or []:
+        L.append(f"- `{sc.get('path')}`{'（正文已截断，截断的不下结论）' if sc.get('truncated') else ''}")
+    L.append("")
+    L.append("---")
+    L.append("")
+    L.append("由 Lumiere 域级 AI 评审生成，只读了 QA 仓的清单与脚本正文，"
+             "**没有对该仓库做任何写操作**。结论是建议，不是门禁。")
+    return "\n".join(L)
+
+
 def to_dict(r: QaCatalogReview) -> dict:
     return {
         "id": str(r.id),
@@ -454,7 +949,8 @@ def to_dict(r: QaCatalogReview) -> dict:
         "status": r.status,
         "scenarioCount": r.scenario_count,
         "scriptCount": r.script_count,
-        "result": r.result,
+        # 老记录没有 brief（后加的字段），读的时候补上——不补就是页面上一页空白
+        "result": ({**r.result, "brief": brief_of(r.result)} if r.result else r.result),
         "error": r.error,
         "createdAt": r.created_at.isoformat() if r.created_at else None,
         "finishedAt": r.finished_at.isoformat() if r.finished_at else None,

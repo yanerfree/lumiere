@@ -251,6 +251,39 @@ async def list_qa_reviews(
     return {"data": {"reviews": [qa_catalog_review.to_dict(r) for r in rows]}}
 
 
+@router.get("/reviews/{review_id}/export")
+async def export_qa_review(
+    project_id: uuid.UUID,
+    review_id: uuid.UUID,
+    fmt: str = Query(default="md", alias="format", description="md | json"),
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+):
+    """把一次评审导出成能拿走的文本。**QA 那边取结论走这里（拉），不是我们推。**
+
+    平台永远不往 QA 仓写（`docs/qa-repo-readonly-catalog.md` §1）。所以"让 QA 拿到
+    评审结果"只能做成一份**他自己来拉**的产物：这个接口给全文，
+    MCP 的 `lum_get_qa_review` 给同一份东西（QA 那边跑 Claude Code 时用）。
+    拿到之后放不放进他自己的仓库、放哪，是他的决定，不是我们的动作。
+
+    `format=md` 回 Markdown 全文（含判据锚点，可直接贴 issue / 交给 AI 改脚本），
+    `format=json` 回结构化原文（要自己拼报表时用）。
+    """
+    r = await session.get(QaCatalogReview, review_id)
+    if r is None or str(r.project_id) != str(project_id):
+        raise AppError(code="REVIEW_NOT_FOUND", message="找不到这次评审", status_code=404)
+    if r.status != "done":
+        raise AppError(code="REVIEW_NOT_DONE",
+                       message=f"这次评审还没出结论（{r.status}），没有可导出的内容",
+                       status_code=400)
+    if fmt == "json":
+        return {"data": qa_catalog_review.to_dict(r)}
+    return {"data": {
+        "filename": f"qa-review-{r.domain}-{(r.commit_sha or '')[:7]}.md",
+        "markdown": qa_catalog_review.to_markdown(r),
+    }}
+
+
 @router.get("/reviews/{review_id}")
 async def get_qa_review(
     project_id: uuid.UUID,
