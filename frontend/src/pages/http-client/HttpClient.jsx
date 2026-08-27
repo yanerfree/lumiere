@@ -137,8 +137,11 @@ export default function HttpClient() {
     try {
       const item = items.find(i => i.id === id)
       if (item?.type === 'folder') {
-        const children = items.filter(i => i.parentId === id)
-        children.forEach(c => closeTab(c.id))
+        // 目录有两层，子目录里的请求也会被后端一起删掉 —— 标签页不跟着关就会留下一个 id 已经不存在的 tab，
+        // 之后自动保存会 404 在一个看不出来源的地方
+        const kids = items.filter(i => i.parentId === id)
+        const grandKids = items.filter(i => kids.some(k => k.id === i.parentId))
+        ;[...kids, ...grandKids].forEach(c => closeTab(c.id))
       }
       await api.delete(`/http-client/requests/${id}`)
       message.success('已删除')
@@ -153,53 +156,51 @@ export default function HttpClient() {
       fetchItems()
     } catch {}
   }
+  // 目录只有两层：一级目录 → 子目录 → 请求。往目录里放目录之前先过这一关，返回非空就是不能放
+  const folderNestError = (folder, parent) => {
+    if (!parent) return null
+    if (parent.parentId) return '目录最多两层，子目录里不能再放目录'
+    if (items.some(i => i.type === 'folder' && i.parentId === folder.id)) return '这个目录下还有子目录，挪进去会超过两层'
+    return null
+  }
   const handleDragDrop = async (srcId, targetId, pos) => {
     if (!srcId || srcId === targetId) return
     const src = items.find(i => i.id === srcId)
     const target = items.find(i => i.id === targetId)
     if (!src || !target) return
+    const srcIsFolder = src.type === 'folder'
     const targetIsFolder = target.type === 'folder'
 
+    // 落在目录中间 = 放进这个目录
     if (targetIsFolder && pos === 'inside') {
+      if (srcIsFolder) {
+        const err = folderNestError(src, target)
+        if (err) { message.warning(err); return }
+        if (src.parentId === targetId) return
+      }
       await handleMove(srcId, targetId)
       setExpandedFolders(s => ({ ...s, [targetId]: true }))
       return
     }
 
-    if (targetIsFolder && !target.parentId) {
-      const allFolders = items.filter(i => i.type === 'folder' && i.id !== srcId)
-      const targetIdx = allFolders.findIndex(i => i.id === targetId)
-      if (targetIdx < 0) return
-      const insertIdx = pos === 'below' ? targetIdx + 1 : targetIdx
-      if (src.type === 'folder') {
-        allFolders.splice(insertIdx, 0, src)
-      } else {
-        const sortItems = [{ id: srcId, sort_order: 0, parent_id: '' }]
-        try {
-          await api.post('/http-client/requests/batch-sort', { items: sortItems })
-          fetchItems()
-        } catch {}
-        return
-      }
-      const sortItems = allFolders.map((s, idx) => ({
-        id: s.id, sort_order: (idx + 1) * 100, parent_id: ''
-      }))
-      try {
-        await api.post('/http-client/requests/batch-sort', { items: sortItems })
-        fetchItems()
-      } catch {}
-      return
-    }
-
+    // 落在上下边缘 = 和 target 做同级。目录和请求各排一串（树上目录也是先渲染的），
+    // 拖到另一类旁边就落到本类末尾，别混进对方的序里
     const newParentId = target.parentId || null
+    if (srcIsFolder && newParentId) {
+      const err = folderNestError(src, items.find(i => i.id === newParentId))
+      if (err) { message.warning(err); return }
+    }
     const siblings = items.filter(i => {
       if (i.id === srcId) return false
-      if (i.type === 'folder') return false
+      if ((i.type === 'folder') !== srcIsFolder) return false
       return newParentId ? i.parentId === newParentId : !i.parentId
     })
-    const targetIdx = siblings.findIndex(i => i.id === targetId)
-    if (targetIdx < 0) return
-    const insertIdx = pos === 'below' ? targetIdx + 1 : targetIdx
+    let insertIdx = siblings.length
+    if (targetIsFolder === srcIsFolder) {
+      const targetIdx = siblings.findIndex(i => i.id === targetId)
+      if (targetIdx < 0) return
+      insertIdx = pos === 'below' ? targetIdx + 1 : targetIdx
+    }
     siblings.splice(insertIdx, 0, src)
     const sortItems = siblings.map((s, idx) => ({
       id: s.id,
@@ -227,11 +228,20 @@ export default function HttpClient() {
       const r = await api.post('/http-client/requests', { type: item.type, name: item.name + ' 副本', method: item.method, url: item.url, parent_id: item.parentId || null })
       const d = r.data || r
       if (item.type === 'folder') {
-        const children = items.filter(i => i.parentId === item.id)
-        for (const child of children) {
-          const cr = await api.post('/http-client/requests', { type: 'request', name: child.name, method: child.method, url: child.url, parent_id: d.id })
+        const copyRequestInto = async (parentId, req) => {
+          const cr = await api.post('/http-client/requests', { type: 'request', name: req.name, method: req.method, url: req.url, parent_id: parentId })
           const cd = cr.data || cr
-          await api.put(`/http-client/requests/${cd.id}`, { headers: child.headers, body: child.body, body_type: child.bodyType })
+          await api.put(`/http-client/requests/${cd.id}`, { headers: req.headers, body: req.body, body_type: req.bodyType })
+        }
+        for (const child of items.filter(i => i.parentId === item.id)) {
+          if (child.type === 'folder') {
+            // 只复制到第二层就停 —— 树本来就只有两层，再往下递归只会造出后端拒收的第三层
+            const sr = await api.post('/http-client/requests', { type: 'folder', name: child.name, parent_id: d.id })
+            const sd = sr.data || sr
+            for (const g of items.filter(i => i.parentId === child.id && i.type === 'request')) await copyRequestInto(sd.id, g)
+          } else {
+            await copyRequestInto(d.id, child)
+          }
         }
       } else {
         await api.put(`/http-client/requests/${d.id}`, { headers: item.headers, body: item.body, body_type: item.bodyType })
@@ -274,6 +284,21 @@ export default function HttpClient() {
   const resp = activeItem ? responses[activeItem.id] : null
   const isSending = activeItem ? sending[activeItem.id] : false
   const rootRequests = requests.filter(r => !r.parentId)
+  const rootFolders = folders.filter(f => !f.parentId)
+  // 移动菜单的候选要带路径：两个一级目录下各有一个「上游」子目录时，光看名字在菜单里分不出来
+  const folderOptions = rootFolders.flatMap(f => [
+    { id: f.id, label: f.name },
+    ...folders.filter(s => s.parentId === f.id).map(s => ({ id: s.id, label: `${f.name} / ${s.name}` })),
+  ])
+  const moveTargets = (item) => {
+    const out = item.parentId ? [{ id: null, label: '根目录' }] : []
+    folderOptions.forEach(o => {
+      if (o.id === item.id || o.id === item.parentId) return
+      if (item.type === 'folder' && folderNestError(item, folders.find(f => f.id === o.id))) return
+      out.push(o)
+    })
+    return out
+  }
 
   // ── 文本域搜索：请求 Body + 响应 Body，忽略大小写的包含匹配 ──
   const respBodyText = useMemo(() => {
@@ -336,7 +361,9 @@ export default function HttpClient() {
 
   const renderTreeItem = (item, depth = 0) => {
     const isFolder = item.type === 'folder'
-    const children = isFolder ? requests.filter(r => r.parentId === item.id) : []
+    const children = isFolder
+      ? [...folders.filter(f => f.parentId === item.id), ...requests.filter(r => r.parentId === item.id)]
+      : []
     const isEditing = editingNameId === item.id
     const isActive = !isFolder && activeTabId === item.id
     const isHover = hoverItemId === item.id || popupItemId === item.id
@@ -399,13 +426,12 @@ export default function HttpClient() {
           {isHover && !isEditing && (
             <span style={{ display: 'flex', gap: 2, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
               {isFolder && <Tooltip title="新建请求"><PlusOutlined style={{ fontSize: 11, color: '#86909c', padding: 2 }} onClick={() => { handleCreate('request', item.id); setExpandedFolders(s => ({ ...s, [item.id]: true })) }} /></Tooltip>}
-              {!isFolder && folders.length > 0 && (
+              {/* 子目录里不给这个入口 —— 目录一共两层 */}
+              {isFolder && !item.parentId && <Tooltip title="新建子目录"><FolderAddOutlined style={{ fontSize: 11, color: '#86909c', padding: 2 }} onClick={() => { handleCreate('folder', item.id); setExpandedFolders(s => ({ ...s, [item.id]: true })) }} /></Tooltip>}
+              {moveTargets(item).length > 0 && (
                 <Dropdown
                   onOpenChange={open => { if (open) setPopupItemId(item.id); else { setPopupItemId(null); setHoverItemId(null) } }}
-                  menu={{ items: [
-                    ...(item.parentId ? [{ key: '__root', label: '根目录', onClick: () => handleMove(item.id, null) }] : []),
-                    ...folders.filter(f => f.id !== item.parentId).map(f => ({ key: f.id, label: f.name, onClick: () => handleMove(item.id, f.id) }))
-                  ] }}
+                  menu={{ items: moveTargets(item).map(t => ({ key: t.id || '__root', label: t.label, onClick: () => handleMove(item.id, t.id) })) }}
                   trigger={['click']}
                 >
                   <Tooltip title="移动"><FolderOutlined style={{ fontSize: 11, color: '#86909c', padding: 2 }} /></Tooltip>
@@ -425,7 +451,12 @@ export default function HttpClient() {
           )}
         </div>
         {isFolder && isExpanded && children.map(c => renderTreeItem(c, depth + 1))}
-        {isFolder && isExpanded && children.length === 0 && <div style={{ padding: `3px 8px 3px ${26 + depth * 16}px`, fontSize: 11, color: '#c9cdd4', cursor: 'pointer' }} onClick={() => handleCreate('request', item.id)}>+ 新建请求</div>}
+        {isFolder && isExpanded && children.length === 0 && (
+          <div style={{ padding: `3px 8px 3px ${26 + depth * 16}px`, fontSize: 11, color: '#c9cdd4', display: 'flex', gap: 10 }}>
+            <span style={{ cursor: 'pointer' }} onClick={() => handleCreate('request', item.id)}>+ 新建请求</span>
+            {!item.parentId && <span style={{ cursor: 'pointer' }} onClick={() => handleCreate('folder', item.id)}>+ 新建子目录</span>}
+          </div>
+        )}
       </div>
     )
   }
@@ -482,7 +513,7 @@ export default function HttpClient() {
             <div style={{ flex: 1, overflow: 'auto' }}
               onDragOver={e => { if (dragId) e.preventDefault() }}
               onDrop={async e => { e.preventDefault(); if (dragId) { await handleMove(dragId, null); setDragId(null); setDragOverId(null); setDragPos(null) } }}>
-              {folders.map(f => renderTreeItem(f))}
+              {rootFolders.map(f => renderTreeItem(f))}
               {rootRequests.map(r => renderTreeItem(r))}
               {items.length === 0 && <div style={{ textAlign: 'center', padding: 30, color: '#c9cdd4', fontSize: 12 }}>点击上方新建</div>}
             </div>

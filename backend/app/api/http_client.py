@@ -75,6 +75,10 @@ async def list_requests(session: AsyncSession = Depends(get_db)):
 
 @router.post("/requests", status_code=201)
 async def create_request(body: RequestCreate, session: AsyncSession = Depends(get_db)):
+    if body.parent_id:
+        err = await _nest_error(session, body.type, uuid.UUID(body.parent_id), None)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
     item = HttpRequest(
         type=body.type,
         name=body.name,
@@ -96,6 +100,9 @@ async def update_request(item_id: uuid.UUID, body: RequestUpdate, session: Async
     data = body.model_dump(exclude_unset=True)
     if "parent_id" in data:
         data["parent_id"] = uuid.UUID(data["parent_id"]) if data["parent_id"] else None
+        err = await _nest_error(session, item.type, data["parent_id"], item.id)
+        if err:
+            return JSONResponse({"error": err}, status_code=400)
     for k, v in data.items():
         setattr(item, k, v)
     await session.flush()
@@ -105,8 +112,19 @@ async def update_request(item_id: uuid.UUID, body: RequestUpdate, session: Async
 
 @router.delete("/requests/{item_id}")
 async def delete_request(item_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
-    await session.execute(delete(HttpRequest).where(HttpRequest.parent_id == item_id))
-    await session.execute(delete(HttpRequest).where(HttpRequest.id == item_id))
+    # 目录有两层，只删直接子级会留下「父目录已经不存在」的孤儿行：它们再也不会出现在树上，
+    # 但仍然占着列表和顶部那个请求计数 —— 删不掉也看不见，比报错难查。所以按层往下收。
+    ids = [item_id]
+    frontier = [item_id]
+    for _ in range(4):  # 一级目录 → 子目录 → 请求，四轮兜住；同时防脏数据成环
+        if not frontier:
+            break
+        rows = await session.execute(
+            select(HttpRequest.id).where(HttpRequest.parent_id.in_(frontier))
+        )
+        frontier = [r for (r,) in rows.all() if r not in ids]
+        ids.extend(frontier)
+    await session.execute(delete(HttpRequest).where(HttpRequest.id.in_(ids)))
     return {"ok": True}
 
 
@@ -116,6 +134,10 @@ async def batch_sort(body: BatchSortRequest, session: AsyncSession = Depends(get
         values = {"sort_order": item.sort_order}
         if item.parent_id is not None:
             values["parent_id"] = uuid.UUID(item.parent_id) if item.parent_id else None
+            row = await session.get(HttpRequest, uuid.UUID(item.id))
+            err = await _nest_error(session, row.type, values["parent_id"], row.id) if row else None
+            if err:
+                return JSONResponse({"error": err}, status_code=400)
         await session.execute(
             update(HttpRequest)
             .where(HttpRequest.id == uuid.UUID(item.id))
@@ -194,6 +216,37 @@ async def clear_history():
 
 
 # ── 工具 ──
+
+async def _nest_error(
+    session: AsyncSession, item_type: str, parent_id: uuid.UUID | None, item_id: uuid.UUID | None
+) -> str | None:
+    """目录只有两层：一级目录 → 子目录 → 请求。返回非空就是这次挪动/新建不能做。
+
+    前端已经按这个规则画树了，这里再拦一次是因为越界的行不会报错、只会从树上消失
+    （renderTreeItem 只从根往下递归两层），到时候是一条查不出来源的「请求不见了」。
+    """
+    if parent_id is None:
+        return None
+    parent = await session.get(HttpRequest, parent_id)
+    if parent is None:
+        return "父级不存在"
+    if parent.type != "folder":
+        return "父级不是目录"
+    if item_id is not None and parent_id == item_id:
+        return "不能移动到自己里面"
+    if item_type == "folder":
+        if parent.parent_id:
+            return "目录最多两层，子目录里不能再放目录"
+        if item_id is not None:
+            kids = await session.execute(
+                select(HttpRequest.id).where(
+                    HttpRequest.parent_id == item_id, HttpRequest.type == "folder"
+                )
+            )
+            if kids.first():
+                return "这个目录下还有子目录，挪进去会超过两层"
+    return None
+
 
 def _to_dict(r: HttpRequest) -> dict:
     return {
