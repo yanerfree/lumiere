@@ -24,7 +24,7 @@ const CAT_COLORS = {
   '需求→用例流水线': 'magenta', 'UI 脚本': 'volcano', '执行报告': 'purple',
   '项目须知': 'magenta', 'Mock 与观测': 'cyan',
   '文档规范': 'gold', 'Skill 共享': 'lime', '失败归因': 'error',
-  '版本升级·分支对账': 'gold', '其它': 'default',
+  '版本升级·分支对账': 'gold', 'QA 仓对账': 'processing', '其它': 'default',
 }
 
 /*

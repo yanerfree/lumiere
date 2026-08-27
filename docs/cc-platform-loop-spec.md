@@ -2219,3 +2219,375 @@ CC 自己推进一批时只能逐条送审，而 review-spec §5 建那条队列
 （`branches` 没有 `is_active`、`cases.source` NOT NULL）—— 改用 ORM；
 setup 半路挂掉时事务是坏的，不先 `rollback()` 清理语句一条都执行不了，
 于是在库里留了个空分支。清理现在先回滚，并顺手收历次残骸。
+
+---
+
+## 14. 「文档管理」模块下线 + 「API 接口」入口下掉（2026-08-27）
+
+两件事一起做的，但**性质不一样，别当成一件**：
+
+- **「API 接口」只下入口** —— 菜单项没了，路由、页面、接口库表、MCP 那几个工具全在。
+- **「文档管理」是整个模块下线** —— 页面、路由、后端路由、生成服务、SKILL.md、
+  MCP 工具、档位全删；表和迁移留着。
+
+### 14.1 「API 接口」为什么只下入口
+
+单接口要验什么，用例那边已经全覆盖得到：`case_type=api` 的步骤用例负责
+「某个接口的参数/权限」，绑用例的接口场景负责真跑。菜单里那个「API 接口」点进去
+是**同一批接口的另一种看法** —— 多一条路，进去的人反而要先选一次。
+
+> **⚠ 更正（同日，用户问「mcp 用的不是场景的嘛」之后查的）。**
+> 这一节原来写的是「接口库本身是活的，MCP 的 `lum_list_api_tree` /
+> `lum_create_api_node` 在写它」。**不对 —— 库里没有任何 MCP 写入的痕迹。**
+>
+> | 查的 | 结果 |
+> |---|---|
+> | `api_nodes` 总数 / 最后写入 | **12 条**，最后 **2026-07-10**（7 周前） |
+> | 这 12 条叫什么 | 全是 `新建接口` / `新建文件夹` —— 页面点"新建"的默认名 |
+> | 7 个 `endpoint` 的 `url` | **一个都没填**（`count(*) filter (where url='') = 7`） |
+> | MCP 写过什么 | `audit_logs` 里 `actor_type='mcp'` **只有 `case`**：159 条，最新今天 |
+> | 绑用例的接口场景 | **52 条，52 条都绑了用例**，最新今天 |
+>
+> `lum_create_api_node` 的 `name` 是必填参数，MCP 调用不可能留下
+> 「新建接口」这种页面默认名 —— 所以这 12 条**全是人在页面上点出来的空壳**。
+> 结论倒过来说：**MCP 用的是用例 + 绑用例的接口场景，不是接口库**，
+> 跟「接口场景只有一种：绑用例的编排链」那条红线本来就是一致的。
+>
+> 那为什么还留着路由和页面？理由换了一个：**只是让存了书签的人别白屏**，
+> 不是「还在被用」。工具和 `apidoc` 档位也留着 —— 它们是只读查询为主
+> （`lum_get_api_node` 在"编排前查这个接口怎么调"时确实有用），
+> 删工具是另一件事，要单独决定，别夹在下入口这一笔里做掉。
+
+所以：
+
+| | 处理 |
+|---|---|
+| `App.jsx` 里 `menu.apis` 菜单项 | 删（连原因一起写在原地） |
+| `/projects/:projectId/apis` 路由 + 页面 | **原样保留**，存了书签的照样能进 |
+| `i18n.jsx` 的 `menu.apis` 键 | **留着**，恢复入口时不用再翻一遍 |
+| 接口库表 / MCP 工具 / `apidoc` 档位 | 一个字没动（见上面的更正：留着的理由不是"在被写"） |
+
+### 14.2 「文档管理」为什么整个下
+
+不是"没人用"。是**这条产物没有对照物**：
+
+- 截图靠通用启发式点菜单（"找找看有没有叫这个名字的入口"），认不准就截一堆列表页；
+- 文字是 AI 看着那些图编的，**没有需求做对照** —— 写得对不对，没有任何东西能判；
+- 平台这边连"它有没有被写出来"都不知道，产物落在 `documents` 表里就没有下游了。
+
+跟红线 1 是同一个道理，只是这次的判据更硬：**测试产物至少还能拿去跑一遍见红绿，
+文档产物连红绿都没有。** 要文档就在 Claude Code 里自己实操系统写 ——
+那边有真浏览器、有仓库、有需求。
+
+### 14.3 删了什么，留了什么
+
+**删掉的（`git rm`，不是注释掉）**：
+
+| 文件 | 行数 | 是什么 |
+|---|---|---|
+| `frontend/src/pages/documents/Documents.jsx` | 624 | 模块页 |
+| `backend/app/api/documents.py` | 688 | `/api/projects/{id}/documents/*` 整组路由 |
+| `backend/app/services/doc_generator.py` | 549 | 平台侧驱动浏览器截图 + AI 写文档 |
+| `backend/app/mcp/tools/documents.py` | 83 | `lum_get_doc_spec` |
+| `backend/app/skills/preset/lum-doc-generate/SKILL.md` | 303 | 模板 + 平台侧 prompt |
+
+连带删掉的：`App.jsx` 菜单项和 import、`i18n.jsx` 的 `menu.documents`（这个键
+**没留** —— 跟 `menu.apis` 不一样，那边入口还会回来，这边不会）、`main.py` 的
+`include_router`、`mcp/__init__.py` 的注册 + instructions 里那一整段文档流程、
+`profiles.py` 的 `doc` 档位。
+
+**留着的**：
+
+| 留着的 | 为什么 |
+|---|---|
+| `documents` 表 + 5 条迁移 + model | 库里 5 条真数据（最后写入 2026-07-01）。删表是毁数据，跟下线是两件事。⚠ 见 §14.6 —— 光"不删"是不够的 |
+| `ai_capabilities.py` 三条 key（`doc-generate` / `-screenshots` / `doc-optimize`） | **标 `deprecated: True` + `deprecatedNote`，不删**。删了 `category_of()` 会走 `.get(cap,"text")` 兜底静默降档；而且"曾经有过这个能力、为什么没了"本身该留在清单里 |
+| `SkillManage.jsx` 的 `lum-doc-generate` 卡片 | 改 `status: 'retired'`。**标"可用"会露出一个点了就 404 的编辑按钮** —— SKILL.md 文件本身已经删了，跟 `lum-script-generate` 当初一模一样的坑 |
+| `METERED_SINCE` 里那三条 | 纯展示，历史用量还要按它归档 |
+
+### 14.4 `lum_get_doc_spec` 是被连坐的 —— 这一条要说清楚
+
+它不是平台侧生成，它是**发模板给外部 CC、让 CC 自己实操系统写文档**那条通道
+（Model B），方向上恰恰是对的、也是当初专门建的。
+
+它跟着一起下，**唯一原因是它没有独立的模板来源**：`_load_format_template()`
+是从 `lum-doc-generate/SKILL.md` 里切片出来的，而那份 SKILL.md 已经删了。
+留着它 = **发一份不存在的模板**，比没有更糟。
+
+要恢复这条通道，正确做法是**给它写一份自己的模板**（不寄生在平台侧生成的 SKILL.md
+上），而不是把整个模块加回来。
+
+### 14.5 盯着这次改动的封样测试（都改了，没有一条被放宽）
+
+删横切的东西，最容易留下的不是编译错误，是**恒真的断言**：
+
+| 测试 | 原来断什么 | 改成什么 |
+|---|---|---|
+| `test_endpoint_auth.py` | `/documents/tasks/{task_id}` 在「故意公开」白名单里 | 从白名单删掉。那条测试会核「白名单里每条都真的是路由」，不删就是**必红** |
+| `test_ai_usage_visibility.py` | `api/documents.py` 要在 AI 用量清单里 | 换成注释；另加一条断 `lum-doc-generate` 卡片状态必须是 `retired` |
+| `test_mcp_profiles.py` | 全链路档不含 `lum_get_doc_spec` | **工具都没了，"不在某档里"是恒真的**。改成 `"lum_get_doc_spec" not in NAMES` —— 更硬，且能挡住"哪天又被注册回来" |
+
+**顺带修掉两条会周期性假红的守卫**（不是这次改坏的，是这次撞出来的）：
+
+- `test_单件活的档位都比全量小得多` 原来判 `len(tools) < len(NAMES) * 0.6`。
+  下线一个工具之后 `live` 从 35/59 变成 35/58，**档位一个工具都没多放，
+  分母小了一个百分比就自己越线** —— 假红。分母会随着每次下线继续缩，
+  这个判据不改就会周期性假红，而每次只能靠调阈值糊过去，调着调着就什么都不守了。
+  改成按**排除了几个**判（阈值 15，当下最小的 `live` 排除 23 个，留了余量）。
+- `test_全链路档大_但仍然挡住那几条岔路` 的 `excluded >= 5` 改成 `>= 4`。
+  少的那一个正是 `lum_get_doc_spec` —— **它从注册表里消失了，不是被放进了这一档**，
+  而它那一条已经升级成上面那个 `not in NAMES`。
+
+### 14.6 差点把那 5 条数据删掉：模型没人 import 了
+
+`Document` 模型原本是靠 `api/documents.py` 那条 import 链进 `Base.metadata` 的。
+路由文件一删，**模型还在，但没有任何地方 import 它** —— metadata 里就没有这张表了。
+后果不是"少个功能"，是三件事：
+
+1. **`alembic revision --autogenerate` 会提议 `op.drop_table('documents')`**。
+   模型里没有、库里有 → autogenerate 认为这张表该删。合进去就是把那 5 条数据删掉，
+   而 diff 上只有一行。`alembic/env.py` 里那句
+   「**不 import 的话 autogenerate 会提议 DROP 掉它们**」写的就是这个坑，
+   只是这次是从相反方向踩进去的：不是忘了加 import，是删掉了唯一那条 import。
+2. `Base.metadata.create_all` 建的测试库里不再有这张表。
+3. `tests/unit/core/test_schema_invariants.py` 的 CASCADE 封样直接红
+   （`表名对不上，模型改过？缺：['documents']`）—— **是它先把这件事喊出来的**，
+   不然这个洞会一直躺到某次 autogenerate。
+
+修法：`app/models/__init__.py` 里显式 import 一次（那个文件此前是空的），
+并在 docstring 里写明它只放"没有别的地方会 import 它"的模型。
+放这儿而不是 `env.py`，是因为 `env.py` 和 `app.main` 两条路都会经过 `app.models`
+包的 `__init__` —— 一处补上，autogenerate 和运行时都盖到。
+
+**这条留给下一次下线用**：删一个模块的路由文件时，先问一句
+「这个模块的模型还有别人 import 吗」。表留着 ≠ 数据安全。
+
+后端单测 **1413 条全过**；根目录那套（打真接口）**498 条全过**
+（`DATABASE_URL` 用的独占库 `lumiere_test_doctakedown`）。
+
+### 14.7 页面自测（Playwright，断到内容不看状态码）
+
+| 验的 | 结果 |
+|---|---|
+| 左侧菜单里「API 接口」「文档管理」都没了 | ✅ |
+| 其余入口一个没少（下错比没下更糟） | ✅ 用例管理/测试计划/测试报告/探索测试都在 |
+| 老书签 `/projects/:id/documents` | ✅ 落到用例页且有正文 —— 全站没有兜底 404，不留重定向就是一片空白内容区 |
+| `/projects/:id/apis` 仍可直达 | ✅ 说好只下入口，页面原样在 |
+| 「能力总览」三条 doc-* 挪进「已下线 / 已封存」段 | ✅ 4 在用 / 9 已下线，在用段不再出现「文档管理」 |
+| 「Skill 管理」`lum-doc-generate` 卡片 | ✅ 标「已下线」、**没有「编辑」按钮**（SKILL.md 已删，露出来点下去就是 404） |
+| 页面 JS 报错 | ✅ 无 |
+
+**踩到一次假象，记一笔**：8756 上跑的后端是主仓的代码，不是这个 worktree 的。
+直接开页面看到的还是「7 在用 / 6 已下线」—— 那是**后端没重启**，不是改动没生效。
+分清这件事的办法是直接 import worktree 的 `CAPABILITY_REGISTRY` 数一遍
+（4 / 9），再把响应里的 `registry` 换成它验渲染路径。
+不分清就会得出"改了没用"的结论，然后回去改本来是对的代码。
+
+## 15. 「探索测试」下线（2026-08-27）
+
+用户的原话是「**具体还要看这个功能做的怎么样，如果不太好直接下掉，
+如果还可以就抽出来一个 mcp**」。查完是前者，理由不是"没人用"（那是结果不是原因），
+是**它的输出跟被测系统没有关系**。
+
+### 15.1 它实际产出什么
+
+链路是四步：建会话 →「AI 生成章程」→ 人逐项勾检查点 → 生成总结报告。
+`POST /sessions/{id}/generate-charter` 喂给模型的上下文只有两样：
+
+```python
+api_tree = await api_endpoints.list_api_tree(session, str(project_id))
+endpoints = [n for n in api_tree if n.get("type") == "endpoint"]
+api_text = "\n".join(f"- {ep['method']} {ep['url']} ({ep['name']})" for ep in endpoints[:20])
+# → f"目标模块: {target_module}\n时间限制: {n}分钟\n\n项目API接口:\n{api_text or '（无录入）'}"
+```
+
+**而接口库全库 7 个 `endpoint` 的 `url` 一个都没填**（见 §14.1 的更正表）。
+有探索会话的那个项目里两个接口，拼出来的原文逐字是：
+
+```
+- GET  (新建接口)
+- GET  (新建接口)
+```
+
+也就是说模型真正拿到的上下文**就是模块名那几个字**。出来的东西自然长这样
+（库里那条真章程的原文，不是编的）：
+
+| 检查点 | |
+|---|---|
+| 1 用户创建功能 | 必填字段验证、重复用户检测、特殊字符处理 |
+| 2 用户信息查询 | 列表展示、搜索过滤、分页功能、权限隔离 |
+| 6 边界值与异常处理 | 空值、超长输入、SQL注入、XSS攻击、并发操作 |
+
+**换任何一个系统的"用户管理"模块，这份章程逐字都成立。** 它不是探索的结果，
+是"用户管理该测什么"的通用清单 —— 那种清单模型不看系统也写得出来，
+所以它没有把任何信息从被测系统里搬出来。
+
+### 15.2 章程之后没有执行
+
+章程只是文字。勾检查点（`complete-checkpoint`）、写发现（`findings`）
+全是人手填的表单，平台不驱动浏览器、不发请求、不截图。
+`ExploratoryFinding.screenshot_url` 有这个字段，唯一那条发现里是空的。
+
+留下的痕迹：**3 个会话、0 个检查点被勾过、1 条发现**，
+全在 2026-06-26 一天里（自测），之后两个月没人碰。
+`0/8`、`0/10` 这两个数说的就是「章程生成完，人没有接着往下走」。
+
+### 15.3 那"抽成 MCP"呢 —— 已经有了，而且是活的
+
+探索这件事的价值在**真去点一遍**，不在"列一份该测什么"。
+外部 Claude Code 本来就能点（Playwright / `lum_proxy_capture` 看页面真发了什么），
+而对账那半边平台早就有了：
+
+```
+lum_module_checkup(branch_id, module, observed_actions=[...])
+```
+
+`observed_actions` 就是「你在页面上探到的可操作项」，
+返回的 `coverageGaps` 是拿它跟现有用例对账出来的 ——
+**「页面上有这个操作、用例里一条都没覆盖」是最硬的缺口**，
+而这正是探索测试想要的产物。区别在于：
+
+| | 探索测试（下线的） | `lum_module_checkup` |
+|---|---|---|
+| 输入 | 模块名（接口库是空的） | 真在页面上探到的可操作项 |
+| 产出 | 通用检查清单 | 跟现有用例求差集的缺口 |
+| 谁去点 | 人，手填表单 | CC 自己点 |
+| 落到哪 | `exploratory_findings`（1 条） | 直接变成待补用例 |
+
+所以**不新写 MCP 工具** —— 再抽一个只会跟 `lum_module_checkup` 抢同一件事，
+「同一件事上给出第二个声音」这个坑 `lum-diagnose` 那张卡上已经写过一次了。
+
+### 15.4 删了什么，留了什么
+
+| | 处理 |
+|---|---|
+| `frontend/src/pages/exploratory/Exploratory.jsx`（319 行） | 删 |
+| `backend/app/api/exploratory.py`（390 行） | 删（含 `include_router`） |
+| `App.jsx` 菜单项 + `BugOutlined` 导入 + `i18n.jsx` 的 `menu.exploratory` | 删 |
+| `/projects/:projectId/exploratory` 路由 | **改成 `RedirectToCases`** —— 全站没有兜底 404，直接删路由 = 老书签白屏 |
+| `exploratory_sessions` / `exploratory_findings` 两张表 + 迁移 + 3+1 条数据 | **留着**。删表是毁数据，跟下线是两件事 |
+| `app/models/exploratory.py` | **留着，并且补进 `app/models/__init__.py`** —— 见 §14.6，唯一那条 import 链（`api/exploratory.py`）删掉之后 autogenerate 会提议 `DROP TABLE`。`exploratory_sessions` 还在 `_MUST_CASCADE` 里，不补就是那三条后果原样再来一遍 |
+| `exploratory-charter` 能力 key | **标 `deprecated` 不删** —— 删了 `category_of()` 会静默降档 |
+| `SkillManage` 的 `lum-explore` 卡 | `inline` → `retired`，`where` 写明入口哪天下的 |
+
+### 15.5 顺带废掉了 SkillManage 的第四态 `inline`
+
+那一态（"已上线在跑，但没有独立 skill 文件、编辑按钮会 404"）**只为 `lum-explore` 存在**。
+卡片改成 `retired` 之后它没有使用者了，数据和渲染分支一起收掉，
+封样测试反过来守两句：`status === 'inline'` 和 `status: 'inline'` 都不许再出现 ——
+**留着死分支就是给下一个人一个"省事标 inline"的口子**（标了就绕开了
+"available 必须真有 SKILL.md"这条）。
+
+### 15.6 改了三处封样守卫，都不是放宽
+
+| 守卫 | 原来 | 现在 | 为什么 |
+|---|---|---|---|
+| `test_原来没记账的链路都补上了` | 断言 `api/exploratory.py` 里记了 `exploratory-charter` | 整条删掉，原地留注释 | 文件没了，留着断言就是必红 |
+| `assert "Tooltip" in jsx.split(...)` | 无条件要求 antd 导入里有 `Tooltip` | 条件式：用了才要求导入，**没用则要求删掉** | 收掉 `inline` 之后这页最后一处 `<Tooltip>` 也没了，无条件断言会红在"没导入一个没人用的组件"上 —— 守卫盯错了东西。真正要防的是**用了却没导入**（整页白屏 pageerror） |
+| `assert _status_of("lum-explore") == "inline"` | — | `== "retired"` | 状态跟着改 |
+
+第一版的 `assert "'inline'" not in jsx` **自己红了一次**：它把我写在原地的
+"为什么收掉 inline"那句注释也匹配上了。改成只断 `status === 'inline'` /
+`status: 'inline'` 两种真代码写法 —— **禁的是用法，不是禁提这个词**，
+不然下一个人只会看到一句"别用 inline"而不知道为什么。
+
+`scripts/selftest/scan_overflow.py` 里「探索测试」「文档管理」两条路由也一并摘掉：
+它们现在重定向到用例页，**留着不会红，只会把用例页重复扫两遍并冒充成两个页面的"已检查"**。
+
+## 16. 「接口库还在被谁写」——把它变成可查的（2026-08-27）
+
+### 16.1 事故本身：我断言错了，而且当时**没人能证伪**
+
+用户问「API 接口这块 MCP 在用吗」，我答了"在用"。用户一句
+「**mcp 用的不是场景的嘛**」把它顶了回来 —— 对的，MCP 写的是
+`api_test_scenarios`（绑用例的编排链），不是 `api_nodes`（接口库）。
+
+问题不在我记错，在**那句话当时无法被查证**：
+
+| 想查的 | 当时能查到的 |
+|---|---|
+| 接口库最近谁写过？ | 无。`api_collection_service` 的 6 个写函数**一行日志都不记** |
+| 是页面点的还是 MCP 写的？ | 无 |
+
+只能靠间接推断：库里 12 个节点全叫「新建接口」「新建文件夹」——
+那是页面新建的默认名，而 `lum_create_api_node` 的 `name` 是必填参数，
+不可能产出这种名字；7 个 endpoint 的 `url` 一个都没填；最后一次写入停在 2026-07-10。
+推断碰巧对了，**但那是运气**。
+
+> **一个查不出来的事实，等于一个可以随便断言的事实 —— 谁写在注释里就算谁的。**
+
+所以这次的修法不是"把注释改对"（下一个人照样只能猜），是让这个问题
+**从此有地方查**。
+
+### 16.2 四层，缺一层这事就会再发生一次
+
+| 层 | 做了什么 | 挡住的是哪种复发 |
+|---|---|---|
+| **能查** | `api_collection_service.py` 六个写路径全部 `_audit_node(...)` 记账 | 「问了也查不到」 |
+| **能筛** | 操作日志页 `TARGET_TYPES` 加 `api_node`，中文名「接口库」 | 记了但页面上筛不出来 = 等于没记 |
+| **能看见** | 接口库页顶常驻 `<Alert>`：这是文档、**不产生可执行测试**，可执行的在用例详情里 | 下一个人**根本不会想到要去查** |
+| **防漂移** | 静态封样 4 条 + 真跑集成 3 条 | 以后新加写函数又忘了记账 |
+
+### 16.3 记账的四个取舍（都不是"顺手记一下"）
+
+- **`write_audit_log` 而不是 `@audit_log` 装饰器** —— 这几个服务函数返回 `dict`，
+  装饰器要从返回值上 `getattr(result, "id")`，拿到的是 `None`：
+  记出来一行没有对象、没有项目的空日志，**比不记更坏**（它看起来像记了）。
+- **删除要记在删之前** —— `delete + flush` 之后 ORM 对象属性过期，
+  那时候再读 `node.name` 只剩一条查不出对象名的空行。
+- **改动只记字段名，不记新旧值** —— `body`/`headers` 动辄几十 KB，塞进 `changes`
+  会把审计表撑爆；而「谁改了它」这个问题只需要字段名。
+- **导入/拖排序整批记一条** —— 一个 Postman collection 上百个接口，
+  逐条记会把操作日志冲成一片，反而看不出"谁导入过什么"。
+
+来源那一列不用额外做：`app/mcp/middleware.py` 的 `on_call_tool` 对**所有** `lum_*`
+统一注入 `actor_type="mcp"` + `actor_label=<Key 名>`，
+所以只要服务层记了账，MCP 写的和页面点的自动分得开。
+
+**从此这个问题的答案是**：操作日志 → 对象类型选「接口库」→ 看「操作人」列的来源标签。
+
+### 16.4 封样守的是"行为"，不是函数名
+
+```python
+if "flush" not in called:      # 读函数（list_tree/get_node）不 flush，自动跳过
+    continue
+if "_audit_node" not in called:
+    missing.append(fn.name)
+```
+
+判据用**「这个函数会不会 flush」**而不是函数名前缀：以后加 `rename_node`、
+`move_node`、`archive_node`，名字再怎么起都照样落在这条规则里。
+守卫**咬过一次**才留下的 —— 把 `create_node` 里的记账删掉，确认它真的红了，再还原。
+
+静态守卫看不出的那半边交给 `tests/integration/services/test_api_collection_audit.py`
+真跑：它断到库里那一行的 `project_id` / `target_name` / `actor_type` 上 ——
+**记了账但筛不出来，跟没记一样**。其中 `test_来源分得出是MCP还是页面`
+就是 16.1 那个问题的答案该从哪儿来。
+
+> 踩过的坑：第一版按 `created_at` 排序断言 `["create","update","delete"]`，红成
+> `['create','delete','update']`。不是产品 bug —— Postgres 的 `now()` 是
+> **事务开始时间**，同一个事务里写的几行时间戳一模一样，排出来是随机的。
+> 线上每个 HTTP 请求各自一个事务不会撞，测试里三个动作在一个事务内会撞。
+
+### 16.5 顺带：措辞「API 接口」→「接口库」
+
+`menu.apis` 的**文案**改了（key 和路由没动；菜单项本身 §14 已经下掉，
+这一页现在只从老书签/直链进）。原来那个名字跟「接口场景 / 接口测试」
+只差一个字，真有人（包括我）把它当成可执行的接口测试。
+MCP 那边的分区描述早就叫「**接口库·只记怎么调**」，这边跟上 ——
+别再让同一个东西有两个名字。恢复入口的时候文案已经是对的了。
+
+同一批还改了新建分支弹窗的「复制模块」——那三个勾选框里，
+「API 接口（接口树）」和「接口测试（文件夹+场景+步骤）」**是并排放的**，
+这就是这场误会的缩影。改成：
+
+```
+接口库（接口文档树·不可执行）      ← api_nodes
+接口场景（绑用例的编排链·可执行）  ← api_test_scenarios，source_case_id NOT NULL
+```
+
+括号里那半句是刻意加的：光换名字，两个名字还是只差一个字。
+
+页面上那条 `<Alert>` **故意不做"读过就不再显示"**：
+存 localStorage 关掉的话谁都只看得见一次，而会踩这个坑的**恰恰是第一次打开这页的人**。
+占 40px，不值得为它省。

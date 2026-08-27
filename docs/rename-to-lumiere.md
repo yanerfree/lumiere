@@ -240,6 +240,16 @@ cd backend && .venv/bin/python scripts/check_name_drift.py --strict      # 库�
    改完封样白名单里那三条「指真路径」的豁免全空了 —— **盯白名单那族用例当场红**，
    删掉即可（封样 17 → 14 条，`ALLOWED_LINE_REGEXES` 整个空掉）。
 
+6. **`__pycache__` 里烧着旧的绝对路径。** `.pyc` 记的是编译时那个源文件的全路径，
+   目录一挪就全指着 `/home/dreamer/testBench`。**`mv` 当天没发作**（软链还在，读得到），
+   收尾删掉软链之后才开始红 —— 而那时已经没人再跑一次全量了。
+   报出来是 **21 条单测 `OSError: could not get source code`**，全是拿
+   `inspect.getsource()` 做断言的结构封样用例；错误信息里一个字都不提改名，
+   traceback 顶上那行才是唯一线索（写着旧路径）。
+   `find . -type d -name __pycache__ -prune -exec rm -rf {} +` 清掉即可（7524 个 `.pyc`，
+   其中 7023 个在 `.venv` 里），清完 `1404 passed`。
+   **别只清 `backend/app`** —— `.venv` 占了九成，而它正好是 `grep` 包装函数会跳过的那块（见第 2 条）。
+
 **做完的验证（从新路径跑）**：backend `1404 passed`；根目录 `498 passed`
 （`DATABASE_URL=…/lumiere_test_2`）；`check_name_drift.py --strict` exit 0；
 `npm run build` 通过；后端 `/proc/<pid>/cwd` → `/home/dreamer/lumiere/backend`、

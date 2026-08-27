@@ -40,8 +40,9 @@ def test_原来没记账的链路都补上了():
     """一条一条对：谁在调 AI，谁就得留下调用记录。"""
     root = Path(__file__).resolve().parents[1] / "app"
     checks = {
-        "api/documents.py": ["doc-generate", "doc-generate-screenshots", "doc-optimize"],
-        "api/exploratory.py": ["exploratory-charter"],
+        # api/documents.py 2026-08-27 随「文档管理」整个删掉，三条 doc-* 能力标 deprecated。
+        # api/exploratory.py 同日随「探索测试」删掉，exploratory-charter 标 deprecated。
+        # 这两行不是"暂时注释掉" —— 文件没了，留着断言就是必红。
         "api/toolbox.py": ["toolbox-regex"],
         "services/ai/api_scenario_gen_service.py": ["api-test-generate"],
     }
@@ -280,11 +281,19 @@ def test_SkillManage状态跟注册表对齐():
     from pathlib import Path
     jsx = (Path(__file__).resolve().parents[2]
            / "frontend/src/pages/settings/SkillManage.jsx").read_text(encoding="utf-8")
-    assert "Tooltip" in jsx.split("from 'antd'")[0], \
-        "用了 Tooltip 组件却没在 antd 导入里加上（会整页白屏 pageerror）"
+    # 条件式，不是无条件要求导入 Tooltip。2026-08-27 收掉 inline 第四态之后
+    # 这页最后一处 <Tooltip> 也没了，无条件断言会红在"没导入一个没人用的组件"上
+    # —— 那是守卫盯错了东西。真正要防的是**用了却没导入**（整页白屏 pageerror）。
+    head, _, _ = jsx.partition("from 'antd'")
+    if "<Tooltip" in jsx:
+        assert "Tooltip" in head, \
+            "用了 Tooltip 组件却没在 antd 导入里加上（会整页白屏 pageerror）"
+    else:
+        assert "Tooltip" not in head, \
+            "antd 导入里留着没人用的 Tooltip —— 要么用它，要么删掉，别放着占位"
 
-    # 逐条状态必须对：lum-case-generate/lum-script-generate 已下线，
-    # lum-quality-review 可用，lum-explore 是"上线但无独立 skill 文件"的第四态
+    # 逐条状态必须对：lum-case-generate/lum-script-generate/lum-doc-generate/
+    # lum-explore 已下线，lum-quality-review 可用
     import re
     def _status_of(name):
         m = re.search(r"name:\s*'%s'.*?status:\s*'(\w+)'" % re.escape(name), jsx, re.DOTALL)
@@ -296,11 +305,20 @@ def test_SkillManage状态跟注册表对齐():
         "AI 脚本生成没有 skill 文件，标『可用』会露出一个点了 404 的编辑按钮"
     assert _status_of("lum-quality-review") == "available", \
         "质量评审（AI 审核）是全平台唯一高频调用的能力，不该标『规划中』"
-    assert _status_of("lum-explore") == "inline", \
-        "探索测试的章程生成已经上线（内联 prompt），标『规划中』是说反了；" \
-        "但也不能标『可用』——那会露出一个查无 skill 文件、点了 404 的编辑按钮"
+    assert _status_of("lum-doc-generate") == "retired", \
+        "「文档管理」2026-08-27 整个下线（含 SKILL.md 文件本身），标『可用』" \
+        "会露出一个点了就 404 的编辑按钮"
+    assert _status_of("lum-explore") == "retired", \
+        "「探索测试」2026-08-27 下线（页面/路由/api/exploratory.py 都删了），" \
+        "标『可用』会露出一个查无 skill 文件、点了 404 的编辑按钮"
 
-    # 第四态的渲染分支必须真的存在，不能只改数据不改渲染（那样会退回默认分支
-    # 显示成"undefined 规划中"）
-    assert "status === 'inline'" in jsx, "没有渲染 inline 状态的分支"
-    assert "已上线（无独立 Skill 文件）" in jsx
+    # inline（"已上线但没有独立 skill 文件"）这第四态只为 lum-explore 存在，
+    # 卡片改成 retired 之后数据和渲染分支一起收掉了。这里反过来守：
+    # 别只改数据留着死分支，也别把死分支留成"下次谁想省事就标 inline"的口子。
+    # 只断代码，不断注释 —— 收掉的理由就写在那行注释里，连注释一起禁掉的话
+    # 下一个人只会看到一句"别用 inline"而不知道为什么（第一版就这么自己红了一次）。
+    assert "status === 'inline'" not in jsx, \
+        "inline 第四态已经没有使用者了，渲染分支该一起收掉（留着就是死代码）"
+    assert "status: 'inline'" not in jsx, \
+        "又有卡片标成 inline 了 —— 这一态已经废除，要么 available（得真有 SKILL.md）要么 retired"
+    assert "已上线（无独立 Skill 文件）" not in jsx

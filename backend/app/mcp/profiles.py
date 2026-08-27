@@ -62,6 +62,8 @@ _LIVE = _LOCATE + _NOTES_READ + ["lum_add_project_note"] + [
     "lum_sync_orchestrated_scenario",
     # 断言里的错误提示语走 ${T:中文}，用的是同一份词典，所以这一档也要能登记
     "lum_upsert_i18n_terms",
+    # 选择器登记表跟词典是同一件事的另一半（外部取值不许写死在正文里）
+    "lum_upsert_selectors", "lum_list_selectors",
     "lum_list_api_tests", "lum_get_api_test", "lum_run_api_test",
     # 跑绿之后还得回答"这些断言有没有用" —— 跳掉动作步再跑一遍，该红的必须红
     "lum_check_assertion_bite",
@@ -104,6 +106,8 @@ _UISCRIPT = _LOCATE + _NOTES_READ + [
     "lum_render_ui_script",
     # 文案纪律要求走 t()，那就得有地方登记词条 —— 缺这个通道，纪律就只能靠人工转抄
     "lum_upsert_i18n_terms",
+    # 选择器同理，而且这一档最需要它：写 UI 脚本第一件事就是查登记表，别现编
+    "lum_upsert_selectors", "lum_list_selectors",
     "lum_check_deliverable", "lum_check_branch",
     "lum_review_case", "lum_review_check",
     "lum_review_batch", "lum_review_batch_status", "lum_module_checkup",
@@ -202,19 +206,24 @@ PROFILES: list[dict] = [
             "lum_list_api_tests", "lum_get_api_test",
         ],
     },
-    {
-        "key": "doc",
-        "label": "写操作/演示/验收文档",
-        "task": "拿平台的文档规范，在本地实操被测系统、截图，产出带图文档",
-        "hint": "平台只给模板和规范，实操和截图都在你本地 —— 它不需要写库权限",
-        "tools": _LOCATE + ["lum_get_doc_spec", "lum_list_cases", "lum_get_case"],
-    },
+    # 原来这里有一档「写操作/演示/验收文档」，配 lum_get_doc_spec。
+    # 那个工具 2026-08-27 随「文档管理」模块一起下线（见 mcp/__init__.py 那段说明），
+    # 档位跟着删 —— 留一个配着不存在的工具的档位，选中它等于什么都没有。
     {
         "key": "skill",
         "label": "Skill 取用与共享",
         "task": "把本项目的 skill 推上平台，或取用别的项目共享出来的",
         "hint": "存的是客户端侧执行的 skill（跑在你机器的 Claude Code 里），平台只做存取",
         "tools": ["lum_list_projects", "lum_list_skills", "lum_pull_skill", "lum_push_skill"],
+    },
+    {
+        "key": "qareview",
+        "label": "QA 仓：取域评审结论",
+        "task": "把平台对某个域的评审结论拿回本地，照 evidence 里的锚点 grep 定位，逐条改脚本",
+        "hint": "**平台对 QA 仓永远只读**，这一档也只有「拿」没有「写」—— "
+                "结论是建议不是门禁，改不改由仓库主人定。刻意不含任何写平台库的工具：读结论的人"
+                "跟写用例的人不是同一拨，给他全链路那一档等于把别人的用例库也一并交出去",
+        "tools": ["lum_list_projects", "lum_get_qa_review"],
     },
     {
         "key": "all",

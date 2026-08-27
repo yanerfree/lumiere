@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Card, Tag, Space, Typography, Alert, Steps, Collapse, Button, Drawer, Input, message, Tooltip } from 'antd'
+import { Card, Tag, Space, Typography, Alert, Steps, Collapse, Button, Drawer, Input, message } from 'antd'
 import {
   ThunderboltOutlined, FileTextOutlined, CodeOutlined, SearchOutlined,
   BugOutlined, FileSearchOutlined, BookOutlined, CheckCircleOutlined,
@@ -68,17 +68,18 @@ const SKILLS = [
   {
     name: 'lum-explore',
     title: '探索测试',
-    icon: <BugOutlined style={{ fontSize: 20, color: '#4e8af0' }} />,
-    // 不是"规划中"：生成章程 → 记录检查点 → 生成总结报告这条链路在
-    // app/api/exploratory.py 里已经跑得通，项目菜单也已经有「探索测试」了。
-    // 但它是内联 prompt，不是独立的 skill 文件——GET/PUT /skills/lum-explore
-    // 会 404，所以不能标"可用"（那会露出一个点了就 404 的编辑按钮）。
-    status: 'inline',
-    description: 'AI 辅助人工探索测试：生成章程 → 引导逐项检查 → 记录发现 → 输出报告',
-    input: '目标模块 + API 接口 + 已有用例覆盖情况',
-    output: '探索测试报告（结论 + 检查点覆盖情况）',
-    where: '探索测试 →「AI 生成章程」',
-    mcpTools: ['lum_list_api_tree', 'lum_list_cases'],
+    icon: <BugOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
+    status: 'retired',
+    description: '已下线。它生成的章程唯一的输入是接口库，而全库 7 个 endpoint 的 url '
+      + '一个都没填 —— 模型实际拿到的上下文就是模块名那几个字，出来的检查点'
+      + '（"必填校验/边界值/权限隔离/SQL注入"）换个系统照样成立，跟被测系统没有关系。'
+      + '章程之后也没有任何执行：勾检查点、写发现全靠人手填，3 个会话 0 个检查点被勾过。'
+      + '探索归外部 Claude Code：它真能在页面上点一遍，'
+      + '把探到的可操作项喂 lum_module_checkup(observed_actions=…) 跟现有用例对账。',
+    input: '—',
+    output: '—',
+    where: '入口 2026-08-27 下线（原「探索测试」→「AI 生成章程」）',
+    mcpTools: ['lum_module_checkup', 'lum_proxy_capture'],
   },
   {
     name: 'lum-diagnose',
@@ -96,12 +97,19 @@ const SKILLS = [
   {
     name: 'lum-doc-generate',
     title: '文档生成',
-    icon: <BookOutlined style={{ fontSize: 20, color: '#0ea5a0' }} />,
-    status: 'available',
-    description: '自动操作系统截图 + AI 写文档，支持平台直接生成和 Claude Code 两种方式',
-    input: '被测系统地址 + 账号密码 + 文档范围 + 目标读者',
-    output: '带截图的 Markdown 操作手册，可导出 HTML / ZIP',
-    where: '项目菜单「文档管理」→ 生成按钮',
+    icon: <BookOutlined style={{ fontSize: 20, color: '#c9cdd4' }} />,
+    // 「文档管理」模块 2026-08-27 整体下线（docs/cc-platform-loop-spec.md §14）。
+    // 页面、路由、后端 /api/projects/{id}/documents/*、doc_generator.py、
+    // 这条 SKILL.md、MCP 的 lum_get_doc_spec 一并删了 —— 所以这里必须标
+    // retired：标"可用"会露出一个点了就 404 的编辑按钮（跟 lum-script-generate
+    // 当初一模一样的坑）。
+    status: 'retired',
+    description: '已下线。平台侧驱动浏览器截图 + AI 写文档这条路做得不好：'
+      + '截图靠通用启发式点菜单，认不准就截一堆列表页；文字是 AI 看图编的，'
+      + '没有需求做对照。要文档就在 Claude Code 里自己实操系统写，那边有真浏览器。',
+    input: '—',
+    output: '—',
+    where: '入口 2026-08-27 下线（原「文档管理」→ 生成按钮）',
     mcpTools: [],
   },
 ]
@@ -165,8 +173,10 @@ export default function SkillManage() {
             key={skill.name}
             size="small"
             style={{
-              borderLeft: skill.status === 'available' ? '3px solid #0ea5a0'
-                : skill.status === 'inline' ? '3px solid #4e8af0' : '3px solid rgba(0,0,0,0.15)',
+              // 第四态 'inline'（已上线但没有独立 skill 文件）2026-08-27 随 lum-explore
+              // 一起收掉了 —— 它只为那一张卡存在。真再出现"功能活着但没 skill 文件"
+              // 的情况，照着 git 历史加回来，别为了省事标成 available（编辑按钮会 404）。
+              borderLeft: skill.status === 'available' ? '3px solid #0ea5a0' : '3px solid rgba(0,0,0,0.15)',
             }}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -188,13 +198,7 @@ export default function SkillManage() {
                   ? <Tag color="cyan" icon={<CheckCircleOutlined />}>可用</Tag>
                   : skill.status === 'retired'
                     ? <Tag color="default">已下线</Tag>
-                    : skill.status === 'inline'
-                      // 功能是活的，但走的是内联 prompt，不是这页管的独立 skill 文件——
-                      // 标"可用"会露出一个点了 404 的编辑按钮，标"规划中"又是撒谎。
-                      ? <Tooltip title="功能已经上线在跑，只是没有做成这页能编辑的独立 skill 文件（走的是接口里的内联 prompt）">
-                          <Tag color="blue">已上线（无独立 Skill 文件）</Tag>
-                        </Tooltip>
-                      : <Tag icon={<ClockCircleOutlined />}>{skill.phase} 规划中</Tag>
+                    : <Tag icon={<ClockCircleOutlined />}>{skill.phase} 规划中</Tag>
                 }
               </Space>
             </div>

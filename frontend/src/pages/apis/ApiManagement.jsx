@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { useParams } from 'react-router-dom'
-import { Input, Select, Button, Tag, Space, Tooltip, Dropdown, Popover, Checkbox, Spin, message, Modal, Upload, Empty, AutoComplete } from 'antd'
+import { useParams, Link } from 'react-router-dom'
+import { Input, Select, Button, Tag, Space, Tooltip, Dropdown, Popover, Checkbox, Spin, message, Modal, Upload, Empty, AutoComplete, Alert } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, FolderOutlined, FolderOpenOutlined, ApiOutlined,
   ImportOutlined, ExportOutlined, SearchOutlined, EditOutlined, CopyOutlined,
@@ -916,7 +916,27 @@ export default function ApiManagement() {
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>
 
   return (
-    <div style={{ display: 'flex', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 12, overflow: 'hidden', height: 'calc(100vh - 80px)', background: 'transparent' }}>
+    <>
+      {/* 常驻说明条，不做「读过就不再显示」——
+          这条误会（把接口库当成"接口测试"）2026-08-27 真发生过一次，
+          而会踩的人恰恰是第一次打开这一页的人。存进 localStorage 关掉的话，
+          谁都只看得见一次，等于没写。占 40px，不值得为它省。 */}
+      <Alert
+        type="info"
+        showIcon
+        style={{ marginBottom: 10, fontSize: 12, borderRadius: 10 }}
+        message={<span style={{ fontSize: 12.5 }}>这是<b>接口库</b>：只记「系统有哪些接口、怎么调」，是文档，<b>不产生可执行的测试</b>。</span>}
+        description={(
+          <span style={{ fontSize: 12, color: '#4e5969' }}>
+            可执行的接口测试是<b>绑用例的编排链</b>（多步 + 断言 + 变量提取），在
+            {' '}<Link to={`/projects/${projectId}/cases`}>用例管理</Link>{' '}
+            里进用例详情看，不在这一页。这一页的增删改会记进
+            {' '}<Link to={`/projects/${projectId}/logs`}>操作日志</Link>{' '}
+            （对象类型选「接口库」），谁写的一查便知 —— 别靠猜。
+          </span>
+        )}
+      />
+      <div style={{ display: 'flex', border: '1px solid rgba(0,0,0,0.06)', borderRadius: 12, overflow: 'hidden', height: 'calc(100vh - 152px)', background: 'transparent' }}>
       {/* 左侧：接口树 */}
       {navCollapsed ? (
         <div
@@ -1124,6 +1144,7 @@ export default function ApiManagement() {
           </Upload.Dragger>
         </div>
       </Modal>
-    </div>
+      </div>
+    </>
   )
 }

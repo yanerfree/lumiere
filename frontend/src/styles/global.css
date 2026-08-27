@@ -560,6 +560,12 @@ textarea.ant-input-disabled {
 .ant-descriptions .ant-descriptions-view,
 .ant-list,
 .ant-list .ant-list-item,
+/* Tree 的默认底是不透明 colorBgContainer（纯白），而它只铺到最后一个节点为止 ——
+   在半透面板里就是"上半截一块白板、下半截透出渐变"，中间一道硬边。
+   CasePicker 当初是在自己那棵树上写 inline background:transparent 绕过去的，
+   漏了用例导航这棵。归到这条统一规则里。 */
+.ant-tree,
+.ant-tree .ant-tree-list-holder-inner,
 .ant-tabs-nav,
 .ant-tabs-content,
 .ant-empty,
@@ -594,6 +600,21 @@ textarea.ant-input-disabled {
 }
 .ant-descriptions .ant-descriptions-item-label {
   background: rgba(255, 255, 255, 0.35) !important;
+}
+
+/* Tree 节点：底透了之后，选中/悬浮不能再用 antd 的不透明浅色块，
+   跟表格行走同一套（悬浮=白色薄雾，选中=主色 0.1 档）+ 圆角。 */
+.ant-tree .ant-tree-node-content-wrapper {
+  border-radius: var(--radius-sm) !important;
+  transition: background 0.2s ease !important;
+}
+.ant-tree .ant-tree-node-content-wrapper:hover {
+  background: var(--table-row-hover-bg) !important;
+}
+.ant-tree .ant-tree-node-content-wrapper.ant-tree-node-selected {
+  background: var(--primary-bg) !important;
+  color: var(--primary) !important;
+  font-weight: 600 !important;
 }
 
 /* --- Alert：四种语义色统一到 0.1 档透明，不用 antd 的不透明浅色 --- */

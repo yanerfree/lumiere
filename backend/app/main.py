@@ -34,8 +34,6 @@ from app.api.mcp_mock import router as mcp_mock_router
 from app.api.protocol_mock import router as protocol_mock_router
 from app.api.oauth2_mock import router as oauth2_mock_router
 from app.api.load_test import router as load_test_router
-from app.api.exploratory import router as exploratory_router
-from app.api.documents import router as documents_router
 from app.api.case_file import router as case_file_router
 from app.api.api_test import router as api_test_router
 from app.api.skill_manage import router as skill_manage_router
@@ -355,8 +353,6 @@ app.include_router(mcp_mock_router, dependencies=_AUTHED)
 app.include_router(protocol_mock_router, dependencies=_AUTHED)
 app.include_router(oauth2_mock_router, dependencies=_AUTHED)
 app.include_router(load_test_router, dependencies=_AUTHED)
-app.include_router(exploratory_router)
-app.include_router(documents_router, dependencies=[Depends(require_project_role('project_admin', 'developer', 'tester', 'guest'))])
 app.include_router(api_test_router, dependencies=_SCOPED)
 app.include_router(scenario_gen_router, dependencies=_SCOPED)
 app.include_router(case_file_router, dependencies=[Depends(verify_case_access)])

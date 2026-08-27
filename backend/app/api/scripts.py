@@ -197,6 +197,9 @@ async def run_script(
     # 文案占位 ${键|中文} —— **这条路以前没渲染**（run-stream 那条渲染了，这条漏了：
     # 又是"同一件事几处各写一份"。占位没换掉时正例红、负例假绿，见 executor 里那道拦截）。
     if script_type == "ui":
+        # 先选择器、再文案：登记表的值本身可以带文案占位（`text=${a.b|更多}`）。
+        from app.services.ui_selector_render import render_for_case as _render_sel
+        content, _, _ = await _render_sel(session, case_id, content)
         from app.services.i18n_harvest_service import load_locale_table_for_case
         from app.services.ui_text_render import locale_of, render as render_text
         content, _ = render_text(content, await load_locale_table_for_case(session, case_id),
@@ -441,6 +444,10 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
     from app.services.ui_text_render import bake_env_defaults as _bake
     content, _ = _bake(content, env_vars)
 
+    # 选择器占位 ${SEL:键} 先替（登记表的值里可以带文案占位，顺序不能反）。
+    from app.services.ui_selector_render import render_for_case as _render_sel
+    content, _sel_stat, _sel_tbl = await _render_sel(session, case_id, content)
+
     # 文案占位 ${键|中文} 在执行前替换掉 —— 和 MCP 那条路共用同一个渲染，
     # 别再各写一份（上次"词典只在一条路注入"就是这么埋的）。
     from app.services.i18n_harvest_service import load_locale_table_for_case
@@ -460,6 +467,22 @@ async def _run_python_stream(script, case_id, env_vars, user, session):
                               f"{'、'.join(_left[:5])}" + ("…" if len(_left) > 5 else "")
                               + "。先在「国际化词典」登记 key+zh+en，或在占位里补 ${键|中文原文}。"
                                 "不拦的话「不应出现」那类断言会假绿。"),
+            "steps": [], "screenshots": [], "captured_requests": [],
+        })
+        return
+
+    # 选择器占位同理（理由逐字相同）。这条路也不过 executor，所以要自己拦一次。
+    from app.services.ui_selector_render import (
+        unresolved as _unresolved_sel, unresolved_hint as _sel_hint,
+    )
+    _sel_left = _unresolved_sel(content)
+    if _sel_left:
+        yield _sse_done({
+            "status": "error", "duration_ms": 0,
+            "error_summary": (f"{len(_sel_left)} 处选择器占位没解析出来，拒绝执行："
+                              f"{'、'.join(_sel_left[:5])}"
+                              + ("…" if len(_sel_left) > 5 else "") + "。"
+                              + _sel_hint(content, _sel_tbl)),
             "steps": [], "screenshots": [], "captured_requests": [],
         })
         return
@@ -830,13 +853,17 @@ async def export_scripts(
                     if k != "__I18N__"}
     from app.mcp.tools.sync import _SECRET_RE
     from app.services.i18n_harvest_service import load_locale_table
+    from app.services.ui_selector_render import load_table as load_sel_table
+    from app.services.ui_selector_render import render as render_sel
     from app.services.ui_text_render import bake_env_defaults, locale_of, render
     try:
         from app.models.project import Branch as _Branch
         _b = await session.get(_Branch, branch_id)
         i18n = await load_locale_table(session, _b.project_id) if _b else {}
+        sel_tbl = await load_sel_table(session, _b.project_id) if _b else {}
     except Exception:  # noqa: BLE001
         i18n = {}
+        sel_tbl = {}
     locale = locale_of({**env_vars, "TEST_LANGUAGE": lang})
     secret_keys = sorted(k for k in env_vars if _SECRET_RE.search(k))
     skip = set() if include_credentials else set(secret_keys)
@@ -848,6 +875,7 @@ async def export_scripts(
     manifest = []
     seen: set[str] = set()
     unresolved: set[str] = set()
+    sel_unresolved: set[str] = set()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for script_obj, case_code in rows:
             path = backup_path(case_code, script_obj.script_type,
@@ -855,6 +883,9 @@ async def export_scripts(
             seen.add(path)
             content = script_obj.content or ""
             if env_id:
+                if script_obj.script_type == "ui":
+                    content, _ss = render_sel(content, sel_tbl)
+                    sel_unresolved |= set(_ss["missing"]) | set(_ss["gap"])
                 content, stat = render(content, i18n, locale)
                 unresolved |= set(stat["missing"])
                 # **场景变量是按用例的**，不在环境变量里。少了它，脚本里
@@ -925,6 +956,13 @@ async def export_scripts(
                    f"（占位匹配不到任何元素，'不该存在'当然成立）。\n"
                    f"先把这几个键登记进项目词典，或在占位里补 `${{键|中文原文}}`。\n"
                    if unresolved else "")
+                + (f"\n⚠ 有 {len(sel_unresolved)} 个选择器占位没解析出来："
+                   f"{sorted(sel_unresolved)[:5]}。\n"
+                   f"要么这几个键没登记（lum_upsert_selectors），要么登记了但还是 "
+                   f"`gap` —— **被测前端还没给抓手**。后一种别在脚本里换个脆选择器"
+                   f"绕过去：去前端仓补 data-testid、提 MR，合了再回来。\n"
+                   f"假绿的路数和上面那条一样。\n"
+                   if sel_unresolved else "")
             ))
         else:
             zf.writestr("README.md", (
