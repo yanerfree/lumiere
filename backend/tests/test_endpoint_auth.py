@@ -32,10 +32,9 @@ PUBLIC_BY_DESIGN = {
     # 而 <img> 请求**带不了 Authorization 头**。加鉴权 = 所有文档的图片全裂。
     # 安全性靠路径里的 uuid（capability URL）。
     "/api/screenshots/files/{path:path}": "img 标签发不出 Authorization 头，加鉴权会让所有文档图片裂掉",
-    # 平台给用户一行"粘到 Claude Code 里"的命令，对面那个 CC 没有平台 token。
-    # 配置里带被测系统账号密码，所以改成了**一次性 + 30 分钟过期**（见 documents.py）。
-    "/api/projects/{project_id}/documents/tasks/{task_id}":
-        "外部 Claude Code 用 URL 取任务，没有平台 token；已收口成一次性 + 30 分钟过期",
+    # 原来这里还有一条 /api/projects/{id}/documents/tasks/{task_id}（平台发给外部 CC
+    # 的一次性取任务 URL）。「文档管理」2026-08-27 整个下线、路由已删，而下面那条
+    # 反向用例会 assert 白名单里的路径真的存在 —— 留着就是一条必红的死条目。
 }
 
 # 按**定义所在模块**判，不按函数名判：`require_project_role(...)` 返回的是个闭包，
@@ -90,7 +89,6 @@ def test_故意公开的那几条必须写明理由且没被扩充():
     """
     assert set(PUBLIC_BY_DESIGN) == {
         "/api/screenshots/files/{path:path}",
-        "/api/projects/{project_id}/documents/tasks/{task_id}",
     }, sorted(PUBLIC_BY_DESIGN)
     for path, why in PUBLIC_BY_DESIGN.items():
         assert len(why) > 15, f"{path} 的理由写得太敷衍"

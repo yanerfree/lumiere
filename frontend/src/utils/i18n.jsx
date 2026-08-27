@@ -7,13 +7,15 @@ const MESSAGES = {
     // 菜单
     'menu.projects': '项目列表',
     'menu.cases': '用例管理',
-    'menu.apis': 'API 接口',
+    // 菜单项 2026-08-27 下掉，路由和页面保留 —— 键留着，恢复入口时不用再翻一遍。
+    // 措辞同日从「API 接口」改成「接口库」：跟「接口场景/接口测试」只差一个字，
+    // 真有人（包括我）把它当成"可执行的接口测试"了。MCP 那边的分区早就叫
+    // 「接口库·只记怎么调」，这里跟上，别再让两个名字各说各的。
+    'menu.apis': '接口库',
     'menu.qaCatalog': 'QA 对账',
     'menu.plans': '测试计划',
     'menu.reports': '测试报告',
     'menu.reviewReport': '审核报告',
-    'menu.exploratory': '探索测试',
-    'menu.documents': '文档管理',
     'menu.ai': 'AI 智能',
     'menu.ai.capabilities': '能力总览',
     'menu.ai.scenarioGen': 'AI 生成用例',
@@ -90,13 +92,11 @@ const MESSAGES = {
   en: {
     'menu.projects': 'Projects',
     'menu.cases': 'Test Cases',
-    'menu.apis': 'API Endpoints',
+    'menu.apis': 'API Library',
     'menu.qaCatalog': 'QA Coverage',
     'menu.plans': 'Test Plans',
     'menu.reports': 'Test Reports',
     'menu.reviewReport': 'Review Report',
-    'menu.exploratory': 'Exploratory',
-    'menu.documents': 'Documents',
     'menu.ai': 'AI',
     'menu.ai.capabilities': 'Capabilities',
     'menu.ai.scenarioGen': 'Scenario Gen',

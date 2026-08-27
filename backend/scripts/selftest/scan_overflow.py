@@ -23,8 +23,8 @@ ROUTES = [
     ("API 接口", f"/projects/{PROJ}/apis"),
     ("测试计划", f"/projects/{PROJ}/plans"),
     ("测试报告", f"/projects/{PROJ}/reports"),
-    ("探索测试", f"/projects/{PROJ}/exploratory"),
-    ("文档管理", f"/projects/{PROJ}/documents"),
+    # 「探索测试」「文档管理」2026-08-27 下线，这两条路由现在重定向到用例页 ——
+    # 留在扫描名单里不会红，只会把用例页重复扫两遍并冒充成两个页面的"已检查"。
     ("自动化数据", f"/projects/{PROJ}/settings/automation-data"),
     ("国际化词典", f"/projects/{PROJ}/settings/i18n"),
     ("AI 能力总览", f"/projects/{PROJ}/settings/ai-capabilities"),
