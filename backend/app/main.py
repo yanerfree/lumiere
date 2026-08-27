@@ -50,6 +50,7 @@ from app.api.mcp_keys import project_scope_router as mcp_scope_router
 from app.api.qa_catalog import router as qa_catalog_router
 from app.api.system_services import router as system_services_router
 from app.api.me import router as me_router
+from app.api.assistant import router as assistant_router
 from app.core.middleware import CamelCaseResponse, TraceIdMiddleware
 from app.deps.auth import get_current_user, require_project_role
 from app.deps.scope import verify_case_access, verify_path_scope
@@ -372,6 +373,8 @@ app.include_router(mcp_scope_router)
 app.include_router(qa_catalog_router)
 app.include_router(system_services_router, dependencies=_AUTHED)
 app.include_router(me_router)
+# AI 助手：能力面按登录用户权限过滤，各端点自带 get_current_user + 执行前复检
+app.include_router(assistant_router)
 
 # --- MCP Server ---
 # 只在独立端口（MCP_PORT，默认 18800）暴露，见 _start_standalone_mcp_server()。

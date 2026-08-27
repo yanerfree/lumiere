@@ -16,6 +16,7 @@ import { PermissionProvider, usePermissions } from './utils/PermissionContext'
 import { PERM } from './utils/permissions'
 import BranchSelector from './components/BranchSelector'
 import ServiceStatusBadge from './components/ServiceStatusBadge'
+import AssistantPanel from './components/AssistantPanel'
 import ProjectList from './pages/projects/ProjectList'
 import CaseManagement from './pages/cases/CaseManagement'
 import ReviewReport from './pages/cases/ReviewReport'
@@ -386,6 +387,9 @@ function AppLayout() {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* AI 助手 —— 能力面由后端按当前用户权限过滤，随项目语境切换 */}
+      <AssistantPanel projectId={projectId} />
     </Layout>
   )
 }
