@@ -13,6 +13,8 @@ import { marked } from 'marked'
 import { api, getValidToken } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
 import { formatTime } from '../../utils/timeCol'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 const { Text } = Typography
 const { TextArea } = Input
@@ -33,6 +35,9 @@ const countImages = (md) => (md || '').match(/!\[[^\]]*\]\([^)]+\)/g)?.length ||
 
 export default function Documents() {
   const { projectId } = useParams()
+  const { has } = usePermissions()
+  const canGen = has(PERM.DOC_GENERATE)
+  const canManage = has(PERM.DOC_MANAGE)
   const [docs, setDocs] = useState([])
   const [loading, setLoading] = useState(false)
   const [genOpen, setGenOpen] = useState(false)
@@ -211,20 +216,26 @@ export default function Documents() {
         <Space size={4}>
           <Button type="link" size="small" icon={<EyeOutlined />} onClick={() => loadDoc(r.id)}>查看</Button>
           {/* 两条路的代价差很多，按钮上就得能分出来，别让人靠猜 */}
-          <Tooltip title="保留现有截图，只按你的意见重写文字。不碰被测系统，不用再填账号">
-            <Button type="text" size="small" icon={<EditOutlined />} onClick={() => { setOptDoc(r); setOptFeedback('') }}>优化文字</Button>
-          </Tooltip>
-          <Tooltip title="拿账号重新登录被测系统、重新截一遍图、整篇重做">
-            <Button type="text" size="small" icon={<RobotOutlined />} onClick={() => openRegen(r)}>重新生成</Button>
-          </Tooltip>
-          {r.canRevert && (
+          {canGen && (
+            <Tooltip title="保留现有截图，只按你的意见重写文字。不碰被测系统，不用再填账号">
+              <Button type="text" size="small" icon={<EditOutlined />} onClick={() => { setOptDoc(r); setOptFeedback('') }}>优化文字</Button>
+            </Tooltip>
+          )}
+          {canGen && (
+            <Tooltip title="拿账号重新登录被测系统、重新截一遍图、整篇重做">
+              <Button type="text" size="small" icon={<RobotOutlined />} onClick={() => openRegen(r)}>重新生成</Button>
+            </Tooltip>
+          )}
+          {canManage && r.canRevert && (
             <Popconfirm title="退回上一次优化前的正文？" onConfirm={() => handleRevert(r.id)}>
               <Tooltip title="撤销上一次「优化文字」"><Button type="text" size="small" icon={<UndoOutlined />} /></Tooltip>
             </Popconfirm>
           )}
-          <Popconfirm title="确认删除此文档？" onConfirm={() => handleDelete(r.id)}>
-            <Button type="text" size="small" danger icon={<DeleteOutlined />} />
-          </Popconfirm>
+          {canManage && (
+            <Popconfirm title="确认删除此文档？" onConfirm={() => handleDelete(r.id)}>
+              <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+            </Popconfirm>
+          )}
         </Space>
       ),
     },
@@ -247,9 +258,11 @@ export default function Documents() {
       </Card>
 
       <div style={{ marginBottom: 12 }}>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => { setGenOpen(true); setTaskResult(null); setRegenDocId(null); setRegenFeedback(''); ccForm.resetFields() }}>
-          生成文档
-        </Button>
+        {canGen && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => { setGenOpen(true); setTaskResult(null); setRegenDocId(null); setRegenFeedback(''); ccForm.resetFields() }}>
+            生成文档
+          </Button>
+        )}
       </div>
 
       {docs.length === 0 && !loading ? (
@@ -417,16 +430,20 @@ export default function Documents() {
         extra={previewDoc?.content && (
           <Space>
             {/* 读着读着发现哪句不对，就在这儿改 —— 不用退出去、更不用重新截一遍图 */}
-            <Button size="small" icon={<EditOutlined />} onClick={() => { setOptDoc(previewDoc); setOptFeedback('') }}>优化文字</Button>
-            {previewDoc?.canRevert && (
+            {canGen && (
+              <Button size="small" icon={<EditOutlined />} onClick={() => { setOptDoc(previewDoc); setOptFeedback('') }}>优化文字</Button>
+            )}
+            {canManage && previewDoc?.canRevert && (
               <Popconfirm title="退回上一次优化前的正文？" onConfirm={() => handleRevert(previewDoc.id)}>
                 <Button size="small" icon={<UndoOutlined />}>撤销优化</Button>
               </Popconfirm>
             )}
-            <Button size="small" icon={<RobotOutlined />} onClick={() => {
-              setPreviewOpen(false)
-              openRegen(previewDoc)
-            }}>重新生成</Button>
+            {canGen && (
+              <Button size="small" icon={<RobotOutlined />} onClick={() => {
+                setPreviewOpen(false)
+                openRegen(previewDoc)
+              }}>重新生成</Button>
+            )}
             <Button size="small" icon={<CopyOutlined />} onClick={() => { copyToClipboard(previewDoc.content); message.success('已复制') }}>复制</Button>
             <Button size="small" icon={<DownloadOutlined />} onClick={() => downloadFromApi(`/projects/${projectId}/documents/${previewDoc.id}/export-zip`, `${previewDoc.title}.zip`)}>下载</Button>
             <Button size="small" type="primary" icon={<DownloadOutlined />} onClick={() => downloadFromApi(`/projects/${projectId}/documents/${previewDoc.id}/export-html`, `${previewDoc.title}.html`)}>导出 HTML</Button>

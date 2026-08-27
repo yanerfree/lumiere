@@ -5,6 +5,8 @@ import { SearchOutlined, ReloadOutlined, DownloadOutlined, DeleteOutlined } from
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 // 「入口」= 从哪儿点的；「执行」= 真跑的什么。两件事，分两列，别再共用「类型」这个词。
 const ENTRY_LABELS = {
@@ -50,6 +52,8 @@ const th = { fontSize: 12, color: '#86909c', fontWeight: 500, whiteSpace: 'nowra
 export default function ReportList() {
   const navigate = useNavigate()
   const { projectId } = useParams()
+  const { has } = usePermissions()
+  const canWrite = has(PERM.REPORT_WRITE)
   const [globalBranchId] = useBranch(projectId)
   const [reports, setReports] = useState([])
   const [total, setTotal] = useState(0)
@@ -292,8 +296,10 @@ export default function ReportList() {
                   <div style={{ width: 84, display: 'flex', justifyContent: 'center', gap: 0, flexShrink: 0 }}>
                     <Button type="text" size="small" style={{ fontSize: 12, color: '#0ea5a0' }}
                       onClick={e => handleExport(e, r.id)}>导出</Button>
-                    <Button type="text" size="small" danger style={{ fontSize: 12 }}
-                      onClick={e => handleDelete(e, r.id, r.reportName || r.planName)}>删除</Button>
+                    {canWrite && (
+                      <Button type="text" size="small" danger style={{ fontSize: 12 }}
+                        onClick={e => handleDelete(e, r.id, r.reportName || r.planName)}>删除</Button>
+                    )}
                   </div>
                 </div>
               )

@@ -11,6 +11,8 @@ import {
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { formatTime } from '../../utils/timeCol'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 const { Text, Paragraph } = Typography
 const { TextArea } = Input
@@ -20,6 +22,9 @@ const SEVERITY_COLORS = { critical: '#e8453c', high: '#ff7d00', medium: '#4e8af0
 
 export default function Exploratory() {
   const { projectId } = useParams()
+  const { has } = usePermissions()
+  const canWrite = has(PERM.CASE_WRITE)
+  const canGenerate = has(PERM.CASE_GENERATE)
   const [sessions, setSessions] = useState([])
   const [loading, setLoading] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
@@ -137,7 +142,9 @@ export default function Exploratory() {
           <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}><BugOutlined style={{ marginRight: 8 }} />探索测试</h2>
           <Text type="secondary" style={{ fontSize: 13 }}>AI 辅助探索测试：生成章程 → 引导检查 → 记录发现 → 输出报告</Text>
         </div>
-        <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建会话</Button>
+        {canWrite && (
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setCreateOpen(true)}>新建会话</Button>
+        )}
       </div>
 
       {sessions.length === 0 && !loading ? (
@@ -179,10 +186,12 @@ export default function Exploratory() {
                 <Space direction="vertical" style={{ width: '100%' }}>
                   <Text strong>还没有章程，让 AI 生成一份？</Text>
                   <Text type="secondary">AI 会根据项目 API 接口分析，自动生成检查点和探索建议</Text>
-                  <Button type="primary" icon={charterLoading ? <LoadingOutlined /> : <RobotOutlined />}
-                    loading={charterLoading} onClick={handleGenerateCharter}>
-                    AI 生成章程
-                  </Button>
+                  {canGenerate && (
+                    <Button type="primary" icon={charterLoading ? <LoadingOutlined /> : <RobotOutlined />}
+                      loading={charterLoading} onClick={handleGenerateCharter}>
+                      AI 生成章程
+                    </Button>
+                  )}
                 </Space>
               </Card>
             ) : (
@@ -210,13 +219,17 @@ export default function Exploratory() {
                   </div>
                   {activeSession.status === 'active' && (
                     <Space style={{ marginTop: 8 }}>
-                      <Button size="small" type="primary" ghost onClick={handleCompleteCheckpoint}
-                        disabled={activeSession.completedCheckpoints >= activeSession.totalCheckpoints}>
-                        完成当前检查点
-                      </Button>
-                      <Button size="small" danger loading={summarizing} onClick={handleComplete}>
-                        结束会话并出报告
-                      </Button>
+                      {canWrite && (
+                        <Button size="small" type="primary" ghost onClick={handleCompleteCheckpoint}
+                          disabled={activeSession.completedCheckpoints >= activeSession.totalCheckpoints}>
+                          完成当前检查点
+                        </Button>
+                      )}
+                      {canWrite && (
+                        <Button size="small" danger loading={summarizing} onClick={handleComplete}>
+                          结束会话并出报告
+                        </Button>
+                      )}
                     </Space>
                   )}
                 </div>
@@ -290,7 +303,9 @@ export default function Exploratory() {
                   <Form.Item name="description" label="详细描述">
                     <TextArea rows={3} placeholder="详细描述问题、复现步骤、影响范围" />
                   </Form.Item>
-                  <Button type="primary" onClick={handleAddFinding} block>记录发现</Button>
+                  {canWrite && (
+                    <Button type="primary" onClick={handleAddFinding} block>记录发现</Button>
+                  )}
                 </Form>
               </Card>
             )}

@@ -14,6 +14,8 @@ import { api } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
 import { useEnv, buildEnvOptions } from '../../utils/env'
 import { copyToClipboard } from '../../utils/clipboard'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 const methodColors = {
   GET: { color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
@@ -449,6 +451,8 @@ function hasVars(text) {
 
 // =========== 右侧编辑器 ===========
 function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDirtyChange, onPreviewChange }) {
+  const { has } = usePermissions()
+  const canWrite = has(PERM.CASE_WRITE)
   const [data, setData] = useState(node)
   const [activeTab, setActiveTab] = useState('params')
   const [dirty, setDirty] = useState(false)
@@ -549,8 +553,10 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
       <div style={{ padding: '8px 16px', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8, borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
         <Input variant="borderless" value={data.name || ''} onChange={e => up('name', e.target.value)}
           placeholder="输入接口名称" style={{ fontSize: 14, fontWeight: 600, color: '#1d2129', flex: 1, padding: '2px 4px' }} />
-        <Button size="small" type={dirty ? 'primary' : 'default'} disabled={!dirty} onClick={() => { onSave(data); setDirty(false); onDirtyChange?.(false) }}
-          style={dirty ? {} : { color: '#c9cdd4', borderColor: 'rgba(0,0,0,0.06)' }}>保存</Button>
+        {canWrite && (
+          <Button size="small" type={dirty ? 'primary' : 'default'} disabled={!dirty} onClick={() => { onSave(data); setDirty(false); onDirtyChange?.(false) }}
+            style={dirty ? {} : { color: '#c9cdd4', borderColor: 'rgba(0,0,0,0.06)' }}>保存</Button>
+        )}
       </div>
 
       {/* Method + URL + Send */}
@@ -567,26 +573,30 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
                 e.preventDefault(); setCurlText(text); setImportCurlOpen(true)
               }
             }} />
-          <Dropdown menu={{ items: [
-            { key: 'import-curl', icon: <ImportOutlined />, label: '导入 cURL', onClick: () => setImportCurlOpen(true) },
-            { key: 'copy-curl', icon: <CopyOutlined />, label: '复制 cURL', onClick: () => {
-              const fullUrl = resolvedUrl
-              const parts = [`curl -X ${method}`, `  '${fullUrl}'`]
-              ;(data.headers || []).filter(h => h.key && h.enabled !== false).forEach(h => parts.push(`  -H '${resolveVars(h.key, envVars)}: ${resolveVars(h.value, envVars)}'`))
-              if (method !== 'GET' && data.body?.trim()) parts.push(`  -d '${resolveVars(data.body, envVars).replace(/'/g, "'\\''")}'`)
-              copyToClipboard(parts.join(' \\\n')).then(() => message.success('cURL 已复制'))
-            }},
-            { type: 'divider' },
-            { key: 'gen-python', icon: <CodeOutlined />, label: '生成 Python 代码', onClick: () => { setCodeGenLang('python'); setCodeGenOpen(true) } },
-            { key: 'gen-js', icon: <CodeOutlined />, label: '生成 JavaScript 代码', onClick: () => { setCodeGenLang('javascript'); setCodeGenOpen(true) } },
-          ]}} trigger={['click']}>
-            <Button icon={<CodeOutlined />} style={{ color: '#4e5969' }} />
-          </Dropdown>
+          {canWrite && (
+            <Dropdown menu={{ items: [
+              { key: 'import-curl', icon: <ImportOutlined />, label: '导入 cURL', onClick: () => setImportCurlOpen(true) },
+              { key: 'copy-curl', icon: <CopyOutlined />, label: '复制 cURL', onClick: () => {
+                const fullUrl = resolvedUrl
+                const parts = [`curl -X ${method}`, `  '${fullUrl}'`]
+                ;(data.headers || []).filter(h => h.key && h.enabled !== false).forEach(h => parts.push(`  -H '${resolveVars(h.key, envVars)}: ${resolveVars(h.value, envVars)}'`))
+                if (method !== 'GET' && data.body?.trim()) parts.push(`  -d '${resolveVars(data.body, envVars).replace(/'/g, "'\\''")}'`)
+                copyToClipboard(parts.join(' \\\n')).then(() => message.success('cURL 已复制'))
+              }},
+              { type: 'divider' },
+              { key: 'gen-python', icon: <CodeOutlined />, label: '生成 Python 代码', onClick: () => { setCodeGenLang('python'); setCodeGenOpen(true) } },
+              { key: 'gen-js', icon: <CodeOutlined />, label: '生成 JavaScript 代码', onClick: () => { setCodeGenLang('javascript'); setCodeGenOpen(true) } },
+            ]}} trigger={['click']}>
+              <Button icon={<CodeOutlined />} style={{ color: '#4e5969' }} />
+            </Dropdown>
+          )}
           <VarInsertBtn envVars={envVars} onInsert={v => { const cur = data.url || ''; up('url', cur + v) }} />
-          <Tooltip title="Ctrl+Enter 发送">
-            <Button type="primary" icon={sending ? <LoadingOutlined /> : <SendOutlined />} loading={sending} onClick={handleSend}
-              style={{ fontWeight: 600, minWidth: 72, height: 32 }}>发送</Button>
-          </Tooltip>
+          {canWrite && (
+            <Tooltip title="Ctrl+Enter 发送">
+              <Button type="primary" icon={sending ? <LoadingOutlined /> : <SendOutlined />} loading={sending} onClick={handleSend}
+                style={{ fontWeight: 600, minWidth: 72, height: 32 }}>发送</Button>
+            </Tooltip>
+          )}
         </div>
         {urlHasVars && (
           <div style={{ marginTop: 4, fontSize: 11, color: '#86909c', fontFamily: 'var(--font-mono)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -704,6 +714,9 @@ function EndpointEditor({ node, onSave, onSend, sending, response, envVars, onDi
 
 // =========== 主页面 ===========
 export default function ApiManagement() {
+  const { has } = usePermissions()
+  const canWrite = has(PERM.CASE_WRITE)
+  const canEnvWrite = has(PERM.ENV_WRITE)
   const { projectId } = useParams()
   const [branchId] = useBranch(projectId)
   const [nodes, setNodes] = useState([])
@@ -887,15 +900,17 @@ export default function ApiManagement() {
   }
 
   const contextMenuItems = (node) => [
-    ...(node.nodeType === 'folder' ? [
+    ...(node.nodeType === 'folder' && canWrite ? [
       { key: 'add-endpoint', icon: <ApiOutlined />, label: '新建接口', onClick: () => handleCreate(node.id, 'endpoint') },
       { key: 'add-folder', icon: <FolderOutlined />, label: '新建子文件夹', onClick: () => handleCreate(node.id, 'folder') },
       { type: 'divider' },
     ] : []),
-    { key: 'duplicate', icon: <CopyOutlined />, label: '复制', onClick: () => handleDuplicate(node.id) },
-    { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true, onClick: () => {
-      Modal.confirm({ title: `确认删除「${node.name}」?`, content: node.nodeType === 'folder' ? '文件夹下的所有接口也会被删除' : undefined, onOk: () => handleDelete(node.id) })
-    }},
+    ...(canWrite ? [
+      { key: 'duplicate', icon: <CopyOutlined />, label: '复制', onClick: () => handleDuplicate(node.id) },
+      { key: 'delete', icon: <DeleteOutlined />, label: '删除', danger: true, onClick: () => {
+        Modal.confirm({ title: `确认删除「${node.name}」?`, content: node.nodeType === 'folder' ? '文件夹下的所有接口也会被删除' : undefined, onOk: () => handleDelete(node.id) })
+      }},
+    ] : []),
   ]
 
   if (loading) return <div style={{ textAlign: 'center', padding: 80 }}><Spin size="large" /></div>
@@ -920,14 +935,16 @@ export default function ApiManagement() {
           <Tooltip title="收起侧栏">
             <Button type="text" size="small" icon={<MenuFoldOutlined style={{ fontSize: 12 }} />} onClick={() => setNavCollapsed(true)} style={{ flexShrink: 0 }} />
           </Tooltip>
-          <Dropdown menu={{ items: [
-            { key: 'endpoint', icon: <ApiOutlined />, label: '新建接口', onClick: () => handleCreate(null, 'endpoint') },
-            { key: 'folder', icon: <FolderOutlined />, label: '新建文件夹', onClick: () => handleCreate(null, 'folder') },
-            { type: 'divider' },
-            { key: 'import', icon: <ImportOutlined />, label: '导入 Postman', onClick: () => setImportOpen(true) },
-          ]}} trigger={['click']}>
-            <Button type="primary" size="small" icon={<PlusOutlined />} ghost />
-          </Dropdown>
+          {canWrite && (
+            <Dropdown menu={{ items: [
+              { key: 'endpoint', icon: <ApiOutlined />, label: '新建接口', onClick: () => handleCreate(null, 'endpoint') },
+              { key: 'folder', icon: <FolderOutlined />, label: '新建文件夹', onClick: () => handleCreate(null, 'folder') },
+              { type: 'divider' },
+              { key: 'import', icon: <ImportOutlined />, label: '导入 Postman', onClick: () => setImportOpen(true) },
+            ]}} trigger={['click']}>
+              <Button type="primary" size="small" icon={<PlusOutlined />} ghost />
+            </Dropdown>
+          )}
         </div>
 
         {/* 全局环境选择器 */}
@@ -956,14 +973,16 @@ export default function ApiManagement() {
                       }} style={{ flex: 1, fontFamily: 'var(--font-mono)', fontSize: 11 }} />
                     </div>
                   ))}
-                  <Button size="small" type="primary" block style={{ marginTop: 8 }} onClick={async () => {
-                    try {
-                      await api.put(`/projects/${projectId}/environments/${runEnv}/variables`, envVars.map(v => ({ key: v.key, value: v.value, description: v.description })))
-                      const env = environments.find(e => e.id === runEnv)
-                      if (env) env.variables = [...envVars]
-                      message.success('变量已保存')
-                    } catch { message.error('保存失败') }
-                  }}>保存变量</Button>
+                  {canEnvWrite && (
+                    <Button size="small" type="primary" block style={{ marginTop: 8 }} onClick={async () => {
+                      try {
+                        await api.put(`/projects/${projectId}/environments/${runEnv}/variables`, envVars.map(v => ({ key: v.key, value: v.value, description: v.description })))
+                        const env = environments.find(e => e.id === runEnv)
+                        if (env) env.variables = [...envVars]
+                        message.success('变量已保存')
+                      } catch { message.error('保存失败') }
+                    }}>保存变量</Button>
+                  )}
                 </div>
               }>
               <span style={{ fontSize: 11, color: '#0ea5a0', cursor: 'pointer', textDecoration: 'underline', whiteSpace: 'nowrap', flexShrink: 0 }}>{envVars.length} 变量</span>
@@ -976,8 +995,12 @@ export default function ApiManagement() {
           {filteredTree.length === 0 ? (
             <Empty description="暂无接口" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ padding: 40 }}>
               <Space direction="vertical" size={8}>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => handleCreate(null, 'endpoint')}>新建接口</Button>
-                <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入 Postman</Button>
+                {canWrite && (
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => handleCreate(null, 'endpoint')}>新建接口</Button>
+                )}
+                {canWrite && (
+                  <Button icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入 Postman</Button>
+                )}
               </Space>
             </Empty>
           ) : (
@@ -985,7 +1008,8 @@ export default function ApiManagement() {
               if (node.nodeType === 'endpoint') openTab(node)
               else setActiveTabId(node.id)
             }, (node, e) => {
-              setCtxMenu({ node, items: contextMenuItems(node), x: e.clientX, y: e.clientY })
+              const items = contextMenuItems(node)
+              if (items.length) setCtxMenu({ node, items, x: e.clientX, y: e.clientY })
             }, handleRename, newNodeId)
           )}
         </div>
@@ -1047,8 +1071,12 @@ export default function ApiManagement() {
             </div>
             <div style={{ marginTop: 16 }}>
               <Space>
-                <Button icon={<ApiOutlined />} onClick={() => handleCreate(selected.id, 'endpoint')}>新建接口</Button>
-                <Button icon={<FolderOutlined />} onClick={() => handleCreate(selected.id, 'folder')}>新建子文件夹</Button>
+                {canWrite && (
+                  <Button icon={<ApiOutlined />} onClick={() => handleCreate(selected.id, 'endpoint')}>新建接口</Button>
+                )}
+                {canWrite && (
+                  <Button icon={<FolderOutlined />} onClick={() => handleCreate(selected.id, 'folder')}>新建子文件夹</Button>
+                )}
               </Space>
             </div>
           </div>

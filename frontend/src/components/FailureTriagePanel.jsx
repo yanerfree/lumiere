@@ -8,12 +8,16 @@ import { useState, useEffect } from 'react'
 import { Tag, Select, Input, Button, message } from 'antd'
 import { api } from '../utils/request'
 import { formatTime } from '../utils/timeCol'
+import { PERM } from '../utils/permissions'
+import { usePermissions } from '../utils/PermissionContext'
 
 export default function FailureTriagePanel({ projectId, branchId, caseId, run, onConfirmed }) {
   const [data, setData] = useState(null)
   const [cause, setCause] = useState(null)
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
+  const { has } = usePermissions()
+  const canWrite = has(PERM.REPORT_WRITE)
 
   const runId = run?.id
   const base = `/projects/${projectId}/branches/${branchId}/cases/${caseId}/scripts/runs/${runId}`
@@ -75,18 +79,29 @@ export default function FailureTriagePanel({ projectId, branchId, caseId, run, o
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: confirmed ? '#0ea5a0' : '#1d2129', fontWeight: 600 }}>
-          {confirmed ? '已确认' : '人工确认'}
-        </span>
-        <Select size="small" style={{ width: 210 }} value={cause} onChange={setCause}
-          placeholder="确认原因" options={(data.causeOptions || []).map(o => ({ value: o.value, label: o.label }))} />
-        <Input size="small" style={{ flex: 1, minWidth: 200 }} value={note} onChange={e => setNote(e.target.value)}
-          placeholder="为什么是这个原因（必填）" />
-        <Button size="small" type="primary" loading={saving} onClick={submit}>
-          {confirmed ? '更新确认' : '确认'}
-        </Button>
-      </div>
+      {canWrite ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: confirmed ? '#0ea5a0' : '#1d2129', fontWeight: 600 }}>
+            {confirmed ? '已确认' : '人工确认'}
+          </span>
+          <Select size="small" style={{ width: 210 }} value={cause} onChange={setCause}
+            placeholder="确认原因" options={(data.causeOptions || []).map(o => ({ value: o.value, label: o.label }))} />
+          <Input size="small" style={{ flex: 1, minWidth: 200 }} value={note} onChange={e => setNote(e.target.value)}
+            placeholder="为什么是这个原因（必填）" />
+          <Button size="small" type="primary" loading={saving} onClick={submit}>
+            {confirmed ? '更新确认' : '确认'}
+          </Button>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 12, color: confirmed ? '#0ea5a0' : '#86909c', fontWeight: 600 }}>
+            {confirmed ? '已确认' : '人工确认'}
+          </span>
+          {confirmed
+            ? <Tag color="green" style={{ margin: 0 }}>{data.confirmedCause}</Tag>
+            : <span style={{ fontSize: 12, color: '#c9cdd4' }}>只读：无确认权限</span>}
+        </div>
+      )}
       {confirmed && (
         <div style={{ fontSize: 11, color: '#86909c', marginTop: 4 }}>
           确认于 {formatTime(data.confirmedAt)}
