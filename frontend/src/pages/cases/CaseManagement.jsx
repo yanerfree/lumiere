@@ -6,6 +6,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { api, getValidToken } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
 import { useEnv, buildEnvOptions } from '../../utils/env'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 // 和 scenario-gen/Stage5Review 用同一套分类，两处对不上的话质量统计会分裂
 const REJECT_CATEGORIES = [
@@ -71,6 +73,13 @@ const dimBadge = (targetLevel, dim, status) =>
 export default function CaseManagement() {
   const navigate = useNavigate()
   const { projectId } = useParams()
+
+  // 权限：写用例要 case.write（tester+），AI 生成/审核要 case.generate，批量执行要 plan.run。
+  // 只读角色（viewer）能看用例、不能改。真正的强制在后端，这里只是把点不动的入口收起来。
+  const { has } = usePermissions()
+  const canWrite = has(PERM.CASE_WRITE)
+  const canGenerate = has(PERM.CASE_GENERATE)
+  const canRun = has(PERM.PLAN_RUN)
 
   // 分支
   const [globalBranchId] = useBranch(projectId)
@@ -1095,15 +1104,19 @@ export default function CaseManagement() {
             改名、挪菜单、拆页面在 UI 上都长得像「没了」—— 拿不准就驳回，驳回=「这是要改，不是要废」
           </div>
         </div>}>
-          <Dropdown trigger={['click']} menu={{ items: [
-            { key: 'approve', label: '确认废弃', danger: true },
-            { key: 'reject', label: '驳回（这是要改）' },
-          ], onClick: ({ key, domEvent }) => { domEvent.stopPropagation(); decideDeprecate(row.id, key === 'approve') } }}>
-            <Tag onClick={e => e.stopPropagation()}
-              style={{ fontSize: 11, cursor: 'pointer', background: 'rgba(250,173,20,0.12)', color: '#d48806', border: 'none', margin: 0 }}>
-              待废审 ▾
-            </Tag>
-          </Dropdown>
+          {canWrite ? (
+            <Dropdown trigger={['click']} menu={{ items: [
+              { key: 'approve', label: '确认废弃', danger: true },
+              { key: 'reject', label: '驳回（这是要改）' },
+            ], onClick: ({ key, domEvent }) => { domEvent.stopPropagation(); decideDeprecate(row.id, key === 'approve') } }}>
+              <Tag onClick={e => e.stopPropagation()}
+                style={{ fontSize: 11, cursor: 'pointer', background: 'rgba(250,173,20,0.12)', color: '#d48806', border: 'none', margin: 0 }}>
+                待废审 ▾
+              </Tag>
+            </Dropdown>
+          ) : (
+            <Tag style={{ fontSize: 11, background: 'rgba(250,173,20,0.12)', color: '#d48806', border: 'none', margin: 0 }}>待废审</Tag>
+          )}
         </Tooltip>
       )
     }},
@@ -1164,7 +1177,7 @@ export default function CaseManagement() {
       if (v === 'inconclusive') return wrap(
         <Tag style={{ fontSize: 11, background: 'rgba(250,173,20,0.14)', color: '#d48806',
                       border: 'none', margin: 0 }}>无法审核</Tag>)
-      return (
+      return canWrite ? (
         <Dropdown trigger={['click']} menu={{ items: [
           { key: 'approved', label: '通过' },
           { key: 'rejected', label: '打回', danger: true },
@@ -1174,6 +1187,8 @@ export default function CaseManagement() {
             待审 ▾
           </Tag>
         </Dropdown>
+      ) : (
+        <Tag style={{ fontSize: 11, background: 'rgba(78,138,240,0.08)', color: '#4e8af0', border: 'none', margin: 0 }}>待审</Tag>
       )
     }},
     { key: 'qualityScore', title: '评分', dataIndex: 'qualityScore', width: 48, align: 'center', defaultVisible: false, render: v => {
@@ -1188,6 +1203,7 @@ export default function CaseManagement() {
     // 一行里最扎眼的东西成了"复制/删除"，而它们是这一行最不常点的两个按钮，
     // 还各占 30px。改成默认无底色的灰图标，hover 才上色：常态安静、要用时找得到。
     { key: 'actions', title: '操作', width: statusFilter === 'deleted' ? 124 : 64, align: 'center', defaultVisible: true, fixed: 'right', render: (_, row) => (
+      !canWrite ? <span style={{ color: '#c9cdd4' }}>—</span> :
       statusFilter === 'deleted' ? (
         <Space size={2}>
         {/* 误删一条就得整条重写，那这一步缓冲就白设了 */}
@@ -1296,10 +1312,12 @@ export default function CaseManagement() {
                 <Tooltip title="刷新目录">
                   <Button type="text" size="small" icon={<ReloadOutlined />} onClick={() => { fetchFolders(); fetchCases() }} style={{ color: '#c9cdd4' }} />
                 </Tooltip>
-                <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => setFolderModalOpen(true)} style={{ color: '#0ea5a0' }} />
-                <Tooltip title="清理空目录">
-                  <Button type="text" size="small" icon={<ClearOutlined />} onClick={openEmptyFolders} style={{ color: '#c9cdd4' }} />
-                </Tooltip>
+                {canWrite && <Button type="text" size="small" icon={<PlusOutlined />} onClick={() => setFolderModalOpen(true)} style={{ color: '#0ea5a0' }} />}
+                {canWrite && (
+                  <Tooltip title="清理空目录">
+                    <Button type="text" size="small" icon={<ClearOutlined />} onClick={openEmptyFolders} style={{ color: '#c9cdd4' }} />
+                  </Tooltip>
+                )}
                 <Tooltip title="收起导航">
                   <Button type="text" size="small" icon={<MenuFoldOutlined />} onClick={() => toggleNav(true)} style={{ color: '#c9cdd4' }} />
                 </Tooltip>
@@ -1377,8 +1395,10 @@ export default function CaseManagement() {
             ) : (
               <div style={{ textAlign: 'center', padding: 20, color: '#86909c', fontSize: 12 }}>
                 暂无目录
-                <br />
-                <Button type="link" size="small" onClick={() => setFolderModalOpen(true)}>+ 创建模块</Button>
+                {canWrite && <>
+                  <br />
+                  <Button type="link" size="small" onClick={() => setFolderModalOpen(true)}>+ 创建模块</Button>
+                </>}
               </div>
             )}
           </Card>
@@ -1471,10 +1491,12 @@ export default function CaseManagement() {
                 {/* 批量「AI 生成脚本」已下线：走的是 scripts/generate-stream 那条平台侧生成管道，
                     实测跑不通（详情页的单条入口同批下线）。UI 脚本改由外部 Claude Code 写好跑通后
                     经 lum_sync_ui_script 回推。 */}
-                <Tooltip title="按六维逐条审核（场景合理性/验证点到位/接口必要性/UI脚本/覆盖遗漏/纪律）：勾选了就评勾选的，没勾就评当前模块。结论落库到审核标签和评分">
-                  <Button icon={<SearchOutlined />} onClick={() => handleQualityReview()}>AI 审核</Button>
-                </Tooltip>
-                <Button icon={<UploadOutlined />} size="small" onClick={() => setImportOpen(true)}>导入</Button>
+                {canGenerate && (
+                  <Tooltip title="按六维逐条审核（场景合理性/验证点到位/接口必要性/UI脚本/覆盖遗漏/纪律）：勾选了就评勾选的，没勾就评当前模块。结论落库到审核标签和评分">
+                    <Button icon={<SearchOutlined />} onClick={() => handleQualityReview()}>AI 审核</Button>
+                  </Tooltip>
+                )}
+                {canWrite && <Button icon={<UploadOutlined />} size="small" onClick={() => setImportOpen(true)}>导入</Button>}
                 {/* 「给人看」和「给机器用」是两个动作，各给一个入口。
                     做成一个带选项的弹窗等于把人已经做好的决定再问一遍。 */}
                 <Tooltip title={selectedRowKeys.length
@@ -1500,18 +1522,20 @@ export default function CaseManagement() {
                     <Button icon={<DownloadOutlined />} size="small">导出备份</Button>
                   </Dropdown>
                 </Tooltip>
-                <Tooltip title="从本项目其它分支复制用例到当前分支（深拷贝，含步骤和场景）">
-                  <Button icon={<CopyOutlined />} size="small" onClick={openCopy}>从分支复制</Button>
-                </Tooltip>
-                <Button type="primary" icon={<PlusOutlined />} size="small" onClick={() => {
+                {canWrite && (
+                  <Tooltip title="从本项目其它分支复制用例到当前分支（深拷贝，含步骤和场景）">
+                    <Button icon={<CopyOutlined />} size="small" onClick={openCopy}>从分支复制</Button>
+                  </Tooltip>
+                )}
+                {canWrite && <Button type="primary" icon={<PlusOutlined />} size="small" onClick={() => {
                   createCaseForm.resetFields()
                   if (selectedFolderId) {
                     const folderName = findFolderNameById(folderTree, selectedFolderId)
                     if (folderName) createCaseForm.setFieldValue('module', folderName)
                   }
                   setCreateCaseOpen(true)
-                }}>新建用例</Button>
-                {statusFilter === 'deleted' && total > 0 && (
+                }}>新建用例</Button>}
+                {canWrite && statusFilter === 'deleted' && total > 0 && (
                   <Popconfirm
                     title="清空回收站"
                     description={`将彻底删除全部 ${total} 条已删除用例，不可恢复。关联的脚本、场景变量会一并清理；历史测试报告保留但解除关联。`}
@@ -1528,7 +1552,7 @@ export default function CaseManagement() {
                 )}
               </Space>
             </div>
-            {selectedRowKeys.length > 0 && (
+            {selectedRowKeys.length > 0 && canWrite && (
               <div style={{ marginTop: 10, padding: '8px 12px', background: statusFilter === 'deleted' ? '#fff2f0' : '#e0f7f6', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 12 }}>
                 <span style={{ fontSize: 13, color: statusFilter === 'deleted' ? '#e8453c' : '#0ea5a0' }}>已选 {selectedRowKeys.length} 条</span>
                 {statusFilter === 'deleted' ? (<>

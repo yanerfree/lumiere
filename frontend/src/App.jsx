@@ -12,6 +12,8 @@ import {
 } from '@ant-design/icons'
 import { api } from './utils/request'
 import { useLang } from './utils/i18n.jsx'
+import { PermissionProvider, usePermissions } from './utils/PermissionContext'
+import { PERM } from './utils/permissions'
 import BranchSelector from './components/BranchSelector'
 import ServiceStatusBadge from './components/ServiceStatusBadge'
 import ProjectList from './pages/projects/ProjectList'
@@ -74,6 +76,7 @@ function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { t, lang, setLang } = useLang()
+  const { has } = usePermissions()
 
   const user = JSON.parse(localStorage.getItem('user') || '{}')
 
@@ -179,7 +182,9 @@ function AppLayout() {
     {
       key: 'g-system', icon: <DeploymentUnitOutlined />, label: t('menu.group.system'),
       children: [
-        ...(user.role === 'admin' ? [
+        // 用户管理：只有持 system.user.manage（admin）才看得到。由后端 /me/permissions 判定，
+        // 不再前端硬编码 role === 'admin' —— 同一份权限点，菜单和后端守卫一处对齐。
+        ...(has(PERM.SYS_USER_MANAGE) ? [
           { key: '/settings/users', icon: <UserOutlined />, label: t('menu.users') },
         ] : []),
         { key: '/settings/logs', icon: <FileSearchOutlined />, label: t('menu.logs') },
@@ -389,7 +394,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/*" element={<RequireAuth><AppLayout /></RequireAuth>} />
+      <Route path="/*" element={<RequireAuth><PermissionProvider><AppLayout /></PermissionProvider></RequireAuth>} />
     </Routes>
   )
 }
