@@ -97,6 +97,33 @@ def execute_single_case(
             "steps": [],
         }
 
+    # 选择器占位同理。放在这里的理由和上面一样：**四条执行路径都过这个函数**，
+    # 所以"某条路忘了替选择器"也会被这道拦住 —— 而"忘了替"和"登记表里没这条"
+    # 在结果上长得一模一样（都是 ${SEL:} 原样留着），只在这一层拦得干净。
+    from app.services.ui_selector_render import unresolved as _unresolved_sel
+    _sel_left = _unresolved_sel(script_content)
+    if _sel_left:
+        try:
+            os.unlink(junit_xml_path)
+        except OSError:
+            pass
+        return {
+            "status": "error",
+            "duration_ms": 0,
+            "error_summary": (
+                f"{len(_sel_left)} 处选择器占位没解析出来，拒绝执行："
+                f"{'、'.join(_sel_left[:5])}"
+                + ("…" if len(_sel_left) > 5 else "")
+                + "。不拦的话「不应出现」那类断言会假绿（占位匹配不到任何元素，"
+                  "'不该存在'当然成立）。两种可能：① 这几个键没登记 —— "
+                  "lum_upsert_selectors(project_id, items=[{key, selector, kind}])；"
+                  "② 登记了但还是 status='gap'（**被测前端还没给抓手**）—— "
+                  "那就去前端仓补 data-testid 并提 MR，合了再回来写这条用例。"
+            ),
+            "stdout": "",
+            "steps": [],
+        }
+
     pw_output_dir = None
     if is_playwright_script(script_content):
         pw_output_dir = str(Path(sandbox_dir) / ".pw_results")

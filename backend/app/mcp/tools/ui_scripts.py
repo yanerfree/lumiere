@@ -96,6 +96,12 @@ async def run_ui_script(
     from app.services.ui_text_render import bake_env_defaults as _bake
     content, _ = _bake(content, env_vars)
 
+    # 选择器登记表：`${SEL:键}` 换成登记的那条。**先选择器、再文案** ——
+    # 登记表里的值本身可以带文案占位（`text=${services.action.more|更多}`），
+    # 顺序反了那一层就换不掉。
+    from app.services.ui_selector_render import render_for_case as _render_sel
+    content, _sel_stat, _sel_tbl = await _render_sel(session, cid, content)
+
     # 文案词典：脚本里的 ${键|中文} 和 TEXT 都靠它换语种。**这条路以前没注入**，
     # 于是取不到文案、选择器拿键去匹配，红在「element not found」上。
     from app.services.i18n_harvest_service import load_locale_table_for_case
@@ -121,6 +127,21 @@ async def run_ui_script(
                     "items=[{key, zh, en}]) 把这几个键登记上；"
                     "② 占位里补中文原文写成 ${键|中文原文}（英文环境下会退回中文，"
                     "不挂但测的是中文那一版）。"),
+        }
+
+    # 选择器占位同理，一个字都不放过 —— 理由和上面逐字相同（负例会假绿）。
+    from app.services.ui_selector_render import (
+        unresolved as _unresolved_sel, unresolved_hint as _sel_hint,
+    )
+    sel_left = _unresolved_sel(content)
+    if sel_left:
+        return {
+            "status": "error",
+            "error_summary": f"{len(sel_left)} 处选择器占位没解析出来，拒绝执行",
+            "selectorsUnresolved": sel_left,
+            "why": ("跑了也没意义：正例会红在「找不到元素」上，而「不应出现」那类断言会"
+                    "**假绿**（未替换的占位匹配不到任何元素，'不该存在'当然成立）。"),
+            "fix": _sel_hint(content, _sel_tbl),
         }
 
     sandbox_dir = tempfile.mkdtemp(prefix="lum_ui_")
@@ -421,9 +442,15 @@ async def render_ui_script(
     if not script:
         return {"error": "这条用例还没有 UI 脚本"}
 
+    # 选择器先替，再替文案（登记表的值里可以带文案占位）。少了这一步，
+    # 本地渲出来的文件里还留着 `${SEL:键}` 字面量 —— 跑起来正例红在
+    # 「找不到元素」上，而"不应出现"那类断言假绿。
+    from app.services.ui_selector_render import render_for_case as _render_sel
+    _content0, _sel_stat, _sel_tbl = await _render_sel(session, cid, script.content)
+
     table = await load_locale_table_for_case(session, cid)
     locale = locale_of({"TEST_LANGUAGE": lang})
-    content, stat = render(script.content, table, locale)
+    content, stat = render(_content0, table, locale)
 
     # ── ② 环境变量：把 os.getenv 那行的默认值换成真值（和平台执行时同一套替换）──
     ev: dict = {}
@@ -471,6 +498,11 @@ async def render_ui_script(
         "textFellBackToChinese": sorted(set(stat["fellBack"])),
         # 没换掉的占位会以字面量进选择器，本地一样跑不通 —— 先去登记词条
         "textUnresolved": sorted(set(stat["missing"])),
+        # 选择器占位 ${SEL:键}。gap = 登记了但**被测前端还没给抓手**，
+        # 那条现在渲染不出东西 —— 本地也跑不了，该去前端补 data-testid 提 MR，
+        # 不是在脚本里换个脆选择器绕过去。
+        "selectorsResolved": sorted(set(_sel_stat["resolved"])),
+        "selectorsUnresolved": sorted(set(_sel_stat["missing"]) | set(_sel_stat["gap"])),
         "langSwitchInjected": bool(lang_key),
     }
     if need_export:

@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff, selectors
 
 mcp = FastMCP(
     name="Lumiere",
@@ -801,6 +801,41 @@ _register(
     sync.upsert_i18n_terms,
     name="lum_upsert_i18n_terms",
     description="【登记国际化词典】脚本里要用 t() 的文案在这里登记（按 key upsert）。有语言中立键就用键（services.form.name）——多义词只能这么区分；只有中文就用中文当键。带 i18next 命名空间的键两种拼法互认（`ns:a.b` = `ns.a.b`），查词时同一条，登记一次就够。⚠ 用键**必须先登记**：t() 查不到会原样返回那串键，选择器拿它匹配必然红；中文当键则退回中文不会挂。没 en 译文的词条注入后在英文环境仍退回中文。参数: project_id, items([{key(必填), zh(中文当键时可省), en, module, category(button/placeholder/label/text), description}])",
+)
+
+_register(
+    selectors.upsert_selectors,
+    name="lum_upsert_selectors",
+    description=(
+        "【登记选择器·UI 脚本别再写字面量】把 UI 定位用的选择器登记成**项目公共资产**"
+        "（按 key upsert）。脚本里写 `page.locator(\"${SEL:用例列表.新建按钮}\")`，"
+        "平台执行前替换成登记表里那条 —— 前端改名只改这一行，全项目脚本跟着好；"
+        "写在正文里就得逐条改 N 遍，而**改漏了当场不报错**，等回归红了才发现，"
+        "那时已经分不清是产品坏了还是脚本过期了。本地跑先 lum_render_ui_script 渲一份。\n"
+        "kind 是**稳定性等级**不是分类：testid/id/role/semantic 稳，structure 会飘，"
+        "text 换语种必挂（选择器值里写 ${键|中文} 占位），**style 样式类最脆**"
+        "（`.card.card-pad`、`.ant-modal` 是给人看好看的，改版随手就变）。不传自动判。\n"
+        "⚠ **前端压根没给抓手时写 status='gap' + gap_note + blocked_cases，"
+        "别硬塞一个样式类当 active。** 该做的是去被测前端仓补 data-testid 并提 MR；"
+        "gap 行会进 lum_next_duty 的「待补 testid」队列留痕，MR 合了回来把 selector 填上、"
+        "status 改 active，blocked_cases 里那几条用例会自动变成「回来写 UI」的待办，"
+        "直到真推了脚本才消失。不留痕的话「没抓手」就只是一句"
+        "口头的\"以后再说\"，然后永远没有以后。\n"
+        "参数: project_id, items([{key(必填), selector, kind, module, description, "
+        "status(active/gap), gap_note, blocked_cases([用例编号])}])"
+    ),
+)
+
+_register(
+    selectors.list_selectors,
+    name="lum_list_selectors",
+    description=(
+        "【看选择器登记表 + 两笔欠账】列出项目登记的选择器（含按稳定性分档的条数），"
+        "外加 **待整改**：项目里哪些 UI 脚本正文还写死着脆弱的样式类选择器、各几处 —— "
+        "换成 ${SEL:键} 回推之后它自己从清单上消失。缺 testid 的口子看 status='gap' 那些"
+        "（也在 lum_next_duty 里）。写 UI 脚本前先调一次，别自己现编选择器。"
+        "参数: project_id(项目UUID), module(可选), status(可选 active/gap)"
+    ),
 )
 
 _register(

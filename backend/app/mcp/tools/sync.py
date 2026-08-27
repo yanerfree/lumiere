@@ -1000,6 +1000,49 @@ for card in page.locator(".todo-card").all():
 用 `page.goto(url, wait_until="domcontentloaded")` + **显式元素断言**当就绪信号。
 `networkidle` 同样别用 —— 轮询永远不会 idle。
 
+### 选择器纪律：登记表 `${SEL:键}`，缺抓手就去补 testid
+
+**别在脚本里写死选择器。** 实测本库 18 个 UI 脚本、125 处 `page.locator(...)`，
+只有 4 处用了 testid，其余大量是 `.card.card-pad` / `button.btn.sm.primary` /
+`span.chip.sm` / `.ant-modal` 这种**样式类**：前端改一次样式，得逐条改脚本，
+而且改漏的那几条要等下一次回归红了才知道。
+
+做法和文案词典完全同形 —— 项目级登记一次，脚本里引用：
+
+    # 登记（一次）
+    lum_upsert_selectors(project_id, items=[
+      {"key": "用例列表.新建按钮", "selector": "[data-testid=case-create]", "module": "用例管理"},
+    ])
+    # 脚本里引用
+    page.locator("${SEL:用例列表.新建按钮}").click()
+
+平台在**执行前的源码文本**上替换（和 `${键|中文}`、`os.getenv` 默认值同一处，
+**先选择器、再文案** —— 登记表的值里可以带文案占位）。
+所以本地跑照旧 `lum_render_ui_script`，吐出来的就是替换好的那一份。
+
+`kind` 是**稳定性档位**，不是分类标签，越靠前越稳：
+`testid` > `id` > `role` > `semantic` > `structure` > `text` > `style`。
+不传会按 selector 自动判。`lum_list_selectors` 会按档位统计，
+`style` 那一档就是待整改清单。
+
+⚠ **被测前端没有抓手时，正确的动作是去补 testid，不是换个脆选择器凑合。**
+
+    lum_upsert_selectors(project_id, items=[{
+      "key": "权限面板.申请调用按钮", "status": "gap",
+      "gap_note": "MCP 权限面板每行的「申请调用」没有 testid，需前端补",
+      "blocked_cases": ["TC-MCP-00049"],
+    }])
+
+登记成 `gap` 之后：① 平台**故意不给它存 selector**（留着下一个人就直接拿去用了，
+于是"等前端补 testid"永远不会发生）；② `lum_next_duty` 会一直把它排在「待补 testid」
+队列里；③ MR 合了、你把它改成 active 之后，`blocked_cases` 里那几条用例会继续
+出现在「回来写 UI」队列里，**直到真的有一份 active 的 UI 脚本**为止。
+这条链子是自消的，不靠谁记得回来关单。
+
+回推门禁：引用了没登记的键、或引用了还挂着 `gap` 的键 → **硬拦**
+（跟文案占位一个道理：换不掉的占位让正例红、让「不应出现」那类负例**假绿**）。
+写死样式类选择器 → 软警告，不拦（脆会红在明面上，不骗人）。
+
 ### 文案纪律：优先 testid，退回文案时用 `t()`
 
 **数据不许写死已经有硬拦截，文案是同一件事的另一半。**
@@ -2220,11 +2263,55 @@ def _stray_cn_literals(code: str) -> list[str]:
 
 
 def _scan_ui_script(content: str, language: str,
-                    known_keys: set[str] | None = None) -> tuple[list[str], list[str]]:
+                    known_keys: set[str] | None = None,
+                    sel_table: dict | None = None) -> tuple[list[str], list[str]]:
     """返回 (硬错误, 软警告)。规矩跟接口回推一致：外部取值一律走变量，不许写死。"""
     errors: list[str] = []
     warns: list[str] = []
     reader = "process.env" if language == "typescript" else "os.getenv"
+
+    # ── 选择器登记表 ${SEL:键} ──
+    # 两条硬拦，判据都是 100% 确定的："这个键平台给不出值" → 脚本必然跑不了，
+    # 而跑不了的方式一半是看不见的（占位匹配不到任何元素，「不应出现」那类断言假绿）。
+    from app.services.ui_selector_render import (
+        fragile_literals, refs as _sel_refs, testid_literals,
+    )
+    _refs = _sel_refs(content)
+    if _refs and sel_table is not None:
+        _unreg = [k for k in _refs if k not in sel_table]
+        _gap = [k for k in _refs if (sel_table.get(k) or {}).get("status") == "gap"]
+        if _unreg:
+            errors.append(
+                f"{len(_unreg)} 个选择器键登记表里没有（{'、'.join(_unreg[:3])}…）—— "
+                f"平台**拒绝执行**这种脚本：占位换不掉时正例红在「找不到元素」上、"
+                f"而「不应出现」那类断言会假绿。"
+                f"先 lum_upsert_selectors(project_id, items=[{{key, selector, kind}}]) 登记。")
+        if _gap:
+            errors.append(
+                f"{len(_gap)} 个选择器键还挂着 `gap`（{'、'.join(_gap[:3])}…）—— "
+                f"**被测前端还没给抓手**，这条脚本现在写不了。"
+                f"正确的下一步是去被测前端仓补 `data-testid`、提 MR，"
+                f"合了之后把这条改成 active（lum_upsert_selectors 传上 selector），"
+                f"再回来写这个用例。"
+                f"⚠ 别在脚本里换个样式类选择器绕过去 —— 那正是当初要治的东西。")
+
+    # 字面量脆选择器（`.card.card-pad` / `button.btn.sm.primary` 这类样式类）→ 软警告。
+    # **不硬拦**：脆不等于错，它会红在明面上（不像假绿那样骗人），
+    # 硬拦会把「先跑通再加固」这条正常路径堵死。
+    _frag = fragile_literals(content)
+    if _frag:
+        warns.append(
+            f"{len(_frag)} 处选择器写死了样式类（{'、'.join(_frag[:3])}…）—— "
+            f"前端改一次样式就得回来调脚本，而且是**逐条改**。"
+            f"两步：① 被测前端补 `data-testid`；② 用 lum_upsert_selectors 登记成键，"
+            f"脚本里写 `${{SEL:键}}`。前端还没抓手就先登记成 status='gap' 留痕，"
+            f"lum_next_duty 会一直盯着它，别让它烂在这儿。")
+    _tid = testid_literals(content)
+    if _tid and not _refs:
+        warns.append(
+            f"{len(_tid)} 处 testid 选择器是直接写死的（{'、'.join(_tid[:3])}…）—— "
+            f"稳是稳，但换个用例还得再抄一遍、testid 改名要 grep 全库。"
+            f"登记成键（lum_upsert_selectors）之后写 `${{SEL:键}}`，改一处全站生效。")
 
     # 引用了词典里没有的键 → 软警告。
     # 词典的定位是**「测试引用到的文案清单」**，不是被测系统 locale 的镜像 ——
@@ -2371,7 +2458,15 @@ async def sync_ui_script(
             )).scalars().all())
     except Exception:  # noqa: BLE001
         _known = None
-    errors, warns = _scan_ui_script(content, lang, _known)
+    # 已登记的选择器键（含 gap 的 —— gap 也要认出来，才能说"去补 testid"
+    # 而不是"这个键不存在"，两句话指向完全不同的下一步）。
+    _sel_tbl = None
+    try:
+        from app.services.ui_selector_render import load_table_for_case
+        _sel_tbl = await load_table_for_case(session, cid)
+    except Exception:  # noqa: BLE001
+        _sel_tbl = None
+    errors, warns = _scan_ui_script(content, lang, _known, _sel_tbl)
 
     # ── 断言门禁（B5）──
     # 唯一的硬拦截：一条断言都没有。"跑通了但什么都不验证"是最常见的作弊路径，

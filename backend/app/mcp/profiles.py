@@ -62,6 +62,8 @@ _LIVE = _LOCATE + _NOTES_READ + ["lum_add_project_note"] + [
     "lum_sync_orchestrated_scenario",
     # 断言里的错误提示语走 ${T:中文}，用的是同一份词典，所以这一档也要能登记
     "lum_upsert_i18n_terms",
+    # 选择器登记表跟词典是同一件事的另一半（外部取值不许写死在正文里）
+    "lum_upsert_selectors", "lum_list_selectors",
     "lum_list_api_tests", "lum_get_api_test", "lum_run_api_test",
     # 跑绿之后还得回答"这些断言有没有用" —— 跳掉动作步再跑一遍，该红的必须红
     "lum_check_assertion_bite",
@@ -104,6 +106,8 @@ _UISCRIPT = _LOCATE + _NOTES_READ + [
     "lum_render_ui_script",
     # 文案纪律要求走 t()，那就得有地方登记词条 —— 缺这个通道，纪律就只能靠人工转抄
     "lum_upsert_i18n_terms",
+    # 选择器同理，而且这一档最需要它：写 UI 脚本第一件事就是查登记表，别现编
+    "lum_upsert_selectors", "lum_list_selectors",
     "lum_check_deliverable", "lum_check_branch",
     "lum_review_case", "lum_review_check",
     "lum_review_batch", "lum_review_batch_status", "lum_module_checkup",
