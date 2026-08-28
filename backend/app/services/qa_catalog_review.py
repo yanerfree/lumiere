@@ -41,6 +41,12 @@ from datetime import datetime, timezone
 
 from app.models.qa_catalog_review import QaCatalogReview
 from app.services.ai import llm_client
+from app.services.qa_evidence_check import (
+    PASS_STATES,
+    check_evidence,
+    evidence_stats,
+    state_cn,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -855,6 +861,10 @@ def _merge_payload(domain: dict, merged: dict, batches: int, scripts: int) -> st
     gaps = merged.get("scriptGaps") or []
     n = {b: sum(1 for g in gaps if (g.get("blame") or "script") == b)
          for b in ("script", "env", "catalog")}
+    # 回验已经在 `_one` 里做完了，所以这三行数的是**回验之后**的行 ——
+    # 跟页面列的是同一批。要是回验挪到 merge 之后，这里就会拿一份还没标记的数
+    # 去让模型写 brief，写出来的数和页面列的条数对不上，而两边都"看起来对"。
+    ev = evidence_stats(gaps)
     lines = [f"域：{domain.get('code')} {domain.get('name') or ''}".strip(),
              f"（{scripts} 份脚本分 {batches} 批读完，下面是合并后的全部结论）", "",
              f"## 合并后的结论：{merged.get('verdict')}", "",
@@ -864,8 +874,13 @@ def _merge_payload(domain: dict, merged: dict, batches: int, scripts: int) -> st
              f"- 环境要铺：{n['env']} 条",
              f"- 清单要商量：{n['catalog'] + len(merged.get('catalogGaps') or [])} 条",
              "", "## 抓到的问题"]
+    if ev["total"] - ev["verified"]:
+        lines.insert(-1, f"（下面有 {ev['total'] - ev['verified']} 条的判据在脚本正文里"
+                         "搜不到，标着 ⚠判据存疑。**别把它们写进 brief 的重点**；"
+                         "但上面三行的数照抄别自己减 —— 页面列的是全部。）")
     for g in merged.get("scriptGaps") or []:
-        lines.append(f"- [{g.get('blame')}][{g.get('severity')}] {g.get('id') or ''} "
+        mark = "" if g.get("evidenceCheck") in PASS_STATES else "⚠判据存疑 "
+        lines.append(f"- {mark}[{g.get('blame')}][{g.get('severity')}] {g.get('id') or ''} "
                      f"{g.get('oneLine') or ''}｜{g.get('problem') or ''}")
     if merged.get("catalogGaps"):
         lines += ["", "## 清单口径"]
@@ -897,9 +912,14 @@ async def run_review(*, domain: dict, scenarios: list[dict],
             [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
             config=ai_config, max_tokens=MAX_OUTPUT_TOKENS, temperature=0,
             timeout=MIN_TIMEOUT_SECONDS)
+        parsed = parse_result(resp.content or "")
+        # **回验必须在这里，不能挪到 merge 之后。** `part` 是这一批的脚本；
+        # 合并之后手上只剩全域脚本，A 批引用 B 批正文的那种编造当场就查不出来了 ——
+        # 而挪过去之后类型、形状、绝大多数单测全都过得去。
+        check_evidence(parsed.get("scriptGaps") or [], part)
         # 完整性跟结论一起带出来。**丢掉它就没法区分「这批没抓到问题」和
         # 「这批话没说完」** —— 两者在页面上长得一模一样，都是"这一格 0 条"。
-        return parse_result(resp.content or ""), batch_completeness(resp)
+        return parsed, batch_completeness(resp)
 
     completeness: dict[str, str] = {}
     if len(batches) == 1:
@@ -982,6 +1002,11 @@ async def run_review(*, domain: dict, scenarios: list[dict],
         # 批次号 → complete / truncated / unknown。**这个键不存在 = 旧口径评的**，
         # 那时候不记这件事 —— 渲染时必须说"没记"，不许当成 complete。
         "completeness": completeness,
+        # 判据回验的结果。**从行本身数**（`evidence_stats` 扫的就是 `scriptGaps`），
+        # 跟页面列的、跟喂给收口那一趟的是同一批行 —— 摘要的数和列表的条数
+        # 因此不可能打架。各批各回一份统计再相加就会有两条独立路径，
+        # 哪天分歧了没人看得出来是哪边错。
+        "evidence": evidence_stats(out.get("scriptGaps") or []),
     }
     return out
 
@@ -1202,8 +1227,26 @@ def to_markdown(r: QaCatalogReview) -> str:
     L.append("")
     L.append("**这份结论靠得住吗** —— 按下面这几条自己掂量：")
     L.append("")
-    L.append("- ✅ **每条都能十秒内被否掉**：`evidence` 是从脚本正文原样抄的，"
-             "grep 一下就知道我说得对不对。**这才是它能被信的理由，不是「AI 说的」。**")
+    # 这句话原来是**无条件**写死的 —— 一句自己没验过的承诺，而这个模块的全部意义
+    # 就是抓「结论看起来有据、依据其实没验过」。现在它跟着回验结果走。
+    ev = evidence_stats(res.get("scriptGaps") or [])
+    if ev["unchecked"]:
+        # 存量结论（回验上线之前评的）。**不许套用那句 ✅** ——
+        # 那就成了拿一句没验过的话去担保另一句没验过的话。
+        L.append(f"- ⚠ **这份结论的判据没回验过**：它评在回验上线之前，{ev['total']} 条判据"
+                 "平台一条都没搜过。要用就自己 grep 一遍。")
+    elif not ev["total"]:
+        L.append("- ✅ **每条都能十秒内被否掉**：`evidence` 是从脚本正文原样抄的，"
+                 "grep 一下就知道我说得对不对。**这才是它能被信的理由，不是「AI 说的」。**"
+                 "（这一趟没有脚本级发现，没有可回验的判据。）")
+    else:
+        miss = ev["total"] - ev["verified"]
+        L.append(f"- {'✅' if not miss else '⚠'} **判据回验过了**："
+                 f"{ev['total']} 条判据平台已经拿回脚本正文搜过一遍，"
+                 f"{ev['verified']} 条 grep 得到，"
+                 + ("一条不落。" if not miss else
+                    f"**{miss} 条搜不到**，已经逐条标在那条发现底下 —— 那几条先别照着改。")
+                 + "**这才是它能被信的理由，不是「AI 说的」。**")
     L.append("- ⚠ **单趟单模型，没有第二意见**：同一份脚本再评一次，措辞会变、条数会差几条。"
              "拿它当「要不要停下来处理」的依据可以，别拿它当分数。")
     L.append("- ⚠ **漏判是看不见的**：抓到多少不等于只有多少；某一格 0 条只等于"
@@ -1309,6 +1352,14 @@ def to_markdown(r: QaCatalogReview) -> str:
                 L.append(f"  （原文还有 {len(ev_lines) - 6} 行，这里只显示前 6 行）")
             if g.get("evidenceTruncated"):
                 L.append("  （这段判据入库时被截过，**不是脚本原文的全部**）")
+        st = g.get("evidenceCheck")
+        if st and st not in PASS_STATES:
+            # **只标记，不删、不降 severity。** 删了的话"一条没删"和"删了 8 条"
+            # 在页面上长得一模一样 —— 正是本模块要禁的那个形状。
+            found = g.get("evidenceFoundIn")
+            L.append(f"- ⚠ **这条的判据平台没验上**（{state_cn(st)}）"
+                     + (f"，不过在 `{found}` 里搜到了" if found else "")
+                     + " —— 结论本身可能仍然成立，但**先回原文确认再动手**。")
         if g.get("fix"):
             L.append(f"- 建议改成：{g['fix']}")
         L.append("")

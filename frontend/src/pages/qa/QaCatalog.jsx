@@ -1081,6 +1081,32 @@ export default function QaCatalog() {
 
 const SEVERITY = { blocker: C.red, major: C.orange, minor: C.gray }
 
+// 判据回验（后端 `qa_evidence_check`：把模型给的 evidence 拿回脚本正文搜一遍）。
+// 三档都算搜到 —— 真实判据经常是「第 12 行的断言 + 第 40 行的清理」拼起来的，
+// 要求整块一字不差会把这类**真判据**判成编造。
+const EV_PASS = ['verbatim', 'reflowed', 'stitched']
+const EV_CN = {
+  verbatim: '一字不差抄的', reflowed: '只有换行/缩进变了', stitched: '从正文几处拼起来的',
+  'wrong-path': '判据是真的，但路径写错了', unmatched: '在这一批脚本里搜不到',
+  too_short: '太短，搜到了也不算验过', empty: '没给判据',
+}
+
+// **从行本身数，不读后端那份 `coverage.evidence` 汇总。** 页面列的就是这些行，
+// 同一个来源就不可能出现「上面写「12 条 grep 得到」、底下列着 9 条 ⚠」这种一屏里
+// 两个数打架 —— 那种页面读的人只会得出「这页的数不能信」。
+// 存量结论（回验上线之前评的）没有 evidenceCheck 键，**一律算没验过，不算验过**：
+// 拿一句没验过的话去担保另一句没验过的话，正是这个模块要抓的形状。
+// 旧后端 + 新前端也落在这一档（本仓后端故意不带 --reload），说出来好过悄悄挂个对勾。
+function evidenceStats(gaps) {
+  const rows = gaps || []
+  const known = rows.filter(g => EV_CN[g.evidenceCheck])
+  return {
+    total: rows.length,
+    unchecked: rows.length - known.length,
+    verified: known.filter(g => EV_PASS.includes(g.evidenceCheck)).length,
+  }
+}
+
 // 一次评审有两拨读者，需要的东西不是同一个东西 —— 所以分两页，不做成一页里的折叠。
 //
 // **人**（测试经理/项目经理）：三十秒决定要不要停下来处理。他不需要知道
@@ -1125,6 +1151,7 @@ function HowIRead({ res, r }) {
   const batches = c.batches || 1
   const read = c.scriptsRead || (res.reviewedScripts || []).length
   const failed = c.batchesFailed || []
+  const ev = evidenceStats(res.scriptGaps)
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.9 }}>
@@ -1178,8 +1205,25 @@ function HowIRead({ res, r }) {
           <div>· <b>代价</b>：所以<b>脚本在真环境里跑不跑得起来，这份结论判不了</b>，那一半只有 QA 自己跑得出来。</div>
 
           <div style={{ fontWeight: 600, color: C.ink, marginTop: 8 }}>靠得住吗 —— 自己掂量这四条</div>
-          <div>· ✅ <b>每条都能十秒内被否掉</b>：判据是从脚本正文原样抄的，
-            grep 一下就知道我说得对不对。<b>这才是它能被信的理由，不是「AI 说的」。</b></div>
+          {/* 这句话原来是**无条件**写死的 —— 一句自己没验过的承诺，而这个模块的
+              全部意义就是抓「结论看起来有据、依据其实没验过」。现在它跟着回验结果走，
+              导出的那份 Markdown 同理（`_导出结论` 里是同一套分支）。 */}
+          {ev.unchecked > 0 ? (
+            <div>· ⚠ <b>这份结论的判据没回验过</b>：它评在回验上线之前，
+              {ev.total} 条判据平台一条都没搜过。要用就自己 grep 一遍。</div>
+          ) : ev.total === 0 ? (
+            <div>· ✅ <b>每条都能十秒内被否掉</b>：判据是从脚本正文原样抄的，
+              grep 一下就知道我说得对不对。<b>这才是它能被信的理由，不是「AI 说的」。</b>
+              （这一趟没有脚本级发现，没有可回验的判据。）</div>
+          ) : (
+            <div>· {ev.verified === ev.total ? '✅' : '⚠'} <b>判据回验过了</b>：
+              {ev.total} 条判据平台已经拿回脚本正文搜过一遍，{ev.verified} 条 grep 得到，
+              {ev.verified === ev.total ? '一条不落。' : (
+                <><b>{ev.total - ev.verified} 条搜不到</b>，在「给 AI · 逐条」那页
+                  逐条标着 —— 那几条先别照着改。</>
+              )}
+              <b>这才是它能被信的理由，不是「AI 说的」。</b></div>
+          )}
           <div>· ⚠ <b>单趟单模型，没有第二意见</b>：同一份脚本再评一次，措辞会变、条数会差几条。
             拿它当「要不要停下来处理」的依据可以，别拿它当分数。</div>
           <div>· ⚠ <b>漏判是看不见的</b>：抓到多少不等于只有多少；某一格 0 条只等于这一趟没抓到。</div>
@@ -1456,6 +1500,19 @@ function ReviewBody({ r, onOpenFile, projectId }) {
                 borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 12,
                 color: '#476582', whiteSpace: 'pre-wrap', overflowX: 'auto',
               }}>{g.evidence}</pre>
+            )}
+            {/* 判据没搜到就必须在**这段引文旁边**说，不能只写在页面顶上那句汇总里：
+                照着 evidence 动手的人是一条一条看的，他不会先回头读汇总。
+                **只标记，不删也不降 severity** —— severity 说的是「对仓库有多糟」，
+                回验说的是「我有多确信」，两个正交的轴合成一个就都读不出来了。
+                存量结论（没有这个键）不逐条标：顶上那句已经说了整份都没回验，
+                这里再标一遍就是给每一行都糊上噪音。 */}
+            {g.evidenceCheck && !EV_PASS.includes(g.evidenceCheck) && (
+              <div style={{ fontSize: 12, color: C.orange, lineHeight: 1.8 }}>
+                ⚠ <b>这条的判据平台没验上</b>（{EV_CN[g.evidenceCheck] || g.evidenceCheck}）
+                {g.evidenceFoundIn && <>，不过在 <code>{g.evidenceFoundIn}</code> 里搜到了</>}
+                {' '}—— 结论本身可能仍然成立，但<b>先回原文确认再动手</b>。
+              </div>
             )}
             {g.fix && <div style={{ color: C.gray, lineHeight: 1.8 }}>建议改成：<Rich text={g.fix} /></div>}
           </div>

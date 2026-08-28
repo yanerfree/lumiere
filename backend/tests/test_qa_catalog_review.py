@@ -8,11 +8,13 @@
 Test ID: qa-catalog-review-UT-001
 Priority: P0
 """
+import json
 import pathlib
 
 import pytest
 
 from app.services import qa_catalog_review as qr
+from app.services import qa_evidence_check as ec
 
 SCRIPT = """\
 #!/usr/bin/env bash
@@ -1759,3 +1761,456 @@ class TestEnvTiersRendering:
 
         line = [x for x in md.splitlines() if x.startswith("- `UAG_APIKEY`")][0]
         assert line == "- `UAG_APIKEY` — config/env.sh"
+
+
+# ── Epic 3：evidence 回验 ────────────────────────────────────────────────────
+
+#: 回验用的样本脚本。**行与行之间要拉开距离** —— ★#11 要的是"两条非相邻真实行"，
+#: 相邻两行拼起来在归一化之后还是连续的，那测的是 `reflowed`，不是 `stitched`。
+EV_SCRIPT = """\
+#!/usr/bin/env bash
+# @scenario AGT-11
+set -euo pipefail
+out=$(mktemp)
+curl -s -o "$out" -H "Authorization: Bearer $ADMIN_TOKEN" "$API_BASE/agents"
+echo "fetched"
+if [ ! -s "$out" ]; then
+  echo "empty"
+fi
+grep -q '"status":"ok"' "$out"
+rm -f "$out"
+"""
+
+_CURL = 'curl -s -o "$out" -H "Authorization: Bearer $ADMIN_TOKEN" "$API_BASE/agents"'
+_GREP = """grep -q '"status":"ok"' "$out\""""
+_RM = 'rm -f "$out"'
+
+
+class TestEvidenceCheck:
+    """`evidence` 到底是不是从脚本正文里抄的 —— 拿回去搜一遍。
+
+    导出的 Markdown 里有一句「每条都能十秒内被否掉：`evidence` 是从脚本正文原样抄的」。
+    那句话此前**没有任何东西在验证它**。而这个模块的全部意义就是抓
+    「结论看起来有据、依据其实没验过」—— 在自己身上留一句没验过的承诺，
+    比不写这句话坏得多：它把"可复核"从一个可检查的性质，变成一句需要相信的话。
+    """
+
+    @staticmethod
+    def _check(evidence, path="a.sh", scripts=None):
+        g = {"id": "X-01", "severity": "major", "path": path, "problem": "p",
+             "evidence": evidence}
+        ec.check_evidence([g], scripts or [{"path": "a.sh", "content": EV_SCRIPT}])
+        return g
+
+    def test_原样抄的认得出来(self):
+        """#10。一字不差、连缩进都没动的那一档。"""
+        assert self._check(_GREP)["evidenceCheck"] == "verbatim"
+
+    def test_跨行拼接的判据也算数(self):
+        """★#11。**整组里最重要的一条 —— 防的是 27% 的假阳。**
+
+        真实的判据经常是「第 5 行的请求 + 第 11 行的清理」拼起来的，中间隔着好几行。
+        任何"整块 exact match"的实现会把这类**真判据**判成编造，
+        然后页面上一片"判据搜不到"，人看两眼就再也不信这一列了。
+
+        注意 Epic 5 那边的翻车方向是**把真阳修没了**，这里正好反过来：
+        **放松得不够，真判据会被打成编造。** 两个方向都得有哨兵。
+        """
+        g = self._check(_CURL + "\n" + _RM)
+
+        assert g["evidenceCheck"] == "stitched"
+        assert g["evidenceCheck"] in ec.PASS_STATES
+
+    def test_换行重排也算数(self):
+        """#12。模型是在写 JSON 字符串，缩进和换行几乎必然会变。
+
+        拿原始文本做 exact match 等于**要求模型逐字节复刻缩进** ——
+        那种实现报出来的"搜不到"里绝大多数是排版差异，不是编造。
+        """
+        g = self._check('  echo "fetched"\n      if [ ! -s "$out" ]; then')
+
+        assert g["evidenceCheck"] == "reflowed"
+        assert g["evidenceCheck"] in ec.PASS_STATES
+
+    def test_编出来的要标出来(self):
+        """#13。脚本里根本没有这一句。"""
+        assert self._check('assert_status 403 "$resp"')["evidenceCheck"] == "unmatched"
+
+    def test_判据真但路径写错跟编造要分得开(self):
+        """#14。两件事，处置也不同：前者改一个字段就能用，后者整条不能信。
+
+        混成一档等于把前者当废品扔了 —— 而它其实是这份结论里最容易兑现的那部分。
+        """
+        g = self._check(_GREP, path="other.sh",
+                        scripts=[{"path": "other.sh", "content": "echo hi\n"},
+                                 {"path": "a.sh", "content": EV_SCRIPT}])
+
+        assert g["evidenceCheck"] == "wrong-path"
+        assert g["evidenceFoundIn"] == "a.sh"
+
+    def test_太短的不算验过(self):
+        """#15。`fi` / `done` / `set -e` 在任何一份 shell 脚本里都命中。
+
+        算通过等于把这道检查变成橡皮图章：**通过率 100%，信息量 0**。
+        """
+        for tiny in ("fi", "done", "set -e", "  }  "):
+            assert self._check(tiny)["evidenceCheck"] == "too_short", tiny
+
+    def test_没给判据标empty不标unmatched(self):
+        """#18。「他没给判据」和「他给的判据是编的」是两个问题，别合并。
+
+        合并之后，"提示词该逼它给判据"这条改进方向就再也看不见了。
+        """
+        for blank in (None, "", "   \n  \n"):
+            assert self._check(blank)["evidenceCheck"] == "empty"
+
+    def test_搜不到的也留在输出里只是带标记(self):
+        """#16（S3.4）。**只打标记，不删、不降 severity。**
+
+        删 ⇒ 丢了多少不可知，「一条没删」和「删了 8 条」在页面上长得一模一样 ——
+        正是本模块要禁的那个形状。
+        """
+        gaps = [{"id": "A", "severity": "blocker", "path": "a.sh", "evidence": _GREP},
+                {"id": "B", "severity": "blocker", "path": "a.sh",
+                 "evidence": 'assert_forbidden 403 "$resp"'},
+                {"id": "C", "severity": "minor", "path": "a.sh", "evidence": _RM}]
+
+        out = ec.check_evidence(gaps, [{"path": "a.sh", "content": EV_SCRIPT}])
+
+        assert [g["id"] for g in out] == ["A", "B", "C"]
+        # severity 说的是「对仓库有多糟」，回验说的是「我有多确信」—— 两个正交的轴，
+        # 合成一个还会污染 `_SEV_RANK` 的排序
+        assert [g["severity"] for g in out] == ["blocker", "blocker", "minor"]
+        assert out[1]["evidenceCheck"] == "unmatched"
+
+    def test_截断过的判据不额外放水(self):
+        """`_clip_lines` 切在行边界上，或首行超长时硬切 —— 两种都还是正文的子串。
+
+        所以这里**故意不加**"截过就放松一档"的兜底：那种兜底会把真编造的短判据
+        一起放过去，而它看起来像是在修一个假阳。
+        """
+        clipped, cut = qr._clip_lines(_CURL + "\n" + _GREP + "\n" + _RM, limit=len(_CURL) + 20)
+
+        assert cut
+        assert self._check(clipped)["evidenceCheck"] in ec.PASS_STATES
+
+
+class TestEvidenceStats:
+    """摘要那个数**从行本身数**，不从回验那一步的返回值攒。"""
+
+    def test_没标记的算unchecked不算验过(self):
+        """存量结论里没有这个键。**不许当成"验过了"** —— 那正好是这一版要装的东西。"""
+        st = ec.evidence_stats([{"id": "A"}, {"id": "B", "evidenceCheck": "verbatim"}])
+
+        assert st["total"] == 2
+        assert st["unchecked"] == 1
+        assert st["verified"] == 1
+
+    def test_三档都算验过(self):
+        rows = [{"evidenceCheck": s} for s in ("verbatim", "reflowed", "stitched",
+                                               "unmatched", "empty")]
+
+        assert ec.evidence_stats(rows)["verified"] == 3
+
+
+class TestEvidenceCheckWiring:
+    """回验落在哪一步 —— 这决定了它查不查得出跨批的编造。"""
+
+    class _Resp:
+        def __init__(self, content):
+            self.content = content
+            self.reported = frozenset()
+
+    B_ONLY = 'assert_forbidden 403 "$resp_b"'
+
+    def _scripts(self):
+        # 两份都撑到 60KB：BATCH_SCRIPT_BYTES 是 90KB，装不进一批 ⇒ 必然分两批
+        pad = "\n".join(f"# pad {i} " + "x" * 50 for i in range(1100))
+        return [{"path": "a.sh", "content": "echo a\n" + pad, "truncated": False},
+                {"path": "b.sh", "content": self.B_ONLY + "\n" + pad, "truncated": False}]
+
+    @pytest.mark.asyncio
+    async def test_回验必须在合并之前(self, monkeypatch):
+        """★#17。A 批的结论引用了一句**只存在于 B 批脚本**里的正文。
+
+        回验在 `_one` 里做 ⇒ A 批手上只有 a.sh，那句话搜不到 ⇒ `unmatched`。
+        回验一旦被挪到 merge 之后 ⇒ 手上是全域脚本，那句话在 b.sh 里找得到
+        ⇒ 变成 `wrong-path`，**跨批编造当场就查不出来了**。
+
+        而挪过去之后类型、形状、其余单测全都过得去 —— 只有这一条会红，
+        红起来还像是"测试写得太严"。所以这段话写在这里。
+        """
+        def _fence(gap_id, path, sev):
+            # 判据正文里有引号，手拼 JSON 会拼出一个模型永远不会发的畸形串 ——
+            # 那时红的是解析层，测不到回验
+            return "```json\n" + json.dumps(
+                {"verdict": "risky", "summary": "s",
+                 "scriptGaps": [{"id": gap_id, "path": path, "severity": sev,
+                                 "problem": "p", "evidence": self.B_ONLY}]}) + "\n```"
+
+        a_json, b_json = _fence("X-A", "a.sh", "major"), _fence("X-B", "b.sh", "minor")
+        merge_json = ('```json\n{"brief":{"headline":"h","points":["p"],'
+                      '"nextStep":"n","solid":["s"]},"summary":"合并"}\n```')
+
+        async def fake(messages, **kw):
+            user = messages[-1]["content"]
+            if "## 合并后的结论" in user:
+                return self._Resp(merge_json)
+            return self._Resp(a_json if "### a.sh" in user else b_json)
+
+        monkeypatch.setattr(qr.llm_client, "complete", fake)
+
+        out = await qr.run_review(
+            domain={"code": "AGT", "name": "智能体"}, scenarios=[],
+            scripts=self._scripts(), env_name="e", env_keys=[], lib_texts=[])
+
+        rows = {g["id"]: g for g in out["scriptGaps"]}
+        assert rows["X-A"]["evidenceCheck"] == "unmatched"   # ← 挪到 merge 之后这里会变 wrong-path
+        assert "evidenceFoundIn" not in rows["X-A"]
+        assert rows["X-B"]["evidenceCheck"] == "verbatim"
+
+    @pytest.mark.asyncio
+    async def test_计数进覆盖率块且跟列出来的行同源(self, monkeypatch):
+        """#19。摘要的数和页面列的条数**不能打架**。
+
+        各批各回一份统计再相加，那两个数就有了两条独立路径 ——
+        哪天分歧了没人看得出来是哪边错。所以两边都扫同一批行。
+        """
+        async def fake(messages, **kw):
+            user = messages[-1]["content"]
+            if "## 合并后的结论" in user:
+                return self._Resp('```json\n{"brief":{"headline":"h"},"summary":"合并"}\n```')
+            return self._Resp(
+                '```json\n{"verdict":"risky","summary":"s","scriptGaps":[{"id":"G",'
+                '"path":"a.sh","severity":"major","problem":"p","evidence":"编的一句话"}]}\n```')
+
+        monkeypatch.setattr(qr.llm_client, "complete", fake)
+
+        out = await qr.run_review(
+            domain={"code": "AGT", "name": "智能体"}, scenarios=[],
+            scripts=[{"path": "a.sh", "content": EV_SCRIPT, "truncated": False}],
+            env_name="e", env_keys=[], lib_texts=[])
+
+        ev = out["coverage"]["evidence"]
+        assert ev == ec.evidence_stats(out["scriptGaps"])
+        assert ev["total"] == len(out["scriptGaps"])
+        assert ev["verified"] == 0 and ev["unchecked"] == 0
+
+    def test_收口的提示词把存疑的标出来(self):
+        """#19 的另一半：喂给收口那一趟的清单里，存疑的要带记号。
+
+        不标的话，模型会把一条判据搜不到的发现挑进 brief 当重点 ——
+        页面上那条底下写着「判据没验上」，brief 里却拿它当结论，两屏打架。
+        """
+        merged = {"verdict": "risky", "catalogGaps": [],
+                  "scriptGaps": [{"id": "A", "blame": "script", "severity": "major",
+                                  "oneLine": "真的", "evidenceCheck": "stitched"},
+                                 {"id": "B", "blame": "script", "severity": "major",
+                                  "oneLine": "存疑的", "evidenceCheck": "unmatched"}]}
+
+        txt = qr._merge_payload({"code": "AGT"}, merged, 2, 5)
+
+        assert "⚠判据存疑 [script][major] B" in txt
+        assert "⚠判据存疑 [script][major] A" not in txt
+        # 数照抄别自己减 —— 页面列的是全部两条
+        assert "- 脚本要改：2 条" in txt
+        assert "有 1 条的判据在脚本正文里搜不到" in txt
+
+
+class TestEvidenceRendering:
+    """S3.5②：那句「十秒内被否掉」从**无条件承诺**改成**实测陈述**。"""
+
+    @staticmethod
+    def _md(gaps):
+        from datetime import datetime, timezone
+
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="AGT", domain_name="智能体", status="done", environment_name="e",
+            commit_sha="abc1234567", branch="main", actor="cc",
+            scenario_count=3, script_count=1,
+            result={"verdict": "risky", "summary": "s", "brief": {}, "scriptGaps": gaps,
+                    "catalogGaps": [], "envMissing": [], "envSatisfied": [],
+                    "reviewedScripts": [], "scenarioCount": 3},
+        )
+        r.created_at = datetime(2026, 8, 29, 10, 0, tzinfo=timezone.utc)
+        return qr.to_markdown(r)
+
+    def test_页面那句承诺跟着核验结果走(self):
+        """★#21。**这个模块最不该有的，就是一句自己没验过的承诺。**"""
+        md = self._md([
+            {"id": "A", "severity": "major", "blame": "script", "path": "a.sh",
+             "problem": "p", "evidence": _GREP, "evidenceCheck": "verbatim"},
+            {"id": "B", "severity": "major", "blame": "script", "path": "a.sh",
+             "problem": "p", "evidence": "编的", "evidenceCheck": "unmatched"},
+        ])
+
+        assert "2 条判据平台已经拿回脚本正文搜过一遍，1 条 grep 得到" in md
+        assert "**1 条搜不到**" in md
+        assert "✅ **判据回验过了**" not in md          # 有搜不到的就不许挂 ✅
+
+    def test_全都搜到了才挂对勾(self):
+        md = self._md([{"id": "A", "severity": "major", "blame": "script", "path": "a.sh",
+                        "problem": "p", "evidence": _GREP, "evidenceCheck": "verbatim"}])
+
+        assert "✅ **判据回验过了**" in md
+        assert "一条不落" in md
+
+    def test_存量结论不许套用那句对勾(self):
+        """回验上线之前评的那些，一条都没搜过。
+
+        套用 ✅ 等于拿一句没验过的话去担保另一句没验过的话 —— 而这恰好就是
+        这个 Epic 要修的那个形状，修的时候自己再犯一次就太难看了。
+        """
+        md = self._md([{"id": "A", "severity": "major", "blame": "script", "path": "a.sh",
+                        "problem": "p", "evidence": _GREP}])
+
+        assert "判据没回验过" in md
+        assert "✅ **判据回验过了**" not in md
+
+    def test_没有脚本级发现时照旧是那句原话(self):
+        md = self._md([])
+
+        assert "每条都能十秒内被否掉" in md
+        assert "没有可回验的判据" in md
+
+    def test_搜不到的那条要逐条标出来(self):
+        """#16 的渲染面：标记要落在**那条发现底下**，不是只在摘要里报个总数。
+
+        只报总数的话，读的人知道"有 1 条不能信"却不知道是哪一条 ——
+        于是要么全信，要么全不信。
+        """
+        md = self._md([{"id": "B", "severity": "major", "blame": "script", "path": "a.sh",
+                        "problem": "p", "evidence": "编的一句话",
+                        "evidenceCheck": "unmatched"}])
+
+        assert "这条的判据平台没验上" in md
+        assert "在这一批脚本里搜不到" in md
+
+    def test_路径写错的要说清在哪儿找得到(self):
+        md = self._md([{"id": "B", "severity": "major", "blame": "script", "path": "a.sh",
+                        "problem": "p", "evidence": _GREP,
+                        "evidenceCheck": "wrong-path", "evidenceFoundIn": "b.sh"}])
+
+        assert "`b.sh` 里搜到了" in md
+
+    def test_验上的那几条不加噪音(self):
+        md = self._md([{"id": "A", "severity": "major", "blame": "script", "path": "a.sh",
+                        "problem": "p", "evidence": _GREP, "evidenceCheck": "stitched"}])
+
+        assert "这条的判据平台没验上" not in md
+
+
+class TestEvidenceOnTheWire:
+    """S3.5③：QA 那边的 Claude Code 是照 `evidence` 去 grep 的。"""
+
+    def test_MCP的json每行都带回验结论(self):
+        """#20。不给这个键，"搜不到"会被读成"脚本改过了" —— 然后去改脚本。"""
+        from datetime import datetime, timezone
+
+        from app.mcp.tools import qa_catalog as qc
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="AGT", domain_name="智能体", status="done", environment_name="e",
+            commit_sha="abc1234567", branch="main", actor="cc",
+            scenario_count=1, script_count=1,
+            result={"verdict": "risky", "summary": "s", "scriptGaps": [
+                {"id": "A", "path": "a.sh", "evidence": _GREP, "evidenceCheck": "verbatim"},
+                {"id": "B", "path": "a.sh", "evidence": "编的", "evidenceCheck": "unmatched"}],
+                "envMissing": [], "catalogGaps": [], "reviewedScripts": []},
+        )
+        r.created_at = datetime(2026, 8, 29, 10, 0, tzinfo=timezone.utc)
+
+        out = qc._one(r, "json")
+
+        assert [g["evidenceCheck"] for g in out["scriptGaps"]] == ["verbatim", "unmatched"]
+        # 汇总跟行同源，取用方不用自己数
+        assert out["evidenceCheck"]["verified"] == 1
+        assert out["evidenceCheck"]["total"] == 2
+
+    def test_工具说明里要教怎么用这个键(self):
+        """键发出去了、没人知道该怎么读，等于没发。"""
+        from app.mcp.tools import qa_catalog as qc
+
+        assert "evidenceCheck" in (qc.__doc__ or "")
+        assert "wrong-path" in (qc.__doc__ or "")
+
+
+class TestEvidenceOnThePage:
+    """页面上也得跟着回验结果走 —— 而且这是**更醒目**的那一面。
+
+    导出的 Markdown 标了、页面没标，等于把「这条判据搜不到」藏在没人点开的那份里。
+    打开抽屉的人看的是页面，照着 evidence 动手的人也是在页面上一条条看的。
+    """
+
+    FE = (pathlib.Path(__file__).resolve().parents[2]
+          / "frontend/src/pages/qa/QaCatalog.jsx")
+
+    def _src(self):
+        return self.FE.read_text(encoding="utf-8")
+
+    def test_那句承诺不再是无条件写死的(self):
+        """✅「每条都能十秒内被否掉」曾经是无条件打印的。
+
+        一句自己没验过的承诺 —— 正是这个模块存在的意义要抓的那个形状。
+        """
+        src = self._src()
+        body = src.split("function HowIRead")[1].split("function DimUnavailable")[0]
+
+        assert "evidenceStats(res.scriptGaps)" in body, "页面没算回验结果"
+        assert "ev.unchecked > 0 ?" in body, "存量结论没有单独一档"
+        # 那句 ✅ 只许出现在「没有可回验的判据」那一档里
+        head = body.split("ev.unchecked > 0 ?")[0]
+        assert "每条都能十秒内被否掉" not in head, "那句 ✅ 还在无条件路径上"
+
+    def test_逐条标在引文旁边而不是只写在汇总里(self):
+        """照着 evidence 动手的人是一条一条看的，他不会先回头读页面顶上那句汇总。"""
+        src = self._src()
+        body = src.split("function ReviewBody")[1]
+
+        assert "g.evidenceCheck && !EV_PASS.includes(g.evidenceCheck)" in body
+        assert "先回原文确认再动手" in body
+        # 路径写错的要说清在哪儿找得到，否则等于把一条能用的判据当废品扔了
+        assert "g.evidenceFoundIn" in body
+
+    def test_存量结论按没验过算不按验过算(self):
+        """旧后端 + 新前端也落在这一档（本仓后端故意不带 --reload）。
+
+        少一个对勾没人受伤；多一个假对勾，这一列就再也不能信了。
+        """
+        src = self._src()
+        fn = src.split("function evidenceStats")[1].split("\n}")[0]
+
+        assert "rows.length - known.length" in fn, "没有把「没这个键」算进 unchecked"
+
+    def test_页面的数从行本身来不读后端那份汇总(self):
+        """一屏里两个数打架，读的人只会得出「这页的数不能信」。
+
+        后端那份 `coverage.evidence` 是给 MCP / 导出用的，页面列的是这些行，
+        就从这些行数 —— 同一个来源就不可能分歧。
+        """
+        # 只扫**代码行**：注释里写着"不读 coverage.evidence"是说明为什么这么做，
+        # 连它一起禁掉，等于逼着后来的人把理由删了才能过测试。
+        code = [x for x in self._src().splitlines() if not x.strip().startswith("//")]
+
+        for ln in code:
+            assert "coverage.evidence" not in ln and "c.evidence" not in ln, ln
+
+    def test_三档都算搜到不许收紧成一档(self):
+        """收紧到只认 `verbatim`，实测 27% 的**真判据**会被打成编造。"""
+        src = self._src()
+        line = [x for x in src.splitlines() if x.startswith("const EV_PASS")][0]
+
+        for st in ec.PASS_STATES:
+            assert st in line, f"{st} 不在前端的通过档里"
+
+    def test_后端加了状态前端不能露出英文键(self):
+        """跨语言的那道缝：Python 那边加一档，JSX 这边不加就渲染成 `too_short`。
+
+        这条测试的作用是**在加状态的那一刻就红**，而不是等谁在页面上看见英文键。
+        """
+        src = self._src()
+        block = src.split("const EV_CN = {")[1].split("}")[0]
+
+        for st in ec.STATES:
+            assert st in block, f"前端 EV_CN 里没有 {st} 的中文说法"

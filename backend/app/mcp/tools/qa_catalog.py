@@ -16,6 +16,11 @@ QA 那边跑 Claude Code 改脚本时：先 `lum_get_qa_review` 拿到「哪条�
 判据是脚本里哪一句、该改成什么」，再动手改自己的脚本。返回里的 `evidence` 是从脚本正文
 原样抄的锚点，直接拿去 grep 就能定位。
 
+**先看 `evidenceCheck` 再决定要不要 grep。** 平台已经把每条判据拿回脚本正文搜过一遍：
+`verbatim`/`reflowed`/`stitched` 三档都是搜到了；`unmatched` 是搜不到（那条判据可能是编的，
+别浪费时间 grep）；`wrong-path` 是判据真、路径写错了（去 `evidenceFoundIn` 那份里找）。
+这个键**不存在**说明这份结论评在回验上线之前 —— 那种情况下所有判据都得自己验。
+
 **结论是建议，不是门禁。** 平台这边没有任何东西会因为这份结论变红或变绿。
 """
 from __future__ import annotations
@@ -129,9 +134,14 @@ def _one(r: QaCatalogReview, fmt: str) -> dict:
         out.update({
             "brief": qr.brief_of(res),
             "summary": res.get("summary") or "",
+            # 每行随行带 `evidenceCheck`（Epic 3）。取用方是照 `evidence` 去 grep 的，
+            # 它需要知道**哪条不值得 grep** —— 不给这个键，"搜不到"会被读成"脚本改过了"。
             "scriptGaps": res.get("scriptGaps") or [],
             "envMissing": res.get("envMissing") or [],
             "catalogGaps": res.get("catalogGaps") or [],
+            # 汇总也给一份，免得取用方自己数一遍、数出跟页面不一样的数。
+            # 跟页面同源：两边都是 `evidence_stats` 扫 `scriptGaps` 这些行本身。
+            "evidenceCheck": qr.evidence_stats(res.get("scriptGaps") or []),
             # `nextUp` 2026-08-29 停产，这里**故意留一个空数组一个周期**再摘键：
             # 对外契约上直接删字段，取用方的 `res["nextUp"]` 会 KeyError 当场炸；
             # 留成 `[]` 则退化成"这个域没有"，读的人自己就不看了。
