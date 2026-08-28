@@ -309,6 +309,7 @@ def compute_gaps(*, page_items: list[dict] | None,
                              "path": normalize_path(r.get("path") or ""),
                              "group": r.get("group") or ""})
 
+    page_domains: set[str] = set()
     g1: list[dict] = []
     g2: list[dict] = []
     g3: list[dict] = []
@@ -319,16 +320,20 @@ def compute_gaps(*, page_items: list[dict] | None,
 
     # G1 / G3：从页面出发
     for k, meta in p_eps.items():
-        if _covered(meta["method"], meta["path"]):
-            continue
         group = (r_eps.get(k) or {}).get("group") or ""
         doms = _domains(meta["path"], group)
+        if _covered(meta["method"], meta["path"]):
+            # 测到了 ⇒ 不是缺口，但**这个域在页面上有面**这件事照样成立，
+            # 而且是最有力的正面证据。S7.5 靠它把域挡在 `notApplicable` 之外。
+            page_domains |= doms
+            continue
         if not doms:
             # 归不了属 ≠ 没缺口。单独记账，**不塞进任何一类** ——
             # 塞进 G1 是误报（可能压根不该这个域管），丢掉是漏报（更坏）。
             unattributed.append({"anchor": k, "pagePath": meta["pagePath"]})
             continue
         in_r = k in r_eps
+        page_domains |= doms
         for d in sorted(doms):
             row = {"domain": d, "method": meta["method"], "path": meta["path"],
                    "anchor": k, "pagePath": meta["pagePath"], "label": meta["label"],
@@ -385,4 +390,96 @@ def compute_gaps(*, page_items: list[dict] | None,
         },
         "endpointsUnextracted": unextracted,
         "endpointsUnattributed": unattributed,
+        "pageDomains": sorted(page_domains),
+    }
+
+
+# ── 每个域声明「页面维度对我适不适用」 ──────────────────────
+#
+# 漏掉这一条，新维度上线第一天就废：会系统性地报「这个域缺口巨大」，
+# 其实只是那个域的功能**在页面上本来就看不到**（网关、非功能、对外 API、安全）。
+#
+# 但 `notApplicable` 是个**消音器** —— 判宽一格，那个域的真缺口从此永远不出现，
+# **而且永远不会红**。所以三条纪律，方向全是一样的：
+#
+#   1. **只认正面声明，不认"没观测到"。** 「这一轮没在页面上见到它」既可能是
+#      它真没有面，也可能是爬虫压根没跑到那几页 —— 数字上是同一个 0。
+#      只有清单自己的「层」列说了话，才算数。
+#   2. **认不出来的层一律不消音。** 层列写了个没见过的词 ⇒ `unknown`，
+#      不是 `notApplicable`。清单是别人维护的，他加一个新层名，
+#      我们这边不能因此把一个域悄悄静音。
+#   3. **页面枚举没跑起来时，全世界都是 `unknown`。** 否则一次爬虫失败
+#      就把所有域标成"不适用"，报告上一片「无缺口」—— 最毒的那种假绿。
+#
+# ⚠ **故意不写死 `GW`/`NFR`/`PUB`/`SEC` 这四个域码**（AC 是拿它们举例的）。
+#    那是**别人维护的**清单里的编码；写死四个，他加第五个的时候我们不会知道，
+#    而症状是那个新域被系统性地误报成"缺口巨大"—— 又一次要靠人去发现。
+#    改成认「层」列：判据长在清单自己身上，他加域、改域都自动跟得上。
+
+_UI_TIERS = {"ui", "e2e", "web", "ux", "frontend"}
+_NON_UI_TIERS = {"api", "smoke", "nfr", "sec", "perf", "contract",
+                 "unit", "integration", "load", "gateway"}
+
+APPLICABLE = "applicable"
+NOT_APPLICABLE = "notApplicable"
+UNKNOWN = "unknown"
+
+
+def _tier(raw: str | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (raw or "").strip().lower())
+
+
+def page_applicability(*, scenarios: list[dict] | None,
+                       page_domains: set[str] | list[str] | None = None,
+                       page_survey_available: bool = True) -> dict:
+    """每个域：页面维度适不适用。
+
+    返回 `{"byDomain": {域码: {state, reason, tiers}}, "rollup": {...}}`。
+
+    `rollup.denominator` **不含** `notApplicable` 的域，而且它们
+    **不给 0 分** —— 0 分和"不适用"在任何一张排行榜上都是天壤之别，
+    前者是"这个域很差"，后者是"这个域不归这个维度管"。
+    """
+    seen = set(page_domains or ())
+    by_domain: dict[str, dict] = {}
+
+    tiers_by_domain: dict[str, set[str]] = {}
+    for sc in scenarios or []:
+        if sc.get("state") == "deprecated":
+            # 废弃的场景不参与判断：拿一堆已经不做的场景去决定"这个域有没有面"
+            # 是在用过去的事实给现在消音
+            continue
+        code = sc.get("domain") or ""
+        if code:
+            tiers_by_domain.setdefault(code, set()).add(_tier(sc.get("tier")))
+
+    for code, tiers in sorted(tiers_by_domain.items()):
+        named = {t for t in tiers if t}
+        if code in seen:
+            by_domain[code] = {"state": APPLICABLE, "tiers": sorted(named),
+                               "reason": "页面枚举里真见到过这个域的端点"}
+        elif not page_survey_available:
+            by_domain[code] = {"state": UNKNOWN, "tiers": sorted(named),
+                               "reason": "本轮没有页面枚举 —— 没观测到不等于不适用"}
+        elif named and named <= _NON_UI_TIERS:
+            by_domain[code] = {"state": NOT_APPLICABLE, "tiers": sorted(named),
+                               "reason": "清单里这个域的场景全是非 UI 层："
+                                         + "/".join(sorted(named))}
+        elif named & _UI_TIERS:
+            by_domain[code] = {"state": APPLICABLE, "tiers": sorted(named),
+                               "reason": "清单里这个域有 UI 层场景"}
+        else:
+            by_domain[code] = {"state": UNKNOWN, "tiers": sorted(named),
+                               "reason": "层列没写或写了没见过的词 —— 不消音"}
+
+    na = sorted(c for c, v in by_domain.items() if v["state"] == NOT_APPLICABLE)
+    unk = sorted(c for c, v in by_domain.items() if v["state"] == UNKNOWN)
+    return {
+        "byDomain": by_domain,
+        "rollup": {
+            # 三个数**都要渲染，0 也渲染**：只在非 0 时出现的计数跟"没算过"一样
+            "denominator": len(by_domain) - len(na),
+            "notApplicable": na,
+            "unknown": unk,
+        },
     }
