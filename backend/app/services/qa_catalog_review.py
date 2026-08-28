@@ -256,9 +256,63 @@ def sourced_files(text: str, repo_paths: list[str]) -> list[str]:
     return hits[:MAX_SOURCED_LIBS]
 
 
+# 家族匹配的尾段最短长度。**这个数是护栏，不是调参。**
+# `DSN`(3) / `URL`(3) / `ID`(2) 这种短尾段谁都带一个，放进家族匹配就会把
+# `PSQL_DSN`、`UAG_APIKEY` 这类**真缺口**整族降级 —— 而降级之后页面变干净，
+# 看着像修好了。修误报最容易的翻车方式就是把真阳一起修掉。
+_FAMILY_MIN = 5
+
+
+def _tails(name: str) -> set[str]:
+    """按 `_` 切段，收集后段拼接出来的尾巴：`A_B_C` → {A_B_C, B_C, C}。
+
+    **按段切，不用 `endswith` 裸子串。** 裸子串会让 `VICE_TOKEN` 命中
+    `SERVICE_TOKEN`（`"SERVICE_TOKEN".endswith("VICE_TOKEN")` 是真的）——
+    本文件的 `_DYNAMIC_SUFFIX_RE` 注释里已经因为同一个原因被咬过一次。
+    """
+    parts = name.split("_")
+    return {"_".join(parts[i:]) for i in range(len(parts))}
+
+
+def _family(name: str, env_keys: set[str]) -> list[str]:
+    """环境里有没有「同一家族、只是前缀不同」的键：`PASSWORD` ⇐ `ADMIN_PASSWORD`。
+
+    实测 `uag-138:3000` 有 7 组角色账号（`ADMIN_PASSWORD`/`PLATADMIN_PASSWORD`/…），
+    而脚本引用的是 `PASSWORD` —— 旧代码拿名字硬比，报「缺 PASSWORD」。
+    危害不在这一条假阳本身：**它跟 `UAG_APIKEY`/`PSQL_DSN` 两个真缺口用同样的
+    置信度并排显示**，一条响亮的假阳会让人把整列当噪音，两个真阳一起被无视。
+
+    **单向匹配**：只认「候选名 == 某个环境键的尾巴」，不认反过来。
+    反向（环境有 `APIKEY`、脚本要 `UAG_APIKEY`）算不算覆盖判不了，
+    而判错的方向是把真缺口洗白 —— 这种时候宁可留着那条 `absent`。
+    """
+    if len(name) < _FAMILY_MIN:
+        return []
+    return sorted(k for k in env_keys if k != name and name in _tails(k))[:8]
+
+
 def env_gaps(scripts: list[dict], env_keys: set[str], lib_texts: list[str] | None = None,
              lib_paths: list[str] | None = None) -> list[dict]:
-    """「这个域的脚本要、你选的环境没有」的变量名。纯代码，不问模型。
+    """只要**缺口**那两档（`absent` / `ambiguous`）。
+
+    `satisfied` 不进这个列表：它的返回值在好几处被 `len()` 当成「缺 N 个」渲染
+    （markdown 那句「连变量名都缺 N 个」、页面的 `nEnvVar`、MCP 的 `envMissing`），
+    掺进环境里**有**的那些，那个数当场就变成一个不报错的错数。
+    要三档齐全的调 `scan_env_vars`。
+    """
+    return [v for v in scan_env_vars(scripts, env_keys, lib_texts, lib_paths)
+            if v["state"] != "satisfied"]
+
+
+def scan_env_vars(scripts: list[dict], env_keys: set[str], lib_texts: list[str] | None = None,
+                  lib_paths: list[str] | None = None) -> list[dict]:
+    """这个域要从外面拿的变量，**逐个分三档**。纯代码，不问模型。
+
+    `absent` 真没有 / `ambiguous` 名字对不上但环境里有同族的 / `satisfied` 环境里就有。
+
+    ⚠ **只取键名，一个值都不取。** 值里是真凭证 —— 提示词、日志、页面、
+    MCP 返回里都不许出现。`ambiguous` 那一档列的是那几个**真键名**，也仅此而已。
+
 
     宁可漏报不可误报：脚本自己赋过值的、给了默认值的、shell 自带的、公共库里定义的，
     全部不算。剩下的还有一类躲不掉的假阳（远程 CI 注入的变量），所以页面上那一列
@@ -288,16 +342,20 @@ def env_gaps(scripts: list[dict], env_keys: set[str], lib_texts: list[str] | Non
     hits: dict[str, list[str]] = {}
     for name, srcs in wanted.items():
         # 别处真赋过值就不算缺；`${X:-}` 声明完又被 `X=真值` 覆盖的属于这种
-        if name in defined or name in _AMBIENT or name in env_keys:
+        if name in defined or name in _AMBIENT:
+            continue
+        # 夹具运行时拼出来的那一族（MB_ID / TA_TOKEN / …）。
+        # 这一句原来只写在下面的引用分支里 —— 同一个名字改用 `export X="${X:-}"`
+        # 声明一次就绕过豁免，从这边冒出来。豁免要豁在**两个分支**上。
+        if any(name.endswith(x) for x in suffixes):
             continue
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,}", name):
             continue
         hits[name] = srcs[:6]
     for s in scripts:
         for name in _referenced_names(s.get("content") or ""):
-            if name in defined or name in _AMBIENT or name in env_keys:
+            if name in defined or name in _AMBIENT:
                 continue
-            # 夹具运行时拼出来的那一族（MB_ID / TA_TOKEN / …）
             if any(name.endswith(x) for x in suffixes):
                 continue
             # 只看 SCREAMING_CASE：小写的基本都是脚本内部的临时变量
@@ -306,7 +364,21 @@ def env_gaps(scripts: list[dict], env_keys: set[str], lib_texts: list[str] | Non
             hits.setdefault(name, [])
             if s["path"] not in hits[name] and len(hits[name]) < 6:
                 hits[name].append(s["path"])
-    return [{"name": k, "scripts": v} for k, v in sorted(hits.items())]
+
+    out = []
+    for name, srcs in sorted(hits.items()):
+        row = {"name": name, "scripts": srcs}
+        if name in env_keys:
+            row["state"] = "satisfied"
+        elif (fam := _family(name, env_keys)):
+            row["state"] = "ambiguous"
+            # 这几个是**键名**。列出来是为了让人一眼看出「不是真缺，是名字对不上」——
+            # 不列的话降级本身就成了一句无从复核的断言。
+            row["family"] = fam
+        else:
+            row["state"] = "absent"
+        out.append(row)
+    return out
 
 
 # ── prompt ────────────────────────────────────────────────────
@@ -463,9 +535,17 @@ def build_payload(domain: dict, scenarios: list[dict], scripts: list[dict],
 
     lines += ["", "## 运行环境", f"环境名：{env_name or '（未选）'}"]
     lines.append("已配置的变量名：" + ("、".join(env_keys) if env_keys else "（一个都没有）"))
-    if env_missing:
+    # **只喂 `absent`。** `ambiguous` 是"名字对不上、环境里有同族的"，
+    # 它进提示词只会被当成缺口再推一遍覆盖结论 —— 而那正是这一档要拦的误报。
+    absent = [x for x in env_missing if x.get("state", "absent") == "absent"]
+    ambiguous = [x for x in env_missing if x.get("state") == "ambiguous"]
+    if ambiguous:
+        lines.append("下面这些名字**不算缺**（环境里有同族的键，只是前缀不同）："
+                     + "、".join(x["name"] for x in ambiguous[:20]))
+        lines.append("（**不许由这一行推出任何覆盖结论。** 它们名字对不上而已，不是真缺。）")
+    if absent:
         lines.append("脚本引用了、这个环境里没有的变量名："
-                     + "、".join(x["name"] for x in env_missing[:20]))
+                     + "、".join(x["name"] for x in absent[:20]))
         # ⚠ 这行话改过一次。原来写的是"判「能不能跑起来」时可以直接用"，
         # 结果模型拿它当铁证，把「我们的环境记录里没这个名字」写成了「场景层一条没跑、
         # 已覆盖是假的」—— 而这份名单只反映**我们这侧**环境记录里有什么，
@@ -805,7 +885,10 @@ async def run_review(*, domain: dict, scenarios: list[dict],
     不是截掉多的那些。原来那版是截：MCP 域 47 份脚本只进去 11 份，
     页面照样写「场景 75 条」—— 「没发现问题」和「没读到」在页面上长得一样。
     """
-    missing = env_gaps(scripts, set(env_keys), lib_texts, lib_paths)
+    scanned = scan_env_vars(scripts, set(env_keys), lib_texts, lib_paths)
+    # `envMissing` 只装缺口那两档 —— 它在四个地方被 `len()` 当成「缺 N 个」渲染。
+    missing = [v for v in scanned if v["state"] != "satisfied"]
+    satisfied = [v["name"] for v in scanned if v["state"] == "satisfied"]
     batches = split_batches(scripts)
 
     async def _one(part: list[dict], mark: tuple[int, int] | None) -> tuple[dict, str]:
@@ -869,6 +952,9 @@ async def run_review(*, domain: dict, scenarios: list[dict],
             # 收口这一步挂了不算评审失败：分批的结论都在，人话那段退回拼接的 summary
             logger.exception("QA 域评审：分批收口失败，退回拼接版 domain=%s", domain.get("code"))
     out["envMissing"] = missing
+    # 第三档。只存**键名**，给「缺 2 个」配个分母 —— 没分母的话
+    # 「缺 2 个」既可能是 2/3 也可能是 2/40，读的人没法判这一列有多严重。
+    out["envSatisfied"] = satisfied
     out["reviewedScripts"] = [{"path": s["path"], "truncated": s["truncated"]} for s in scripts]
     # 页面要说清"这次读了多少"：只读了 14 份里的 5 份却说"这个域没问题"是骗人的
     out["scenarioCount"] = len(scenarios)
@@ -1238,8 +1324,19 @@ def to_markdown(r: QaCatalogReview) -> str:
     miss = res.get("envMissing") or []
     if not miss:
         L.append("（脚本要的变量这个环境都有）")
+    ok_n = len(res.get("envSatisfied") or [])
+    if miss and ok_n:
+        L.append(f"（这个域要从外面拿 {len(miss) + ok_n} 个变量，其中 {ok_n} 个这个环境里有）")
+        L.append("")
     for v in miss:
-        L.append(f"- `{v.get('name')}` — {'、'.join(v.get('scripts') or []) or '—'}")
+        tail = "、".join(v.get("scripts") or []) or "—"
+        if v.get("state") == "ambiguous":
+            # 降级要连**凭什么降**一起写出来，否则它就是一句无从复核的断言
+            L.append(f"- `{v.get('name')}` — 名字对不上，**不是真缺**："
+                     f"环境里有 {'、'.join(f'`{k}`' for k in v.get('family') or [])}"
+                     f"　｜　{tail}")
+        else:
+            L.append(f"- `{v.get('name')}` — {tail}")
     if miss:
         L.append("")
         L.append("⚠ 两件事别搞混：**在平台这边补上变量不会让 QA 的脚本真跑起来**"

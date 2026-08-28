@@ -1303,7 +1303,10 @@ function ReviewBrief({ r }) {
     catalog: gaps.filter(g => blameOf(g) === 'catalog').length + nCat,
   }
   const total = gaps.length + nCat
-  const nEnvVar = (res.envMissing || []).length
+  // **只数 `absent`。** `ambiguous` 是"名字对不上、环境里有同族的"，
+  // 把它算进「缺 N 个」等于把那条误报从列表挪到了摘要里 —— 摘要还更醒目。
+  // 没标 state 的（存量结论）按真缺算：多一条要人看的行，好过悄悄洗白一个真缺口。
+  const nEnvVar = (res.envMissing || []).filter(v => (v.state || 'absent') === 'absent').length
   return (
     <div style={{ fontSize: 13 }}>
       <div style={{
@@ -1463,14 +1466,35 @@ function ReviewBody({ r, onOpenFile, projectId }) {
                hint={`脚本引用的、或 config 里声明「要从外面传」的，而我们这条 ${r.environmentName || '所选环境'} 记录里没有。代码算的，不是模型猜的 —— 但它只说明我们这侧没记着，推不出 QA 自己跑的时候也缺`}>
         {res.envMissing?.length ? (
           <Space direction="vertical" size={4} style={{ width: '100%' }}>
+            {/* 分母。「缺 2 个」既可能是 2/3 也可能是 2/40 —— 没分母读的人判不了
+                这一列有多严重，而判不了的结果通常是整列被当噪音略过。 */}
+            {res.envSatisfied?.length > 0 && (
+              <div style={{ fontSize: 12, color: C.faint }}>
+                这个域要从外面拿 {res.envMissing.length + res.envSatisfied.length} 个变量，
+                其中 {res.envSatisfied.length} 个这个环境里有。
+              </div>
+            )}
             {res.envMissing.map(v => (
               <div key={v.name}>
-                <Tag color="warning" style={{ fontFamily: 'var(--font-mono)' }}>{v.name}</Tag>
+                {/* 两档分开画。混在一起是这一列最贵的毛病：一条响亮的假阳
+                    （7 组角色账号都在，却报「缺 PASSWORD」）跟真缺口并排、
+                    同样的警告色 —— 人扫两眼就把整列当噪音，真缺口跟着被无视。 */}
+                <Tag color={v.state === 'ambiguous' ? 'default' : 'warning'}
+                     style={{ fontFamily: 'var(--font-mono)' }}>{v.name}</Tag>
                 <Tooltip title={(v.scripts || []).join('\n')}>
                   <span style={{ fontSize: 12, color: C.gray }}>
                     {(v.scripts || []).map(p => p.split('/').pop()).join('、')}
                   </span>
                 </Tooltip>
+                {v.state === 'ambiguous' && (
+                  /* 降级要连**凭什么降**一起写出来，否则它就是一句无从复核的断言 */
+                  <div style={{ fontSize: 12, color: C.faint, marginLeft: 2 }}>
+                    名字对不上，<b>不是真缺</b>：环境里有{' '}
+                    <span style={{ fontFamily: 'var(--font-mono)' }}>
+                      {(v.family || []).join('、')}
+                    </span>
+                  </div>
+                )}
               </div>
             ))}
             <div style={{ fontSize: 12, color: C.faint }}>

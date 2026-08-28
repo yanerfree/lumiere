@@ -209,6 +209,34 @@ class TestBuildPayload:
         # 调用方传进来的就只有键名，这里再钉一遍：任何看着像值的东西都不该出现
         assert "https://uag.example.com" not in out.split("## 脚本正文")[0]
 
+    def test_提示词只喂真缺的那一档(self):
+        """`ambiguous` 混进「环境里没有的变量名」那一行就废了这一档。
+
+        模型看见一个名字挂在"没有"下面，就会顺着推出「这条场景在这个环境跑不起来」——
+        而那正是这一档要拦的那条误报，只是换了个地方冒出来。
+        """
+        out = self._payload(
+            ["ADMIN_PASSWORD"],
+            [{"name": "PASSWORD", "scripts": ["a.sh"], "state": "ambiguous",
+              "family": ["ADMIN_PASSWORD"]},
+             {"name": "UAG_APIKEY", "scripts": ["a.sh"], "state": "absent"}])
+        gap_line = [x for x in out.splitlines() if x.startswith("脚本引用了、")][0]
+
+        assert "UAG_APIKEY" in gap_line
+        assert "PASSWORD" not in gap_line
+        assert "不许由这一行推出任何覆盖结论" in out
+
+    def test_没标state的按真缺算(self):
+        """存量结论、以及任何漏标的路径，都要落回「响的那一档」。
+
+        这里的退化方向是刻意选的：漏标当 `absent` 只是多一条要人看的行，
+        漏标当 `ambiguous` 是把真缺口悄悄洗白。
+        """
+        out = self._payload([], [{"name": "UAG_APIKEY", "scripts": ["a.sh"]}])
+
+        assert "UAG_APIKEY" in [x for x in out.splitlines()
+                                if x.startswith("脚本引用了、")][0]
+
     def test_场景清单带上P和R和覆盖状态(self):
         out = self._payload([])
 
@@ -1563,3 +1591,171 @@ class TestFrontendKeepsNoCopy:
 
         assert "'?'" not in body and '"?"' not in body
         assert "后端没给出维度口径" in body
+
+
+class TestEnvTiers:
+    """Epic 5：变量缺口分三档 `absent` / `ambiguous` / `satisfied`。
+
+    危害不在那条假阳本身，在于**它跟 `UAG_APIKEY`/`PSQL_DSN` 两个真缺口并排、
+    用同样的置信度显示** —— 一条响亮的假阳会让人把整列当噪音，两个真阳跟着被无视。
+    实测 `uag-138:3000` 配了 7 组带角色前缀的账号，而这一列照样报「缺 PASSWORD」。
+    """
+
+    def _scan(self, content, env_keys):
+        return {g["name"]: g for g in
+                qr.scan_env_vars([{"path": "a.sh", "content": content}], set(env_keys))}
+
+    def test_角色前缀的同名变量不算真缺(self):
+        env = ["ADMIN_PASSWORD", "PLATADMIN_PASSWORD", "TENANT_PASSWORD", "OPS_PASSWORD",
+               "AUDIT_PASSWORD", "GUEST_PASSWORD", "SVC_PASSWORD"]
+
+        g = self._scan('echo "$PASSWORD"\n', env)["PASSWORD"]
+
+        assert g["state"] == "ambiguous"
+        assert g["family"] == sorted(env)
+
+    def test_两个真缺口不许被家族匹配吃掉(self):
+        """★ **整组里最重要的一条。**
+
+        修误报最容易的翻车方式就是把真阳一起修掉 —— 而且修掉之后页面变干净，
+        看着像修好了。`UAG_APIKEY` 和 `PSQL_DSN` 是这一列唯一有价值的东西，
+        它们俩没了，这一列就只剩装饰。
+        """
+        env = ["ADMIN_PASSWORD", "PLATADMIN_PASSWORD", "TENANT_PASSWORD", "BASE_URL",
+               "ADMIN_TOKEN", "MAIN_DSN", "GW_APIKEY"]
+
+        got = self._scan('echo "$UAG_APIKEY $PSQL_DSN"\n', env)
+
+        assert got["UAG_APIKEY"]["state"] == "absent"
+        assert got["PSQL_DSN"]["state"] == "absent"
+
+    def test_短尾段不参与家族匹配(self):
+        """`DSN`(3) / `URL`(3) / `ID`(2) 这种尾段谁都带一个，放进家族匹配就整族降级。"""
+        got = self._scan('echo "$DSN $URL"\n', ["PSQL_DSN", "BASE_URL"])
+
+        assert got["DSN"]["state"] == "absent"
+        assert got["URL"]["state"] == "absent"
+
+    def test_家族匹配按下划线分段不按结尾子串(self):
+        """`"SERVICE_TOKEN".endswith("VICE_TOKEN")` 是**真的**。
+
+        裸子串匹配会让一个毫不相干的键把真缺口洗白。方向要摆对：危险的是
+        **环境键**在段中间套住了候选名（下面两组都是），不是反过来 ——
+        写反了这条测试就恒绿，`endswith` 的实现照样能过。
+        `PSQL_DSN` 那组尤其要盯：它正是这个域两个真缺口之一。
+        """
+        got = self._scan('echo "$VICE_TOKEN $SQL_DSN"\n', ["SERVICE_TOKEN", "PSQL_DSN"])
+
+        assert got["VICE_TOKEN"]["state"] == "absent"
+        assert "family" not in got["VICE_TOKEN"]
+        assert got["SQL_DSN"]["state"] == "absent"
+
+    def test_家族匹配是单向的(self):
+        """只认「候选名 == 某个环境键的尾巴」，不认反过来。
+
+        环境有 `APIKEY`、脚本要 `UAG_APIKEY`：算不算覆盖判不了，
+        而判错的方向是**把真缺口洗白**。这种时候宁可留着那条响的。
+        """
+        g = self._scan('echo "$UAG_APIKEY"\n', ["APIKEY"])["UAG_APIKEY"]
+
+        assert g["state"] == "absent"
+
+    def test_家族里列出来的都是环境键名(self):
+        """降级要连**凭什么降**一起写出来，否则它就是一句无从复核的断言。
+
+        列的是**键名** —— 它们直接进提示词和导出的 Markdown，跟值有关的东西
+        一个字节都不许跟着走。
+        """
+        env = {"ADMIN_PASSWORD", "TENANT_PASSWORD"}
+
+        g = self._scan('echo "$PASSWORD"\n', env)["PASSWORD"]
+
+        assert set(g["family"]) <= env
+        assert set(g) == {"name", "scripts", "state", "family"}
+
+    def test_环境里就有的落第三档(self):
+        got = self._scan('echo "$ADMIN_TOKEN"\n', ["ADMIN_TOKEN"])
+
+        assert got["ADMIN_TOKEN"]["state"] == "satisfied"
+
+    def test_env_gaps不装第三档(self):
+        """它的返回值在四处被 `len()` 当成「缺 N 个」渲染。
+
+        掺进环境里**有**的那些，那个数当场变成一个不报错的错数 ——
+        而不报错的错数正是这整套评审在抓的东西。
+        """
+        gaps = qr.env_gaps([{"path": "a.sh", "content": 'echo "$ADMIN_TOKEN"\n'}],
+                           {"ADMIN_TOKEN"})
+
+        assert gaps == []
+
+    def test_动态后缀在声明分支也要放过(self):
+        """豁免要豁在**两个分支**上。
+
+        同一个名字改用 `export X="${X:-}"` 声明一次，就绕过了只写在引用分支里的
+        那句豁免，从声明这边原样冒出来。
+        """
+        lib = 'printf -v "${p}_TOKEN" "%s" "x"\nexport MB_TOKEN="${MB_TOKEN:-}"\n'
+
+        gaps = qr.env_gaps([{"path": "a.sh", "content": "echo hi\n"}], set(), [lib])
+
+        assert [g["name"] for g in gaps] == []
+
+
+class TestEnvTiersRendering:
+    """三档在导出的 Markdown 里长什么样。"""
+
+    def _md(self, missing, satisfied):
+        from datetime import datetime, timezone
+
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="MCP", domain_name="MCP 能力", status="done",
+            environment_name="uag-138:3000", commit_sha="dae9b4fc4150", branch="main",
+            actor="admin", scenario_count=1, script_count=1,
+            result={"verdict": "risky", "summary": "s", "brief": {}, "scriptGaps": [],
+                    "catalogGaps": [], "envMissing": missing, "envSatisfied": satisfied,
+                    "reviewedScripts": [], "scenarioCount": 1},
+        )
+        r.created_at = datetime(2026, 8, 29, 10, 0, tzinfo=timezone.utc)
+        return qr.to_markdown(r)
+
+    def test_降级那一行写清凭什么降(self):
+        md = self._md([{"name": "PASSWORD", "scripts": ["a.sh"], "state": "ambiguous",
+                        "family": ["ADMIN_PASSWORD", "TENANT_PASSWORD"]}], [])
+
+        line = [x for x in md.splitlines() if x.startswith("- `PASSWORD`")][0]
+        assert "不是真缺" in line
+        assert "ADMIN_PASSWORD" in line and "TENANT_PASSWORD" in line
+
+    def test_缺几个要有分母(self):
+        """「缺 2 个」既可能是 2/3 也可能是 2/40 —— 没分母读的人判不了这一列有多严重。"""
+        md = self._md([{"name": "UAG_APIKEY", "scripts": ["a.sh"], "state": "absent"}],
+                      ["BASE_URL", "ADMIN_TOKEN", "PSQL_DSN"])
+
+        assert "要从外面拿 4 个变量，其中 3 个这个环境里有" in md
+
+    def test_一个都不缺时不画分母(self):
+        md = self._md([], ["BASE_URL"])
+
+        assert "脚本要的变量这个环境都有" in md
+        assert "要从外面拿" not in md
+
+    def test_前端摘要那个数也只数真缺的(self):
+        """页面顶上还有一句「我们这条环境记录里缺 N 个变量名」。
+
+        列表里分了档、摘要里没分，那条误报只是**从列表挪进了摘要** —— 而摘要更醒目。
+        这个数在前端算，后端测不到它的行为，只能扫源码把过滤这件事钉住。
+        """
+        src = (pathlib.Path(__file__).resolve().parents[2]
+               / "frontend/src/pages/qa/QaCatalog.jsx").read_text(encoding="utf-8")
+        line = [x for x in src.splitlines() if "const nEnvVar" in x][0]
+
+        assert "ambiguous" in line or "absent" in line, line
+
+    def test_真缺那一档照旧一行一个不加料(self):
+        md = self._md([{"name": "UAG_APIKEY", "scripts": ["config/env.sh"],
+                        "state": "absent"}], [])
+
+        line = [x for x in md.splitlines() if x.startswith("- `UAG_APIKEY`")][0]
+        assert line == "- `UAG_APIKEY` — config/env.sh"
