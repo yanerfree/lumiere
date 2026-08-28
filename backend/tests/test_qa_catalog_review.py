@@ -581,6 +581,40 @@ class TestBatching:
         batches = qr.split_batches(big)
         assert [s["path"] for b in batches for s in b] == ["big.sh", "small.sh"]
 
+    def test_take_scripts_能产出的任何输入都一份不丢(self):
+        """★#9。原来这里是「丢了要报出来」—— 那是给一个不会发生的事件加仪表。
+
+        真正要钉的是**永不丢**：`split_batches` 从前有一句
+        `if len(out) >= MAX_BATCHES: break`，超了就无声地把剩下的脚本扔掉，
+        而 `scriptsRead` 数的是从 git 读到的份数 —— 页面照样写「N 份全读了」。
+        它已经删了。这条测试是防它被谁"顺手加回来省额度"（它一分钱也没省）。
+        """
+        for size in (1, 500, 5_000, 12_001, 15_001, qr.MAX_SCRIPT_BYTES):
+            paths = [f"s{i}.sh" for i in range(qr.MAX_SCRIPTS)]
+            scripts = qr.take_scripts(lambda p, _sz=size: "x" * _sz, paths)
+            batches = qr.split_batches(scripts)
+            got = [c["path"] for b in batches for c in b]
+            assert got == [c["path"] for c in scripts], f"size={size} 丢了脚本"
+            # 顺带：真实输入下批数根本够不着封顶（★#9b 是它的常量版证明）
+            assert len(batches) <= qr.MAX_BATCHES, f"size={size} 批数 {len(batches)}"
+
+    def test_批数封顶够不着所以不会静默丢(self):
+        """★#9b。把一个**隐形的常量耦合**变成一句会红的断言。
+
+        贪心装箱下，除最后一批外每批都装了 > (BATCH - 单份上限) 字节
+        （否则下一份就该塞进来了）。所以 B 批需要总量
+        > (B-1) × (BATCH_SCRIPT_BYTES - MAX_SCRIPT_BYTES)，
+        而总量被 TOTAL_SCRIPT_BYTES 钉住 ⇒ 撞到 MAX_BATCHES 需要
+        (MAX_BATCHES-1) × 72_000 = 504_000 字节，预算只有 480_000 ⇒ **够不着**。
+
+        今天不丢靠的就是这个 24_000 字节的余量，而**没有任何东西写着这件事**。
+        谁把 TOTAL_SCRIPT_BYTES 调过 504_000 而没动 MAX_BATCHES，
+        静默丢当场开始 —— 现在这条会先替他红一次。
+        （MCP 域脚本数已从 47 长到 49，调大预算不是假想的改动。）
+        """
+        assert (qr.MAX_BATCHES - 1) * (qr.BATCH_SCRIPT_BYTES - qr.MAX_SCRIPT_BYTES) \
+            >= qr.TOTAL_SCRIPT_BYTES
+
     def test_单份上限装得下实测最大的脚本(self):
         # 2026-08-27 量过 uag-qa 109 份：中位数 5.3KB、p90 11.6KB、最大 17.7KB。
         # 这个数掉回 6000 的话，全仓一半的脚本会被截 —— 而截断的不下结论。
@@ -632,11 +666,14 @@ class TestBatching:
                     "scriptGaps": [], "envMissing": [], "reviewedScripts": [],
                     "coverage": {"scenariosTotal": 75, "scenariosShown": 75,
                                  "scriptsTotal": 47, "scriptsRead": 47,
+                                 "scriptsBatched": 47,
                                  "scriptsTruncated": 0, "batches": 5}},
         )
         r.created_at = datetime(2026, 8, 27, tzinfo=timezone.utc)
         md = qr.to_markdown(r)
-        assert "分 5 批" in md and "47 份全读了" in md
+        # 「全进了模型」这句话现在有依据了：scriptsBatched == scriptsRead。
+        # 原来它是**无条件**输出的 —— 读的人无法区分"核过"和"照着模板写的"。
+        assert "分 5 批" in md and "47 份全进了模型" in md
         # 全读完了就不许再挂"只读进 N 份"那种警告
         assert "只读进" not in md
 
@@ -819,3 +856,154 @@ class TestHowItWorksDisclosure:
         assert "grep" in md                    # 每条都能十秒内被否掉
         assert "没有第二意见" in md            # 单趟单模型
         assert "漏判是看不见的" in md
+
+
+class TestBatchCompleteness:
+    """「模型有没有把话说完」是**三态**，不是布尔。
+
+    压成布尔的后果不是"少个字段"，是**主路一律显示成写完了**：
+    2026-08-28 实测那一趟网关额度耗尽（`no upstream tokens available`），
+    12 次调用全走 claude-proxy 那条 CLI 降级通道，而那条通道
+    `usage` 恒 0、`finish_reason` 恒 `"stop"`、连 `max_tokens` 都不理会。
+    也就是说：**默认值长得跟"正常写完了"一模一样**，而它其实是"没人知道"。
+    把"没人知道"渲染成"写完了"，跟这套评审要抓的「跑绿了但没验到」是同一个病。
+    """
+
+    ALL = frozenset({"finish_reason", "prompt_tokens", "completion_tokens"})
+
+    def _resp(self, **kw):
+        from app.services.ai.llm_client import LLMResponse
+        kw.setdefault("reported", self.ALL)
+        kw.setdefault("prompt_tokens", 12_000)
+        return LLMResponse(**kw)
+
+    # ── #4 ──
+    def test_满额那批标truncated(self):
+        r = self._resp(finish_reason="length", completion_tokens=qr._BATCH_MAX_TOKENS)
+        assert qr.batch_completeness(r) == "truncated"
+
+    def test_anthropic协议那个词也认(self):
+        # 同一件事两个协议两个词：openai 叫 length，anthropic 叫 max_tokens
+        assert qr.batch_completeness(self._resp(finish_reason="max_tokens")) == "truncated"
+
+    # ── #5 ──
+    def test_结束原因说正常但token顶格也算没写完(self):
+        # 只信 finish_reason 会漏：有的通道顶格了照样回 stop
+        r = self._resp(finish_reason="stop", completion_tokens=qr._BATCH_MAX_TOKENS)
+        assert qr.batch_completeness(r) == "truncated"
+
+    def test_没顶格且结束原因正常才算写完(self):
+        r = self._resp(finish_reason="stop", completion_tokens=800)
+        assert qr.batch_completeness(r) == "complete"
+
+    # ── ★#6：三态被压成布尔时唯一会红的那条 ──
+    def test_两个凭据都拿不到时是说不清不是写完了(self):
+        r = self._resp(reported=frozenset(), finish_reason="stop",
+                       prompt_tokens=0, completion_tokens=0)
+        got = qr.batch_completeness(r)
+        assert got == "unknown"
+        assert got != "complete"        # ← 压成布尔就红在这一行
+
+    def test_只报了一项就用那一项判(self):
+        # 通道只报 token 不报结束原因：能判，别退化成 unknown
+        r = self._resp(reported=frozenset({"completion_tokens"}), finish_reason="stop",
+                       completion_tokens=qr._BATCH_MAX_TOKENS)
+        assert qr.batch_completeness(r) == "truncated"
+
+    def test_默认构造的响应是说不清(self):
+        from app.services.ai.llm_client import LLMResponse
+        # LLMResponse() 的默认值是 finish_reason="stop" / completion_tokens=0，
+        # 长得跟"正常写完了"一样。默认 reported 是空集就是为了不让它冒充事实。
+        assert qr.batch_completeness(LLMResponse(content="x")) == "unknown"
+
+
+class TestMetaReported:
+    """通道报的元数据算不算数 —— 判据**不是"键在不在"**。"""
+
+    def test_CLI通道那种恒0的usage一项都不算(self):
+        from app.services.ai import llm_client as lc
+        # claude-proxy 实测回的就是这个形状：键全在、值全是编的
+        got = lc._meta_reported({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                                in_key="prompt_tokens", prompt_chars=73_882)
+        assert got == frozenset()
+
+    def test_网关那种真数字全算(self):
+        from app.services.ai import llm_client as lc
+        got = lc._meta_reported({"prompt_tokens": 20_113, "completion_tokens": 6_386},
+                                in_key="prompt_tokens", prompt_chars=73_882)
+        assert got == lc._META_ALL
+
+    def test_压根没有usage也是一项都不算(self):
+        from app.services.ai import llm_client as lc
+        assert lc._meta_reported({}, in_key="prompt_tokens", prompt_chars=100) == frozenset()
+
+    def test_prompt本身是空的就不去证伪(self):
+        from app.services.ai import llm_client as lc
+        # prompt 空的时候 prompt_tokens=0 是**可能为真**的，不该据此判通道在编数
+        assert lc._meta_reported({"prompt_tokens": 0}, in_key="prompt_tokens",
+                                 prompt_chars=0) == lc._META_ALL
+
+
+class TestCompletenessRendering:
+    """三态要在页面上长得不一样。`unknown` 尤其不许长成 `complete`。"""
+
+    def _md(self, cov):
+        return qr.to_markdown(TestPartialBatchFailure()._rec(cov))
+
+    _BASE = {"scenariosTotal": 10, "scenariosShown": 10, "scriptsTotal": 3,
+             "scriptsRead": 3, "scriptsBatched": 3, "scriptsTruncated": 0, "batches": 3}
+
+    def test_截断了要点名第几批(self):
+        md = self._md({**self._BASE, "completeness": {"1": "complete", "2": "truncated",
+                                                      "3": "complete"}})
+        assert "第 2 批" in md and "撞上输出上限" in md
+        # 「没抓到」和「没写完」不是一回事，必须写出来
+        assert "没写完" in md
+
+    def test_说不清和写完了长得不一样(self):
+        unk = self._md({**self._BASE, "completeness": {"1": "unknown", "2": "unknown",
+                                                       "3": "unknown"}})
+        ok = self._md({**self._BASE, "completeness": {"1": "complete", "2": "complete",
+                                                      "3": "complete"}})
+        assert "说不清有没有写完" in unk
+        assert "说不清 ≠ 写完了" in unk
+        assert "每一批都写完了" in ok
+        assert "每一批都写完了" not in unk       # ← 三态压成布尔就红在这一行
+        assert "说不清有没有写完" not in ok
+        assert "说不清 ≠ 写完了" not in ok
+
+    def test_旧口径没记这件事就说没记(self):
+        # S1.3 的 AC：存量结论（没有 completeness 字段）不许渲染成 complete
+        md = self._md(dict(self._BASE))          # 无 completeness 键
+        assert "没记" in md
+        assert "别把它当成写完了" in md
+        assert "每一批都写完了" not in md
+
+
+class TestScriptsBatchedRendering:
+    """洞四：**「从 git 读到」和「真进了模型」是两件事**，别用前者的数说后者。
+
+    机制是真的（`split_batches` 那个 break 会静默丢，`scriptsRead` 数的是读到的份数，
+    页面照样写「N 份全读了」）；但 2026-08-28 实测它**现在触发不了** ——
+    38 个域一个都没超，而且按常量算够不着（见 test_批数封顶够不着所以不会静默丢）。
+    所以这里的输入是**构造的**，不能指望真域触发。
+    """
+
+    def _md(self, cov):
+        return qr.to_markdown(TestPartialBatchFailure()._rec(cov))
+
+    _LOST = {"scenariosTotal": 10, "scenariosShown": 10, "scriptsTotal": 20,
+             "scriptsRead": 20, "scriptsBatched": 14, "scriptsTruncated": 0, "batches": 8}
+
+    def test_丢了就不许说全读了并且要写清差几份(self):
+        md = self._md(dict(self._LOST))
+        assert "全进了模型" not in md and "全读了" not in md
+        assert "只有 14 份真进了模型" in md      # 开头第一个数字就得说实话
+        assert "差 6 份" in md                    # 差几份要写出来，不能只说"有丢失"
+
+    def test_旧口径没记就不敢说全读了(self):
+        # 没有 scriptsBatched 的存量结论：不许沿用那句无条件断言
+        cov = {k: v for k, v in self._LOST.items() if k != "scriptsBatched"}
+        md = self._md(cov)
+        assert "全读了" not in md and "全进了模型" not in md
+        assert "这一版口径没记" in md

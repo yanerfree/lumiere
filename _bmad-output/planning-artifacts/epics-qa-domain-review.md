@@ -204,6 +204,35 @@ FR-1-2 / FR-1-4。**先只做检测，不做续跑**（续跑是 Epic 4，且条
 > 优先级：**S1.2 + S1.2b + ★#9b 可以单独发**，仍排在本 Epic 其余部分之前 ——
 > 不是因为线上在流血，是因为它便宜、独立、且封住的是一个**会随着 QA 仓变大而打开**的口子。
 
+### Epic 1 实现记录（2026-08-28 已落代码）— 三处偏离本文的写法
+
+**E1-1 · `completeness` 的形状：不是 `batchesIncomplete: [批次号]`，是每批一个态的 map。**
+S1.3 的 AC 写的是一个"不完整批次号"列表。**列表装不下三态** ——
+`unknown`（通道没报，说不清）和 `truncated`（报了，确实没写完）都会落进这个列表，
+在页面上就分不开了，而 S1.3 自己的 AC 又要求「`unknown` 的渲染必须和 `complete` 明确不同」。
+实现改成 `coverage.completeness = {"1": "complete", "2": "truncated", ...}`。
+顺带解决了 AC 的另一半：**这个键不存在**就是存量结论的标记，
+不需要另加版本号字段（列表方案里 `[]` 既可能是"都完整"也可能是"旧口径"）。
+
+**E1-2 · S1.1 没有改 `LLMResponse` 的默认值，而是新增了 `reported: frozenset[str]`。**
+本文 line 79 那条 ⚠ 已经预告了原因，这里只记落点：
+`llm_client.complete()` 按原始 JSON 填 `reported`，判据是
+`prompt_tokens == 0 而 prompt 非空`（可证伪的假值）；
+`qa_catalog_review.batch_completeness()` 只认 `reported` 里有的那几项。
+`LLMResponse.reported` 的默认值**必须是空集**：默认 `"stop"` / `0` 长得跟
+"正常写完了"一模一样，谁手搓一个 mock 谁就会拿到一个假的 `complete`。
+（实现过程中就把这个默认值先写错成 `_META_ALL` 一次，自查时改回来的。）
+
+**E1-3 · S1.2b 有一处本文没提的连带改动：一条既有测试必须改。**
+`test_markdown要说清是全读了还是抽的` 断言的正是 S1.2 要删掉的那句无条件断言
+（`"47 份全读了" in md`）。它没写错 —— 它是**忠实地封样了当时的行为**，
+而这次改的就是那个行为。改成 `"47 份全进了模型"` 并给 fixture 补上 `scriptsBatched`。
+记这一条是因为：**封样测试红了不等于代码错了**，这次是本文要求它红的；
+但下次谁看到它红，得能查到"当初是故意的"。
+
+**验证**：`backend/tests/test_qa_catalog_review.py` 96 passed；
+`backend/tests/` 全量 1556 passed / 17.88s。
+
 ---
 
 ## Epic 2 — 去上限（**三处必须同批**）

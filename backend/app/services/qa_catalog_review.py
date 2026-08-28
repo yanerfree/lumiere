@@ -50,14 +50,32 @@ logger = logging.getLogger(__name__)
 # 也就是说 6K 的单份上限把**一半的脚本截了**，而截断的脚本是不下"没验到"结论的 ——
 # 于是「没发现问题」里有一大块其实是「没读到」。这两件事在页面上长得一模一样。
 # 现在的定法：单份装得下最大的那份；一次调用的总量按批切；批数封顶防跑飞。
-MAX_SCENARIOS = 200         # 场景清单一行一条，200 行也就 20KB。最大的域 75 条
-MAX_SCRIPTS = 60            # 一个域最多读这么多份（实测最大的域 MCP 47 份）
+MAX_SCENARIOS = 200         # 场景清单一行一条，200 行也就 20KB。最大的域 80 条（2026-08-28 复量）
+MAX_SCRIPTS = 60            # 一个域最多读这么多份（最大的域 MCP 49 份，2026-08-28 复量）
 MAX_SCRIPT_BYTES = 18_000   # 单份上限：实测最大 17.7KB，这个数下全仓 0 份被截
 TOTAL_SCRIPT_BYTES = 480_000  # 一个域所有脚本正文合计上限（MCP 域实测 409KB）
 BATCH_SCRIPT_BYTES = 90_000  # **一次模型调用**带多少脚本正文。超了就分批，不是丢弃
-MAX_BATCHES = 8             # 批数封顶：真有域超了，宁可少读也别把额度烧穿
+MAX_BATCHES = 8             # **只是不变量断言的上界，不再截断**（那个 break 已删）。
+                            # 原注释写「真有域超了，宁可少读也别把额度烧穿」——
+                            # 两句实测都不成立：38 个域一个都没超，而且**结构上就够不着**
+                            # （8 批要 504_000 字节，预算封在 480_000）；额度也早被
+                            # TOTAL_SCRIPT_BYTES 钉死了，跟批数封不封顶无关。
+                            # 所以那个 break 一分钱没省，只留了个静默丢脚本的口子。
+                            # 「够不着」这件事本身是常量之间的隐形耦合 ——
+                            # 谁把 TOTAL_SCRIPT_BYTES 调过 504_000 而没动这里，静默丢当场开始。
+                            # 现在有 test_批数封顶够不着所以不会静默丢 会替他红一次。
 BATCH_CONCURRENCY = 3       # 同时在飞几批。5 批一起打网关实测 5 个 429 全降级到 CLI 通道
                             # —— 那条通道慢，而且网关是全平台共用的，别一个域把它占满
+_BATCH_MAX_TOKENS = 2400    # 一批准写多长。**这个数现在是不够的**：2026-08-28 把提示词
+                            # 上限拿掉、max_tokens 放到 16000 量了两轮 × 6 批，
+                            # 模型每批想写 6717–10217 字符 ≈ 最大 6386 个 output token
+                            # —— 2400 只装得下 38%，是**常态性截断**不是偶发。
+                            # 提到 10000 是 Epic 2 的事（它要三处同批改），这里先只做检测：
+                            # 撞上限了就在页面上说出来，别让"被截断"看起来像"没问题"。
+                            # ⚠ 提上限之前先看墙钟：单批实测 237–404s，
+                            # BATCH_CONCURRENCY=3 时 6 批要两波，而 arq 的 job_timeout=600
+                            # 是 **worker 全局**的；输出变长 ⇒ 单批更慢 ⇒ 先撞的是它，
+                            # 撞上的表现是整个域的评审**直接没了**，不是"慢一点"。
 MAX_SOURCED_LIBS = 20       # 顺带读几份被 source 的公共库（只用来认变量，不进 prompt）
                             # 要跟着 source 链往下走，6 份打不住：uag-qa 的 MCP 域一趟 11 份
 
@@ -565,13 +583,50 @@ def split_batches(scripts: list[dict]) -> list[list[dict]]:
     for sc in scripts:
         n = len((sc.get("content") or "").encode("utf-8"))
         if out[-1] and used + n > BATCH_SCRIPT_BYTES:
-            if len(out) >= MAX_BATCHES:
-                break
+            # 这里原来有一句 `if len(out) >= MAX_BATCHES: break` ——
+            # 它违反的正是上面三行那句 docstring（「每一份脚本都会被读到」），
+            # 而且**一分钱额度也没省**（总量早被 TOTAL_SCRIPT_BYTES 钉住）。
+            # 它唯一的作用是：超了就无声地把剩下的脚本丢掉，而 scriptsRead
+            # 数的是从 git 读到的份数，页面照样写「N 份全读了」。已删。
             out.append([])
             used = 0
         out[-1].append(sc)
         used += n
     return out
+
+
+# 服务端说的「没写完」。openai 协议叫 length，anthropic 协议叫 max_tokens。
+_TRUNC_REASONS = frozenset({"length", "max_tokens"})
+
+
+def batch_completeness(resp, *, max_tokens: int = _BATCH_MAX_TOKENS) -> str:
+    """这一批模型到底写完了没有。**三态，不是布尔。**
+
+    - `truncated`：有服务端事实证明没写完（结束原因是 length/max_tokens，
+      或者写出来的 token 数已经顶到上限）。
+    - `unknown`：**两个凭据一个都拿不到** —— 通道没报，或者报的是常量假值。
+    - `complete`：拿到了凭据，而且都没命中。
+
+    `unknown` 不是边角情况，是**主路**：2026-08-28 实测那一趟网关额度耗尽
+    （`no upstream tokens available`），12 次调用全走 CLI 降级通道，
+    而那条通道 `usage` 恒 0、`finish_reason` 恒 `"stop"`、连 `max_tokens` 都不理会。
+    所以千万别把三态压成布尔 —— 压了之后**主路会一律显示成"写完了"**，
+    而它其实是"没人知道"。这正是这个模块存在的意义要抓的那类错。
+
+    （附带一条：CLI 通道既然不理会 `max_tokens`，它上面**根本不会发生**按上限截断。
+      截断只发生在网关那条路上。所以三态里 `truncated` 和 `unknown` 是**互斥且分通道**的，
+      不是"同一件事的两种确信度"。）
+    """
+    rep_ = getattr(resp, "reported", None) or frozenset()
+    has_reason = "finish_reason" in rep_
+    has_tokens = "completion_tokens" in rep_
+    if not has_reason and not has_tokens:
+        return "unknown"
+    if has_reason and (getattr(resp, "finish_reason", "") or "") in _TRUNC_REASONS:
+        return "truncated"
+    if has_tokens and max_tokens and (getattr(resp, "completion_tokens", 0) or 0) >= max_tokens:
+        return "truncated"
+    return "complete"
 
 
 _SEV_RANK = {"blocker": 0, "major": 1, "minor": 2}
@@ -669,15 +724,18 @@ async def run_review(*, domain: dict, scenarios: list[dict],
     missing = env_gaps(scripts, set(env_keys), lib_texts, lib_paths)
     batches = split_batches(scripts)
 
-    async def _one(part: list[dict], mark: tuple[int, int] | None) -> dict:
+    async def _one(part: list[dict], mark: tuple[int, int] | None) -> tuple[dict, str]:
         user = build_payload(domain, scenarios, part, env_name, env_keys, missing, mark)
         resp = await llm_client.complete(
             [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
-            config=ai_config, max_tokens=2400, temperature=0)
-        return parse_result(resp.content or "")
+            config=ai_config, max_tokens=_BATCH_MAX_TOKENS, temperature=0)
+        # 完整性跟结论一起带出来。**丢掉它就没法区分「这批没抓到问题」和
+        # 「这批话没说完」** —— 两者在页面上长得一模一样，都是"这一格 0 条"。
+        return parse_result(resp.content or ""), batch_completeness(resp)
 
+    completeness: dict[str, str] = {}
     if len(batches) == 1:
-        out = await _one(batches[0], None)
+        out, completeness["1"] = await _one(batches[0], None)
     else:
         n = len(batches)
         # 并发发出去，但**限流**。分批是为了每批读得完整，不是为了排队 ——
@@ -695,8 +753,15 @@ async def run_review(*, domain: dict, scenarios: list[dict],
         # 已经读完的 2 批结果跟着没了，页面上只剩一句"评审失败"，得整个域重跑 10 分钟。
         raw = await asyncio.gather(*[_guarded(b, (i + 1, n)) for i, b in enumerate(batches)],
                                    return_exceptions=True)
-        good = [r for r in raw if not isinstance(r, BaseException)]
-        lost = [(i + 1, r) for i, r in enumerate(raw) if isinstance(r, BaseException)]
+        good: list[dict] = []
+        lost: list[tuple[int, BaseException]] = []
+        for i, r in enumerate(raw, 1):
+            if isinstance(r, BaseException):
+                lost.append((i, r))
+            else:
+                parsed, comp = r
+                good.append(parsed)
+                completeness[str(i)] = comp
         for idx, err in lost:
             logger.warning("QA 域评审：第 %d/%d 批没读成 domain=%s：%r",
                            idx, n, domain.get("code"), err)
@@ -734,10 +799,18 @@ async def run_review(*, domain: dict, scenarios: list[dict],
         "scenariosShown": min(len(scenarios), MAX_SCENARIOS),
         "scriptsTotal": len({c["path"] for s in scenarios for c in (s.get("scripts") or [])}),
         "scriptsRead": len(scripts),
+        # **真进了模型的份数。** scriptsRead 数的是从 git 读到的份数 ——
+        # 这两个数不相等的时候，差额就是"页面说读了、模型没看过"的那些。
+        # 今天恒等（split_batches 不再丢），但**页面不许拿"应该恒等"当依据去断言"全读了"**：
+        # 这个模块治的就是「结论看起来有据、依据其实没验过」，自己身上更不能有。
+        "scriptsBatched": sum(len(b) for b in batches),
         "scriptsTruncated": sum(1 for s in scripts if s.get("truncated")),
         "batches": len(batches),
         # 没读成的批次号。非空 = 这一趟的"没发现问题"里有一块是"没读到"
         "batchesFailed": out.pop("batchesFailed", []),
+        # 批次号 → complete / truncated / unknown。**这个键不存在 = 旧口径评的**，
+        # 那时候不记这件事 —— 渲染时必须说"没记"，不许当成 complete。
+        "completeness": completeness,
     }
     return out
 
@@ -931,9 +1004,18 @@ def to_markdown(r: QaCatalogReview) -> str:
     cov0 = res.get("coverage") or {}
     if cov0.get("scriptsRead"):
         bat = cov0.get("batches") or 1
-        L.append(f"这一趟读了 **{cov0['scriptsRead']} 份脚本的正文**"
-                 + (f"（一次装不下，分 {bat} 批读完再合并）" if bat > 1 else "")
-                 + "、" + f"**{cov0.get('scenariosShown', 0)} 条场景**。")
+        read0 = cov0["scriptsRead"]
+        fed0 = cov0.get("scriptsBatched")
+        # **「读到」和「进了模型」是两件事**，别用前者的数去说后者。
+        # 页面上这句是全篇第一个数字，人拿它当"评了多少"用。
+        if fed0 is not None and fed0 < read0:
+            L.append(f"⚠ 这一趟从 git 读出 {read0} 份脚本，但**只有 {fed0} 份真进了模型**"
+                     f"（差 {read0 - fed0} 份）、**{cov0.get('scenariosShown', 0)} 条场景**。"
+                     f"下面的结论**不包括**没进去那 {read0 - fed0} 份。")
+        else:
+            L.append(f"这一趟读了 **{fed0 if fed0 is not None else read0} 份脚本的正文**"
+                     + (f"（一次装不下，分 {bat} 批读完再合并）" if bat > 1 else "")
+                     + "、" + f"**{cov0.get('scenariosShown', 0)} 条场景**。")
         L.append("")
     L.append("**为什么一份都没跑** —— 跑不了，而且不该靠跑：")
     L.append("")
@@ -958,6 +1040,28 @@ def to_markdown(r: QaCatalogReview) -> str:
     L.append("- ⚠ **环境那一列判的是我们这侧**：QA 自己跑的时候有没有那些变量，平台看不到。")
     if (res.get("coverage") or {}).get("batchesFailed"):
         L.append("- ⚠ **这一趟有批次没读成**（见下方「这次读了什么」），那几批等于没看。")
+    # 「模型有没有把话说完」。三态，`unknown` 的说法必须和 `complete` 明确不同 ——
+    # 把"没人知道"渲染成"写完了"，跟这个模块要抓的「跑绿了但没验到」是同一个病。
+    comp = (res.get("coverage") or {}).get("completeness")
+    if comp is None:
+        L.append("- ⚠ **这一趟没记「模型有没有把话说完」**：旧口径评的，当时不区分"
+                 "「写完了」和「写到一半撞上输出上限」——**别把它当成写完了**。")
+    else:
+        def _pick(state: str) -> list[int]:
+            return sorted(int(k) for k, v in comp.items() if v == state and str(k).isdigit())
+        tr, uk = _pick("truncated"), _pick("unknown")
+        if tr:
+            L.append(f"- ⚠ **有 {len(tr)} 批撞上输出上限被截断了**"
+                     f"（第 {'、'.join(str(i) for i in tr)} 批）：截断处之后本该写的结论"
+                     "根本没写出来 —— 那几批的「没抓到」是**没写完**，不是没问题。")
+        if uk:
+            L.append(f"- ⚠ **有 {len(uk)} 批说不清有没有写完**"
+                     f"（第 {'、'.join(str(i) for i in uk)} 批）：走的是 CLI 降级通道，"
+                     "它不报 token 数、结束原因恒为 `stop`（值是编的），"
+                     "**没有服务端事实可查**。说不清 ≠ 写完了。")
+        if not tr and not uk and comp:
+            L.append("- ✅ **每一批都写完了**：通道报的结束原因和 token 数都拿到了，"
+                     "都没撞上限 —— 这一条是有服务端事实支撑的，不是默认值。")
     L.append("")
     if b.get("solid"):
         L.append("## 撑得住的部分")
@@ -1084,9 +1188,23 @@ def to_markdown(r: QaCatalogReview) -> str:
                  f"{cov['scriptsRead']} 份 —— 没读到的那几份不在下面这张表里。")
         L.append("")
     if (cov.get("batches") or 1) > 1:
-        L.append(f"> 这个域的脚本一次装不进一轮对话，分了 {cov['batches']} 批读，"
-                 f"每批都拿到完整场景清单，最后合并 —— **{cov.get('scriptsRead')} 份全读了**，"
-                 "不是抽了几份。")
+        read = cov.get("scriptsRead") or 0
+        fed = cov.get("scriptsBatched")
+        if fed is None:
+            # 旧口径没记「真进了模型几份」。**那就不许说"全读了"** ——
+            # 这句原来是无条件断言，谁看都以为是核过的事实。
+            L.append(f"> 这个域的脚本一次装不进一轮对话，分了 {cov['batches']} 批读，"
+                     "每批都拿到完整场景清单，最后合并。"
+                     "（这一版口径没记「真进模型几份」，所以这里不敢说"
+                     f"{read} 份都进去了。）")
+        elif fed < read:
+            L.append(f"> ⚠ 这个域的脚本分了 {cov['batches']} 批读，"
+                     f"但**从 git 读出 {read} 份、只有 {fed} 份进了模型，差 {read - fed} 份**。"
+                     "下面这张表列的是**读出来的**，不是评过的 —— 差额那几份没人看过。")
+        else:
+            L.append(f"> 这个域的脚本一次装不进一轮对话，分了 {cov['batches']} 批读，"
+                     f"每批都拿到完整场景清单，最后合并 —— **{fed} 份全进了模型**，"
+                     "不是抽了几份。")
         L.append("")
     if cov.get("batchesFailed"):
         bad = "、".join(f"第 {i} 批" for i in cov["batchesFailed"])

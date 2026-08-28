@@ -91,6 +91,10 @@ class StreamChunk:
     finish_reason: str | None = None
 
 
+# 元数据的三项。`reported` 里有哪几项，就只有哪几项能拿去下结论。
+_META_ALL = frozenset({"finish_reason", "prompt_tokens", "completion_tokens"})
+
+
 @dataclass
 class LLMResponse:
     content: str = ""
@@ -98,6 +102,28 @@ class LLMResponse:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     model: str = ""
+    # 这条通道**确实报了**哪几项元数据（见 `_meta_reported`）。
+    # 空集 = 一项都不可信。默认空集是故意的：**没填就是不知道**，
+    # 而上面那几个字段的默认值（"stop" / 0）长得跟"模型正常说完了、
+    # 输入 0 个 token"一模一样 —— 谁拿默认值当事实，谁就会把"没测到"
+    # 渲染成"测过了没问题"，那恰好是这个平台要治的病。
+    reported: frozenset[str] = frozenset()
+
+
+def _meta_reported(usage: dict, *, in_key: str, prompt_chars: int) -> frozenset[str]:
+    """通道报的元数据里，哪几项算数。
+
+    判据**不是"键在不在"**。claude-proxy 那条 CLI 降级通道 `usage` 三项恒 0、
+    `finish_reason` 恒 `"stop"`，键全在、值全是编的（2026-08-28 实测 12/12 次调用，
+    连 `max_tokens=64` 都不理会，照样返回 1891 字符）。
+
+    单看一次响应分不出「模型正好写了 0 个 token」和「通道压根不数」——
+    但 `prompt_tokens == 0` 而 prompt 非空是**可证伪的假值**：输入就摆在那儿，
+    不可能 0 个 token。这一项一假，同一条通道同一个响应里报的另外两项一起不算数。
+    """
+    if prompt_chars > 0 and int(usage.get(in_key) or 0) <= 0:
+        return frozenset()
+    return _META_ALL
 
 
 class LLMError(Exception):
@@ -275,6 +301,7 @@ async def complete(
 
     headers = {**_build_headers(config=config), **_get_extra_headers(config=config)}
     endpoint = _get_endpoint(config=config)
+    prompt_chars = sum(len(m.get("content") or "") for m in messages)
 
     async with httpx.AsyncClient(timeout=_get_timeout(config=config)) as client:
         resp = await _post_with_retry(client, endpoint, body, headers, provider=provider)
@@ -285,22 +312,25 @@ async def complete(
         for block in data.get("content", []):
             if block.get("type") == "text":
                 content += block.get("text", "")
+        usage = data.get("usage") or {}
         return LLMResponse(
             content=content,
             finish_reason=data.get("stop_reason", "end_turn"),
-            prompt_tokens=data.get("usage", {}).get("input_tokens", 0),
-            completion_tokens=data.get("usage", {}).get("output_tokens", 0),
+            prompt_tokens=usage.get("input_tokens", 0),
+            completion_tokens=usage.get("output_tokens", 0),
             model=data.get("model", ""),
+            reported=_meta_reported(usage, in_key="input_tokens", prompt_chars=prompt_chars),
         )
 
     choice = data.get("choices", [{}])[0]
-    usage = data.get("usage", {})
+    usage = data.get("usage") or {}
     return LLMResponse(
         content=choice.get("message", {}).get("content", ""),
         finish_reason=choice.get("finish_reason", "stop"),
         prompt_tokens=usage.get("prompt_tokens", 0),
         completion_tokens=usage.get("completion_tokens", 0),
         model=data.get("model", ""),
+        reported=_meta_reported(usage, in_key="prompt_tokens", prompt_chars=prompt_chars),
     )
 
 
