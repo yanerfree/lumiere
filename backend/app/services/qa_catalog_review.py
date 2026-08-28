@@ -66,16 +66,41 @@ MAX_BATCHES = 8             # **只是不变量断言的上界，不再截断**�
                             # 现在有 test_批数封顶够不着所以不会静默丢 会替他红一次。
 BATCH_CONCURRENCY = 3       # 同时在飞几批。5 批一起打网关实测 5 个 429 全降级到 CLI 通道
                             # —— 那条通道慢，而且网关是全平台共用的，别一个域把它占满
-_BATCH_MAX_TOKENS = 2400    # 一批准写多长。**这个数现在是不够的**：2026-08-28 把提示词
-                            # 上限拿掉、max_tokens 放到 16000 量了两轮 × 6 批，
-                            # 模型每批想写 6717–10217 字符 ≈ 最大 6386 个 output token
-                            # —— 2400 只装得下 38%，是**常态性截断**不是偶发。
-                            # 提到 10000 是 Epic 2 的事（它要三处同批改），这里先只做检测：
-                            # 撞上限了就在页面上说出来，别让"被截断"看起来像"没问题"。
-                            # ⚠ 提上限之前先看墙钟：单批实测 237–404s，
-                            # BATCH_CONCURRENCY=3 时 6 批要两波，而 arq 的 job_timeout=600
-                            # 是 **worker 全局**的；输出变长 ⇒ 单批更慢 ⇒ 先撞的是它，
-                            # 撞上的表现是整个域的评审**直接没了**，不是"慢一点"。
+MEASURED_MAX_OUTPUT_TOKENS = 6386  # **实测**一批最多想写多少 output token（2026-08-28，
+                            # MCP 域两轮 × 6 批，正文 6717–10217 字符）。
+                            # 这个数是**观测值**，不是拍的；MAX_OUTPUT_TOKENS 由它推出来。
+                            # 重新量了就改这里，别只改下面那个 —— 有测试盯着两者的比例。
+MAX_OUTPUT_TOKENS = 10_000  # 一批准写多长 = 实测最大 × 1.5 向上取千位。
+                            # 上一版是 2400，只装得下实测的 38% —— 那是**常态性截断**
+                            # 不是偶发，而截断在页面上长得跟"这批没抓到问题"一模一样。
+                            # ⚠ 提上限之前先看墙钟：单批实测 237–404s。
+                            # 那个数是**走 claude-proxy 量的**（兜底那一跳的下限 _PROXY_TIMEOUT=600，
+                            # 本模块带了更长的会取 max）；而网关主路的超时默认取
+                            # **服务配置里的 timeout_seconds（现值 120s）**。
+                            # 也就是说：提 max_tokens ⇒ 输出变长 ⇒ 单批更慢 ⇒
+                            # 主路上会整整齐齐**全在 120.1s 超时**（Epic 0 已经这么撞过一次）。
+                            # 而各批耗时相近 ⇒ 不是丢一批，是 6 批一起挂 ⇒
+                            # `if not good: raise` ⇒ **整个域的评审直接没了**。
+                            # 所以这个数和下面的 MIN_TIMEOUT_SECONDS 必须一起改，
+                            # 只提 token 比不改更差。
+                            # 注：这里跟 arq 的 job_timeout=600 **无关** —— 域评审走的是
+                            # `spawn()` 里的 asyncio.create_task，跑在 API 进程内；
+                            # arq 的 functions 只注册了 git_sync / execution 两个。
+                            # （这条是 2026-08-28 写错过一次又查回来的，别再照 arq 那个数推。）
+MIN_TIMEOUT_SECONDS = 1020  # 这一批等多久 = 实测最慢单批 404s × 2.5。
+                            # **`MAX_OUTPUT_TOKENS` 的连体双胞胎**：准写 10000 token
+                            # 就得给够写完的时间，两个数必须一起改。
+                            # 只提 token 不提超时的结果不是慢一点：各批耗时相近
+                            # ⇒ 6 批一起卡在默认的 120s ⇒ `if not good: raise`
+                            # ⇒ **整个域的评审直接没了**，比不改还差。
+                            #
+                            # 这个数**由本模块自己传给 `llm_client.complete(timeout=)`**，
+                            # 不去动服务配置里那个 120 —— 那个是全平台共用的，
+                            # 拧大它等于让每一个卡死的 AI 请求都多等十五分钟才报错。
+                            # （上一版这里写的是"去页面上把能力位超时改大"：那既是一条
+                            #   靠人记得做的上线步骤，而且**页面上根本没有那个输入框** ——
+                            #   超时在「AI 服务配置」的服务上，能力位只管选模型。）
+
 MAX_SOURCED_LIBS = 20       # 顺带读几份被 source 的公共库（只用来认变量，不进 prompt）
                             # 要跟着 source 链往下走，6 份打不住：uag-qa 的 MCP 域一趟 11 份
 
@@ -350,7 +375,6 @@ _SYSTEM = """你在评审一个黑盒验收仓里**某一个域**的自动化覆
   那种话说了等于没说。
 - 不许建议我们去改这个仓库的流程、加字段、加钩子 —— 仓库是别人的，我们只读。
 - 没截断的脚本才下"没验到"的结论；正文标了「已截断」的，拿不准就别列。
-- 每一项最多 6 条。
 
 ## 你要写给两拨人看，分开写，别混
 
@@ -474,10 +498,28 @@ def parse_result(text: str) -> dict:
         raise ValueError("模型回了个不是对象的东西")
 
     def _rows(key: str) -> list[dict]:
+        # **不封条数。** 上一版这里是 `[:6]`，提示词里也写着「每一项最多 6 条」——
+        # 两处一起把结论砍在 6 条。实测（去掉提示词上限量的那一趟）一个批次能出到
+        # 104 条，`[:6]` 静默扔掉 31/104 = 30%，而页面上只显示剩下的，
+        # **看起来就像"这个域只有这么多问题"**。
+        # 封顶真正省的是渲染长度，不是额度；而额度早被 MAX_OUTPUT_TOKENS 管着了。
         out = []
-        for x in (data.get(key) or [])[:6]:
+        for x in (data.get(key) or []):
             if isinstance(x, dict):
-                row = {k: str(v)[:600] for k, v in x.items() if v is not None}
+                row = {}
+                for k, v in x.items():
+                    if v is None:
+                        continue
+                    if k == "evidence":
+                        # S2.3：evidence 是**要拿去回原文比对的**（Epic 3 的回验）。
+                        # `str(v)[:600]` 从行中间切断 ⇒ 那半行在原文里找不到
+                        # ⇒ 回验必然判 partial。而第一反应会是"回验不准"然后去放松回验
+                        # —— 修错地方。所以按行边界截，且**截了就说截了**。
+                        row[k], cut = _clip_lines(str(v))
+                        if cut:
+                            row["evidenceTruncated"] = "1"
+                    else:
+                        row[k] = str(v)[:600]
                 b = (row.get("blame") or "").strip().lower()
                 # 认不出来就落 script：这一栏是「要发给仓库主人的」，
                 # 宁可多审一条，也别把该发的漏进"不是你的事"那一堆里
@@ -599,7 +641,7 @@ def split_batches(scripts: list[dict]) -> list[list[dict]]:
 _TRUNC_REASONS = frozenset({"length", "max_tokens"})
 
 
-def batch_completeness(resp, *, max_tokens: int = _BATCH_MAX_TOKENS) -> str:
+def batch_completeness(resp, *, max_tokens: int = MAX_OUTPUT_TOKENS) -> str:
     """这一批模型到底写完了没有。**三态，不是布尔。**
 
     - `truncated`：有服务端事实证明没写完（结束原因是 length/max_tokens，
@@ -633,9 +675,41 @@ _SEV_RANK = {"blocker": 0, "major": 1, "minor": 2}
 _VERDICT_RANK = {"bad": 0, "risky": 1, "ok": 2}
 
 
-def _gap_key(g: dict) -> str:
-    return "|".join(str(g.get(f) or "")[:60]
-                    for f in ("id", "path", "scenario", "problem", "why"))
+def _clip_lines(text: str, limit: int = 600) -> tuple[str, bool]:
+    """截长文本，但**只在行边界上截**。返回 (截完的文本, 是不是截过)。
+
+    给 `evidence` 用。它是要被 Epic 3 拿去在脚本原文里回查的 ——
+    从行中间切断会留下一个原文里根本不存在的半行，回验只能判"对不上"。
+    唯一截不出行边界的情况是**第一行自己就超长**；那时只能硬切，
+    但仍然标 `evidenceTruncated`，让回验知道这条本来就不完整，别赖到脚本头上。
+    """
+    if len(text) <= limit:
+        return text, False
+    head = text[:limit]
+    cut = head.rfind("\n")
+    return (head[:cut] if cut > 0 else head), True
+
+
+# `scriptGaps` 不参与跨批去重的**收紧版键**：它按 problem/why 前 60 字比，
+# 而各批的脚本本来就不相交 —— 真重复几乎不可能，误合并倒是随手就来
+# （两条讲同一份脚本的不同毛病，开头 60 字很容易一样）。
+_LOOSE_KINDS = frozenset({"scriptGaps"})
+
+
+def _gap_key(g: dict, kind: str = "") -> str:
+    """跨批去重的键。
+
+    `scriptGaps` 用**全文不截断**：截 60 字是在制造静默合并，而它防不住什么 ——
+    每份脚本只出现在一个批里，跨批撞车本来就不成立。留精确去重是为了兜住
+    模型在**同一批**里把同一条写两遍，那个只有全等才该合。
+    `catalogGaps` / `nextUp` 是域级的（每批都看全量清单），保持原样。
+    ⚠ 但它俩的键仍然是自由文本 —— 实测（副-A）跨批去重**一条都没去掉**，
+    18 行 nextUp 其实只有 3 件事。那是 Epic 9 的事，不在本 story 范围内。
+    """
+    fields = ("id", "path", "scenario", "problem", "why")
+    if kind in _LOOSE_KINDS:
+        return "|".join(str(g.get(f) or "") for f in fields)
+    return "|".join(str(g.get(f) or "")[:60] for f in fields)
 
 
 def merge_results(parts: list[dict]) -> dict:
@@ -653,7 +727,7 @@ def merge_results(parts: list[dict]) -> dict:
             out["verdict"] = v
         for key in ("scriptGaps", "catalogGaps", "nextUp"):
             for g in part.get(key) or []:
-                k = key + "|" + _gap_key(g)
+                k = key + "|" + _gap_key(g, key)
                 if k in seen:
                     continue
                 seen.add(k)
@@ -728,7 +802,8 @@ async def run_review(*, domain: dict, scenarios: list[dict],
         user = build_payload(domain, scenarios, part, env_name, env_keys, missing, mark)
         resp = await llm_client.complete(
             [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": user}],
-            config=ai_config, max_tokens=_BATCH_MAX_TOKENS, temperature=0)
+            config=ai_config, max_tokens=MAX_OUTPUT_TOKENS, temperature=0,
+            timeout=MIN_TIMEOUT_SECONDS)
         # 完整性跟结论一起带出来。**丢掉它就没法区分「这批没抓到问题」和
         # 「这批话没说完」** —— 两者在页面上长得一模一样，都是"这一格 0 条"。
         return parse_result(resp.content or ""), batch_completeness(resp)
@@ -1127,9 +1202,17 @@ def to_markdown(r: QaCatalogReview) -> str:
             L.append("- 判据（脚本原文）：")
             L.append("")
             L.append("  ```bash")
-            for line in str(g["evidence"]).splitlines()[:6]:
+            ev_lines = str(g["evidence"]).splitlines()
+            for line in ev_lines[:6]:
                 L.append(f"  {line}")
             L.append("  ```")
+            # 显示只留 6 行、入库时也可能截过。**两处都要说出来。**
+            # 不说的话，读的人拿这段去 grep 发现"就这么点"，
+            # 会把"我只给你看了一部分"读成"它就只有这么多" —— 本模块整套在防的正是这个。
+            if len(ev_lines) > 6:
+                L.append(f"  （原文还有 {len(ev_lines) - 6} 行，这里只显示前 6 行）")
+            if g.get("evidenceTruncated"):
+                L.append("  （这段判据入库时被截过，**不是脚本原文的全部**）")
         if g.get("fix"):
             L.append(f"- 建议改成：{g['fix']}")
         L.append("")

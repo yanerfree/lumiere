@@ -138,13 +138,16 @@ Q2-H 已经据此定了分片方案，但要看清余量：主爬 5–7 分钟 =
 **离 600s 只剩 30% 余量**。S7.8 的分片是「能不能跑起来」的前提，不是优化；
 真跑超了**不许调 `job_timeout`**（那会一起放松 git_sync 和 execution 的超时），
 只能再切细。
-⚠ **S0.1 实测把这条从"Epic 7 的事"变成了"Epic 2 的事"**：域评审自己就已经在射程内。
-单批墙钟实测 **237 – 404s**；`BATCH_CONCURRENCY = 3` 时 6 批要跑两波，
-两波之和轻易过 600s。而 Epic 2 要把 `max_tokens` 从 2400 提到 10000，
-**输出变长 ⇒ 单批更慢**，这个 600 会先于任何别的东西撞上。
-撞上的表现是**整个域的评审直接没了**（job 被杀），不是"慢一点"。
-⇒ Epic 2 的 AC 里必须带一条：提 `max_tokens` 的同一批改动里，
-要么把域评审也分片，要么先量一趟提上限之后的单批墙钟。
+⚠ **勘误：这条只管 Epic 7 的爬虫，管不到域评审。**
+本文一度写成「S0.1 把这条从 Epic 7 的事变成了 Epic 2 的事」—— 错的。
+域评审走 `qa_catalog_review.spawn()` 的 `asyncio.create_task`，**跑在 API 进程内**，
+不经过 arq；`engine/worker.py::functions` 只有 `run_git_sync` / `run_automated_execution`。
+Epic 2 真正会撞的是**能力位的 `timeout_seconds`（现值 120s，只管网关主路）** ——
+S0.1 那个 237–404s 是走 claude-proxy 量的（`_PROXY_TIMEOUT = 600` 写死在模块里）。
+⇒ Epic 2 的 AC 仍然必须带一条，但内容换成：
+**③ 提 `max_tokens` 和 ④ 提 `timeout_seconds` 必须同一批落地** ——
+只做 ③ 会让 6 批在主路上整整齐齐全在 120.1s 超时，各批耗时相近 ⇒ 一起挂
+⇒ `if not good: raise` ⇒ 整个域的评审直接没了。**比现状更差。**
 
 **C-3 · 两套 `tests/`，且根目录那套要独占 `DATABASE_URL`。**
 Epic 6/7 加迁移和新表 ⇒ **必须跑根目录那套**（打真接口）。

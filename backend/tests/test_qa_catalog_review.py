@@ -282,11 +282,73 @@ class TestParseResult:
 
         assert out["catalogGaps"][0]["problem"] == "缺删除后越权"
 
-    def test_每一项最多留六条(self):
-        gaps = ",".join(f'{{"id":"A-{i}"}}' for i in range(20))
+    # ── Epic 2 #1：**替换**了原来的 test_每一项最多留六条 ──
+    # 那条没写错，它忠实封样了当时的行为；本次改的就是那个行为。
+    # 原行为：`_rows` 的 `[:6]` + 提示词里「每一项最多 6 条」两处一起把结论砍在 6 条。
+    # 实测（去掉提示词上限量的那一趟）一个批次能出 104 条，`[:6]` 静默扔掉 30%，
+    # 而页面只显示剩下的 —— 看起来就像"这个域只有这么多问题"。
+    def test_一批三十条结论一条都不许丢(self):
+        gaps = ",".join(f'{{"id":"A-{i}"}}' for i in range(30))
         out = qr.parse_result('{"verdict":"bad","scriptGaps":[' + gaps + ']}')
 
-        assert len(out["scriptGaps"]) == 6
+        assert len(out["scriptGaps"]) == 30
+        # 顺序也不许动：severity 排序是 merge_results 的事，parse 这层原样往下传
+        assert [g["id"] for g in out["scriptGaps"]] == [f"A-{i}" for i in range(30)]
+
+    # ── ★#2 ──
+    def test_提示词里不许再有条数上限(self):
+        """删了 `[:6]` 却留着提示词那句 = 模型仍然只写 6 条，代码这层白改。
+
+        **写窄一点**：`brief` 里那句「points 最多 3 条」是有意的（那一段是给人
+        三十秒扫一眼的结论，不是清单），别一起误伤。
+        """
+        assert "每一项最多" not in qr._SYSTEM
+        # 反过来兜一下：真正该留的那条还在，说明上面那句断言不是靠"整段没了"过的
+        assert "brief" in qr._SYSTEM
+
+    # ── #3：只盯 _rows 这一处切片，别对整个文件扫 ──
+    def test_rows里不许再有条数切片(self):
+        """⚠ 这条**必须写窄**，否则要么永远红要么删错东西。
+
+        `qa_catalog_review.py` 里有三处 `[:6]`，只有 `_rows` 里那个是目标：
+        `env_gaps` 的 `srcs[:6]`（每个变量留几条引用位置）和 markdown 里的
+        `splitlines()[:6]`（evidence 显示几行）**都该留**。
+        所以只看 `parse_result`（`_rows` 嵌在它里面），不是整个文件。
+
+        ⚠ 而且**看的是 AST 不是源码字符串**：第一版写成 `"[:6]" not in src`，
+        当场红了 —— 红在 `_rows` 里那句解释"上一版这里是 `[:6]`"的注释上。
+        注释里提一句被删掉的写法是正常的（不写反而没人知道为什么删），
+        所以判据不能是"源码里不出现这四个字符"。
+        顺带：`[:600]`（单字段长度）该留，AST 判法天然不会误伤它。
+        """
+        import ast
+        import inspect
+        import textwrap
+        tree = ast.parse(textwrap.dedent(inspect.getsource(qr.parse_result)))
+        rows = [n for n in ast.walk(tree)
+                if isinstance(n, ast.FunctionDef) and n.name == "_rows"]
+        assert len(rows) == 1, "_rows 没了或改名了 —— 这条测试得跟着改"
+
+        caps = [n for n in ast.walk(rows[0])
+                if isinstance(n, ast.Slice) and isinstance(n.upper, ast.Constant)
+                and n.upper.value == 6]
+        assert not caps, "_rows 里又出现了 [:6] 条数封顶"
+        # 兜一下：单字段截断还在，说明上面那句不是靠"整个函数没了"过的
+        assert any(isinstance(n, ast.Slice) and isinstance(n.upper, ast.Constant)
+                   and n.upper.value == 600 for n in ast.walk(rows[0]))
+
+    # ── #E：§9 E 条。Epic 0 之前写不出来，因为那个数当时还不存在 ──
+    def test_MAX_OUTPUT_TOKENS装得下实测最多的那一批(self):
+        """对标 test_单份上限装得下实测最大的脚本。
+
+        实测最大 6386 output token（2026-08-28，MCP 域两轮 × 6 批）。
+        留 1.5 倍余量：这套评审**本来就不确定**（`_NO_SAMPLING_PARAMS` 摘掉了
+        `temperature=0`），同一个域两趟写的长度不一样，按观测最大值贴边定必然常态截断。
+        谁重新量了要改 `MEASURED_MAX_OUTPUT_TOKENS`，这条会逼他把上限一起改。
+        """
+        assert qr.MAX_OUTPUT_TOKENS >= qr.MEASURED_MAX_OUTPUT_TOKENS * 1.5
+        # 也别虚高到没意义 —— 上限本身还要受 MIN_TIMEOUT_SECONDS 的墙钟约束
+        assert qr.MAX_OUTPUT_TOKENS <= qr.MEASURED_MAX_OUTPUT_TOKENS * 3
 
 
 class TestCollect:
@@ -879,7 +941,7 @@ class TestBatchCompleteness:
 
     # ── #4 ──
     def test_满额那批标truncated(self):
-        r = self._resp(finish_reason="length", completion_tokens=qr._BATCH_MAX_TOKENS)
+        r = self._resp(finish_reason="length", completion_tokens=qr.MAX_OUTPUT_TOKENS)
         assert qr.batch_completeness(r) == "truncated"
 
     def test_anthropic协议那个词也认(self):
@@ -889,7 +951,7 @@ class TestBatchCompleteness:
     # ── #5 ──
     def test_结束原因说正常但token顶格也算没写完(self):
         # 只信 finish_reason 会漏：有的通道顶格了照样回 stop
-        r = self._resp(finish_reason="stop", completion_tokens=qr._BATCH_MAX_TOKENS)
+        r = self._resp(finish_reason="stop", completion_tokens=qr.MAX_OUTPUT_TOKENS)
         assert qr.batch_completeness(r) == "truncated"
 
     def test_没顶格且结束原因正常才算写完(self):
@@ -907,7 +969,7 @@ class TestBatchCompleteness:
     def test_只报了一项就用那一项判(self):
         # 通道只报 token 不报结束原因：能判，别退化成 unknown
         r = self._resp(reported=frozenset({"completion_tokens"}), finish_reason="stop",
-                       completion_tokens=qr._BATCH_MAX_TOKENS)
+                       completion_tokens=qr.MAX_OUTPUT_TOKENS)
         assert qr.batch_completeness(r) == "truncated"
 
     def test_默认构造的响应是说不清(self):
@@ -1007,3 +1069,251 @@ class TestScriptsBatchedRendering:
         md = self._md(cov)
         assert "全读了" not in md and "全进了模型" not in md
         assert "这一版口径没记" in md
+
+
+class TestLooseGapKey:
+    """S2.2：`scriptGaps` 的跨批去重键不再截 60 字。
+
+    截 60 字防不住什么 —— 每份脚本只出现在**一个**批里，跨批撞车本来就不成立；
+    它能干的只有一件事：把同一份脚本上**两条不同的毛病**合成一条，
+    因为技术描述的开头 60 字很容易一样（"断言只检查了 HTTP 状态码，没有…"）。
+    合掉的那条在页面上不留任何痕迹 —— 又是一次「少了看起来像没有」。
+    """
+
+    # 得比 60 个字符长，否则两条的键在截断后就不相同了，这条测试等于什么都没测。
+    # （第一版写了 35 个字符，下面那句前提断言当场拦住 —— 断言前提这件事就是干这个用的。）
+    HEAD = ("断言只检查了返回码是不是 200，没有读回创建出来的那条记录去核对字段，"
+            "也没有在失败分支上做任何检查，等于只验了这个接口没有崩掉")
+
+    def _gap(self, tail):
+        return {"id": "MCP-01", "path": "t.sh", "scenario": "MCP-01",
+                "problem": self.HEAD + tail, "why": "", "severity": "major",
+                "blame": "script"}
+
+    def test_前六十字相同的两条scriptGaps都要在(self):
+        assert len(self.HEAD) >= 60, "前提：公共前缀得比截断位置长，否则这条测不到东西"
+        part = {"verdict": "bad", "summary": "", "brief": {},
+                "scriptGaps": [self._gap("；名称没核"), self._gap("；配额没核")],
+                "catalogGaps": [], "nextUp": []}
+
+        merged = qr.merge_results([part])
+
+        assert len(merged["scriptGaps"]) == 2, "截 60 字的旧键会把这两条合成一条"
+
+    def test_一模一样的两条还是只留一条(self):
+        # 放宽 ≠ 不去重。模型在同一批里把同一条写两遍，那个仍然只该留一条
+        part = {"verdict": "bad", "summary": "", "brief": {},
+                "scriptGaps": [self._gap("；名称没核"), self._gap("；名称没核")],
+                "catalogGaps": [], "nextUp": []}
+
+        assert len(qr.merge_results([part])["scriptGaps"]) == 1
+
+    def test_catalogGaps保持原来的严格去重(self):
+        """域级的那两项每批都会各说一遍，去重是真要干活的 —— 本 story 不动它。
+
+        ⚠ 但别把这条读成"catalogGaps 的去重是好的"：副-A 实测跨批去重
+        **一条都没去掉**（键后两段是自由文本，换个措辞就是新键）。
+        那是 Epic 9 的事。这条只锁住「S2.2 没有顺手把它一起放宽」。
+        """
+        g = {"scenario": "MCP-07", "problem": "清单说已覆盖，实际只有冒烟", "why": "同上"}
+        parts = [{"verdict": "ok", "summary": "", "brief": {}, "scriptGaps": [],
+                  "catalogGaps": [dict(g)], "nextUp": []} for _ in range(3)]
+
+        assert len(qr.merge_results(parts)["catalogGaps"]) == 1
+
+
+class TestEvidenceClip:
+    """S2.3：`evidence` 是要拿回原文比对的，从行中间切断 = 回验必然判 partial。
+
+    **这条必须排在 Epic 3 之前。** 否则回验一上线就冒一片假 partial，
+    而第一反应会是"回验不准"然后去放松回验 —— 修错地方，
+    并且放松之后真的假 evidence 也一起放过去了。
+    """
+
+    LINES = [f'assert_status {i} 200 # {"x" * 28}' for i in range(30)]
+
+    def _parse(self, ev):
+        import json
+        body = json.dumps({"verdict": "bad",
+                           "scriptGaps": [{"id": "A", "evidence": ev}]},
+                          ensure_ascii=False)
+        return qr.parse_result(body)["scriptGaps"][0]
+
+    def test_截完仍然是完整的行(self):
+        ev = "\n".join(self.LINES)
+        assert len(ev) > 600, "前提：得真的超了才截"
+
+        row = self._parse(ev)
+
+        got = row["evidence"].split("\n")
+        assert got, "不许截成空"
+        assert all(g in self.LINES for g in got), "有半行 —— 那半行在原文里找不到"
+        assert row["evidenceTruncated"] == "1", "截了就得说截了"
+
+    def test_没超就不截也不标(self):
+        ev = "\n".join(self.LINES[:3])
+
+        row = self._parse(ev)
+
+        assert row["evidence"] == ev
+        assert "evidenceTruncated" not in row
+
+    def test_第一行自己就超长时硬切但仍然标出来(self):
+        """截不出行边界的唯一情况。硬切没办法，但**不许闷声硬切** ——
+
+        标了 `evidenceTruncated`，回验才知道这条本来就不完整，
+        不会把"对不上"赖到脚本头上。
+        """
+        row = self._parse("z" * 800)
+
+        assert len(row["evidence"]) == 600
+        assert row["evidenceTruncated"] == "1"
+
+    def test_别的字段照旧按字符截(self):
+        # 按行截只对 evidence 特殊处理，problem 这些仍是 600 字符
+        import json
+        body = json.dumps({"verdict": "bad",
+                           "scriptGaps": [{"id": "A", "problem": "。" * 900}]},
+                          ensure_ascii=False)
+
+        row = qr.parse_result(body)["scriptGaps"][0]
+
+        assert len(row["problem"]) == 600
+        assert "evidenceTruncated" not in row
+
+
+class TestTimeoutBudget:
+    """④ 是这四处改动里唯一不在代码里的那处 —— 所以把它**搬进代码**。
+
+    只做 ③（提 max_tokens）不做 ④（提超时）的后果不是慢一点：
+    各批耗时相近 ⇒ 6 批一起卡在默认的 120s ⇒ `if not good: raise`
+    ⇒ 整个域的评审直接没了，**比不改还差**。
+
+    ⚠ 落法换过一次，记在这里省得下次又绕一圈：
+    第一版写成开跑前查一下服务配置里的超时、配小了就报错让人去页面改。
+    两个问题 ——
+    ① **页面上没有那个输入框**：超时在「AI 服务配置」的服务上，
+       能力位只管选模型（`ai_capability_bindings` 表里压根没有 timeout 列）。
+       一句照着做不了的报错，比不报错更糟。
+    ② 就算改对了地方，那个数是**全平台共用**的：为这一个功能拧到 1020，
+       别处每一个卡死的 AI 请求都要多等十五分钟才报错。
+    所以改成本模块**自己带超时**下去，公共那个 120 一个字不动。
+    """
+
+    def test_这一批自己带足够长的超时(self):
+        """真正的判据：`complete()` 收到的 timeout 装得下一批 10000 token。
+
+        不去断言 DB 里配了多少 —— 那个数现在跟这件事无关了。
+        """
+        import inspect
+        src = inspect.getsource(qr.run_review)
+        assert "timeout=MIN_TIMEOUT_SECONDS" in src, \
+            "run_review 没把自己的超时传下去 ⇒ 又回到吃全局那个 120 的老路"
+
+    def test_门槛得跟实测墙钟对得上(self):
+        # 实测最慢单批 404s。门槛贴着实测定，不是拍的；
+        # 谁把 MIN_TIMEOUT_SECONDS 调小到装不下实测，这条替他红一次。
+        assert qr.MIN_TIMEOUT_SECONDS >= 404 * 2
+
+    @staticmethod
+    def _need_seconds():
+        """按实测折算：写满 `MAX_OUTPUT_TOKENS` 要多少秒。"""
+        rate = qr.MEASURED_MAX_OUTPUT_TOKENS / 404          # 实测出字速度 ≈16 token/s
+        return qr.MAX_OUTPUT_TOKENS / rate
+
+    def test_两个数必须一起改(self):
+        """`MAX_OUTPUT_TOKENS` 和 `MIN_TIMEOUT_SECONDS` 是连体的。
+
+        按实测的 6386 token / 404s 折算，约 16 token/s。谁把 token 上限翻倍
+        却不动超时，这条会红 —— 红在"写得完吗"上，而不是等上线那天六批一起超时。
+        """
+        need = self._need_seconds()
+        assert qr.MIN_TIMEOUT_SECONDS >= need, \
+            f"准写 {qr.MAX_OUTPUT_TOKENS} token 得给 {need:.0f}s，现在只给 {qr.MIN_TIMEOUT_SECONDS}s"
+
+    def test_限流降级那一跳也得装得下(self):
+        """④ 有两条腿，主路和 429 兜底，**只放宽主路等于只做了一半**。
+
+        实测那批 237–404s 就是**走 claude-proxy 量的**，也就是说最慢的样本恰恰
+        出在兜底这条腿上。而降级只在网关限流时发生 —— 平时跑得好好的，
+        一到忙时段整批挂掉，日志里还只写"超时"，最难查的那种。
+        """
+        from app.services.ai import llm_client
+
+        need = self._need_seconds()
+        assert llm_client._proxy_timeout(qr.MIN_TIMEOUT_SECONDS) >= need, \
+            f"兜底只给 {llm_client._proxy_timeout(qr.MIN_TIMEOUT_SECONDS):.0f}s，装不下 {need:.0f}s"
+
+    def test_没人要求就还是原来那个兜底值(self):
+        """`_PROXY_TIMEOUT` 是下限：没人带超时、或带得比它短，都维持 600。"""
+        from app.services.ai import llm_client
+
+        assert llm_client._proxy_timeout() == 600.0
+        assert llm_client._proxy_timeout(None) == 600.0
+        assert llm_client._proxy_timeout(120) == 600.0      # 主路默认值不该把兜底缩短
+        assert llm_client._proxy_timeout(1020) == 1020.0
+        assert llm_client._proxy_timeout(True) == 600.0     # bool 是 int 的子类，别当秒数
+
+    def test_没人带超时的时候别改变原来的行为(self):
+        """加的是**可选**参数。别的调用方（用例生成、评审、体检）一个都不该被影响。"""
+        from app.services.ai import llm_client
+
+        class _Cfg:
+            timeout_seconds = 120
+
+        assert llm_client._get_timeout(config=_Cfg()) == 120
+        assert llm_client._get_timeout(config=_Cfg(), override=None) == 120
+        assert llm_client._get_timeout(config=_Cfg(), override=1020) == 1020
+        # 认不出来的 override 一律当没传，别猜
+        assert llm_client._get_timeout(config=_Cfg(), override=0) == 120
+        assert llm_client._get_timeout(config=_Cfg(), override="1020") == 120
+        assert llm_client._get_timeout(config=_Cfg(), override=True) == 120
+
+
+class TestEvidenceDisclosure:
+    """截了就得在页面上说 —— 存了 `evidenceTruncated` 却不渲染，等于没存。
+
+    markdown 里有**两处**会让 evidence 变短：入库时的 600 字符（S2.3 已改成按行截），
+    和渲染时的 `splitlines()[:6]`。后者按本文是**该留**的（那是显示长度，不是额度），
+    但留着不等于可以不说 —— 读的人拿这段去 grep 发现"就这么点"，
+    会把「我只给你看了一部分」读成「它就只有这么多」。
+    """
+
+    def _md(self, gap):
+        from datetime import datetime, timezone
+
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="MCP", domain_name="MCP 能力", status="done",
+            environment_name="uag-138:3000", commit_sha="dae9b4fc4150",
+            branch="main", actor="admin", scenario_count=1, script_count=1,
+            result={"verdict": "bad", "summary": "s", "brief": {},
+                    "scriptGaps": [gap], "catalogGaps": [], "nextUp": [],
+                    "envMissing": [], "reviewedScripts": [], "scenarioCount": 1},
+        )
+        r.created_at = datetime(2026, 8, 29, 10, 0, tzinfo=timezone.utc)
+        return qr.to_markdown(r)
+
+    def test_原文超过六行要说还有多少行(self):
+        md = self._md({"id": "A", "scenario": "MCP-01", "problem": "p",
+                       "evidence": "\n".join(f"line{i}" for i in range(10))})
+
+        assert "还有 4 行" in md
+
+    def test_正好六行不说废话(self):
+        md = self._md({"id": "A", "scenario": "MCP-01", "problem": "p",
+                       "evidence": "\n".join(f"line{i}" for i in range(6))})
+
+        assert "还有" not in md
+
+    def test_入库截过要单独说一句(self):
+        md = self._md({"id": "A", "scenario": "MCP-01", "problem": "p",
+                       "evidence": "line0", "evidenceTruncated": "1"})
+
+        assert "入库时被截过" in md
+
+    def test_没截过就一句都不多说(self):
+        md = self._md({"id": "A", "scenario": "MCP-01", "problem": "p",
+                       "evidence": "line0"})
+
+        assert "入库时被截过" not in md

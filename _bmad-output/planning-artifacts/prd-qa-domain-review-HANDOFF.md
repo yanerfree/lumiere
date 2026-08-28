@@ -586,7 +586,7 @@ bash deploy/restart-backend.sh
 
 ## 10. 勘误（写于本文之后，**与正文冲突时以本节为准**）
 
-本文写在动代码之前。后面走 BMAD 的架构决策和 Epic 0 实测，推翻了正文里的五处。
+本文写在动代码之前。后面走 BMAD 的架构决策、Epic 0 实测和 Epic 1/2 落地，推翻了正文里的七处。
 **按正文原样照做会踩坑的，全在这儿。**
 
 ### 10.1 §4「洞四」的定性错了：机制是真的，「线上正在谎报」不成立
@@ -654,6 +654,46 @@ M2 一并解除 §7 Q2-G 那条 ⚠，并让 §9 第 30 条测试从「只能断
 - **光把 endpoint 旁路到 claude-proxy 不够**：`_get_timeout()` 取的是能力位的
   `timeout_seconds`（现值 120s），而 proxy 正常走的是模块里写死的 `_PROXY_TIMEOUT = 600`。
   只换 endpoint 不换 timeout ⇒ **6 批整整齐齐全在 120.1s 超时**。
+
+### 10.6 §5「能力位 `timeout_seconds`」这个东西**不存在**（Epic 2 落地时查证）
+
+正文有四处这么写：line 152/153、line 159 的第 3 条、line 251 的 Epic 2 一行、
+line 654–655。**能力位上没有超时**：`ai_capability_bindings` 表只有
+`key/label/category/model/module_keys/sort_order` —— 它**只管选模型**。
+超时在 `ai_provider_configs.timeout_seconds`（「AI 服务配置」里的**服务**那一层），
+`resolve_ai_config()` 从服务上取，跟 `capability=` 参数无关。
+
+所以正文第 3 条那句「这是 DB 配置改动，要写进上线步骤」照做会卡住：
+去能力位页面找不到那个输入框。而**改对了地方也不该改** —— 现网
+系统默认「公司网关-Opus」`timeout_seconds = 120`，用例生成 / 六维评审 / 模块体检
+全走它，为域评审拧到 1020 等于让每一个卡死的 AI 请求都多等十五分钟才报错。
+
+**已落的做法**：`llm_client.complete()` 加可选 `timeout` 参数（不传 = 原样走服务配置，
+别的调用方零影响），`run_review` 自己传 `MIN_TIMEOUT_SECONDS = 1020`。
+④ 于是从一条上线步骤变成代码里的常量，**上线步骤这条整个没了**。
+正文 line 161「不要为此上流式」仍然成立，理由不变。
+
+⚠ 补一条落地时才发现的：**④ 有两条腿**。主路之外还有 429 降级到 claude-proxy 的
+那一跳，它写死 `_PROXY_TIMEOUT = 600s`，而写满 10000 token 按实测要 ~633s ——
+只放宽主路，长请求会「平时好好的、一到限流时段整批挂」。
+已把 `_PROXY_TIMEOUT` 改成**下限**（`max(600, 调用方要的)`）。
+细节和为什么这条最难查，记在 epics 文档的 E2-5。
+
+### 10.7 §Q2-H / §附录表里的 `job_timeout = 600` 对这个模块不适用
+
+正文 line 460 写「硬约束：`worker.py:18` 的 `job_timeout = 600`（我核过）」，
+line 508 的文件表里也照抄了一遍「⇒ 分片」。**域评审根本不过 arq。**
+`app/api/qa_catalog.py` 的 `spawn()` 是一个裸 `asyncio.create_task`，跑在 API 进程里；
+`app/engine/worker.py` 的 `functions = [run_git_sync, run_automated_execution]`
+两个都不是它。所以 600 秒这个数**不构成域评审的墙钟约束**，别照它推分片。
+
+⚠ 但正文那两处不是全错 —— **Epic 7 的爬虫要是走 arq，那 600 秒对它就是真的**。
+这条只否掉"域评审受它约束"，没否掉 Q2-H 对爬虫的分片结论。
+
+⚠ 另一件顺带查出来的、**本次不修**的事：`asyncio.create_task` 起的活
+会被后端重启直接杀掉，而 `finish()` 只在异常分支里跑 ——
+**一次重启就能让一条评审永远卡在 `running`，没有任何东西会去收尸。**
+（记在 epics 文档 Epic 1 的 S0.1 结论三里，明确划在 Epic 2 范围外。）
 
 另：本次新增的实施就绪偏差 **B-1 ~ B-5** 与三条环境约束 **C-1 ~ C-3**
 写在 `implementation-readiness-qa-domain-review.md`，**开工前那份要连着这份一起读**。

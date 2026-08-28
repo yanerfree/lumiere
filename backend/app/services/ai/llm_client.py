@@ -33,6 +33,9 @@ _BACKOFF_BASE = 1.8
 _BACKOFF_CAP = 30.0
 # 降级通道专用超时：proxy 每次要冷启真 CLI（实测非流式 ~36s），大 prompt 更久，
 # 沿用主路的 ai_timeout_seconds(默认120) 会把兜底也拖超时，等于没兜底。
+# ⚠ 这是**下限不是定值**：调用方自己带了更长的 timeout，兜底这一跳得跟着放宽。
+# 否则出现一种很难查的偏科 —— 主路给够了时间，一被限流降级就卡死在 600s。
+# 而降级恰恰发生在网关最忙的时候，也就是**最慢的那些请求**上。
 _PROXY_TIMEOUT = 600.0
 
 
@@ -223,7 +226,29 @@ def _get_extra_headers(*, config=None) -> dict[str, str]:
     return {"content-type": "application/json"}
 
 
-def _get_timeout(*, config=None) -> int:
+def _proxy_timeout(requested: float | None = None) -> float:
+    """降级那一跳等多久：`_PROXY_TIMEOUT` 打底，调用方要得更长就听它的。
+
+    别写成"降级就用 600" —— 那样**提高 max_tokens 的人只改对了一半**：
+    主路放宽了、兜底没有，于是长请求在正常时段跑得通、一限流就整批挂掉。
+    """
+    if isinstance(requested, (int, float)) and not isinstance(requested, bool):
+        return max(_PROXY_TIMEOUT, float(requested))
+    return _PROXY_TIMEOUT
+
+
+def _get_timeout(*, config=None, override: int | None = None) -> int:
+    """这次调用等多久。`override` 是**调用方按自己这一次的形状**要的秒数。
+
+    默认那条路（服务配置里的 `timeout_seconds`，现值 120）是**全平台共用**的：
+    改大它，用例生成、评审、体检全都跟着变成十几分钟才超时 —— 一个卡死的请求
+    从"两分钟后报错"变成"十七分钟没反应"。所以**一次调用要更长，就自己带过来**，
+    别去把公共的那个数拧大。
+    """
+    # bool 是 int 的子类：`override=True` 会一路走到 httpx，变成**1 秒**超时 ——
+    # 比不传更坏，因为它看起来像"传了"。认不出来的一律当没传。
+    if isinstance(override, int) and not isinstance(override, bool) and override > 0:
+        return override
     return config.timeout_seconds if config else settings.ai_timeout_seconds
 
 
@@ -238,8 +263,13 @@ async def _post_with_retry(
     headers: dict,
     *,
     provider: str,
+    timeout: float | None = None,
 ) -> httpx.Response:
-    """POST + 限流退避重试 + 429 耗尽后降级到 claude-proxy CLI 通道。返回 200 响应或抛 LLMError。"""
+    """POST + 限流退避重试 + 429 耗尽后降级到 claude-proxy CLI 通道。返回 200 响应或抛 LLMError。
+
+    `timeout` 是调用方为**这一次**要的秒数（主路已经设在 client 上了，这里只用来
+    决定降级那一跳给多久）—— 见 `_proxy_timeout()`。
+    """
     last: httpx.Response | None = None
     for attempt in range(_MAX_ATTEMPTS):
         resp = await client.post(endpoint, json=body, headers=headers)
@@ -275,7 +305,8 @@ async def _post_with_retry(
         fb = _proxy_endpoint()
         if _has_proxy_channel(endpoint, provider):
             logger.warning("网关限流，降级到 CLI 通道: %s", fb)
-            resp = await client.post(fb, json=body, headers=headers, timeout=_PROXY_TIMEOUT)
+            resp = await client.post(
+                fb, json=body, headers=headers, timeout=_proxy_timeout(timeout))
             if resp.status_code == 200:
                 return resp
             last = resp
@@ -292,6 +323,7 @@ async def complete(
     max_tokens: int | None = None,
     temperature: float | None = None,
     config=None,
+    timeout: int | None = None,
 ) -> LLMResponse:
     provider = _get_provider(config=config)
     if provider == "anthropic":
@@ -303,8 +335,11 @@ async def complete(
     endpoint = _get_endpoint(config=config)
     prompt_chars = sum(len(m.get("content") or "") for m in messages)
 
-    async with httpx.AsyncClient(timeout=_get_timeout(config=config)) as client:
-        resp = await _post_with_retry(client, endpoint, body, headers, provider=provider)
+    resolved_timeout = _get_timeout(config=config, override=timeout)
+    async with httpx.AsyncClient(timeout=resolved_timeout) as client:
+        resp = await _post_with_retry(
+            client, endpoint, body, headers,
+            provider=provider, timeout=resolved_timeout)
         data = resp.json()
 
     if provider == "anthropic":
