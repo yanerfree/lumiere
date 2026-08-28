@@ -161,6 +161,28 @@ def anchor_selector(*, testid: str = "", elem_id: str = "", text: str = "") -> s
     return ""
 
 
+def selector_of_item(*, anchor: str = "", anchor_kind: str = "") -> str:
+    """把 survey 里存下来的一行**还原**成选择器字面量。
+
+    爬取存的是 `anchor`（testid / id / 文案的**原值**）+ `anchor_kind`，不是拼好的
+    选择器 —— key 要拿原值去对齐两趟，拼好的串太长也不好看。S6.5 要把它登记进
+    选择器表，那就得再拼一次，而这里**必须走 `anchor_selector`**，不许照着
+    `f'[data-testid="{anchor}"]'` 另写一遍：写第二遍就是第二套词表，
+    登记表的 `kind` 和 survey 的 `anchor_kind` 一旦对不上，
+    「爬到的与登记不符」那条待整改就永远报不准（S6.4 已经为这件事提过一次公共函数）。
+
+    认不出的 kind 返回 `""` —— **不猜**。上游拿空串登记不成 `active`
+    （`upsert_selectors` 硬拦空选择器），只能落 `gap`，这个方向是对的。
+    """
+    if anchor_kind == "testid":
+        return anchor_selector(testid=anchor)
+    if anchor_kind == "id":
+        return anchor_selector(elem_id=anchor)
+    if anchor_kind == "text":
+        return anchor_selector(text=anchor)
+    return ""
+
+
 # 定位 API 的字符串参数 —— 只扫这些，普通字符串和注释不算（脚本头的说明里
 # 出现 `.card` 不该被报）。
 _LOCATOR_CALL = re.compile(

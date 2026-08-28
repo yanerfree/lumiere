@@ -708,6 +708,67 @@ S6.4 —— 那条要「同一构建指纹跑两趟 diff 稳定」，本来就�
 已修好）逐个咬住各自的哨兵测试，无一全绿、无一红错人；
 `backend/tests` 1757 全过，根级 528 全过（`lumiere_test_qadr` 独占库）。
 
+**S6.5**：`app/services/qa_survey_byproducts.py`（爬到的锚点 → 登记候选、
+「与登记不符」判定、模块对页面、可操作项成行）+ `ui_selector_render.selector_of_item`
++ `mcp/tools/selectors.py` 加 `source` 与待整改出口 + `services/review/checkup.py`
+的 `observed_actions` 兜底 + `backend/tests/test_qa_survey_byproducts.py`（34 条）、
+根级 `tests/integration/services/test_qa_survey_byproducts.py`（18 条，真库）。
+**六处偏离本文的字面**：
+
+1. **`upsert_selectors` 加一个 `source` 参数，不另写第二个写入口。**
+   本文只说「已有且人工登记过的绝不覆盖」，没说这条信息存在哪。
+   为爬取单开一个写函数的话，人工那条路上任何一次改动（字段、审计、长度限制）
+   都不会同步过来，而**两个写入口写同一张表、走岔了当场不报错** ——
+   下一次发现是选择器替换在脚本里当场失效。现在只有一条路：
+   `_SOURCES = ("manual", "crawl")`，乱填直接拒（`test_乱填_source_直接拒`），
+   `source != "manual" and row.source == "manual"` 时**整行不动**。
+2. **「爬到的与登记不符」是每次 `list_selectors` 现算的，不落库。**
+   落一张表就得有人负责删：人把前端 testid 补好、把登记行改对之后，
+   那条待整改还挂在那儿，除非有人记得回来清。**清不掉的待办等于没有待办** ——
+   两三条陈年僵尸挂着，整个队列就没人看了。现在它跟 `_pending_migration` 同一个
+   路子：条件不成立时下一次调用它自己消失（`test_人改对了这条自己消失`）。
+3. **爬到的比登记的弱时，故意不报**（本文没说方向性）。
+   登记着 testid、这一趟只找到文案，最可能的解释是**这一趟没看清**
+   （渲染时机、当前角色、列表是空的），不是前端把 testid 拿掉了。
+   跟 S6.4 的假 `removed` 是同一条纪律。报出来人会去查一个不存在的改动，
+   查两次这份清单就没人信了。
+4. **待补队列排序改成「有人卡着的排前面」**（本文没提排序）。
+   `lum_next_duty` 那条队列是 `[:limit]` 截断的，而 S6.5 之后爬取会**一次扫出几十条**
+   `status='gap'`。不排序的话，人工登记时写了 `blocked_cases`（真有用例卡在上面）
+   的那几条会被爬取扫出来的挤到窗口外 —— **待办还在库里，但没人再看得见它**，
+   跟删掉的区别只在事后能查。计数照旧是全量，只有顺序变了（`test_有人卡着的排在爬取扫出来的前面` 同时钉住这两半）。
+5. **`MAX_ACTIONS` 截断补了一句正文说明** —— 这是**洞四在这个模块里的第二个实例**。
+   `coverage_gaps` 本来就切 `[:40]`，在「靠 CC 手抄」的年代还算显眼；
+   S6.5 之后它自动从枚举读，一个模块几百个控件很正常，
+   于是「模型只看了前 40 个」变成常态，而正文里一个字都不说。
+   这跟 `scriptsRead` 数读到的份数、模型没看全是**同一个形状的错**。
+   现在超了就在 prompt 里明说共几个、只列了前几个（`test_超过上限要在正文里说清楚`）。
+6. **`selector_of_item` 单拎成函数，和 `anchor_selector` 并排放。**
+   S6.4 已经把「拼选择器」收进 `ui_selector_render`，但 survey 存的是锚点**原值**
+   （`new-btn`），登记表要的是字面量（`[data-testid="new-btn"]`），中间还差一次还原。
+   照着 f-string 在 byproducts 里另拼一遍，就又是两套词表 —— S6.4 偏离 1 防的正是这件事。
+
+**两处被变异清单逼出来的设计缺口**（不是跑挂了，是列变异时发现没有哨兵）：
+
+- **两道守卫互相遮住，于是两道各自都没人测。** `disagreements` 里
+  「kind 不稳的不比」和「这一趟 status 不是 active 的不比」都能挡住
+  `test_爬到的更弱不算不符` 那个输入，把任一道改成 `if False` 全套照绿。
+  加了 `test_这一趟没抓住的不报` 单独钉 status 那一半，
+  `test_status_写着_active_但_kind_不稳的不报` 单独钉 kind 那一半 ——
+  两条都直接构造候选行，不经过 `candidates_from_items`，才隔离得开。
+- **`selector_of_item` 的文案分支从行为上看不见。** 它返回什么，
+  `candidates_from_items` 都会因为 `kind not in _STABLE_KINDS` 把那行落成 `gap`、
+  丢掉选择器 —— 把整个分支删掉，端到端一条测试都不红。
+  改成直接拿 `selector_of_item` 跟 `anchor_selector` 三档逐个对（参数化那条），
+  这才是「一套词表」这句话真正的封样。
+
+**爬虫仍未对 138 真跑过**（要单独批准），所以这两个副产品的端到端证据到
+`save_survey` 落库为止：根级那 18 条走的是真库 —— 真写 survey、真调
+`register_selectors`、真读回登记表，缺的只是「items 从真实浏览器来」这一段。
+
+验证：**35 个变异**逐个咬住各自的哨兵测试，无一全绿、无一红错人；
+`backend/tests` 1791 全过（15.22s），根级 546 全过（383s，`lumiere_test_qadr` 独占库）。
+
 ---
 
 ## Epic 7 — 三方对账
