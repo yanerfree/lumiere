@@ -1,0 +1,114 @@
+---
+version: 0.1
+date: 2026-08-28
+status: ready-with-notes
+feature: qa-domain-review-redo
+relatedPRD: prd-qa-domain-review.md
+relatedHandoff: prd-qa-domain-review-HANDOFF.md
+relatedArch: architecture-qa-domain-review.md
+relatedEpics: epics-qa-domain-review.md
+---
+
+# 实施就绪检查 — QA 对账 · 域级 AI 评审（重做）
+
+**这一步不是签字仪式，是把 epics 里引用的每个文件、行号、符号真去核一遍。**
+理由很具体：HANDOFF §6 引用的前端行号已经漂了（`AXES` 142→147、rollup 1236→1252），
+而**一份行号错了的交接文档，会让接手的人在错的地方读代码，然后得出错的结论** ——
+这跟本模块要治的病是同一个。
+
+结论：**可以开工**。下面是核出来的东西，分三类。
+
+---
+
+## A. 核过属实（不再复核，直接照用）
+
+`backend/app/services/qa_catalog_review.py`：
+
+| 符号 / 常量 | 行 | 用在哪个 story |
+|---|---|---|
+| `MAX_SCENARIOS = 200` / `MAX_SCRIPTS = 60` / `MAX_SCRIPT_BYTES = 18_000` | 53–55 | 背景 |
+| `BATCH_SCRIPT_BYTES = 90_000` / `MAX_BATCHES = 8` | 57–58 | S0.3 / S1.2 |
+| `_DYNAMIC_SUFFIX_RE` | 95 | S5.2 ①（被同一个原因咬过一次的那处注释） |
+| `parse_result` / `_rows` | 440 / 458 | S2.1 ① |
+| `_rows` 里 `[:6]` | 460 | S2.1 ①（**唯一的目标**，见 B-2） |
+| `_rows` 里 `str(v)[:600]` | 462 | S2.3 |
+| `split_batches` | 555 | S1.2 |
+| `_SEV_RANK` | 577 | S3.4（降 severity 会污染它） |
+| `_gap_key` | 581 | S2.2 |
+| `_merge_payload` | 632 | S3.5 ① |
+| `"scriptsRead": len(scripts)` / `"batches"` | 736 / 738 | **洞四根因** |
+| `DIM_SPEC = 2` / `DIM_SINCE` | 806 / 809 | S8.3 |
+| `dim_rollup` | 814 | S10.1 |
+| `to_dict` | 1106 | S10.1 |
+| 提示词「每一项最多 6 条」 | 335 | S2.1 ② |
+| 提示词「`points` 最多 3 条」 | 618 | S2.1 ②**的误伤对象，别删** |
+
+`backend/tests/test_qa_catalog_review.py`：
+`test_每一项最多留六条`@**285**（S2.1 要**替换**它）、
+`test_单份上限装得下实测最大的脚本`@**584**（#E 的对标写法）。
+
+复用点全部存在：`branch_diff_service.normalize_path`@54、
+`ui_selector_render.infer_kind`@125、`review/checkup.py` 的 `observed_actions`@146/159
+（**现有 `[:40]` 上限确认在 159 行** —— S6.5 要替掉的正是这个手抄上限）、
+`qa_catalog.py::_DOMAIN_RE`@44、`engine/worker.py::functions`@15（`job_timeout = 600`@18）、
+`engine/pw_conftest.py`、`engine/har.py`。
+
+`api/qa_catalog.py` 的 `to_dict` 五个调用点：**218 / 230 / 251 / 280 / 298**，
+其中 **`:251` 确认是列表**（`[to_dict(r) for r in rows]`）—— S10.1 的「默认关」是对的。
+
+`QaCatalog.jsx`：`AXES`@**147**、`DIM_KEYS`@**164**、`DIM_SINCE`@**169**、`dimRollup`@**175**。
+
+---
+
+## B. 核出来的偏差（已改进 epics，记在这里防回退）
+
+**B-1 · `to_markdown` 两处行号 HANDOFF 说的是 933/1089，实际是 934/1088。**
+顺带发现 **`:1082` 已经在做 `scriptsTotal > scriptsRead` 的条件渲染** ——
+也就是说同一个病，`split_batches` 这一半漏了、`MAX_SCRIPTS` 那一半治对了。
+**S1.2 照 `:1082` 的写法抄就行，不用自己设计。**
+（这条本身是个提示：洞四不是没人想过，是想过一半。）
+
+**B-2 · 封样测试 #3「扫源码不许再有 `[:6]`」按字面写会出错。**
+文件里有**三处** `[:6]`：
+- `:460` `for x in (data.get(key) or [])[:6]` —— **结论条数上限，是目标**
+- `:252` `hits[name] = srcs[:6]` —— env_gaps 每个变量留几条引用位置，**该留**
+- `:1026` `str(g["evidence"]).splitlines()[:6]` —— markdown 里 evidence 显示几行，**该留**
+
+按字面做整文件子串扫描，结果只有两种：永远红，或者有人为了让它绿把后两处也删了。
+**#3 必须断言 `_rows` 函数体内不再有切片。**
+HANDOFF 已经给 #2 写了「写窄一点别误伤」，#3 漏了同一句 —— 现在补上了。
+
+**B-3 · `nextUp` 的爆破半径 HANDOFF 说 5 处，实际 9 处。**
+关键差别在 MCP 那边是**三处而不是一处**：
+`mcp/tools/qa_catalog.py:44`（工具描述）、**`:135`（真正的 payload）**、
+`mcp/__init__.py:886`（工具描述）。
+**只改两处描述不改 `:135` 的 payload，等于没改，而且看起来像改了。**
+
+---
+
+## C. 开工前必须知道的三个约束（不是缺陷，是环境事实）
+
+**C-1 · worktree 里没有 `.venv`。**
+`.claude/worktrees/qa-domain-review-impl/backend/.venv` 不存在（venv 不受 git 跟踪）。
+跑测试和临时脚本用主检出那个解释器：`/home/dreamer/lumiere/backend/.venv/bin/python`。
+**Epic 0 的临时脚本 cwd 仍必须是 `backend/`**（否则静默丢 `.env`，429 降级通道消失）——
+这两条合起来意味着：**cwd 用 worktree 的 `backend/`，解释器用主检出的**。
+
+**C-2 · `job_timeout = 600` 是 worker 全局的**，不是每 job 的。
+Q2-H 已经据此定了分片方案，但要看清余量：主爬 5–7 分钟 = 300–420s，
+**离 600s 只剩 30% 余量**。S7.8 的分片是「能不能跑起来」的前提，不是优化；
+真跑超了**不许调 `job_timeout`**（那会一起放松 git_sync 和 execution 的超时），
+只能再切细。
+
+**C-3 · 两套 `tests/`，且根目录那套要独占 `DATABASE_URL`。**
+Epic 6/7 加迁移和新表 ⇒ **必须跑根目录那套**（打真接口）。
+库名用自己的，别用默认 `lumiere_test`（它收尾 `drop_all`，共用会互删表，
+报出来是几十上百条假 red 而代码一行没错）。
+
+---
+
+## 开工顺序
+
+按 epics 文末那张图。**第一件事是 Epic 0**（不落代码，产两个数），
+第一件**落代码**的事是 **S1.2** —— 它修的是唯一一个已经在线上的缺陷，
+且可以单独发。
