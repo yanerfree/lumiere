@@ -71,7 +71,7 @@ async def get_qa_review(
                 "domain": r.domain,
                 "domainName": r.domain_name or "",
                 "status": r.status,
-                # 结论只有三档：ok 都验到了 / risky 部分没验到 / bad 多数没验到
+                # 结论只有三档：ok 认领都算数 / risky 部分认领不算数 / bad 多数认领不算数
                 "verdict": (r.result or {}).get("verdict") if r.result else None,
                 "headline": qr.brief_of(r.result).get("headline") if r.result else None,
                 "scenarioCount": r.scenario_count,

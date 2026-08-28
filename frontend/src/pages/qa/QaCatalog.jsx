@@ -95,20 +95,23 @@ function Hit({ onClick, active, children, style }) {
 
 // AI 评审的结论。措辞对着「这个域的脚本撑不撑得起这个域的清单」说，
 // 不用「通过/不通过」—— 这里没有门禁，说"不通过"会被当成拦了谁的活
-// 词换过两轮，都是同一个毛病：**用一个词概括，读的人就得猜。**
+// 词换过三轮，前两轮同一个毛病（**用一个词概括，读的人就得猜**），第三轮是另一个：
 //   第一版「靠得住 / 有水分 / 撑不住」—— "水"在哪？"撑"的是什么？
 //   第二版「能信 / 信一半 / 不能信」—— 信什么？信一半是哪一半？
-// 问题不在词好不好听，在于**这一栏根本不是一个形容词能装下的东西**。
-// 它答的是一个很具体的问题：*脚本头写了 `@scenario X`，它到底验没验 X？*
-// 所以不概括了，直接把那句话写出来。这三个短语里没有一个字要人再解释一遍。
+//   第三版「都验到了 / 部分没验到 / 多数没验到」—— 意思清楚了，但**没主语**：
+//     同一个抽屉里还写着「一份都没真跑」「第 3 批没读成」，读的人完全有理由把
+//     「部分没验到」读成"你自己只看了一部分"。**结论词除了要不用再解释一遍，
+//     还得让人一眼看出「这句话在说谁」。**
+// 这一栏答的是：*清单说这条场景「已覆盖」，那句认领算不算数？* 主语是认领，不是我。
 const VERDICT = {
-  ok: { text: '都验到了', color: 'success',
-        why: '脚本声明覆盖的场景，读下来都真在验那件事' },
-  risky: { text: '部分没验到', color: 'warning',
-           why: '一部分场景脚本认领了、但没真验：断言太松，或在这个环境里压根没跑' },
-  bad: { text: '多数没验到', color: 'error',
-         why: '认领的那几条主要场景，多数没真验 ——「已覆盖」这一栏当不了数' },
+  ok: { text: '认领都算数', color: 'success',
+        why: '清单里认领了的场景，脚本读下来都真在验那件事' },
+  risky: { text: '部分认领不算数', color: 'warning',
+           why: '一部分认领对不上：脚本认领了，但断言太松、或在这个环境里压根没跑' },
+  bad: { text: '多数认领不算数', color: 'error',
+         why: '认领的主要场景多数没真验 —— 清单上那个「已覆盖」当不了数' },
 }
+const VERDICT_SUBJECT = '说的是 QA 的清单和脚本，不是说我读了多少 —— 我这趟读了多少、漏没漏，在「怎么看的」里单独写。'
 
 // 「谁动手」。人第一个要知道的不是严重度，是"这条要不要我处理"。
 // 上一版三类混在一张表里：MCP 那 6 条里有 2 条根子是我们自己的环境记录没铺 apikey，
@@ -122,6 +125,73 @@ const BLAME = {
   catalog: { title: '清单口径要商量', color: C.teal,
              why: '脚本和环境都没错，是清单认领的口径对不上，或者这件事清单里压根没列' },
 }
+// 人在这一页只做一个决定：这个域要不要停下来处理。
+// 上一版给他的是四十几条一句话（分三栏、每栏露 3 条）—— 24 个域这么看，一天看不完两个。
+// 维度固定，横着比也是这几块，明细留在隔壁「给 AI / 整改」那页（那页给动手的人看）。
+//
+// ⚠ 某一格 0 条 ≠ 这一块没问题，只等于**这一趟没抓到**。这句话必须摆在表旁边：
+//   漏判是看不见的，让 0 自己去暗示"这块过了"，等于替结论吹牛。
+// 域名已经带了代号就别再拼一遍 —— 抽屉标题真出现过「AI 评审 · MCP MCP 能力」。
+function domainLabel(code, name) {
+  const c = (code || '').trim(); const n = (name || '').trim()
+  if (!c) return n
+  if (!n) return c
+  return n.startsWith(c) ? n : `${c} ${n}`
+}
+
+// 评审维度。**先定人认得的三个大维度，查法挂在底下当子项** —— 上一版直接摆六条查法
+// （「断言能不能失败」「一条认领拆没拆开」），反馈就一句「你写的都是什么维度，我咋看不懂」。
+// 大维度只用现成的行话：覆盖面 / 场景设置 / 断言。跟后端 `AXES` 必须一字不差。
+const AXES = [
+  ['cover', '覆盖面', '该测的测了没', [
+    ['coverage', '清单里就没有这条场景', '这个域该有的路径/角色/失败态，清单一条都没认领'],
+    ['both', '只测了成功那一半', '该被拒的那一半没测（或反过来）—— 放行对了不等于拦得住'],
+    ['skip', '在这个环境里整条跳过', '缺变量、缺样本就 exit 0，清单那边照记「已覆盖」'],
+  ]],
+  ['design', '场景设置', '这条场景本身定得合不合理', [
+    ['grain', '一条说了好几件事', '清单一条说三件事，脚本只验得了其中一件 —— 认领粒度太粗'],
+    ['shape', '说不清要证明什么', '场景描述给不出可判定的预期，或优先级跟风险明显不匹配'],
+  ]],
+  ['assertion', '断言', '断得对不对、站不站得住', [
+    ['assert', '断言恒真，改坏了也不会红', '把动作删掉这条断言还成立 —— 跑绿证明不了任何事'],
+    ['claim', '断的不是认领的那件事', '脚本头认领了 A，正文在验 B'],
+    ['depth', '只断到接口回了 200', '没读回来确认那件事真的发生了'],
+    ['expect', '断的值跟清单写的不一致', '清单写「401 且 error.code=X」，脚本断的是别的，或只断个非空糊过去'],
+  ]],
+]
+const DIM_KEYS = AXES.flatMap(([, , , dims]) => dims.map(d => d[0]))
+// 每条子项从哪一版维度口径起才有（跟后端 `DIM_SINCE` 一字不差）。渲染时拿它跟结论里
+// 存的 `dimSpec` 比：加维度**之前**评的结论，模型压根没被问过新那几条 ——
+// 那种情况摆个 0 是假安心。**后端 `DIM_SPEC` 一涨，这里必须跟着加一行，否则新子项
+// 在存量结论上会渲染成货真价实的 0。**（版本号本身只有后端要写进结论，前端不存。）
+const DIM_SINCE = { coverage: 2, shape: 2, expect: 2 }
+const DIM_OTHER = ['other', '其它（这次没归类）', '模型没给它归维度，或是加维度之前评的旧结论']
+
+// 条数**前端自己数**（跟后端 `dim_rollup` 同一套口径）。让模型报数就会出现
+// 「清单 17 处」底下只列 1 条那种自相矛盾 —— 一屏之内数字打架，读的人只会
+// 得出「这页的数不能信」。大维度的数是子项之和，不另算一套。
+function dimRollup(res) {
+  const spec = res.dimSpec || 1
+  const n = { [DIM_OTHER[0]]: 0 }
+  DIM_KEYS.forEach(k => { n[k] = 0 })
+  ;[...(res.scriptGaps || []), ...(res.catalogGaps || [])].forEach(g => {
+    n[DIM_KEYS.includes(g.dim) ? g.dim : DIM_OTHER[0]] += 1
+  })
+  const out = AXES.map(([ax, name, why, dims]) => {
+    const items = dims.map(([k, iname, iwhy]) => ({
+      k, name: iname, why: iwhy, count: n[k], unavailable: (DIM_SINCE[k] || 1) > spec,
+    }))
+    return { k: ax, name, why, items,
+             count: items.reduce((a, i) => a + i.count, 0),
+             unavailable: items.filter(i => i.unavailable).length }
+  })
+  if (n[DIM_OTHER[0]]) {
+    out.push({ k: DIM_OTHER[0], name: DIM_OTHER[1], why: DIM_OTHER[2],
+               count: n[DIM_OTHER[0]], unavailable: 0, items: [] })
+  }
+  return out
+}
+
 const BLAME_ORDER = ['script', 'env', 'catalog']
 const blameOf = g => (BLAME[g.blame] ? g.blame : 'script')
 const REVIEW_RUNNING = s => s === 'queued' || s === 'running'
@@ -976,7 +1046,7 @@ export default function QaCatalog() {
 
       {/* 选环境 —— 环境是结论的一部分：脚本要的变量这个环境有没有，直接决定它跑不跑得起来 */}
       <Modal
-        title={`AI 评审 · ${reviewFor?.code || ''} ${reviewFor?.name || ''}`}
+        title={`AI 评审 · ${domainLabel(reviewFor?.code, reviewFor?.name)}`}
         open={!!reviewFor} onCancel={() => setReviewFor(null)}
         okText="开始评审" confirmLoading={starting} onOk={startReview}
         okButtonProps={{ disabled: !envs.length }} width={520}
@@ -1011,7 +1081,7 @@ export default function QaCatalog() {
       {/* 评审结论 */}
       <Drawer
         title={<Space>
-          <span>AI 评审 · {openReview?.domain} {openReview?.domainName}</span>
+          <span>AI 评审 · {domainLabel(openReview?.domain, openReview?.domainName)}</span>
           {openReview?.status === 'done' && (
             <Tag color={VERDICT[openReview.result?.verdict]?.color || 'default'} style={{ margin: 0 }}>
               {VERDICT[openReview.result?.verdict]?.text || '已评'}
@@ -1127,86 +1197,116 @@ function HowIRead({ res, r }) {
           borderRadius: 8, padding: '12px 14px', marginTop: 8, fontSize: 12.5,
           color: C.gray, lineHeight: 2,
         }}>
-          <div>① 读清单里这个域的场景 —— 它<b>说要验</b>什么；</div>
-          <div>② 读认领了这些场景的脚本正文 —— 它<b>实际在验</b>什么；</div>
-          <div>③ 一条条对，只问一个问题：<b style={{ color: C.ink }}>这条断言能不能失败？</b>
-            改坏了会红才算真在验，恒真的断言跑绿等于没跑。</div>
-          <div style={{ marginTop: 6 }}>
-            没做的事：脚本<b>一份都没真跑</b>（只读正文），也没碰 QA 仓一个字。
-            {batches > 1 && `脚本一次装不进一轮对话，切成 ${batches} 批各读各的，每批都拿到完整场景清单，最后合并 —— ${read} 份全读了，不是抽了几份。`}
-          </div>
+          <div style={{ fontWeight: 600, color: C.ink }}>流程（每一步都只读，QA 仓一个字没动）</div>
+          <div>① 取这个域的场景清单 —— 它<b>说要验</b>什么；</div>
+          <div>② 取认领了这些场景的脚本正文 —— 它<b>实际在验</b>什么；</div>
+          <div>③ 环境变量对账 —— <b>纯代码算的，不过模型</b>；只有变量<b>名</b>进提示词，值一个字节都不进；</div>
+          <div>④ 一条条对，只问一个问题：<b style={{ color: C.ink }}>这条断言能不能失败？</b>
+            改坏了会红才算真在验，恒真的断言跑绿等于没跑
+            {batches > 1 && `（脚本一次装不进一轮对话，切成 ${batches} 批各读各的，每批都拿到完整场景清单 —— ${read} 份全读了，不是抽了几份）`}；</div>
+          <div>⑤ 合并：结论取<b>最坏</b>的那一批（平均一下会把最要命的那批稀释掉），
+            各堆的条数由代码数好、模型只许照抄；</div>
+          <div>⑥ 渲染成这一页。<b>QA 那边自己来拉</b>（导出 / MCP），平台不往他仓里放任何东西。</div>
+
+          <div style={{ fontWeight: 600, color: C.ink, marginTop: 8 }}>为什么一份都没跑</div>
+          <div>· <b>跑不了</b>：脚本要 QA 自己那套运行环境，而且真跑会往被测系统写数据（造数、审批、删除）—— 那是别人的环境。</div>
+          <div>· <b>更要紧的是不该靠跑</b>：这次要判的恰恰是「跑绿了但没验到」。
+            恒真断言跑一万遍也是绿的，<b>跑本身对这个问题零信息量</b>。
+            要判它只有两条路：读正文（这一趟做的），或者把动作删掉再跑看它变不变红 —— 后者要改人家的脚本，只读做不到。</div>
+          <div>· <b>代价</b>：所以<b>脚本在真环境里跑不跑得起来，这份结论判不了</b>，那一半只有 QA 自己跑得出来。</div>
+
+          <div style={{ fontWeight: 600, color: C.ink, marginTop: 8 }}>靠得住吗 —— 自己掂量这四条</div>
+          <div>· ✅ <b>每条都能十秒内被否掉</b>：判据是从脚本正文原样抄的，
+            grep 一下就知道我说得对不对。<b>这才是它能被信的理由，不是「AI 说的」。</b></div>
+          <div>· ⚠ <b>单趟单模型，没有第二意见</b>：同一份脚本再评一次，措辞会变、条数会差几条。
+            拿它当「要不要停下来处理」的依据可以，别拿它当分数。</div>
+          <div>· ⚠ <b>漏判是看不见的</b>：抓到多少不等于只有多少；某一格 0 条只等于这一趟没抓到。</div>
+          <div>· ⚠ <b>环境那一列判的是我们这侧</b>：QA 自己跑的时候有没有那些变量，平台看不到。</div>
         </div>
       )}
     </div>
   )
 }
 
-// 按「谁动手」分栏，每条**只给一句人话**（`oneLine`）——
-// 上一版这里渲染的是 `problem`（写给动手改脚本的人看的那段），一条三四行、
-// 一个域十几行，24 个域连着看就是几天。技术描述留在隔壁「给 AI / 整改」那页。
-// 每栏最多露 3 条：人在这一页只做一个决定 —— 这个域要不要停下来处理。
-const GROUP_MAX = 3
-
-function BlameGroup({ kind, rows }) {
-  if (!rows.length) return null
-  const m = BLAME[kind]
-  const head = rows.slice(0, GROUP_MAX)
+// 人看那页的主体：**三个大维度一张表，查法缩进在底下**。
+// 上一版是「抓到 46 条」+ 三栏各露 3 条一句话 —— 信息量按域的大小长，大域看不完。
+// 第一次改成维度时直接摆了六条查法，结果是「你写的都是什么维度，我咋看不懂」——
+// 那六条是**我怎么查的**，不是他脑子里的维度。现在顶层只有覆盖面 / 场景设置 / 断言，
+// 三个数就够做决定；查法退到子项，想知道"凭什么这么判"的人才往下读。
+function DimTable({ res }) {
+  const rows = dimRollup(res)
+  const hit = rows.filter(d => d.count > 0).map(d => d.name)
+  const stale = rows.reduce((a, d) => a + d.unavailable, 0)
   return (
-    <div style={{ marginBottom: 12 }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-        <span style={{ width: 3, height: 13, background: m.color, borderRadius: 2, flexShrink: 0 }} />
-        <b style={{ color: C.ink }}>{m.title}</b>
-        <span style={{ color: m.color, fontWeight: 600, whiteSpace: 'nowrap' }}>{rows.length} 条</span>
+    <div style={{ marginBottom: 16, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+      <div style={{ fontWeight: 600, color: C.ink }}>
+        按维度看{hit.length ? ` —— ${hit.join('、')}都有问题` : ' —— 这一趟三块都没抓到'}
       </div>
-      {/* 释义单独一行：跟标题挤一行会把「7 条」折成两行，数字被撕开比不写还糟 */}
-      <div style={{ fontSize: 12, color: C.gray, marginLeft: 11, lineHeight: 1.8 }}>{m.why}</div>
-      {head.map((g, i) => (
-        <div key={i} style={{ display: 'flex', gap: 8, marginLeft: 11, padding: '2px 0', lineHeight: 1.9 }}>
-          {/* 清单那栏的条目没有场景号，别拿一列「—」去占位 */}
-          {g.id && (
-            <span style={{ color: C.gray, flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{g.id}</span>
-          )}
-          <span>{g.oneLine || truncate(g.problem) || '—'}</span>
+      <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.8, marginBottom: 6 }}>
+        三个维度是固定的，24 个域横着比也是这三块。
+        <b>某一格 0 条只说明这一趟没抓到，不等于那一块没问题。</b>
+        {stale > 0 && (
+          <div style={{ color: C.orange }}>
+            ⚠ 有 {stale} 项标着「这一趟没查」：这个域是加这几条判据之前评的，
+            模型没被问过它们 —— <b>重评一次这个域就补上了</b>，在那之前别读成没问题。
+          </div>
+        )}
+      </div>
+      {rows.map(d => (
+        <div key={d.k} style={{ paddingTop: 6, borderTop: `1px solid ${C.line}` }}>
+          {/* 大维度那一行：人只看这三个数 */}
+          <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
+            <span style={{
+              width: 26, flexShrink: 0, textAlign: 'right', fontWeight: 700, fontSize: 15,
+              fontVariantNumeric: 'tabular-nums', color: d.count ? C.red : C.teal,
+            }}>{d.count || '—'}</span>
+            <span style={{ fontWeight: 600, color: d.count ? C.ink : C.gray }}>{d.name}</span>
+            <span style={{ fontSize: 12, color: C.faint }}>{d.why}</span>
+          </div>
+          {/* 子项 = 怎么判的。想细看的人才往下读，大维度那三个数已经够做决定 */}
+          {d.items.map(it => (
+            <div key={it.k} style={{
+              display: 'flex', gap: 10, alignItems: 'baseline', padding: '3px 0 3px 36px',
+            }}>
+              {/* 「没查」和「查了没抓到」都是 0，但意思正好相反 —— 混在一起就是假安心 */}
+              <span style={{
+                width: 18, flexShrink: 0, textAlign: 'right',
+                fontVariantNumeric: 'tabular-nums', color: it.count ? C.orange : C.faint,
+              }}>{it.unavailable ? '?' : it.count || '—'}</span>
+              <span style={{ width: 178, flexShrink: 0, fontSize: 12.5,
+                             color: it.count ? C.ink : C.gray }}>{it.name}</span>
+              <span style={{ fontSize: 12, color: it.unavailable ? C.orange : C.faint,
+                             lineHeight: 1.8 }}>
+                {it.unavailable ? '这一趟没查 —— 这个域是加这条判据之前评的，重评一次就补上' : it.why}
+              </span>
+            </div>
+          ))}
         </div>
       ))}
-      {rows.length > head.length && (
-        <div style={{ marginLeft: 11, fontSize: 12, color: C.faint, lineHeight: 1.9 }}>
-          还有 {rows.length - head.length} 条 —— 要逐条看切到「给 AI / 整改」那一页
-        </div>
-      )}
     </div>
   )
 }
-
-// 老记录没有 `oneLine`（那是后加的字段），只能把 `problem` 截一截顶上。
-// 截出来会不通顺，但比整段技术描述糊在人看的那页上强。
-const truncate = t => (t && t.length > 32 ? `${t.slice(0, 32)}…` : t)
 
 function ReviewBrief({ r }) {
   const res = r.result || {}
   const b = res.brief || {}
   const v = VERDICT[res.verdict]
   const gaps = res.scriptGaps || []
-  // `catalogGaps` 是另一张表（清单缺场景 / 口径不符），此前只在「给 AI」那页露过 ——
-  // 于是人看的这页出现过一句「清单要商量：17 处」底下却只列 1 条。同一屏里两个数打架，
-  // 读的人只会得出「这页的数不能信」。归谁动手就归到哪一栏，别让它无处可去。
-  // `scenario` 是给动手的人写的一句话，冒号后面常挂着端点、方法名、字段名
-  //（实测露出过「上游服务器凭据轮换：PUT 更新 auth_credential…」）——
-  // 人看这页说好了一个路径一个字段名都不出现，所以只取冒号前那截，再截长度。
-  const fromCatalog = (res.catalogGaps || []).map(c => ({
-    oneLine: truncate((c.scenario || '').split(/[：:]/)[0].trim()), problem: c.why,
-  }))
-  const grouped = BLAME_ORDER.map(k => [
-    k, k === 'catalog'
-      ? [...gaps.filter(g => blameOf(g) === k), ...fromCatalog]
-      : gaps.filter(g => blameOf(g) === k),
-  ])
-  const mine = gaps.filter(g => blameOf(g) === 'script').length
-  const total = gaps.length + fromCatalog.length
+  // `catalogGaps` 也算进「谁动手」的总数：它此前只在「给 AI」那页露过，于是人看的这页
+  // 出现过一句「清单要商量：17 处」底下却只列 1 条 —— 一屏里两个数打架，读的人只会
+  // 得出「这页的数不能信」。
+  const nCat = (res.catalogGaps || []).length
+  const n = {
+    script: gaps.filter(g => blameOf(g) === 'script').length,
+    env: gaps.filter(g => blameOf(g) === 'env').length,
+    catalog: gaps.filter(g => blameOf(g) === 'catalog').length + nCat,
+  }
+  const total = gaps.length + nCat
+  const nEnvVar = (res.envMissing || []).length
   return (
     <div style={{ fontSize: 13 }}>
       <div style={{
-        padding: '14px 16px', borderRadius: 8, marginBottom: 16,
+        padding: '14px 16px', borderRadius: 8, marginBottom: 14,
         background: 'rgba(0,0,0,0.02)', border: `1px solid ${C.line}`,
       }}>
         <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.8, color: C.ink }}>
@@ -1217,72 +1317,54 @@ function ReviewBrief({ r }) {
             这次判「<b style={{
               color: res.verdict === 'ok' ? C.teal : res.verdict === 'bad' ? C.red : C.orange,
             }}>{v.text}</b>」= {v.why}
+            {/* 结论词的主语必须写出来。省掉主语，读的人会把它读成"评审只做了一半" */}
+            <div style={{ color: C.faint, marginTop: 2 }}>{VERDICT_SUBJECT}</div>
           </div>
         )}
       </div>
 
       <HowIRead res={res} r={r} />
 
-      {b.points?.length > 0 && (
-        <div style={{ marginBottom: 18 }}>
-          {b.points.map((x, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, padding: '5px 0', lineHeight: 1.9 }}>
-              <span style={{ color: C.orange, flexShrink: 0 }}>•</span>
-              <span>{x}</span>
-            </div>
-          ))}
-        </div>
-      )}
+      <DimTable res={res} />
 
       {total > 0 && (
-        <div style={{ marginBottom: 16, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
-          <div style={{ fontWeight: 600, color: C.ink, marginBottom: 10 }}>
-            抓到 {total} 条，按谁动手分开看
+        <div style={{ fontSize: 12.5, color: C.gray, lineHeight: 2, marginBottom: 14 }}>
+          这 <b style={{ color: C.ink }}>{total}</b> 条<b>按谁动手分</b>：
+          <b style={{ color: C.red }}>QA 改脚本 {n.script} 条</b>
+          <span style={{ color: C.faint }}> · </span>
+          我们这侧铺环境 {n.env} 条
+          <span style={{ color: C.faint }}> · </span>
+          找 QA 对清单口径 {n.catalog} 条。
+          {/* 变量个数和场景条数是两码事，一屏之内并排出现过 10 和 7，得说清是哪个 */}
+          {nEnvVar > 0 && `（环境那几条的根子：我们这条环境记录里缺 ${nEnvVar} 个变量名，
+            值要在真正跑套件的地方注入，平台这边补上也不会让 QA 的脚本真跑起来。）`}
+          <div style={{ color: C.faint }}>
+            要逐条看（哪个文件、哪一句、改成什么）—— 切到隔壁「给 AI / 整改」那一页。
           </div>
-          {grouped.map(([k, rows]) => <BlameGroup key={k} kind={k} rows={rows} />)}
         </div>
       )}
 
       {b.solid?.length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontWeight: 600, color: C.ink, marginBottom: 6 }}>撑得住的部分</div>
+        <div style={{ marginBottom: 14 }}>
+          <div style={{ fontWeight: 600, color: C.ink, marginBottom: 4 }}>撑得住的部分</div>
           {b.solid.map((x, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, padding: '3px 0', lineHeight: 1.9 }}>
+            <div key={i} style={{ display: 'flex', gap: 8, padding: '2px 0', lineHeight: 1.9 }}>
               <span style={{ color: C.teal, flexShrink: 0 }}>✓</span>
-              <span>{x}</span>
+              <span style={{ fontSize: 12.5, color: C.gray }}>{x}</span>
             </div>
           ))}
         </div>
       )}
 
       {b.nextStep && (
-        <Alert
-          type="info" showIcon style={{ marginBottom: 16 }}
-          message="下一步" description={b.nextStep}
-        />
+        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+               message="下一步" description={b.nextStep} />
       )}
 
-      {/* 数字只留他要的那三个：验没验到、有几条真要人家改、这个环境自己缺什么。
-          「要改的脚本」以前算的是全部 gaps —— 把环境的锅算进了 QA 头上，改成只数 script 那栏。 */}
-      <div style={{ display: 'flex', gap: 24, padding: '12px 0', borderTop: `1px solid ${C.line}` }}>
-        <Num label="这次的结论" value={v?.text || '—'}
-             color={res.verdict === 'ok' ? C.teal : res.verdict === 'bad' ? C.red : C.orange} />
-        <Num label="QA 的脚本要改" value={mine}
-             hint={total > mine ? `另 ${total - mine} 条不是脚本的事` : ''}
-             color={mine ? C.orange : C.teal} />
-        {/* 这块数的是**变量个数**，上面那组数的是**受影响的场景条数** —— 两个不同的东西，
-            一屏之内摆在一起(实测 10 和 7)，标签不把单位写清楚，读的人第一反应是"这页数打架"。 */}
-        <Num label="这条环境记录里缺的变量" value={`${(res.envMissing || []).length} 个`}
-             hint={(res.envMissing || []).length
-               ? '不是 QA 的问题；上面「环境要铺」那几条是受它影响的场景'
-               : ''}
-             color={(res.envMissing || []).length ? C.gray : C.teal} />
-      </div>
-
-      {/* 「这次读了多少」已经并进上面的 HowIRead 了，这儿不再重复一遍 */}
-      <div style={{ fontSize: 12, color: C.gray, marginTop: 10, lineHeight: 1.9 }}>
+      {/* 三个数字块撤了：「这次的结论」抽屉标题上有、「脚本要改」上面那行有、
+          「缺的变量」也并进那行了 —— 同一个数在一屏里出现两次，人就得对一次。 */}
+      <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.9 }}>
         <b>结论是建议</b>，不是门禁 —— 清单和脚本都是 QA 自己维护的，平台只读。
-        要具体到"改哪个文件的哪一句"，切到隔壁「给 AI / 整改」那一页。
       </div>
     </div>
   )
@@ -1318,15 +1400,6 @@ function Scanned({ res, r }) {
   )
 }
 
-function Num({ label, value, hint, color }) {
-  return (
-    <div>
-      <div style={{ fontSize: 12, color: C.gray }}>{label}</div>
-      <div style={{ fontSize: 20, fontWeight: 600, color, lineHeight: 1.6 }}>{value}</div>
-      {hint && <div style={{ fontSize: 11, color: C.faint }}>{hint}</div>}
-    </div>
-  )
-}
 
 // 评审结论的正文。四块的顺序 = 测试员下一步该干什么的顺序：
 // 先看「声明了没验到」（覆盖率是虚的），再看环境跑不跑得起来，最后才是补什么、先补哪条。

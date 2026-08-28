@@ -537,9 +537,9 @@ class TestBlame:
         assert "QA 的脚本要改（1 条）" in md
         assert "不是脚本的问题：环境没铺东西（1 条）" in md
         # 结论词后面必须跟释义，光一个词读的人各猜各的
-        assert "部分没验到" in md and "断言太松" in md
+        assert "部分认领不算数" in md and "断言太松" in md
         # 凭什么这么说 —— 别人第一个念头
-        assert "这条断言能不能失败" in md and "脚本一份都没真跑" in md
+        assert "这条断言能不能失败" in md and "为什么一份都没跑" in md
         # 撑得住的部分要说出来，整页只有坏消息读的人会当成全域不能用
         assert "接口层那几条断言是硬的" in md
         # 环境那一列不是对 QA 的意见
@@ -592,7 +592,7 @@ class TestBatching:
             {"verdict": "bad", "scriptGaps": [], "catalogGaps": [], "nextUp": []},
             {"verdict": "risky", "scriptGaps": [], "catalogGaps": [], "nextUp": []},
         ])
-        # 平均一下会把最要命的那批稀释掉：5 批里 1 批"多数没验到"，整个域就不能当数
+        # 平均一下会把最要命的那批稀释掉：5 批里 1 批「多数认领不算数」，整个域就不能当数
         assert merged["verdict"] == "bad"
 
     def test_合批去重且按严重度排(self):
@@ -710,3 +710,112 @@ class TestPartialBatchFailure:
             "scriptsRead": 3, "scriptsTruncated": 0, "batches": 2, "batchesFailed": [],
         })
         assert "没读成" not in qr.to_markdown(r)
+
+
+class TestDims:
+    """维度：一个域几十条明细没人读，人要的是「哪一块塌了」。
+
+    大维度只用人认得的行话（**覆盖面 / 场景设置 / 断言**）—— 上一版摆的是六条查法
+    （「断言能不能失败」「一条认领拆没拆开」），实测反馈就一句「我咋看不懂」。
+    条数**必须代码数**（模型只负责给每条打 `dim`）—— 让模型自己数，
+    页面上就会出现「清单 17 处」底下只列 1 条那种自相矛盾。
+    """
+
+    def _res(self, **kw):
+        base = {"verdict": "risky", "summary": "x", "scriptGaps": [], "catalogGaps": [],
+                "envMissing": [], "reviewedScripts": [], "coverage": {}}
+        base.update(kw)
+        return base
+
+    def test_两个来源都算进维度(self):
+        rows = qr.dim_flat(self._res(
+            scriptGaps=[{"dim": "assert"}, {"dim": "assert"}, {"dim": "skip"}],
+            catalogGaps=[{"dim": "grain"}, {"dim": "assert"}]))
+        n = {r.get("key"): r["count"] for r in rows if r["level"] == 1}
+        assert n["assert"] == 3          # 2 条脚本 + 1 条清单
+        assert n["skip"] == 1 and n["grain"] == 1
+        assert n["both"] == 0 and n["depth"] == 0
+
+    def test_三个大维度的数是子项之和_不许各算一套(self):
+        rows = qr.dim_rollup(self._res(
+            scriptGaps=[{"dim": "assert"}, {"dim": "depth"}, {"dim": "skip"}],
+            catalogGaps=[{"dim": "coverage"}]))
+        n = {r["axis"]: r["count"] for r in rows}
+        assert n["assertion"] == 2       # assert + depth
+        assert n["cover"] == 2           # skip + coverage
+        assert n["design"] == 0
+        for ax in rows:
+            assert ax["count"] == sum(i["count"] for i in ax["items"]) or not ax["items"]
+
+    def test_大维度用人认得的词_不是我的查法(self):
+        names = [r["name"] for r in qr.dim_rollup(self._res())]
+        assert names == ["覆盖面", "场景设置", "断言"]   # 没有 other 这一行
+
+    def test_维度顺序固定_便于横着比二十四个域(self):
+        keys = [r["key"] for r in qr.dim_flat(self._res()) if r["level"] == 1]
+        assert keys == list(qr.DIM_KEYS)
+
+    def test_没归维度的落其它这一格_不许静默塞进某一维(self):
+        rows = qr.dim_flat(self._res(scriptGaps=[{"dim": "assert"}, {}, {"dim": "瞎编的"}]))
+        n = {r.get("key") or r.get("axis"): r["count"] for r in rows}
+        assert n["assert"] == 1 and n["other"] == 2
+
+    def test_旧结论的六个key还认_别把存量渲染成一堆其它(self):
+        """`coverage`/`shape`/`expect` 是后加的；`dim` 刚上线那一批只有这六个 key，
+        它们必须照旧各归各位 —— 否则存量 24 个域全渲染成「其它」。"""
+        old = ["assert", "claim", "skip", "both", "depth", "grain"]
+        rows = qr.dim_flat(self._res(scriptGaps=[{"dim": d} for d in old]))
+        n = {r.get("key") or r.get("axis"): r["count"] for r in rows}
+        assert all(n[d] == 1 for d in old)
+        assert "other" not in n
+
+    def test_加维度之前评的旧结论_新那几条要标没查不是零(self):
+        """0 和「压根没查」在表里长得一样。旧结论（`dimSpec` 缺失或 <2）里
+        `coverage`/`shape`/`expect` 模型没被问过 —— 摆个 0 就是假安心。"""
+        old = qr.dim_flat(self._res(scriptGaps=[{"dim": "assert"}]))          # 没有 dimSpec
+        u = {r["key"]: r["unavailable"] for r in old if r["level"] == 1}
+        assert u["coverage"] and u["shape"] and u["expect"]
+        assert not u["assert"] and not u["skip"] and not u["both"]
+        fresh = qr.dim_flat(self._res(dimSpec=qr.DIM_SPEC, scriptGaps=[{"dim": "assert"}]))
+        assert not any(r["unavailable"] for r in fresh if r["level"] == 1)
+
+    def test_旧结论导出的报告要写明那几项没查(self):
+        r = TestPartialBatchFailure()._rec({"scriptsRead": 5, "batches": 1})
+        r.result["scriptGaps"] = [{"dim": "assert", "blame": "script", "id": "MCP-1"}]
+        r.result.pop("dimSpec", None)
+        md = qr.to_markdown(r)
+        assert "这一趟没查" in md and "重评一次这个域就补上了" in md
+
+    def test_markdown里有维度表且写明零条不等于没问题(self):
+        r = TestPartialBatchFailure()._rec({"scriptsRead": 5, "batches": 1})
+        r.result["scriptGaps"] = [{"dim": "assert", "blame": "script", "id": "MCP-1"}]
+        md = qr.to_markdown(r)
+        assert "按维度看" in md
+        for d in qr.dim_flat(r.result):
+            assert d["name"] in md
+        # 0 条最容易被读成"这一块过了"，报告里必须先堵掉
+        assert "不等于那一块没问题" in md
+
+
+class TestHowItWorksDisclosure:
+    """「你到底怎么评的、靠得住吗、为什么不跑」—— 报告里得答，别等人问。"""
+
+    def _md(self):
+        r = TestPartialBatchFailure()._rec({"scriptsRead": 47, "batches": 5})
+        return qr.to_markdown(r)
+
+    def test_结论词要说清主语是谁(self):
+        assert "不是说我读了多少" in self._md()
+
+    def test_为什么不跑要给出两条理由而不是一句没跑(self):
+        md = self._md()
+        assert "为什么一份都没跑" in md
+        assert "不该靠跑" in md and "零信息量" in md
+        # 不跑的代价也要认：跑不跑得起来这份结论判不了
+        assert "跑不跑得起来，这份结论判不了" in md
+
+    def test_可信边界要写成能被否掉而不是自夸(self):
+        md = self._md()
+        assert "grep" in md                    # 每条都能十秒内被否掉
+        assert "没有第二意见" in md            # 单趟单模型
+        assert "漏判是看不见的" in md
