@@ -3,6 +3,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Button, Radio, Input, Tag, Progress, message, Tooltip, Badge, Spin } from 'antd'
 import { ArrowLeftOutlined, CheckCircleFilled, CloseCircleFilled, ClockCircleOutlined, UserOutlined } from '@ant-design/icons'
 import { api } from '../../utils/request'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 const PRIORITY_CONFIG = {
   P0: { color: '#fff', bg: '#e8453c' },
@@ -21,6 +23,8 @@ const FILTER_OPTIONS = [
 export default function ManualRecord() {
   const { projectId, planId } = useParams()
   const navigate = useNavigate()
+  const { has } = usePermissions()
+  const canReport = has(PERM.REPORT_WRITE)
 
   const [plan, setPlan] = useState(null)
   const [scenarios, setScenarios] = useState([])
@@ -191,9 +195,11 @@ export default function ManualRecord() {
                 <div style={{ fontSize: 13, color: '#4e5969', marginBottom: 8 }}>备注（可选）</div>
                 <Input.TextArea value={selectedEdit.remark ?? selected.remark ?? ''} onChange={e => updateLocalEdit(selected.id, { remark: e.target.value })} placeholder="填写测试过程中的发现或问题描述..." rows={3} style={{ resize: 'none' }} />
               </div>
-              <Button type="primary" onClick={handleSave} loading={saving} block style={{ height: 40 }}>
-                {isLastPending ? '保存' : '保存并下一条'}
-              </Button>
+              {canReport && (
+                <Button type="primary" onClick={handleSave} loading={saving} block style={{ height: 40 }}>
+                  {isLastPending ? '保存' : '保存并下一条'}
+                </Button>
+              )}
             </div>
           </>) : (
             <div style={{ textAlign: 'center', padding: 80, color: '#c9cdd4' }}>请从左侧选择一条用例</div>

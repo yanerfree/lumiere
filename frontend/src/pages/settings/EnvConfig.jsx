@@ -7,9 +7,14 @@ import {
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 export default function EnvConfig() {
   const [activeTab, setActiveTab] = useState('environments')
+  // 环境/变量写操作后端要 env.write（tester 及以上）。只读角色（viewer）看得到配置、不能改。
+  const { has } = usePermissions()
+  const canWrite = has(PERM.ENV_WRITE)
 
   return (
     <div>
@@ -25,8 +30,8 @@ export default function EnvConfig() {
         activeKey={activeTab}
         onChange={setActiveTab}
         items={[
-          { key: 'environments', label: <span><CloudServerOutlined /> 环境管理</span>, children: <EnvironmentPanel /> },
-          { key: 'global', label: <span><GlobalOutlined /> 全局变量</span>, children: <GlobalVariablePanel /> },
+          { key: 'environments', label: <span><CloudServerOutlined /> 环境管理</span>, children: <EnvironmentPanel canWrite={canWrite} /> },
+          { key: 'global', label: <span><GlobalOutlined /> 全局变量</span>, children: <GlobalVariablePanel canWrite={canWrite} /> },
         ]}
       />
     </div>
@@ -34,7 +39,7 @@ export default function EnvConfig() {
 }
 
 // ============ 环境管理面板 ============
-function EnvironmentPanel() {
+function EnvironmentPanel({ canWrite }) {
   // 环境 2026-08-21 起是项目级的，这个页面也跟着从 /settings/env
   // 搬到 /projects/:projectId/settings/env —— 没有项目就没有环境可管。
   const { projectId } = useParams()
@@ -214,9 +219,11 @@ function EnvironmentPanel() {
             ))
           }
         </div>
-        <div style={{ padding: 10, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
-          <Button type="dashed" icon={<PlusOutlined />} block size="small" onClick={() => setCreateOpen(true)}>新增环境</Button>
-        </div>
+        {canWrite && (
+          <div style={{ padding: 10, borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+            <Button type="dashed" icon={<PlusOutlined />} block size="small" onClick={() => setCreateOpen(true)}>新增环境</Button>
+          </div>
+        )}
       </div>
 
       {/* 右侧环境详情 */}
@@ -234,10 +241,10 @@ function EnvironmentPanel() {
                   <Button type="text" size="small" icon={<CloseOutlined />} style={{ color: '#c9cdd4' }} onClick={() => setEditingName(false)} />
                 </div>
               ) : (
-                <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0, color: '#1d2129', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}
-                  onClick={startEditName}>
+                <h3 style={{ fontSize: 15, fontWeight: 600, margin: 0, color: '#1d2129', cursor: canWrite ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 6 }}
+                  onClick={canWrite ? startEditName : undefined}>
                   {selectedEnv.name}
-                  <EditOutlined style={{ fontSize: 12, color: '#c9cdd4' }} />
+                  {canWrite && <EditOutlined style={{ fontSize: 12, color: '#c9cdd4' }} />}
                 </h3>
               )}
               {/* 描述 — 可编辑 */}
@@ -250,22 +257,24 @@ function EnvironmentPanel() {
                   <Button type="text" size="small" icon={<CloseOutlined />} style={{ color: '#c9cdd4' }} onClick={() => setEditingDesc(false)} />
                 </div>
               ) : (
-                <div style={{ fontSize: 12, color: '#86909c', marginTop: 4, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  onClick={startEditDesc}>
-                  {selectedEnv.description || '点击添加描述'}
-                  <EditOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />
+                <div style={{ fontSize: 12, color: '#86909c', marginTop: 4, cursor: canWrite ? 'pointer' : 'default', display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                  onClick={canWrite ? startEditDesc : undefined}>
+                  {selectedEnv.description || (canWrite ? '点击添加描述' : '无描述')}
+                  {canWrite && <EditOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />}
                 </div>
               )}
             </div>
-            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-              <Tooltip title="复制环境"><Button size="small" icon={<CopyOutlined />} onClick={handleClone} /></Tooltip>
-              <Popconfirm title="确定删除该环境？" onConfirm={handleDeleteEnv}>
-                <Button size="small" danger icon={<DeleteOutlined />} />
-              </Popconfirm>
-            </div>
+            {canWrite && (
+              <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+                <Tooltip title="复制环境"><Button size="small" icon={<CopyOutlined />} onClick={handleClone} /></Tooltip>
+                <Popconfirm title="确定删除该环境？" onConfirm={handleDeleteEnv}>
+                  <Button size="small" danger icon={<DeleteOutlined />} />
+                </Popconfirm>
+              </div>
+            )}
           </div>
           <div style={{ fontSize: 12, fontWeight: 600, color: '#86909c', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 0.5 }}>环境变量</div>
-          <VariableTable variables={envVars} onSave={handleSaveVars} />
+          <VariableTable variables={envVars} onSave={handleSaveVars} canWrite={canWrite} />
           <CommonVarHint />
         </>) : (
           <div style={{ textAlign: 'center', padding: 80, color: '#c9cdd4' }}>请从左侧选择环境</div>
@@ -285,7 +294,7 @@ function EnvironmentPanel() {
 }
 
 // ============ 全局变量面板 ============
-function GlobalVariablePanel() {
+function GlobalVariablePanel({ canWrite }) {
   // 「全局」= 本项目所有环境共用，不是跨项目共用（迁移 zzp0gvarproj）
   const { projectId } = useParams()
   const [variables, setVariables] = useState([])
@@ -319,13 +328,13 @@ function GlobalVariablePanel() {
           在<b>本项目所有环境</b>中共享（不跨项目）。当某个环境变量存在同名 key 时，以环境变量为准
         </div>
       </div>
-      {loading ? <Spin /> : <VariableTable variables={variables} onSave={handleSave} />}
+      {loading ? <Spin /> : <VariableTable variables={variables} onSave={handleSave} canWrite={canWrite} />}
     </div>
   )
 }
 
 // ============ 变量表格（复用组件） ============
-function VariableTable({ variables, onSave }) {
+function VariableTable({ variables, onSave, canWrite = true }) {
   const [editVars, setEditVars] = useState([])
   const [dirty, setDirty] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
@@ -397,25 +406,29 @@ function VariableTable({ variables, onSave }) {
     {editVars.map(v => (
       <div key={v._uid} style={{ display: 'flex', gap: 8, padding: '3px 8px', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.03)' }}>
         <Input spellCheck={false} value={v.key} onChange={e => updateVar(v._uid, 'key', e.target.value)}
-          placeholder="KEY" variant="borderless" size="small"
+          placeholder="KEY" variant="borderless" size="small" readOnly={!canWrite}
           style={{ width: '25%', fontSize: 12, fontFamily: 'var(--font-mono)', padding: '2px 4px' }} />
         <Input spellCheck={false} value={v.value} onChange={e => updateVar(v._uid, 'value', e.target.value)}
-          placeholder="VALUE" variant="borderless" size="small"
+          placeholder="VALUE" variant="borderless" size="small" readOnly={!canWrite}
           style={{ width: '35%', fontSize: 12, fontFamily: 'var(--font-mono)', padding: '2px 4px' }} />
         <Input value={v.description} onChange={e => updateVar(v._uid, 'description', e.target.value)}
-          placeholder="变量用途说明" variant="borderless" size="small"
+          placeholder="变量用途说明" variant="borderless" size="small" readOnly={!canWrite}
           style={{ flex: 1, fontSize: 12, color: '#86909c', padding: '2px 4px' }} />
-        <Popconfirm title="删除此变量？" onConfirm={() => removeVar(v._uid)}>
-          <Button type="text" size="small" icon={<DeleteOutlined />} style={{ color: '#c9cdd4', width: 28 }} />
-        </Popconfirm>
+        {canWrite ? (
+          <Popconfirm title="删除此变量？" onConfirm={() => removeVar(v._uid)}>
+            <Button type="text" size="small" icon={<DeleteOutlined />} style={{ color: '#c9cdd4', width: 28 }} />
+          </Popconfirm>
+        ) : <div style={{ width: 28 }} />}
       </div>
     ))}
 
-    <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-      <Button type="dashed" icon={<PlusOutlined />} onClick={addVar} size="small">添加变量</Button>
-      <Button icon={<UnorderedListOutlined />} onClick={openBulkEdit} size="small">批量编辑</Button>
-      {dirty && <Button type="primary" size="small" onClick={handleSave}>保存</Button>}
-    </div>
+    {canWrite && (
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <Button type="dashed" icon={<PlusOutlined />} onClick={addVar} size="small">添加变量</Button>
+        <Button icon={<UnorderedListOutlined />} onClick={openBulkEdit} size="small">批量编辑</Button>
+        {dirty && <Button type="primary" size="small" onClick={handleSave}>保存</Button>}
+      </div>
+    )}
 
     <Modal title="批量编辑" open={bulkOpen} onOk={handleBulkConfirm} onCancel={() => setBulkOpen(false)} okText="确定" cancelText="取消" width={560}>
       <div style={{ fontSize: 13, color: '#86909c', marginBottom: 10 }}>格式: <span style={{ color: '#4e5969', fontFamily: 'var(--font-mono)' }}>变量名,值,备注</span></div>

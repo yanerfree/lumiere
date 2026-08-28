@@ -10,6 +10,8 @@ import {
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 const C = {
   red: '#e8453c', orange: '#ff7d00', teal: '#0ea5a0',
@@ -215,6 +217,9 @@ const LEGEND = (
 
 export default function QaCatalog() {
   const { projectId } = useParams()
+  const { has } = usePermissions()
+  const canConfig = has(PERM.PROJECT_SETTINGS)
+  const canGenerate = has(PERM.CASE_GENERATE)
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
@@ -578,7 +583,9 @@ export default function QaCatalog() {
           <Popover content={LEGEND} title="这一页的列都是什么意思" placement="bottomRight">
             <Button icon={<InfoCircleOutlined />} type="text">怎么读这一页</Button>
           </Popover>
-          <Button icon={<SettingOutlined />} onClick={openConfig}>{configured ? '仓库配置' : '配置 QA 仓'}</Button>
+          {canConfig && (
+            <Button icon={<SettingOutlined />} onClick={openConfig}>{configured ? '仓库配置' : '配置 QA 仓'}</Button>
+          )}
           <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={refreshing} disabled={!configured}>
             拉取最新
           </Button>
@@ -592,7 +599,9 @@ export default function QaCatalog() {
           description={
             <span>
               这个项目还没有配置 QA 仓，下面只显示表头。点右上角
-              <Button type="link" size="small" style={{ padding: '0 4px' }} onClick={openConfig}>配置 QA 仓</Button>
+              {canConfig && (
+                <Button type="link" size="small" style={{ padding: '0 4px' }} onClick={openConfig}>配置 QA 仓</Button>
+              )}
               填上仓库地址就行 —— 分支、清单路径、脚本范围都能自己认出来。
               平台对该仓库只读：只做 clone / fetch，不会写入任何内容。
             </span>
@@ -604,7 +613,7 @@ export default function QaCatalog() {
         <Alert
           type="error" showIcon style={{ marginBottom: 16 }}
           message="读取 QA 仓失败" description={data.error}
-          action={<Button size="small" onClick={openConfig}>改配置</Button>}
+          action={canConfig && <Button size="small" onClick={openConfig}>改配置</Button>}
         />
       )}
 
@@ -834,13 +843,13 @@ export default function QaCatalog() {
                         ) : rv?.status === 'failed' ? (
                           <Tag color="error" style={{ margin: 0, cursor: 'pointer' }}
                                onClick={() => setOpenReview(rv)}>没评上</Tag>
-                        ) : (
+                        ) : canGenerate ? (
                           <Button
                             type="link" size="small" icon={<RobotOutlined />}
                             style={{ padding: 0, height: 'auto', fontSize: 12 }}
                             onClick={() => { setReviewFor(d); setEnvId(envs[0]?.id) }}
                           >AI 评审</Button>
-                        )}
+                        ) : null}
                       </span>
                     </Hit>
                   )
@@ -959,7 +968,7 @@ export default function QaCatalog() {
         onCancel={() => setCfgOpen(false)}
         width={560}
         footer={[
-          data?.config?.url ? (
+          canConfig && data?.config?.url ? (
             <Popconfirm
               key="clear" title="取消配置后这一页只剩表头，确定？"
               onConfirm={() => saveConfig({ url: '', branch: '', catalogPath: '', caseGlobs: [] })}
@@ -968,7 +977,9 @@ export default function QaCatalog() {
             </Popconfirm>
           ) : null,
           <Button key="cancel" onClick={() => setCfgOpen(false)}>取消</Button>,
-          <Button key="ok" type="primary" loading={saving} onClick={handleSaveConfig}>保存</Button>,
+          canConfig ? (
+            <Button key="ok" type="primary" loading={saving} onClick={handleSaveConfig}>保存</Button>
+          ) : null,
         ]}
       >
         <Alert
@@ -1089,7 +1100,7 @@ export default function QaCatalog() {
           )}
         </Space>}
         open={!!openReview} onClose={() => setOpenReview(null)} width={780}
-        extra={openReview?.status === 'done' && (
+        extra={openReview?.status === 'done' && canGenerate && (
           <Button size="small" icon={<RobotOutlined />} onClick={() => {
             const d = domainRows.find(x => x.code === openReview.domain)
             setOpenReview(null); setReviewFor(d || { code: openReview.domain }); setEnvId(openReview.environmentId || envs[0]?.id)

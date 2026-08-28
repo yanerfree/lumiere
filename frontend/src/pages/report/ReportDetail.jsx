@@ -8,6 +8,8 @@ import {
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
 import FailureTriagePanel from '../../components/FailureTriagePanel'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 // 平台按规则算出来的失败现象 —— 只说"是什么"，不说"为什么"。
 // 摊在收起的行上，QA 扫一眼就能把 20 条失败分堆，不用一条条展开。
@@ -511,6 +513,8 @@ export default function ReportDetail() {
   const [closeReason, setCloseReason] = useState('')
   const [closeKnown, setCloseKnown] = useState(false)
   const navigate = useNavigate()
+  const { has } = usePermissions()
+  const canWrite = has(PERM.REPORT_WRITE)
   const { projectId, reportId } = useParams()
   const [loading, setLoading] = useState(true)
   const [summary, setSummary] = useState(null)
@@ -963,9 +967,11 @@ export default function ReportDetail() {
                   </div>
                 )}
               </div>
-              <Button size="small" onClick={() => { setClosing(t); setCloseReason(''); setCloseKnown(false) }}>
-                人工关闭
-              </Button>
+              {canWrite && (
+                <Button size="small" onClick={() => { setClosing(t); setCloseReason(''); setCloseKnown(false) }}>
+                  人工关闭
+                </Button>
+              )}
             </div>
           ))}
         </Card>
@@ -976,18 +982,20 @@ export default function ReportDetail() {
         onClose={() => setClosing(null)}
         footer={
           <Space>
-            <Button type="primary" disabled={closeReason.trim().length < 2}
-              onClick={async () => {
-                try {
-                  await api.post(
-                    `/projects/${projectId}/branches/${branchId}/failure-tickets/${closing.id}/close`,
-                    { reason: closeReason.trim(), knownIssue: closeKnown })
-                  message.success(closeKnown ? '已标为已知问题' : '已关闭')
-                  setClosing(null); loadTickets()
-                } catch (e) {
-                  message.error(e?.response?.data?.error?.message || '关闭失败')
-                }
-              }}>确认关闭</Button>
+            {canWrite && (
+              <Button type="primary" disabled={closeReason.trim().length < 2}
+                onClick={async () => {
+                  try {
+                    await api.post(
+                      `/projects/${projectId}/branches/${branchId}/failure-tickets/${closing.id}/close`,
+                      { reason: closeReason.trim(), knownIssue: closeKnown })
+                    message.success(closeKnown ? '已标为已知问题' : '已关闭')
+                    setClosing(null); loadTickets()
+                  } catch (e) {
+                    message.error(e?.response?.data?.error?.message || '关闭失败')
+                  }
+                }}>确认关闭</Button>
+            )}
             <Button onClick={() => setClosing(null)}>取消</Button>
           </Space>
         }>

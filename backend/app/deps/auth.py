@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ForbiddenError, UnauthorizedError
+from app.core.permissions import canonical_project_role
 from app.core.security import decode_token
 from app.core.audit import set_audit_context
 from app.deps.db import get_db
@@ -62,6 +63,10 @@ def require_project_role(*roles: str) -> Callable:
     - 系统 admin 直接通过（绕过项目级检查）
     - 非 admin 用户必须绑定到该项目，且项目角色在 roles 列表中
     - 路径中必须包含 {project_id} 参数
+
+    角色匹配走**规范名**（canonical_project_role）：新旧两套名互认 —— 传旧名 "project_admin"
+    的守卫也放行 role="manager" 的成员，反之亦然。兼容期里存量端点全用旧名、个别新端点已用
+    新名，不归一就会同一成员两拨端点表现不一致（见 core/permissions.canonical_project_role）。
     """
     async def _check(
         project_id: uuid.UUID,
@@ -87,7 +92,8 @@ def require_project_role(*roles: str) -> Callable:
         if member is None:
             raise ForbiddenError(code="NOT_PROJECT_MEMBER", message="未绑定到该项目")
 
-        if member.role not in roles:
+        allowed = {canonical_project_role(r) for r in roles}
+        if canonical_project_role(member.role) not in allowed:
             raise ForbiddenError(code="PROJECT_ROLE_DENIED", message="无权限执行此操作")
 
         return current_user

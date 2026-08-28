@@ -53,7 +53,7 @@ async def list_projects(
 async def get_project(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
 ):
     """单个项目详情。
 

@@ -9,12 +9,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.common import BaseSchema
-from app.deps.auth import get_current_user
+from app.deps.auth import require_project_role
 from app.deps.db import get_db
 from app.models.user import User
 from app.models.knowledge import KnowledgeEntry
 
 router = APIRouter(prefix="/api/projects/{project_id}/knowledge", tags=["knowledge"])
+
+# 知识库带 {project_id}，此前只校验登录 → 任意登录用户可越权读写他人项目知识库
+# （会喂 AI，污染别人项目的上下文）。补项目级成员+角色校验，口径同环境/全局变量。
+_KB_READ = ("project_admin", "developer", "tester", "guest")
+_KB_WRITE = ("project_admin", "developer", "tester")
 
 
 class CreateKnowledgeRequest(BaseSchema):
@@ -29,7 +34,7 @@ async def list_knowledge(
     project_id: uuid.UUID,
     category: str | None = None,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_role(*_KB_READ)),
 ):
     q = select(KnowledgeEntry).where(KnowledgeEntry.project_id == project_id)
     if category:
@@ -56,7 +61,7 @@ async def create_knowledge(
     project_id: uuid.UUID,
     body: CreateKnowledgeRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_role(*_KB_WRITE)),
 ):
     entry = KnowledgeEntry(
         project_id=project_id,
@@ -76,7 +81,7 @@ async def delete_knowledge(
     project_id: uuid.UUID,
     entry_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_project_role(*_KB_WRITE)),
 ):
     entry = await session.get(KnowledgeEntry, entry_id)
     if entry and entry.project_id == project_id:

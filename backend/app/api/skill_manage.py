@@ -10,10 +10,12 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
 
 from app.core.exceptions import AppError
+from app.deps.auth import require_role
+from app.models.user import User
 from app.services.skill_registry import SKILL_NAME_RE
 
 logger = logging.getLogger(__name__)
@@ -94,7 +96,9 @@ async def get_skill(skill_name: str):
 
 
 @router.put("/{skill_name}")
-async def update_skill(skill_name: str, body: dict):
+async def update_skill(skill_name: str, body: dict, _: User = Depends(require_role("admin"))):
+    # 预置 skill 是平台设施（喂后端 LLM、绑模型档位），改一次影响所有项目 → 仅系统 admin。
+    # 原来这两个写端点连登录都不校验，任何人可 PUT 覆盖 prompt。
     skill_file = _skill_dir(skill_name) / "SKILL.md"
     if not skill_file.exists():
         return {"data": None, "error": f"Skill '{skill_name}' 不存在"}
@@ -131,7 +135,8 @@ async def list_skill_versions(skill_name: str):
 
 
 @router.post("/{skill_name}/rollback/{version_ts}")
-async def rollback_skill(skill_name: str, version_ts: str):
+async def rollback_skill(skill_name: str, version_ts: str, _: User = Depends(require_role("admin"))):
+    # 回滚同样是写操作，同样仅 admin
     skill_file = _skill_dir(skill_name) / "SKILL.md"
     version_file = _skill_dir(skill_name) / "versions" / f"SKILL_{_safe_ts(version_ts)}.md"
     if not version_file.exists():

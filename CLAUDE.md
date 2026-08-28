@@ -9,6 +9,9 @@
   MCP 客户端（Claude Code 自己）踢下线。**别加 `--reload` 来"省事"。**
   代价是不重启就在跑旧代码，而前端 vite 有 HMR，于是变成「新前端 + 旧后端」，
   症状长得像功能本身有 bug。**新增的响应字段在旧后端上会渲染成假的 0，比报错难发现得多。**
+  2026-08-28 起还多一种更响的：前端启动就问 `/api/me/permissions`，旧后端上这条是 404，
+  而权限拉不到是**故意 fail-closed**（空集合），于是**全站写按钮一个不剩地消失** ——
+  看着像「我这账号权限被人收了」，实际只是后端没重启。
   怀疑时对一眼：`ps -o lstart= -p <pid>` 的进程启动时间 vs `git log -1 --format='%ci'`。
   （2026-08-27 实测：QA 对账页「拉取最新」提示成功、数字一动不动，查了半天 —— 那个 bug
   `4aff452` 前一天 16:58 就修好了，后端还停在 15:38 起的那个进程上。）
@@ -95,6 +98,7 @@ cd /home/dreamer/lumiere && DATABASE_URL='postgresql+asyncpg://postgres:postgres
 | **CC ↔ 平台闭环的边界规则、红线、Story 清单**（改这一块之前先读） | [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) |
 | **版本升级怎么复用上一版用例**：分支对账（端点反查）、三堆分法、状态流转、废弃审核 | [docs/version-upgrade-branch-diff.md](docs/version-upgrade-branch-diff.md) |
 | **数据归属与隔离**：MCP Key 为什么管不住数据、环境改项目级、哪些表该留全局（含一条「假隔离」陷阱） | [docs/data-scoping-and-isolation.md](docs/data-scoping-and-isolation.md) |
+| **权限模型**：440 个端点各挂什么守卫、角色档位（viewer ⊂ tester ⊂ member ⊂ manager）、前端按权限藏入口的口径 | [docs/permission-audit-2026-08.md](docs/permission-audit-2026-08.md) + `backend/app/core/permissions.py`（权限点与角色映射的唯一出处） |
 | **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、页面为什么这么排（P/R 口径照抄对方定义）、脚本正文白名单、**域级 AI 评审**（环境缺口那一列的四个坑） | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
 
 ## 长驻服务

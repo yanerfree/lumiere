@@ -4,6 +4,8 @@ import { Tag, Button, Radio, Input, Space, Modal, Form, Select, InputNumber, mes
 import { PlusOutlined, SearchOutlined, ReloadOutlined, PlayCircleOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 import { buildEnvOptions } from '../../utils/env'
 import { useBranch } from '../../utils/branch'
 import CasePicker from '../../components/CasePicker'
@@ -21,6 +23,8 @@ const th = { fontSize: 12, color: '#86909c', fontWeight: 500, whiteSpace: 'nowra
 
 export default function PlanList() {
   const navigate = useNavigate()
+  const { has } = usePermissions()
+  const canRun = has(PERM.PLAN_RUN)
   const { projectId } = useParams()
   const [globalBranchId] = useBranch(projectId)
   const [plans, setPlans] = useState([])
@@ -196,7 +200,9 @@ export default function PlanList() {
             allowClear style={{ width: 200 }} size="small"
           />
           <Button size="small" icon={<ReloadOutlined />} onClick={fetchPlans} loading={loading}>刷新</Button>
-          <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openCreate}>创建计划</Button>
+          {canRun && (
+            <Button size="small" type="primary" icon={<PlusOutlined />} onClick={openCreate}>创建计划</Button>
+          )}
         </Space>
       </div>
 
@@ -300,7 +306,7 @@ export default function PlanList() {
 
                   {/* Actions */}
                   <div style={{ width: 240, flexShrink: 0, display: 'flex', justifyContent: 'flex-end', gap: 4 }}>
-                    {['draft', 'completed', 'paused'].includes(plan.status) && (
+                    {canRun && ['draft', 'completed', 'paused'].includes(plan.status) && (
                       <Button type="text" size="small" style={{ fontSize: 12, color: '#86909c' }}
                         onClick={async e => {
                           e.stopPropagation()
@@ -311,11 +317,11 @@ export default function PlanList() {
                           } catch { message.error('加载计划详情失败') }
                         }}>修改用例</Button>
                     )}
-                    {plan.status === 'draft' && (
+                    {canRun && plan.status === 'draft' && (
                       <Button type="text" size="small" style={{ fontSize: 12, color: '#0ea5a0' }}
                         onClick={e => handleQuickExecute(e, plan.id)}>执行</Button>
                     )}
-                    {(plan.status === 'completed' || plan.status === 'paused') && (
+                    {canRun && (plan.status === 'completed' || plan.status === 'paused') && (
                       <Button type="text" size="small" style={{ fontSize: 12, color: '#0ea5a0' }}
                         onClick={e => {
                           e.stopPropagation()
@@ -329,27 +335,27 @@ export default function PlanList() {
                         }}>重新执行</Button>
                     )}
                     {/* 生命周期：状态决定能做什么，和后端的前置校验一一对应 */}
-                    {plan.status === 'executing' && (
+                    {canRun && plan.status === 'executing' && (
                       <Button type="text" size="small" style={{ fontSize: 12, color: '#faad14' }}
                         onClick={e => handleLifecycle(e, plan.id, plan.name, 'pause')}>暂停</Button>
                     )}
-                    {plan.status === 'paused' && (
+                    {canRun && plan.status === 'paused' && (
                       <Button type="text" size="small" style={{ fontSize: 12, color: '#0ea5a0' }}
                         onClick={e => handleLifecycle(e, plan.id, plan.name, 'resume')}>恢复</Button>
                     )}
-                    {['executing', 'paused'].includes(plan.status) && (
+                    {canRun && ['executing', 'paused'].includes(plan.status) && (
                       <Button type="text" size="small" danger style={{ fontSize: 12 }}
                         onClick={e => handleLifecycle(e, plan.id, plan.name, 'abort')}>终止</Button>
                     )}
-                    {['draft', 'completed'].includes(plan.status) && (
+                    {canRun && ['draft', 'completed'].includes(plan.status) && (
                       <Button type="text" size="small" style={{ fontSize: 12, color: '#86909c' }}
                         onClick={e => handleLifecycle(e, plan.id, plan.name, 'archive')}>归档</Button>
                     )}
-                    {plan.status === 'archived' && (
+                    {canRun && plan.status === 'archived' && (
                       <Button type="text" size="small" style={{ fontSize: 12, color: '#0ea5a0' }}
                         onClick={e => handleLifecycle(e, plan.id, plan.name, 'unarchive')}>取消归档</Button>
                     )}
-                    {plan.status !== 'executing' && (
+                    {canRun && plan.status !== 'executing' && (
                       <Button type="text" size="small" danger style={{ fontSize: 12 }}
                         onClick={e => handleQuickDelete(e, plan.id, plan.name)}>删除</Button>
                     )}

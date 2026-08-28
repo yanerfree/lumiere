@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Routes, Route, useNavigate, useLocation, Navigate, useParams } from 'react-router-dom'
-import { Layout, Menu, Avatar, Dropdown, Button, Tooltip, message, Modal, Form, Input } from 'antd'
+import { Layout, Menu, Avatar, Dropdown, Button, Tooltip, message, Modal, Form, Input, Result } from 'antd'
 import {
   FolderOutlined, FileTextOutlined, UnorderedListOutlined, BarChartOutlined,
   SettingOutlined, UserOutlined, FileSearchOutlined, ApiOutlined,
@@ -12,8 +12,11 @@ import {
 } from '@ant-design/icons'
 import { api } from './utils/request'
 import { useLang } from './utils/i18n.jsx'
+import { PermissionProvider, usePermissions } from './utils/PermissionContext'
+import { PERM } from './utils/permissions'
 import BranchSelector from './components/BranchSelector'
 import ServiceStatusBadge from './components/ServiceStatusBadge'
+import AssistantPanel from './components/AssistantPanel'
 import ProjectList from './pages/projects/ProjectList'
 import CaseManagement from './pages/cases/CaseManagement'
 import ReviewReport from './pages/cases/ReviewReport'
@@ -63,6 +66,24 @@ function RequireAuth({ children }) {
   return children
 }
 
+// 路由守卫：菜单隐藏只挡「点得到」，手敲 URL 照样能进 —— 这里补上「进得去」这一层。
+// 缺权限时给一张明确的 403，而不是白屏或跳走（跳走会让人以为是 bug）。
+// loading 期间先不判定，否则权限还没拉到就闪一下 403。
+function RequirePerm({ perm, children }) {
+  const { has, loading } = usePermissions()
+  if (loading) return null
+  if (perm && !has(perm)) {
+    return (
+      <Result
+        status="403"
+        title="无权限访问"
+        subTitle="当前角色无权访问该页面，请联系项目管理员。"
+      />
+    )
+  }
+  return children
+}
+
 function AppLayout() {
   const [collapsed, setCollapsed] = useState(false)
   const [projectName, setProjectName] = useState('')
@@ -72,6 +93,7 @@ function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { t, lang, setLang } = useLang()
+  const { has } = usePermissions()
 
   const user = JSON.parse(localStorage.getItem('user') || '{}')
 
@@ -138,17 +160,17 @@ function AppLayout() {
       key: 'g-ai', icon: <RobotOutlined />, label: t('menu.group.ai'),
       children: [
         { key: `/projects/${projectId}/settings/ai-capabilities`, icon: <ThunderboltOutlined />, label: t('menu.ai.capabilities') },
-        { key: `/projects/${projectId}/settings/skills`, icon: <FileTextOutlined />, label: t('menu.ai.skills') },
+        { key: `/projects/${projectId}/settings/skills`, icon: <FileTextOutlined />, label: t('menu.ai.skills'), perm: PERM.CASE_GENERATE },
         { key: `/projects/${projectId}/settings/mcp-tools`, icon: <ApiOutlined />, label: t('menu.ai.mcp') },
-        { key: `/projects/${projectId}/settings/ai`, icon: <SettingOutlined />, label: t('menu.ai.config') },
+        { key: `/projects/${projectId}/settings/ai`, icon: <SettingOutlined />, label: t('menu.ai.config'), perm: PERM.AICONFIG_WRITE },
       ],
     },
     {
       key: 'g-proj-config', icon: <SettingOutlined />, label: t('menu.group.projectConfig'),
       children: [
-        { key: `/projects/${projectId}/settings/env`, icon: <GlobalOutlined />, label: t('menu.envConfig') },
-        { key: `/projects/${projectId}/settings/automation-data`, icon: <DatabaseOutlined />, label: t('menu.automationData') },
-        { key: `/projects/${projectId}/settings/i18n`, icon: <TranslationOutlined />, label: t('menu.i18nDict') },
+        { key: `/projects/${projectId}/settings/env`, icon: <GlobalOutlined />, label: t('menu.envConfig'), perm: PERM.ENV_WRITE },
+        { key: `/projects/${projectId}/settings/automation-data`, icon: <DatabaseOutlined />, label: t('menu.automationData'), perm: PERM.DOC_MANAGE },
+        { key: `/projects/${projectId}/settings/i18n`, icon: <TranslationOutlined />, label: t('menu.i18nDict'), perm: PERM.DOC_MANAGE },
         { key: `/projects/${projectId}/logs`, icon: <FileSearchOutlined />, label: t('menu.logs') },
       ],
     },
@@ -164,8 +186,10 @@ function AppLayout() {
       key: 'g-project', icon: <FolderOutlined />, label: t('menu.group.project'),
       children: [
         { key: '/projects', icon: <FolderOutlined />, label: t('menu.projects') },
-        { key: '/settings/ai-providers', icon: <RobotOutlined />, label: t('menu.aiProviders') },
-        { key: '/settings/channels', icon: <BellOutlined />, label: t('menu.channels') },
+        // AI 服务配置 / 通知渠道是**平台级设施**（通知渠道全局、provider 由平台分配给项目），
+        // 归 admin/operator。项目经理用的是项目壳里的「AI 配置」，不是这里。
+        { key: '/settings/ai-providers', icon: <RobotOutlined />, label: t('menu.aiProviders'), perm: PERM.SYS_PROVIDER_READ },
+        { key: '/settings/channels', icon: <BellOutlined />, label: t('menu.channels'), perm: PERM.SYS_CHANNEL_READ },
       ],
     },
     {
@@ -185,14 +209,27 @@ function AppLayout() {
     {
       key: 'g-system', icon: <DeploymentUnitOutlined />, label: t('menu.group.system'),
       children: [
-        ...(user.role === 'admin' ? [
-          { key: '/settings/users', icon: <UserOutlined />, label: t('menu.users') },
-        ] : []),
-        { key: '/settings/logs', icon: <FileSearchOutlined />, label: t('menu.logs') },
-        { key: '/settings/services', icon: <DeploymentUnitOutlined />, label: t('menu.services') },
+        // 「系统管理」整档是平台自己的东西：用户、系统审计日志（admin），服务端口（operator+admin）。
+        // 每项挂 perm，由下方 gate() 统一按 /me/permissions 过滤 —— 同一份权限点，菜单和后端守卫一处对齐，
+        // 不再前端硬编码 role === 'admin'。普通用户三项全无 → 整个「系统管理」组自动消失。
+        { key: '/settings/users', icon: <UserOutlined />, label: t('menu.users'), perm: PERM.SYS_USER_MANAGE },
+        { key: '/settings/logs', icon: <FileSearchOutlined />, label: t('menu.logs'), perm: PERM.SYS_USER_MANAGE },
+        { key: '/settings/services', icon: <DeploymentUnitOutlined />, label: t('menu.services'), perm: PERM.SYS_SERVICE_READ },
       ],
     },
   ]
+
+  // 按权限点过滤菜单：带 perm 的条目只对持有者显示；一个分组的子项被过滤光了，整组也不显示
+  // （普通用户的「系统管理」就是这样整档消失的）。dividers 与无 perm 的条目照常保留。
+  // 这是 UX 层收口，真正的强制在 RequirePerm 路由守卫 + 后端 403。
+  const gate = (items) => items
+    .map(it => it.children
+      ? { ...it, children: it.children.filter(c => !c.perm || has(c.perm)) }
+      : it)
+    .filter(it => it.children
+      ? it.children.length > 0
+      : (it.type === 'divider' || !it.perm || has(it.perm)))
+  const visibleMenu = gate(menuItems)
 
   // 展开哪些一级菜单。存起来 —— 不存的话每跳一次页就弹回默认，"能收起"等于没有。
   const DEFAULT_OPEN = ['g-design', 'g-exec', 'g-ai', 'g-proj-config', 'g-project', 'g-tools', 'g-system']
@@ -300,7 +337,7 @@ function AppLayout() {
               selectedKeys={[location.pathname]}
               openKeys={collapsed ? [] : openKeys}
               onOpenChange={handleOpenChange}
-              items={menuItems}
+              items={visibleMenu}
               onClick={({ key }) => navigate(key)}
               style={{ border: 'none', fontSize: 13, paddingTop: 8, background: 'transparent' }}
             />
@@ -331,12 +368,12 @@ function AppLayout() {
             <Route path="/projects/:projectId/reports" element={<ReportList />} />
             <Route path="/projects/:projectId/reports/:reportId" element={<ReportDetail />} />
             <Route path="/projects/:projectId/logs" element={<AuditLogs />} />
-            <Route path="/projects/:projectId/settings/ai" element={<ProjectAIConfig />} />
-            <Route path="/projects/:projectId/settings/automation-data" element={<AutomationData />} />
-            <Route path="/projects/:projectId/settings/env" element={<EnvConfig />} />
-            <Route path="/projects/:projectId/settings/i18n" element={<I18nMessages />} />
+            <Route path="/projects/:projectId/settings/ai" element={<RequirePerm perm={PERM.AICONFIG_WRITE}><ProjectAIConfig /></RequirePerm>} />
+            <Route path="/projects/:projectId/settings/automation-data" element={<RequirePerm perm={PERM.DOC_MANAGE}><AutomationData /></RequirePerm>} />
+            <Route path="/projects/:projectId/settings/env" element={<RequirePerm perm={PERM.ENV_WRITE}><EnvConfig /></RequirePerm>} />
+            <Route path="/projects/:projectId/settings/i18n" element={<RequirePerm perm={PERM.DOC_MANAGE}><I18nMessages /></RequirePerm>} />
             <Route path="/projects/:projectId/settings/ai-capabilities" element={<AICapabilities />} />
-            <Route path="/projects/:projectId/settings/skills" element={<SkillManage />} />
+            <Route path="/projects/:projectId/settings/skills" element={<RequirePerm perm={PERM.CASE_GENERATE}><SkillManage /></RequirePerm>} />
             <Route path="/projects/:projectId/settings/mcp-tools" element={<MCPTools />} />
             {/* 「探索测试」2026-08-27 下线（见 docs/cc-platform-loop-spec.md §15）。
                 同「文档管理」那次的处理：留重定向而不是直接删路由，
@@ -351,14 +388,14 @@ function AppLayout() {
                 会看到一片空白内容区 —— 不报错也不说话，比 404 还难判断发生了什么。
                 接口场景现在只在「用例详情 → 接口测试」页签里维护。 */}
             <Route path="/projects/:projectId/api-test" element={<RedirectToCases />} />
-            <Route path="/settings/services" element={<SystemServices />} />
+            <Route path="/settings/services" element={<RequirePerm perm={PERM.SYS_SERVICE_READ}><SystemServices /></RequirePerm>} />
             {/* 环境 2026-08-21 起是项目级的（docs/data-scoping-and-isolation.md §4）。
                 旧的 /settings/env 留一条跳转：书签点进来时给项目列表，而不是白屏。 */}
             <Route path="/settings/env" element={<Navigate to="/projects" replace />} />
-            <Route path="/settings/channels" element={<ChannelConfig />} />
-            <Route path="/settings/ai-providers" element={<AIProviderConfig />} />
-            <Route path="/settings/users" element={<UserManagement />} />
-            <Route path="/settings/logs" element={<AuditLogs />} />
+            <Route path="/settings/channels" element={<RequirePerm perm={PERM.SYS_CHANNEL_READ}><ChannelConfig /></RequirePerm>} />
+            <Route path="/settings/ai-providers" element={<RequirePerm perm={PERM.SYS_PROVIDER_READ}><AIProviderConfig /></RequirePerm>} />
+            <Route path="/settings/users" element={<RequirePerm perm={PERM.SYS_USER_MANAGE}><UserManagement /></RequirePerm>} />
+            <Route path="/settings/logs" element={<RequirePerm perm={PERM.SYS_USER_MANAGE}><AuditLogs /></RequirePerm>} />
             <Route path="/tools/llm-mock" element={<LlmMock />} />
             <Route path="/tools/api-mock" element={<ApiMock />} />
             <Route path="/tools/proxy-probe" element={<ProxyProbe />} />
@@ -393,6 +430,9 @@ function AppLayout() {
           </Form.Item>
         </Form>
       </Modal>
+
+      {/* AI 助手 —— 能力面由后端按当前用户权限过滤，随项目语境切换 */}
+      <AssistantPanel projectId={projectId} />
     </Layout>
   )
 }
@@ -401,7 +441,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/*" element={<RequireAuth><AppLayout /></RequireAuth>} />
+      <Route path="/*" element={<RequireAuth><PermissionProvider><AppLayout /></PermissionProvider></RequireAuth>} />
     </Routes>
   )
 }

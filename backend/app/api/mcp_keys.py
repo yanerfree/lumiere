@@ -15,10 +15,11 @@ from app.schemas.common import BaseSchema
 
 from app.deps.db import get_db
 from app.deps.auth import get_current_user, require_project_role
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import ForbiddenError, NotFoundError
+from app.core.permissions import canonical_project_role
 from app.models.user import User
 from app.models.mcp_api_key import McpApiKey
-from app.models.project import Branch, Project
+from app.models.project import Branch, Project, ProjectMember
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,34 @@ def _validate_tools(names: list[str] | None) -> list[str] | None:
 
     known = {t["name"] for t in TOOL_CATALOG}
     return [n for n in names if n in known]
+
+
+# 绑定 Key 到项目 = 给这把 Key 该项目用例/环境的**读写**数据范围（见 CLAUDE.md 硬规则：
+# Key 的 project_id 现在同时管工具范围和数据范围）。project_id 走 body 不走 path，
+# 所以 require_project_role 那个按 path 取 {project_id} 的依赖用不上——在这里手写同一套判定。
+# 允许的角色对齐写口径（不含 guest）：一把能写的 Key 不该由只读成员发出去。
+_BIND_ROLES = ("project_admin", "developer", "tester")
+
+
+async def _assert_can_bind_project(
+    session: AsyncSession, current_user: User, project_id: uuid.UUID | None
+) -> None:
+    if project_id is None:
+        return
+    if current_user.role == "admin":  # 系统 admin 绕过，口径同 require_project_role
+        return
+    member = (await session.execute(
+        select(ProjectMember).where(
+            ProjectMember.project_id == project_id,
+            ProjectMember.user_id == current_user.id,
+        )
+    )).scalar_one_or_none()
+    if member is None:
+        raise ForbiddenError(code="NOT_PROJECT_MEMBER", message="未绑定到该项目，不能把 Key 归到此项目")
+    # 走规范名匹配，新旧名互认（同 require_project_role）：manager/member/tester 都能发，viewer/guest 不能
+    allowed = {canonical_project_role(r) for r in _BIND_ROLES}
+    if canonical_project_role(member.role) not in allowed:
+        raise ForbiddenError(code="PROJECT_ROLE_DENIED", message="当前项目角色无权把 Key 归到此项目")
 
 
 @router.get("/tools")
@@ -121,6 +150,9 @@ async def create_api_key(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # 归属项目必须是本人有写权限的项目，否则等于凭空给自己开一把能读写他人项目的 Key
+    await _assert_can_bind_project(session, current_user, body.project_id)
+
     raw_key = f"lum_{secrets.token_urlsafe(32)}"
     key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
     key_prefix = raw_key[:8]
@@ -158,6 +190,9 @@ async def update_api_key(
     key = await session.get(McpApiKey, key_id)
     if not key or key.user_id != current_user.id:
         return {"error": "Key not found"}
+
+    # 改归属同样要过项目写权限校验——否则 PATCH 就成了绕过 create 校验的后门
+    await _assert_can_bind_project(session, current_user, body.project_id)
 
     if body.name is not None:
         key.name = body.name

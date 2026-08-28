@@ -3,6 +3,8 @@ import { Card, Row, Col, Button, Tag, Modal, Form, Input, Select, Space, message
 import { PlusOutlined, EditOutlined, DeleteOutlined, RightOutlined, FolderOpenOutlined, GitlabOutlined, ReloadOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
 import { api } from '../../utils/request'
+import { PERM, mePermissionsPath } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 const PROJECT_ROLES = [
   { value: 'project_admin', label: '项目管理员' },
@@ -26,6 +28,9 @@ function MemberModal({ project, open, onClose }) {
   const [addOpen, setAddOpen] = useState(false)
   const [addForm] = Form.useForm()
   const [saving, setSaving] = useState(false)
+  // 成员写操作（增/删/改角色）后端要项目管理员（manager）。列表页 URL 无项目语境，
+  // 所以按该项目单独问一次 /me/permissions，拿到就是「我在这个项目里能不能管成员」。
+  const [canManage, setCanManage] = useState(false)
 
   const fetchMembers = useCallback(async () => {
     if (!project) return
@@ -43,9 +48,18 @@ function MemberModal({ project, open, onClose }) {
     } catch { /* 非 admin 可能 403，忽略 */ }
   }, [])
 
+  const fetchPerm = useCallback(async () => {
+    if (!project) return
+    try {
+      const res = await api.get(mePermissionsPath(project.id))
+      const perms = res.data?.permissions || []
+      setCanManage(!!(res.data?.is_super_admin ?? res.data?.isSuperAdmin) || perms.includes(PERM.MEMBER_MANAGE))
+    } catch { setCanManage(false) }
+  }, [project])
+
   useEffect(() => {
-    if (open) { fetchMembers(); fetchUsers() }
-  }, [open, fetchMembers, fetchUsers])
+    if (open) { fetchMembers(); fetchPerm(); fetchUsers() }
+  }, [open, fetchMembers, fetchUsers, fetchPerm])
 
   // 可添加的用户 = 全部用户 - 已是成员的
   const addableUsers = useMemo(() => {
@@ -100,6 +114,7 @@ function MemberModal({ project, open, onClose }) {
           size="small"
           style={{ width: 130 }}
           options={PROJECT_ROLES}
+          disabled={!canManage}
           onChange={(newRole) => handleRoleChange(record, newRole)}
         />
       ),
@@ -111,9 +126,11 @@ function MemberModal({ project, open, onClose }) {
     {
       title: '操作', width: 80, align: 'center',
       render: (_, record) => (
-        <Popconfirm title={`确定移除 ${record.username}？`} onConfirm={() => handleRemove(record)}>
-          <Button type="text" size="small" icon={<DeleteOutlined />} style={{ color: '#e8453c' }} />
-        </Popconfirm>
+        canManage ? (
+          <Popconfirm title={`确定移除 ${record.username}？`} onConfirm={() => handleRemove(record)}>
+            <Button type="text" size="small" icon={<DeleteOutlined />} style={{ color: '#e8453c' }} />
+          </Popconfirm>
+        ) : <span style={{ color: '#c9cdd4' }}>—</span>
       ),
     },
   ]
@@ -126,11 +143,13 @@ function MemberModal({ project, open, onClose }) {
       footer={null}
       width={640}
     >
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
-        <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => { addForm.resetFields(); setAddOpen(true) }}>
-          添加成员
-        </Button>
-      </div>
+      {canManage && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+          <Button type="primary" size="small" icon={<PlusOutlined />} onClick={() => { addForm.resetFields(); setAddOpen(true) }}>
+            添加成员
+          </Button>
+        </div>
+      )}
       <Table
         dataSource={members}
         columns={columns}
@@ -173,6 +192,9 @@ function MemberModal({ project, open, onClose }) {
 // ---- 主页面 ----
 export default function ProjectList() {
   const navigate = useNavigate()
+  // 编辑/删除项目后端是 require_role("admin")（系统管理员），不是项目管理员 ——
+  // 所以这两个按钮按 isSuperAdmin 挡；创建项目是任意登录用户可做（PROJECT_CREATE）。
+  const { has, isSuperAdmin } = usePermissions()
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
   const [modalOpen, setModalOpen] = useState(false)
@@ -267,7 +289,9 @@ export default function ProjectList() {
         <h2 style={{ fontSize: 20, fontWeight: 600, color: '#1d2129' }}>项目列表</h2>
         <Space>
           <Button icon={<ReloadOutlined />} onClick={fetchProjects} loading={loading}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>创建项目</Button>
+          {has(PERM.PROJECT_CREATE) && (
+            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>创建项目</Button>
+          )}
         </Space>
       </div>
 
@@ -275,7 +299,9 @@ export default function ProjectList() {
         <div style={{ textAlign: 'center', padding: 80 }}><Spin /></div>
       ) : projects.length === 0 ? (
         <Empty description="暂无项目" style={{ marginTop: 80 }}>
-          <Button type="primary" onClick={openCreate}>创建第一个项目</Button>
+          {has(PERM.PROJECT_CREATE) && (
+            <Button type="primary" onClick={openCreate}>创建第一个项目</Button>
+          )}
         </Empty>
       ) : (
         <>
@@ -337,7 +363,11 @@ export default function ProjectList() {
 
                 <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
                   <Button size="small" type="text" icon={<TeamOutlined />} onClick={(e) => openMembers(e, p)}>成员</Button>
-                  <Button size="small" type="text" icon={<EditOutlined />} onClick={(e) => openEdit(e, p)}>编辑</Button>
+                  {/* 编辑/删除项目是系统管理员专属（后端 require_role("admin")），非 admin 不显示 */}
+                  {isSuperAdmin && (
+                    <Button size="small" type="text" icon={<EditOutlined />} onClick={(e) => openEdit(e, p)}>编辑</Button>
+                  )}
+                  {isSuperAdmin && (
                   <Popconfirm
                     title={`确定删除项目「${p.name}」？`}
                     // 文案必须写清「会删什么」+「什么情况下删不动」：外键改成全 CASCADE 后
@@ -353,6 +383,7 @@ export default function ProjectList() {
                   >
                     <Button size="small" type="text" icon={<DeleteOutlined />} onClick={(e) => e.stopPropagation()} style={{ color: '#e8453c' }}>删除</Button>
                   </Popconfirm>
+                  )}
                 </div>
               </Card>
             </Col>

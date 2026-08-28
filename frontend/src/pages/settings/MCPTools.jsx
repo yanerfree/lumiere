@@ -10,6 +10,8 @@ import { api } from '../../utils/request'
 import { formatTime } from '../../utils/timeCol'
 import { copyToClipboard } from '../../utils/clipboard'
 import { useBranch } from '../../utils/branch'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 
 const { Text } = Typography
 
@@ -166,6 +168,8 @@ function deriveChosen(profiles, toolNames) {
  * 于是别的活如果因此缺了工具，也会跟着自动取消 —— 这条自然成立，不用特判。
  */
 function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSave, onCopyPrompt, promptCards = [] }) {
+  const { has } = usePermissions()
+  const canManage = has(PERM.PROJECT_SETTINGS)
   const savedUnlimited = !scope?.allowedTools
   const savedList = scope?.allowedTools || []
   const allNames = tools.map(t => t.name)
@@ -317,7 +321,7 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
             落库存的是展开后的显式工具名，所以平台加了新工具不会自动进来。
             点下面的「保存」重新展开一次就好。
           </span>}
-          action={<Button size="small" type="primary" loading={saving}
+          action={canManage && <Button size="small" type="primary" loading={saving}
             onClick={() => onSave(unlimited ? null : [...new Set([...sel, ...staleMissing])])}>
             一键补齐并保存
           </Button>} />
@@ -340,17 +344,19 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
           <div style={{ flex: 1 }} />
           {/* 「不限制」不等于"把 42 个全勾上"：前者以后新增的工具自动包含，后者不会
               （落库 NULL vs 显式清单）。这个区别得写出来，别让人猜。 */}
-          <Tooltip title="勾上之后，以后平台新增的工具也自动包含；关掉就按上面勾的活来">
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <Switch size="small" checked={unlimited}
-                onChange={v => {
-                  setUnlimited(v)
-                  setSel(v ? allNames : baseline)
-                  setChosen(v ? [] : deriveChosen(profiles, baseline))
-                }} />
-              <span style={{ fontSize: 12, color: unlimited ? '#0ea5a0' : '#8c919e' }}>不限制</span>
-            </span>
-          </Tooltip>
+          {canManage && (
+            <Tooltip title="勾上之后，以后平台新增的工具也自动包含；关掉就按上面勾的活来">
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                <Switch size="small" checked={unlimited}
+                  onChange={v => {
+                    setUnlimited(v)
+                    setSel(v ? allNames : baseline)
+                    setChosen(v ? [] : deriveChosen(profiles, baseline))
+                  }} />
+                <span style={{ fontSize: 12, color: unlimited ? '#0ea5a0' : '#8c919e' }}>不限制</span>
+              </span>
+            </Tooltip>
+          )}
           {dirty && (
             <Space size={8}>
               <Button size="small" onClick={() => {
@@ -358,9 +364,11 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
                 setSel(savedUnlimited ? allNames : savedList)
                 setChosen(deriveChosen(profiles, savedUnlimited ? [] : savedList))
               }}>放弃修改</Button>
-              <Button size="small" type="primary" loading={saving}
-                disabled={!unlimited && sel.length === 0}
-                onClick={() => onSave(unlimited ? null : sel)}>保存</Button>
+              {canManage && (
+                <Button size="small" type="primary" loading={saving}
+                  disabled={!unlimited && sel.length === 0}
+                  onClick={() => onSave(unlimited ? null : sel)}>保存</Button>
+              )}
             </Space>
           )}
         </div>
@@ -399,6 +407,8 @@ function ScopePanel({ tools, byCategory, profiles, scope, keyCount, saving, onSa
 
 export default function MCPTools() {
   const { projectId } = useParams()
+  const { has } = usePermissions()
+  const canManage = has(PERM.PROJECT_SETTINGS)
   const [branchId] = useBranch(projectId)
   const mcpUrl = `http://${window.location.hostname}:18800/mcp/`
   const [apiKeys, setApiKeys] = useState([])
@@ -545,7 +555,9 @@ export default function MCPTools() {
                   每个 Claude Code 用独立 API Key 连接。<b>工具范围不在这里选</b> ——
                   它是项目级的，去「工具范围」页签改一次，本项目所有 Key 都生效。
                 </Text>
-                <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateModalOpen(true); setNewKeyResult(null); setNewKeyName('') }}>创建 Key</Button>
+                {canManage && (
+                  <Button type="primary" icon={<PlusOutlined />} onClick={() => { setCreateModalOpen(true); setNewKeyResult(null); setNewKeyName('') }}>创建 Key</Button>
+                )}
               </div>
 
               {projectKeys.length > 0 ? (
@@ -589,9 +601,11 @@ export default function MCPTools() {
                             </div>
                           </div>
                           <Space size={4}>
-                            <Popconfirm title="吊销后该连接立即失效" onConfirm={() => revokeKey(k.id)} okText="吊销" cancelText="取消" okButtonProps={{ danger: true }}>
-                              <Button size="small" danger type="text" icon={<DeleteOutlined />}>吊销</Button>
-                            </Popconfirm>
+                            {canManage && (
+                              <Popconfirm title="吊销后该连接立即失效" onConfirm={() => revokeKey(k.id)} okText="吊销" cancelText="取消" okButtonProps={{ danger: true }}>
+                                <Button size="small" danger type="text" icon={<DeleteOutlined />}>吊销</Button>
+                              </Popconfirm>
+                            )}
                           </Space>
                         </div>
                       </Card>
@@ -628,12 +642,16 @@ export default function MCPTools() {
                             </Tag>
                           </Space>
                           <Space size={4}>
-                            <Popconfirm title="归到本项目后，它的范围立刻改由本项目决定" onConfirm={() => adoptKey(k.id)} okText="归属" cancelText="取消">
-                              <Button size="small" type="text">归到本项目</Button>
-                            </Popconfirm>
-                            <Popconfirm title="吊销后该连接立即失效" onConfirm={() => revokeKey(k.id)} okText="吊销" cancelText="取消" okButtonProps={{ danger: true }}>
-                              <Button size="small" danger type="text" icon={<DeleteOutlined />}>吊销</Button>
-                            </Popconfirm>
+                            {canManage && (
+                              <Popconfirm title="归到本项目后，它的范围立刻改由本项目决定" onConfirm={() => adoptKey(k.id)} okText="归属" cancelText="取消">
+                                <Button size="small" type="text">归到本项目</Button>
+                              </Popconfirm>
+                            )}
+                            {canManage && (
+                              <Popconfirm title="吊销后该连接立即失效" onConfirm={() => revokeKey(k.id)} okText="吊销" cancelText="取消" okButtonProps={{ danger: true }}>
+                                <Button size="small" danger type="text" icon={<DeleteOutlined />}>吊销</Button>
+                              </Popconfirm>
+                            )}
                           </Space>
                         </div>
                       </Card>
@@ -717,7 +735,9 @@ export default function MCPTools() {
           <Button key="close" type="primary" onClick={() => setCreateModalOpen(false)}>我已保存，关闭</Button>
         ] : [
           <Button key="cancel" onClick={() => setCreateModalOpen(false)}>取消</Button>,
-          <Button key="create" type="primary" icon={<PlusOutlined />} onClick={createKey} loading={creating}>创建</Button>,
+          canManage ? (
+            <Button key="create" type="primary" icon={<PlusOutlined />} onClick={createKey} loading={creating}>创建</Button>
+          ) : null,
         ]}>
         {!newKeyResult ? (
           <div>

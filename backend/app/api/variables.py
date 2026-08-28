@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_201_CREATED
 
 from app.core.audit import write_audit_log
-from app.deps.auth import get_current_user, require_project_role
+from app.deps.auth import get_current_user, require_project_role, require_role
 from app.deps.db import get_db
 from app.models.user import User
 from app.schemas.common import MessageResponse
@@ -247,6 +247,8 @@ async def clone_environment(
 
 
 # ---- 通知渠道 API ----
+# 渠道是全局平台设施（不属于任何项目，见文件头注释）。读保持登录可见，
+# 写（增改删）收到系统 admin —— 一个渠道被所有项目共用，普通用户不该能改别人在用的 webhook。
 
 @router.get("/api/channels")
 async def list_channels(session: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
@@ -254,19 +256,19 @@ async def list_channels(session: AsyncSession = Depends(get_db), _: User = Depen
     return {"data": [ChannelResponse.model_validate(c, from_attributes=True).model_dump(by_alias=True) for c in channels]}
 
 @router.post("/api/channels", status_code=HTTP_201_CREATED)
-async def create_channel(body: CreateChannelRequest, session: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
+async def create_channel(body: CreateChannelRequest, session: AsyncSession = Depends(get_db), _: User = Depends(require_role("admin"))):
     ch = await channel_service.create_channel(session, body.name, body.webhook_url)
     await write_audit_log(session, action="create", target_type="channel", target_id=ch.id, target_name=ch.name)
     return {"data": ChannelResponse.model_validate(ch, from_attributes=True).model_dump(by_alias=True)}
 
 @router.put("/api/channels/{ch_id}")
-async def update_channel(ch_id: uuid.UUID, body: UpdateChannelRequest, session: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
+async def update_channel(ch_id: uuid.UUID, body: UpdateChannelRequest, session: AsyncSession = Depends(get_db), _: User = Depends(require_role("admin"))):
     ch = await channel_service.update_channel(session, ch_id, body.name, body.webhook_url)
     await write_audit_log(session, action="update", target_type="channel", target_id=ch.id, target_name=ch.name)
     return {"data": ChannelResponse.model_validate(ch, from_attributes=True).model_dump(by_alias=True)}
 
 @router.delete("/api/channels/{ch_id}")
-async def delete_channel(ch_id: uuid.UUID, session: AsyncSession = Depends(get_db), _: User = Depends(get_current_user)):
+async def delete_channel(ch_id: uuid.UUID, session: AsyncSession = Depends(get_db), _: User = Depends(require_role("admin"))):
     ch = await channel_service.get_channel(session, ch_id)
     await channel_service.delete_channel(session, ch_id)
     await write_audit_log(session, action="delete", target_type="channel", target_id=ch_id, target_name=ch.name)

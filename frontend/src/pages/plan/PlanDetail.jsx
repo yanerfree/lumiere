@@ -4,6 +4,8 @@ import { Card, Tag, Button, Descriptions, Space, Spin, Empty, message, Input, Se
 import { ClockCircleOutlined, EditOutlined, PlayCircleOutlined, CheckOutlined, ArrowLeftOutlined, SaveOutlined, SyncOutlined, BarChartOutlined, CloseOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
+import { PERM } from '../../utils/permissions'
+import { usePermissions } from '../../utils/PermissionContext'
 import { buildEnvOptions } from '../../utils/env'
 import CasePicker from '../../components/CasePicker'
 
@@ -25,6 +27,9 @@ function fmt(ms) {
 
 export default function PlanDetail() {
   const navigate = useNavigate()
+  const { has } = usePermissions()
+  const canRun = has(PERM.PLAN_RUN)
+  const canReport = has(PERM.REPORT_WRITE)
   const { projectId, planId } = useParams()
   const [plan, setPlan] = useState(null)
   const [executions, setExecutions] = useState([])
@@ -170,23 +175,25 @@ export default function PlanDetail() {
             </Space>
           </div>
           <Space>
-            {plan.status !== 'executing' && !editing && (
+            {canRun && plan.status !== 'executing' && !editing && (
               <Button icon={<EditOutlined />} onClick={startEdit}>编辑</Button>
             )}
             {editing && (<>
               <Button onClick={() => setEditing(false)}>取消</Button>
-              <Button type="primary" icon={<SaveOutlined />} onClick={handleSave}>保存</Button>
+              {canRun && (
+                <Button type="primary" icon={<SaveOutlined />} onClick={handleSave}>保存</Button>
+              )}
             </>)}
-            {plan.status === 'draft' && !editing && (
+            {canRun && plan.status === 'draft' && !editing && (
               <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleExecute} loading={executing}>启动执行</Button>
             )}
-            {(plan.status === 'completed' || plan.status === 'paused') && !executing && (
+            {canRun && (plan.status === 'completed' || plan.status === 'paused') && !executing && (
               <Button type="primary" icon={<PlayCircleOutlined />} onClick={handleExecute} loading={executing}>重新执行</Button>
             )}
-            {plan.status === 'pending_manual' && !executing && (
+            {canReport && plan.status === 'pending_manual' && !executing && (
               <Button icon={<EditOutlined />} onClick={() => navigate(`/projects/${projectId}/plans/${planId}/manual-record`)}>手动录入</Button>
             )}
-            {(plan.status === 'pending_manual' || plan.status === 'executing') && !executing && (
+            {canRun && (plan.status === 'pending_manual' || plan.status === 'executing') && !executing && (
               <Button type="primary" icon={<CheckOutlined />} onClick={handleComplete}>确认完成</Button>
             )}
           </Space>
@@ -243,7 +250,9 @@ export default function PlanDetail() {
             <div>
               <div style={{ fontSize: 13, color: '#86909c', marginBottom: 4 }}>关联用例</div>
               <Space>
-                <Button size="small" onClick={() => setCasePickerOpen(true)}>选择用例</Button>
+                {canRun && (
+                  <Button size="small" onClick={() => setCasePickerOpen(true)}>选择用例</Button>
+                )}
                 <span style={{ fontSize: 13, color: '#4e5969' }}>已选 {editCaseIds.length} 条</span>
               </Space>
             </div>
