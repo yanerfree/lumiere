@@ -140,6 +140,27 @@ def infer_kind(selector: str) -> str:
     return "structure"
 
 
+def anchor_selector(*, testid: str = "", elem_id: str = "", text: str = "") -> str:
+    """把爬到的控件属性拼成一条选择器字面量 —— **按稳定性顺序退**。
+
+    页面枚举（`qa_page_survey_crawl.collect_items`）拿它算 `anchor_kind`，
+    S6.5 拿同一条去 `lum_upsert_selectors` 登记。**必须是同一个函数**：
+    两边各拼一次，就会有两套词表，而登记表里的 `kind` 和 survey 里的 `anchor_kind`
+    一旦对不上，「爬到的和登记的不符」这条待整改就永远报不准。
+
+    三样都空返回 `""` —— 那种控件（无 testid、无 id、无可读文案的图标按钮）
+    **没有名字可以对齐两趟**，调用方按「认不出」记账，不要凭序号编一个：
+    编出来的锚点会随 DOM 顺序飘，下次插一个兄弟节点就报成「功能没了」。
+    """
+    if testid:
+        return f'[data-testid="{testid}"]'
+    if elem_id:
+        return f"#{elem_id}"
+    if text:
+        return f"text={text}"
+    return ""
+
+
 # 定位 API 的字符串参数 —— 只扫这些，普通字符串和注释不算（脚本头的说明里
 # 出现 `.card` 不该被报）。
 _LOCATOR_CALL = re.compile(

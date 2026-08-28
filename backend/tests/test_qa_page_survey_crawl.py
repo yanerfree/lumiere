@@ -201,6 +201,52 @@ class Test控件账本:
         assert c.collect_items("/svc", "", None, {}) == []
         assert c.collect_items("/svc", "", [], {}) == []
 
+    def test_anchor_kind_用的是登记表那套词表(self):
+        """`anchor_kind` 是**稳定性等级**，词表必须跟选择器登记表同一套。
+
+        自己在爬虫里另写一套（testid/id/text 三个字符串）当场看不出问题 ——
+        它跟 `infer_kind` 在这三种上恰好同名。等 S6.5 拿爬到的锚点跟登记表对账时
+        才会发现两边的 `kind` 对不上，而那时「爬到的与登记不符」这条待整改
+        已经报了一批假的。
+        """
+        from app.services.ui_selector_render import _KIND_ORDER
+        rows = c.collect_items("/svc", "服务", [
+            {"label": "新建", "role": "button", "testid": "svc-create"},
+            {"label": "新建", "role": "button", "id": "btn1"},
+            {"label": "详情", "role": "link"},
+        ], {})
+        assert [r["anchor_kind"] for r in rows] == ["testid", "id", "text"]
+        assert all(r["anchor_kind"] in _KIND_ORDER for r in rows)
+
+    def test_拼选择器不许在这个模块里重写一份(self):
+        """锚点→选择器只能有一份实现，S6.5 登记时要拿同一条。"""
+        import ast
+        src = pathlib.Path(c.__file__).read_text(encoding="utf-8")
+        names = {a.name for n in ast.parse(src).body
+                 if isinstance(n, ast.ImportFrom) for a in n.names}
+        assert {"anchor_selector", "infer_kind"} <= names
+
+    def test_锚不住的控件不出行只记数(self):
+        """无 testid / 无 id / 无文案的图标按钮：**记数，不编锚点。**
+
+        编一个序号锚点（`btn#3`）会随 DOM 顺序飘，下次插一个兄弟节点就把它报成
+        「功能没了」—— 凭空多报一个缺口，比少记一行坏得多。
+        """
+        ledger = {}
+        rows = c.collect_items("/svc", "服务", [
+            {"label": "", "role": "button", "testid": "", "id": ""},
+            {"label": "", "role": "button", "testid": "", "id": ""},
+            {"label": "新建", "role": "button"},
+        ], ledger)
+        assert [r["label"] for r in rows] == ["新建"]
+        assert ledger["controlsAnchorless"] == 2
+        assert ledger["controlsAnchorlessPages"] == ["/svc"]
+
+    def test_锚不住不算缺口不降级(self):
+        """图标按钮到处都是。一有就降 `partial`，这个信号就永远亮着 ——
+        永远亮着的信号没人看，真有页面没打开时就分不出来了。"""
+        assert c.degrade_for_gaps("done", {"controlsAnchorless": 7}) == "done"
+
 
 # ── HAR 落库前 ───────────────────────────────────────────────────────────
 
@@ -347,7 +393,7 @@ class Test一页失败不拖垮整趟:
         ledger = {}
         rows = await c.crawl_role(browser, "http://h", "qa-auditor",
                                   ["/ok1", "/bad", "/ok2"], ledger, tmp_path)
-        assert ledger["pagesFailed"] == ["/bad: TimeoutError"]
+        assert ledger["pagesFailed"] == [{"path": "/bad", "error": "TimeoutError"}]
         assert ledger["pagesVisited"] == 2          # 坏页之后没停
         assert [r["label"] for r in rows] == ["新建"]
 

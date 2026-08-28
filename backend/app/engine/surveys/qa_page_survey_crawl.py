@@ -23,6 +23,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
+from app.services.ui_selector_render import anchor_selector, infer_kind
 from app.services.qa_survey_guard import (
     MAIN_CRAWL_ROLE,
     SAFE_TO_CLICK,
@@ -161,7 +162,19 @@ def _state_of(raw: dict) -> str:
 
 
 def collect_items(page_path: str, page_title: str, raw_items, ledger: dict) -> list[dict]:
-    """把一页的原始控件整理成账本行。**认不出的照记不漏，只是不点。**"""
+    """把一页的原始控件整理成账本行。**认不出的照记不漏，只是不点。**
+
+    `anchor_kind` 走 `ui_selector_render.infer_kind`，**不在这里另写一套**：
+    它是选择器登记表用的那套稳定性等级，S6.5 要拿爬到的锚点跟登记表对账，
+    两套词表对不上的话「爬到的与登记不符」永远报不准。
+
+    **锚不住的控件不出行**（无 testid / 无 id / 无可读文案的图标按钮）：
+    记进 `controlsAnchorless` 让它在页面上看得见，但不凭序号编一个锚点 ——
+    编出来的会随 DOM 顺序飘，下次插一个兄弟节点就把它报成「功能没了」。
+    少一行只是少一行；凭空多一条「功能没了」会让人去查一个不存在的缺口。
+    （**这个数不参与 `partial` 降级**：图标按钮到处都是，一有就降级等于这个信号
+    永远亮着，亮着的信号没人看。真正的整改出口在 S6.5 的 `status='gap'` 登记。）
+    """
     out = []
     for raw in raw_items or []:
         label = (raw.get("label") or "").strip()
@@ -169,9 +182,16 @@ def collect_items(page_path: str, page_title: str, raw_items, ledger: dict) -> l
         kind = classify_control(label, role)
         if kind == "unknown":
             ledger["controlsUnknown"] = ledger.get("controlsUnknown", 0) + 1
+        selector = anchor_selector(testid=raw.get("testid") or "",
+                                   elem_id=raw.get("id") or "", text=label)
+        if not selector:
+            ledger["controlsAnchorless"] = ledger.get("controlsAnchorless", 0) + 1
+            ledger.setdefault("controlsAnchorlessPages", [])
+            if page_path not in ledger["controlsAnchorlessPages"]:
+                ledger["controlsAnchorlessPages"].append(page_path)
+            continue
         anchor = raw.get("testid") or raw.get("id") or label
-        anchor_kind = ("testid" if raw.get("testid")
-                       else "id" if raw.get("id") else "text")
+        anchor_kind = infer_kind(selector)
         out.append({
             "key": f"{page_path}::{anchor}",
             "page_path": page_path,
@@ -227,9 +247,13 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                 raw = await page.evaluate(_COLLECT_JS)
             except Exception as e:                       # noqa: BLE001
                 # **记账，不抛。** 这一页的 item 在 diff 里会被降级成 unknown
-                # （S6.4），绝不进 `removed` —— 「没走到」和「功能没了」在产物上
-                # 长得一模一样，混过去就会凭空报出一批不存在的缺口。
-                ledger.setdefault("pagesFailed", []).append(f"{path}: {type(e).__name__}")
+                # （`qa_page_survey.diff_items`），绝不进 `removed` ——「没走到」和
+                # 「功能没了」在产物上长得一模一样，混过去就会凭空报出一批不存在的缺口。
+                # 记**结构化的一条**，不拼成 `f"{path}: {err}"`：拼了下游就得反解析，
+                # 而路径里本来就可能带 ": "，解析一歪那一页就不算失败页，
+                # 它的 item 立刻变成 `removed` —— 正是这条规则要防的那个假缺口。
+                ledger.setdefault("pagesFailed", []).append(
+                    {"path": path, "error": type(e).__name__})
                 continue
             if not raw:
                 ledger.setdefault("pagesEmptyState", []).append(path)
