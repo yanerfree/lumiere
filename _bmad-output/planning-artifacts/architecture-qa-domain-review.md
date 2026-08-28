@@ -259,7 +259,14 @@ NFR-1 说"单测每层各一条"，只有先纯函数化才写得出来。
   整个 `request` 塌成省略号，而 HAR 是失败分类唯一的网络证据来源。
 - **L1 的 fixture 不能放进 `pw_conftest.py`。** 那份 conftest 是**所有** UI 脚本
   共用的，普通用例脚本合法地做写操作，无条件挂上 `readonly_guard` 会把它们全 abort。
-  爬虫用自己那份 conftest（S6.3）。
+  ~~爬虫用自己那份 conftest（S6.3）。~~ **S6.3 实做时也没给它单独的 conftest**：
+  爬虫不是 pytest 脚本、是 arq 任务，为它造一份 pytest 装置等于造一份**不会被执行**
+  的装置 —— 只读保护看着有、实际没有。改成直接
+  `context.route("**/*", make_readonly_guard(ledger))`，接线本身由
+  `test_route_一定挂上了` 钉住（漏掉那行 = 整趟裸奔且不报任何错）。
+- **`state` 这一版只产 `present` / `enabled`，不产 `reachable`**（上面第 216 行列了三档）。
+  `reachable` 要真点进去才知道，这一版不点；把 `enabled` 当 `reachable` 写就是
+  **把没验证过的事记成验证过了**，宁可少一档（`test_不许出现_reachable` 钉住）。
 - L3 的判定也提成了纯函数（`pick_main_crawl_role` / `shallow_scan_roles`），
   不然它只是一句注释 —— 而它是五层里唯一由**对方系统**兜底的一层。
 

@@ -2146,22 +2146,9 @@ async def upsert_automation_resource(
 
 # ── UI 脚本回推 ──────────────────────────────────────────────────────────────
 
-_UI_ENV_HINT = 'BASE_URL = os.getenv("BASE_URL", "")'
-
-# 服务地址/凭据写死是硬伤：换环境就全挂，而且挂得很隐蔽（脚本还在跑，只是打了别的系统）。
-_URL_LITERAL_RE = re.compile(r"""["'`](https?://[^"'`\s]+)["'`]""")
-_CRED_LITERAL_RE = re.compile(
-    r"""(password|passwd|pwd|token|secret|api_?key)\s*[:=]\s*["'`]([^"'`\s]{4,})["'`]""",
-    re.I,
-)
-# **合法写法：故意用错的凭据。** 「用错密码登录应失败」这条用例里，
-# 那个密码就该是字面量 —— 它不是配置，是本次要验的输入。
-# 原来一律硬拦，等于逼人把"错密码"也搬进环境变量（那才是真的乱）。
-_INVALID_CRED_RE = re.compile(
-    r"wrong|invalid|bad[-_]?|expired|revoked|fake|dummy|nonexist|notexist|"
-    r"xxx+|placeholder|错误|无效|过期",
-    re.I,
-)
+# 「不许写死地址和凭据」的判定搬去了 `app/services/ui_script_guard.py`。
+# **别在这里再写一份**：仓内自己写的脚本（页面枚举爬虫）不走 MCP 回推，
+# 它要的是同一条判定的另一个入口；两份判定迟早分叉，而分叉那天不会有任何东西变红。
 
 
 def _detect_language(content: str, file_name: str | None) -> str:
@@ -2372,21 +2359,8 @@ def _scan_ui_script(content: str, language: str,
             f"当前语种，词典缺这个语种就退回竖线后面的中文。"
             f"详见 lum_get_sync_spec(kind='ui_script') 的「文案纪律」。")
 
-    for line in content.splitlines():
-        if reader in line:
-            continue  # 这一行本身就是在读变量，允许它带默认值
-        for m in _URL_LITERAL_RE.finditer(line):
-            errors.append(
-                f'写死了服务地址 {m.group(1)[:60]} —— 换环境必挂。'
-                f'改成从变量取：{_UI_ENV_HINT}，再用 f"{{BASE_URL}}/xxx" 拼。'
-            )
-        for m in _CRED_LITERAL_RE.finditer(line):
-            if _INVALID_CRED_RE.search(m.group(2)):
-                continue          # 故意用错的凭据，见 _INVALID_CRED_RE
-            errors.append(
-                f'写死了凭据 {m.group(1)} —— 凭据只能来自环境变量。'
-                f'改成 {reader}("ADMIN_PASSWORD"{"" if language == "typescript" else ", \'\'"})。'
-            )
+    from app.services.ui_script_guard import scan_hardcoded_endpoint_or_secret
+    errors.extend(scan_hardcoded_endpoint_or_secret(content, language))
 
     if language == "python":
         if "def test_" not in content:

@@ -610,6 +610,56 @@ FR-3-3 + NFR-1 五层只读。架构 AD-3 / AD-6 / AD-7。**可与 Epic 1–5 �
 非空、`strip()` 也活着，于是一个空角色会变成**一个名叫 None 的账号**被拿去登录浅扫。
 `if str(r).strip()` 挡不住它，要先判 `is None`。
 
+**S6.3**：门禁提取 `app/services/ui_script_guard.py` + 爬虫
+`app/engine/surveys/qa_page_survey_crawl.py` + arq 入口 `app/engine/tasks/page_survey.py`
++ `backend/tests/test_qa_page_survey_crawl.py`（37 条，25 个变异逐个咬住）。
+**三处偏离本文/AD-7 的字面**：
+
+1. **没有"爬虫自己那份 conftest"**（S6.2 记录里说要在这条落的那个）。爬虫不是 pytest
+   脚本，是 arq 任务；`readonly_guard` 直接挂在 `context.route("**/*", …)` 上。
+   为它造一个 conftest 等于为一个不跑 pytest 的模块造 pytest 装置 —— 那份装置**不会被
+   执行**，于是只读保护看着有、实际没有。接线本身用 `test_route_一定挂上了` 钉住：
+   漏掉那一行 = 整趟没有只读保护，而且什么都不会报错。
+2. **多提了一个纯函数 `degrade_for_gaps`**，AD-7 的清单里没有。
+   `resolve_terminal_status` 只看**分片**成没成，一个分片里跳过半数页面它照样算成功；
+   而 S6.4 的 diff 规则是「失败页的 item 降级成 unknown、绝不进 removed」——
+   `partial` 这个信号要是丢在编排里，下游就会把没爬到的页面报成「这个功能没了」。
+   写在 `run_survey` 里就得起浏览器才测得到，等于不会被测。
+3. **爬虫不产 `reachable` 这一档**（AD-6 的 `state` 列举了它）。要真点进去才知道
+   能不能到，这一版不点。`enabled` 当 `reachable` 写 = 把没验证过的事记成验证过了，
+   所以宁可少一档，并用 `test_不许出现_reachable` 把它钉死。
+
+**写的过程中发现一个会让本模块自己犯规的口子**：L5 的「爬前爬后自检」靠调用方传
+`totals_probe`，而现在**没有任何调用方传它** —— 也就是说 `dirty` 至今永远不会触发，
+一趟 `done` 的含义会从「确认没动过环境」悄悄滑成「根本没查过」。这跟洞四是同一种错
+（把没验证的事记成验证过了），所以账本里明写 `selfCheck: notConfigured`，
+并用两条测试分别钉住「函数判得对」和「`run_survey` 真的调了它」——
+只钉前者的话，把那行赋值删掉不会有任何东西变红。**真正的 probe 留给对账那条线接。**
+
+另外把 AD-4 的登记落了：`run_page_survey` 进 `worker.py` 的 `functions` 白名单，
+并补一条测试盯着 —— 没登记的任务 enqueue 之后**既不执行也不报错**，一直躺在 redis 里，
+页面上看到的是「一直在跑」，查不出任何原因。
+
+门禁从 `mcp/tools/sync.py` 搬出来的理由不是"复用"：它原来只长在 MCP 回推通道上，
+管得住 CC 推上来的脚本，**管不住仓内自己写的脚本**——而爬虫恰恰是后者，且它打的是
+别人的测试环境，写死一个地址的后果不是"换环境挂了"，是**打到了不该打的那台机器上**，
+脚本照跑不误、不报任何错。搬完 36 条原有门禁测试全过（行为未变）。
+封样测试 `test_爬虫脚本里不许写死地址和凭据` 直接对**源码文件**跑校验函数，另配一条
+反向锚点 `test_门禁真的会拦下写死的地址` —— 否则把校验函数改成 `pass` 不会有东西变红。
+
+**跨 Epic 的重叠，别做第二遍**：S7.8 里的「arq 分片（1 深度 + 5 浅扫，`Semaphore(2)`）
++ 在 `worker.py::functions` 注册 + 状态机 `pending → running → done/partial/failed/dirty`」
+**已经在这条落完了**（分片和信号量在 `run_survey`，注册和封样测试在 `worker.py` /
+`Test任务登记`）。S7.8 剩下的只有**增量缓存键**（AD-8）那一半。
+
+**还没落的一块**：爬完的结果**没有写进 S6.1 那两张表**，现在只经 arq 的 result 出去。
+`run_survey` 返回的 `items` 形状是照表的列凑的（`key` / `page_path` / `anchor` /
+`anchor_kind` / `control_type` / `state` / `endpoints` / `roles_visible`），落库放在
+S6.4 —— 那条要「同一构建指纹跑两趟 diff 稳定」，本来就得先有两趟存下来的东西可比。
+
+⚠ **爬虫至今没有对 `uag-138:3000` 真跑过。** 那是别人的测试环境，真跑要单独批准。
+37 条测试全部跑在假 browser/page 上，钉的是**判断和降级纪律**，不是"爬得全不全"。
+
 ---
 
 ## Epic 7 — 三方对账
