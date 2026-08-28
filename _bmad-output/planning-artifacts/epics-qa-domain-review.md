@@ -575,6 +575,43 @@ FR-3-3 + NFR-1 五层只读。架构 AD-3 / AD-6 / AD-7。**可与 Epic 1–5 �
 
 ---
 
+### Epic 6 实现记录（2026-08-29 起，逐条落）
+
+**S6.1**（`0214df4`）：`qa_page_surveys` / `qa_page_survey_items` + 迁移 `zzx0qasrv`。
+两处偏离 AD-6 的字面：① 表名用复数（仓里 60 张表全是复数）；② item 上冗余一列
+`project_id` —— AD-6 的索引清单要 `(project_id, page_path)`，字段清单里却没这一列，
+照字面建不出来；改挂 survey 的话对账（跨 survey 按页扫）用不上那个索引。
+验证：真库上 → 降 → 再上；重复 key 的第二条 insert 报 duplicate key、表里剩 1 行；
+10 个变异各红一条。
+
+**S6.2**：`app/services/qa_survey_guard.py` + `backend/tests/test_qa_survey_guard.py`
+（44 条，16 个变异逐个咬住）。**四处偏离本文/AD-7 的写法**：
+
+1. **L4 不复用 `_mask_deep`。** AD-7 写「落库前复用 `_mask_deep`」，实测**不够**：
+   HAR 把头名放在 `{"name": "Authorization", "value": …}` 的**值**里，按键名脱敏
+   对这个形状**结构性失明** —— 一份带三个凭证头的 HAR 喂进去，`Bearer …` /
+   `session=…` / `Set-Cookie` **原样三个全在**。改成按 HAR 形状整条剔除，
+   `_mask_deep` 那套只留作兜底扫别的键。
+   顺带纠正一句这轮变异测出来的**反直觉事实**：把深度上限从 12 改回 `_mask_deep` 的
+   6，**凭证并不会漏**（到底了返回 `"…"` 不是原对象）—— 浅封顶吃掉的是**证据**：
+   整个 `request` 塌成省略号，url/方法/`Accept` 全没了，而这份 HAR 是失败分类
+   唯一的网络证据来源。原来那条测试的理由写歪了，按真实后果重写。
+2. **fixture 接线不在这条 Story 里，挪到 S6.3。** `pw_conftest.py` 是**所有** UI 脚本
+   共用的那份，普通用例脚本合法地做写操作；把 `readonly_guard` 无条件塞进去会把它们
+   全 abort 掉。爬虫要的是自己那份 conftest，跟爬虫一起落。
+3. **L3 也提成了纯函数**（`pick_main_crawl_role` / `shallow_scan_roles`），
+   AD-7 的函数清单里没有它们。不提的话 L3 就只是一句注释 ——
+   而它是五层里**唯一由对方系统兜底**的一层，前两层都是我们自己判的。
+4. **`dirty` 压过 `failed`**（本文只说了「前后不等 ⇒ dirty」，没说跟 failed 谁先）。
+   一趟全片失败、但环境里的数变了，要看的是"我们动了什么"；排在后面就会被一句
+   "这趟失败了"盖掉，而那正是最需要人看的一趟。
+
+测试写的时候抓到一个**真 bug**（不是设计问题）：`str(None)` 是字符串 `"None"`，
+非空、`strip()` 也活着，于是一个空角色会变成**一个名叫 None 的账号**被拿去登录浅扫。
+`if str(r).strip()` 挡不住它，要先判 `is None`。
+
+---
+
 ## Epic 7 — 三方对账
 
 FR-3-1 / FR-3-2 / FR-3-4 / FR-3-6 / FR-3-7。依赖 Epic 6。

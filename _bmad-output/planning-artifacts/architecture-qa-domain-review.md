@@ -239,12 +239,29 @@ qa_page_survey_item       每个可操作项一行 ← diff 的单位
 | L1 网络 abort | `app/engine/pw_conftest.py` 新增 `readonly_guard` fixture（`context.route("**/*")`） | ✅ 纯函数化判定：`is_write_request(method, url, allowlist)` 单独可测 |
 | L2 不点写控件 | `surveys/qa_page_survey_crawl.py` 的动作词典 | ✅ `classify_control(label, role)` 单独可测 |
 | L3 只读账号 | 编排层选角色 | ✅ 断言主爬用的是 `qa-auditor` |
-| L4 凭证 drop | `qa_page_survey.py` 落库前，复用 `_mask_deep` | ✅ 造一份带 Authorization 的 HAR ⇒ 库里搜不到 |
+| L4 凭证 drop | `qa_page_survey.py` 落库前，~~复用 `_mask_deep`~~ **按 HAR 形状 drop**（下方勘误） | ✅ 造一份带 Authorization 的 HAR ⇒ 库里搜不到 |
 | L5 爬前爬后自检 | 编排层，不等 ⇒ `status='dirty'` | ✅ 桩两个不同的 total ⇒ dirty |
 
 **决策：五层的判定逻辑全部提成纯函数**，Playwright fixture 只做"调用判定 + abort"。
 理由：fixture 里的逻辑要起浏览器才能测，实际上就是不会被测。
 NFR-1 说"单测每层各一条"，只有先纯函数化才写得出来。
+
+**勘误（2026-08-29，S6.2 落地时实测）——上表 L4 那格原来写错了：**
+
+- **`_mask_deep` 救不了 HAR。** 它按**键名**脱敏，而 HAR 把头名放在
+  `{"name": "Authorization", "value": "Bearer …"}` 的**值**里 ——
+  对这个形状结构性失明。实测：一份带三个凭证头的 HAR 喂进去，
+  `Bearer …` / `session=…` / `Set-Cookie` **原样三个全在**。
+  改为 `qa_survey_guard.drop_credentials()`：先按 HAR 形状整条剔除，
+  `_mask_deep` 那套按键名的规则只留作兜底。
+- 顺带记一条**反直觉**的：把深度上限从 12 改回 `_mask_deep` 的 6，
+  **凭证不会漏**（到底了返回 `"…"` 不是原对象），漏的是**证据** ——
+  整个 `request` 塌成省略号，而 HAR 是失败分类唯一的网络证据来源。
+- **L1 的 fixture 不能放进 `pw_conftest.py`。** 那份 conftest 是**所有** UI 脚本
+  共用的，普通用例脚本合法地做写操作，无条件挂上 `readonly_guard` 会把它们全 abort。
+  爬虫用自己那份 conftest（S6.3）。
+- L3 的判定也提成了纯函数（`pick_main_crawl_role` / `shallow_scan_roles`），
+  不然它只是一句注释 —— 而它是五层里唯一由**对方系统**兜底的一层。
 
 ---
 
