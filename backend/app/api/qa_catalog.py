@@ -36,7 +36,10 @@ _EMPTY = {
     "scenarios": [],
     "orphanScriptList": [],
     "knownBugRefList": [],
-    "catalogIssues": {"unparsedRows": [], "duplicateIds": []},
+    # 键要跟 parse_catalog 的真返回**一字不差**：空态少一个键，前端就得写
+    # `?.` 兜底，而兜底之后"这个仓根本没配"和"读到了但一条都没漏"渲染成同一个样子。
+    "catalogIssues": {"unparsedRows": [], "duplicateIds": [],
+                      "domainGroupsUnreadable": []},
 }
 
 
