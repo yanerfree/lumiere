@@ -141,59 +141,6 @@ function domainLabel(code, name) {
   return n.startsWith(c) ? n : `${c} ${n}`
 }
 
-// 评审维度。**先定人认得的三个大维度，查法挂在底下当子项** —— 上一版直接摆六条查法
-// （「断言能不能失败」「一条认领拆没拆开」），反馈就一句「你写的都是什么维度，我咋看不懂」。
-// 大维度只用现成的行话：覆盖面 / 场景设置 / 断言。跟后端 `AXES` 必须一字不差。
-const AXES = [
-  ['cover', '覆盖面', '该测的测了没', [
-    ['coverage', '清单里就没有这条场景', '这个域该有的路径/角色/失败态，清单一条都没认领'],
-    ['both', '只测了成功那一半', '该被拒的那一半没测（或反过来）—— 放行对了不等于拦得住'],
-    ['skip', '在这个环境里整条跳过', '缺变量、缺样本就 exit 0，清单那边照记「已覆盖」'],
-  ]],
-  ['design', '场景设置', '这条场景本身定得合不合理', [
-    ['grain', '一条说了好几件事', '清单一条说三件事，脚本只验得了其中一件 —— 认领粒度太粗'],
-    ['shape', '说不清要证明什么', '场景描述给不出可判定的预期，或优先级跟风险明显不匹配'],
-  ]],
-  ['assertion', '断言', '断得对不对、站不站得住', [
-    ['assert', '断言恒真，改坏了也不会红', '把动作删掉这条断言还成立 —— 跑绿证明不了任何事'],
-    ['claim', '断的不是认领的那件事', '脚本头认领了 A，正文在验 B'],
-    ['depth', '只断到接口回了 200', '没读回来确认那件事真的发生了'],
-    ['expect', '断的值跟清单写的不一致', '清单写「401 且 error.code=X」，脚本断的是别的，或只断个非空糊过去'],
-  ]],
-]
-const DIM_KEYS = AXES.flatMap(([, , , dims]) => dims.map(d => d[0]))
-// 每条子项从哪一版维度口径起才有（跟后端 `DIM_SINCE` 一字不差）。渲染时拿它跟结论里
-// 存的 `dimSpec` 比：加维度**之前**评的结论，模型压根没被问过新那几条 ——
-// 那种情况摆个 0 是假安心。**后端 `DIM_SPEC` 一涨，这里必须跟着加一行，否则新子项
-// 在存量结论上会渲染成货真价实的 0。**（版本号本身只有后端要写进结论，前端不存。）
-const DIM_SINCE = { coverage: 2, shape: 2, expect: 2 }
-const DIM_OTHER = ['other', '其它（这次没归类）', '模型没给它归维度，或是加维度之前评的旧结论']
-
-// 条数**前端自己数**（跟后端 `dim_rollup` 同一套口径）。让模型报数就会出现
-// 「清单 17 处」底下只列 1 条那种自相矛盾 —— 一屏之内数字打架，读的人只会
-// 得出「这页的数不能信」。大维度的数是子项之和，不另算一套。
-function dimRollup(res) {
-  const spec = res.dimSpec || 1
-  const n = { [DIM_OTHER[0]]: 0 }
-  DIM_KEYS.forEach(k => { n[k] = 0 })
-  ;[...(res.scriptGaps || []), ...(res.catalogGaps || [])].forEach(g => {
-    n[DIM_KEYS.includes(g.dim) ? g.dim : DIM_OTHER[0]] += 1
-  })
-  const out = AXES.map(([ax, name, why, dims]) => {
-    const items = dims.map(([k, iname, iwhy]) => ({
-      k, name: iname, why: iwhy, count: n[k], unavailable: (DIM_SINCE[k] || 1) > spec,
-    }))
-    return { k: ax, name, why, items,
-             count: items.reduce((a, i) => a + i.count, 0),
-             unavailable: items.filter(i => i.unavailable).length }
-  })
-  if (n[DIM_OTHER[0]]) {
-    out.push({ k: DIM_OTHER[0], name: DIM_OTHER[1], why: DIM_OTHER[2],
-               count: n[DIM_OTHER[0]], unavailable: 0, items: [] })
-  }
-  return out
-}
-
 const BLAME_ORDER = ['script', 'env', 'catalog']
 const blameOf = g => (BLAME[g.blame] ? g.blame : 'script')
 const REVIEW_RUNNING = s => s === 'queued' || s === 'running'
@@ -1248,8 +1195,47 @@ function HowIRead({ res, r }) {
 // 第一次改成维度时直接摆了六条查法，结果是「你写的都是什么维度，我咋看不懂」——
 // 那六条是**我怎么查的**，不是他脑子里的维度。现在顶层只有覆盖面 / 场景设置 / 断言，
 // 三个数就够做决定；查法退到子项，想知道"凭什么这么判"的人才往下读。
-function DimTable({ res }) {
-  const rows = dimRollup(res)
+// 后端没发 `dims` 时走这里。最可能的原因是**后端还跑着旧代码** —— 本仓的后端
+// 故意不带 --reload，改完不重启就是「新前端 + 旧后端」，而前端有 HMR，症状长得
+// 像功能本身坏了。这时候唯一诚实的做法是把话说出来，再把结论里的原始维度标签
+// **原样**列出来：不猜名字、不摆 0，更**不许显示 `?`** —— 正常路径上 `?` 专指
+// 「这一趟没查」，两个意思撞在一起就是一条假信息，比一片空白坏得多。
+function DimUnavailable({ res }) {
+  const n = {}
+  ;[...(res.scriptGaps || []), ...(res.catalogGaps || [])].forEach(g => {
+    const k = g.dim || '(模型没给它归维度)'
+    n[k] = (n[k] || 0) + 1
+  })
+  const keys = Object.keys(n).sort((a, b) => n[b] - n[a])
+  return (
+    <div style={{ marginBottom: 16, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
+      <div style={{ fontWeight: 600, color: C.orange }}>
+        ⚠ 后端没给出维度口径，这张表画不出来
+      </div>
+      <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.8, marginBottom: 6 }}>
+        维度的名称、分组和「这一趟没查」都由后端发（详情接口的 <code>dims</code>）。
+        拿不到时前端<b>不自己重算一份</b> —— 重算就得再抄一份口径回来，
+        抄的那份漂了会把「压根没查」渲染成一个漂亮的 0。
+        最常见的原因是<b>后端还跑着旧代码</b>（改完要 <code>bash deploy/restart-backend.sh</code>）。
+        下面是结论里的原始维度标签，按条数排：
+      </div>
+      {keys.length ? keys.map(k => (
+        <div key={k} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '3px 0' }}>
+          <span style={{ width: 26, flexShrink: 0, textAlign: 'right', fontWeight: 700,
+                         fontVariantNumeric: 'tabular-nums', color: C.ink }}>{n[k]}</span>
+          <code style={{ fontSize: 12.5, color: C.gray }}>{k}</code>
+        </div>
+      )) : <div style={{ fontSize: 12.5, color: C.faint }}>这一趟一条都没抓到</div>}
+    </div>
+  )
+}
+
+function DimTable({ res, r }) {
+  // **口径由后端发**（`to_dict(..., with_dims=True)`）。以前这里是前端自己按一份
+  // 抄来的常量重算的，注释写着「跟后端必须一字不差」—— 而那是一句没有任何东西
+  // 在执行的话。拿不到就明说拿不到，不许为了"兜底"把那份副本抄回来。
+  const rows = r?.dims
+  if (!rows) return <DimUnavailable res={res} />
   const hit = rows.filter(d => d.count > 0).map(d => d.name)
   const stale = rows.reduce((a, d) => a + d.unavailable, 0)
   return (
@@ -1268,7 +1254,7 @@ function DimTable({ res }) {
         )}
       </div>
       {rows.map(d => (
-        <div key={d.k} style={{ paddingTop: 6, borderTop: `1px solid ${C.line}` }}>
+        <div key={d.axis} style={{ paddingTop: 6, borderTop: `1px solid ${C.line}` }}>
           {/* 大维度那一行：人只看这三个数 */}
           <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
             <span style={{
@@ -1280,7 +1266,7 @@ function DimTable({ res }) {
           </div>
           {/* 子项 = 怎么判的。想细看的人才往下读，大维度那三个数已经够做决定 */}
           {d.items.map(it => (
-            <div key={it.k} style={{
+            <div key={it.key} style={{
               display: 'flex', gap: 10, alignItems: 'baseline', padding: '3px 0 3px 36px',
             }}>
               {/* 「没查」和「查了没抓到」都是 0，但意思正好相反 —— 混在一起就是假安心 */}
@@ -1340,7 +1326,7 @@ function ReviewBrief({ r }) {
 
       <HowIRead res={res} r={r} />
 
-      <DimTable res={res} />
+      <DimTable res={res} r={r} />
 
       {total > 0 && (
         <div style={{ fontSize: 12.5, color: C.gray, lineHeight: 2, marginBottom: 14 }}>

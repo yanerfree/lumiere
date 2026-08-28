@@ -215,7 +215,7 @@ async def start_qa_review(
             QaCatalogReview.status.in_(("queued", "running")))
         .order_by(desc(QaCatalogReview.created_at)).limit(1))).scalars().first()
     if running is not None:
-        return {"data": qa_catalog_review.to_dict(running)}
+        return {"data": qa_catalog_review.to_dict(running, with_dims=True)}
 
     env = await _pick_env(session, project_id, env_id)
     review = qa_catalog_review.new_review(
@@ -227,7 +227,7 @@ async def start_qa_review(
 
     qa_catalog_review.spawn(
         qa_catalog_review.execute(project_id, review.id, cfg, domain))
-    return {"data": qa_catalog_review.to_dict(review)}
+    return {"data": qa_catalog_review.to_dict(review, with_dims=True)}
 
 
 @router.get("/reviews")
@@ -248,6 +248,7 @@ async def list_qa_reviews(
         for r in rows:                      # 已按时间倒序，第一条就是最近的
             latest.setdefault(r.domain, r)
         rows = list(latest.values())
+    # 列表**不带** with_dims：一次几十行，每行挂一份口径就是同一段常量发几十遍。
     return {"data": {"reviews": [qa_catalog_review.to_dict(r) for r in rows]}}
 
 
@@ -277,7 +278,7 @@ async def export_qa_review(
                        message=f"这次评审还没出结论（{r.status}），没有可导出的内容",
                        status_code=400)
     if fmt == "json":
-        return {"data": qa_catalog_review.to_dict(r)}
+        return {"data": qa_catalog_review.to_dict(r, with_dims=True)}
     return {"data": {
         "filename": f"qa-review-{r.domain}-{(r.commit_sha or '')[:7]}.md",
         "markdown": qa_catalog_review.to_markdown(r),
@@ -295,4 +296,4 @@ async def get_qa_review(
     r = await session.get(QaCatalogReview, review_id)
     if r is None or str(r.project_id) != str(project_id):
         raise AppError(code="REVIEW_NOT_FOUND", message="找不到这次评审", status_code=404)
-    return {"data": qa_catalog_review.to_dict(r)}
+    return {"data": qa_catalog_review.to_dict(r, with_dims=True)}

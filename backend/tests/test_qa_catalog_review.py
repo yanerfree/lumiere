@@ -8,6 +8,8 @@
 Test ID: qa-catalog-review-UT-001
 Priority: P0
 """
+import pathlib
+
 import pytest
 
 from app.services import qa_catalog_review as qr
@@ -1474,3 +1476,90 @@ def _review_with(catalog_gaps):
     )
     r.created_at = datetime(2026, 8, 29, 10, 0, tzinfo=timezone.utc)
     return r
+
+
+class TestDimsOnTheWire:
+    """Epic 10：维度口径由后端发，前端不再存副本。
+
+    前端原来抄了三份常量（`AXES` / `DIM_KEYS` / `DIM_SINCE`），注释里写着
+    「跟后端必须一字不差」—— 那是一句**没有任何东西在执行**的话。漂了之后错得极安静：
+    后端加一条子项、前端 `DIM_SINCE` 没跟上，新子项在存量结论上不会标「这一趟没查」，
+    而是渲染成一个漂亮的 0。假的 0 正是这整套表最该堵掉的东西。
+    """
+
+    def _r(self, result=None):
+        from datetime import datetime, timezone
+
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="MCP", domain_name="MCP 能力", status="done",
+            environment_name="uag-138:3000", commit_sha="dae9b4fc4150",
+            branch="main", actor="admin", scenario_count=1, script_count=1,
+            result=result,
+        )
+        r.created_at = datetime(2026, 8, 29, 10, 0, tzinfo=timezone.utc)
+        return r
+
+    def test_详情才带列表不带(self):
+        """列表一次出几十行，每行挂一份口径就是同一段常量发几十遍。
+
+        默认关的方向是**故意选的**：忘了传是"详情少个字段"（页面上明说画不出来），
+        传反了是"列表接口悄悄胖十倍"（没人会发现）。两个方向的代价不对称。
+        """
+        r = self._r({"verdict": "ok", "scriptGaps": [], "catalogGaps": [], "dimSpec": 2})
+
+        assert "dims" not in qr.to_dict(r)
+        assert "dimSpec" not in qr.to_dict(r)
+        assert qr.to_dict(r, with_dims=True)["dims"] == qr.dim_rollup(r.result)
+
+    def test_发的是当前口径版本不是结论那一版(self):
+        """两个数一比才知道「这条结论落后了几版」—— 只发一个数说明不了这件事。"""
+        r = self._r({"verdict": "ok", "scriptGaps": [], "catalogGaps": [], "dimSpec": 1})
+
+        out = qr.to_dict(r, with_dims=True)
+
+        assert out["dimSpec"] == qr.DIM_SPEC
+        assert out["result"]["dimSpec"] == 1
+
+    def test_还在跑的那条没有result也不炸(self):
+        # 详情接口拿 running 的那条也走 with_dims=True，result 是 None。
+        out = qr.to_dict(self._r(None), with_dims=True)
+
+        assert [d["count"] for d in out["dims"]] == [0, 0, 0]
+
+    def test_旧结论里新子项标着没查(self):
+        r = self._r({"verdict": "ok", "scriptGaps": [], "catalogGaps": [], "dimSpec": 1})
+
+        items = {i["key"]: i for d in qr.to_dict(r, with_dims=True)["dims"]
+                 for i in d["items"]}
+
+        assert items["expect"]["unavailable"] is True
+        assert items["assert"]["unavailable"] is False
+
+
+class TestFrontendKeepsNoCopy:
+    """前端那三份副本必须是**删掉**，不是"留着当兜底"。
+
+    留着兜底等于这个 Epic 什么都没做：副本还在，还会漂，只是平时看不见它在用。
+    """
+
+    FE = (pathlib.Path(__file__).resolve().parents[2]
+          / "frontend/src/pages/qa/QaCatalog.jsx")
+
+    def test_前端不再抄一份口径(self):
+        src = self.FE.read_text(encoding="utf-8")
+
+        for dead in ("const AXES", "DIM_KEYS", "DIM_SINCE", "DIM_OTHER", "dimRollup"):
+            assert dead not in src, f"{dead} 还留在前端"
+
+    def test_拿不到dims时不许显示问号(self):
+        """`?` 在正常路径上专指「这一趟没查」。
+
+        降级时也画个 `?`，读的人会以为"后端查过、这几条没抓到"——
+        两个意思撞在一起就是一条假信息，比一片空白坏得多。
+        """
+        src = self.FE.read_text(encoding="utf-8")
+        body = src.split("function DimUnavailable")[1].split("function DimTable")[0]
+
+        assert "'?'" not in body and '"?"' not in body
+        assert "后端没给出维度口径" in body

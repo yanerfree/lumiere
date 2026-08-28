@@ -1311,8 +1311,14 @@ def to_markdown(r: QaCatalogReview) -> str:
     return "\n".join(L)
 
 
-def to_dict(r: QaCatalogReview) -> dict:
-    return {
+def to_dict(r: QaCatalogReview, *, with_dims: bool = False) -> dict:
+    """一条评审记录发给前端的样子。
+
+    `with_dims` **默认关**，只有详情接口开。列表接口一次出几十行，
+    每行挂一份维度口径就是把同一段常量发几十遍 —— 忘了传是"少个字段"，
+    而不是"列表接口悄悄胖了十倍"，这个方向选错了代价不对称。
+    """
+    out = {
         "id": str(r.id),
         "domain": r.domain,
         "domainName": r.domain_name or "",
@@ -1330,6 +1336,18 @@ def to_dict(r: QaCatalogReview) -> dict:
         "createdAt": r.created_at.isoformat() if r.created_at else None,
         "finishedAt": r.finished_at.isoformat() if r.finished_at else None,
     }
+    if with_dims:
+        # **维度口径由后端发，前端不再存副本。**
+        # 之前前端抄了三份常量（`AXES` / `DIM_KEYS` / `DIM_SINCE`），注释里写着
+        # 「跟后端必须一字不差」—— 而"必须一字不差"是一句没有任何东西在执行的话。
+        # 漂了之后错得极安静：后端加一条子项、前端那份 `DIM_SINCE` 没跟上，
+        # 新子项在**存量结论**上不会标「这一趟没查」，而是渲染成一个漂亮的 0。
+        # 一个假的 0 正是这整套表最该堵掉的东西，它自己身上不能有。
+        out["dims"] = dim_rollup(r.result)
+        # 当前口径版本。结论自己是按哪一版评的在 `result.dimSpec` 里，
+        # 两个数一比才知道「这条结论落后了几版」—— 只发一个数说明不了这件事。
+        out["dimSpec"] = DIM_SPEC
+    return out
 
 
 async def execute(project_id: uuid.UUID, review_id: uuid.UUID, cfg: dict, domain_code: str) -> None:
