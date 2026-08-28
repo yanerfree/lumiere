@@ -483,3 +483,137 @@ def page_applicability(*, scenarios: list[dict] | None,
             "unknown": unk,
         },
     }
+
+
+# ── G1/G2 → 可直接粘贴的清单表行 ────────────────────────────
+#
+# 「可直接粘贴」是这条 Story 的**唯一**验收点，而它只有一种诚实的验法：
+# **把生成的行喂回 `qa_catalog.parse_catalog`，看它认不认**。
+# 断言 `markdown == "| POL-06 | … |"` 什么都证明不了 —— 那只是在核对我自己
+# 编出来的形状。（第一版差点写成 `| `POL-06` | …`，带反引号 —— `_ROW_RE`
+# 不允许首列有反引号，那行会掉进 `unparsedRows`：**粘进去了，但清单认不出来**，
+# 而人看着表格渲染得好好的。）
+#
+# 编号**一经分配永不复用**（清单自己的规矩）。三个必须一起满足，少一个都会
+# 造出「两条不同的场景共用一个 ID」，而症状要到几个月后有人翻 git 历史
+# 或者脚本头 `@scenario` 对不上时才出现：
+#
+#   1. **算最大号时废弃的照算。** 废弃 ≠ 号还回来了。
+#   2. **不填空洞。** 中间缺的号是别人退役掉的，不是空位。
+#   3. **同一批里的多条各拿各的号。** 全给 max+1 的话，粘进去 `parse_catalog`
+#      只留第一条、其余进 `duplicateIds` —— **缺口看着归档了，其实凭空消失**。
+#
+# 不知道的格子（优先级 P、风险 R）**写成 `?`，不猜**。猜一个 `P2` 上去，
+# 一个本该 P0 的缺口就被我们自己埋到队尾了，而且再没人会重新问一遍。
+
+_UNSET = "?"
+_UNSET_PRIORITY = "P?"
+_MAX_ID_NUM = 999          # 清单 ID 形状是 `\d{2,3}`，超了就不是合法行
+
+
+def _cell(text: str, limit: int = 80) -> str:
+    """表格单元格：竖线会把一行劈成两列，换行会把一行劈成两行。"""
+    out = " ".join((text or "").split()).replace("|", "/")
+    return out[:limit].strip()
+
+
+def _existing_numbers(scenarios: list[dict] | None) -> dict[str, tuple[int, int]]:
+    """`{域码: (已分配的最大号, 位宽)}` —— **废弃的照算**。
+
+    废弃只是那条场景不做了，号还占着：脚本头里的 `@scenario`、git 历史、
+    过往报告全都指着它。复用等于让一个 ID 在不同时间指两个东西。
+    """
+    out: dict[str, tuple[int, int]] = {}
+    for sc in scenarios or []:
+        code, _, num = (sc.get("id") or "").rpartition("-")
+        if not code or not num.isdigit():
+            continue
+        top, width = out.get(code, (0, 2))
+        out[code] = (max(top, int(num)), max(width, len(num)))
+    return out
+
+
+def _proposed_title(row: dict) -> str:
+    if row.get("kind") == "G1":
+        label = _cell(row.get("label") or "")
+        page = _cell(row.get("pagePath") or "", 40)
+        if label:
+            return _cell(f"{page} {label}" if page else label)
+    return _cell(f"{(row.get('method') or '').upper()} {row.get('path') or ''}")
+
+
+def propose_rows(*, gaps: dict, scenarios: list[dict] | None = None) -> dict:
+    """G1/G2 → 清单表行草案。
+
+    返回 `{"rows": [...], "blocked": [...], "counters": {...}}`。
+    `blocked` 是**提不出行**的那些 —— 丢掉它们就是把缺口弄丢，所以单独记一笔。
+    """
+    used = _existing_numbers(scenarios)
+
+    cand = list(gaps.get("g1") or []) + list(gaps.get("g2") or [])
+    # 排序要确定：同一份输入两次跑出来的号必须一样，否则上周有人照着提案
+    # 粘了 POL-06，这周同一个缺口变成 POL-07，对不上账
+    cand.sort(key=lambda r: ((r.get("domain") or ""), (r.get("kind") or ""),
+                             (r.get("anchor") or "")))
+
+    # 一个组可以映射到**多个**域码（S7.1：那个映射是集合）。两条都提，
+    # 但标出来让人挑一个 —— 悄悄挑一个等于替别人的清单做归属决定
+    doms_by_anchor: dict[str, set[str]] = {}
+    for r in cand:
+        doms_by_anchor.setdefault(r.get("anchor") or "", set()).add(r.get("domain") or "")
+
+    rows: list[dict] = []
+    blocked: list[dict] = []
+    for r in cand:
+        code = r.get("domain") or ""
+        anchor = r.get("anchor") or ""
+        if not code:
+            blocked.append({"anchor": anchor, "reason": "归不了属，先补域码表第三列"})
+            continue
+        top, width = used.get(code, (0, 2))
+        nxt = top + 1
+        if nxt > _MAX_ID_NUM:
+            # 硬吐一个 4 位号出去 = 粘进清单里不被认。宁可提不出来，也不提个假的
+            blocked.append({"anchor": anchor, "domain": code,
+                            "reason": f"{code} 的编号已到 {top}，再加就超出清单的三位格式"})
+            continue
+        used[code] = (nxt, width)
+
+        kind = r.get("kind") or ""
+        # G1 是**在页面上真点到的控件** ⇒ 层就是 ui，这是观测到的事实；
+        # G2 只知道路由表里有这条端点，页面上有没有面**没观测过** ⇒ `?`
+        tier = "ui" if kind == "G1" else _UNSET
+        sid = f"{code}-{nxt:0{width}d}"
+        # 兜底在 `_proposed_title` 里面（控件没有可读文案时退回方法+路径）。
+        # 这里**不再兜一次** —— 死代码会让人以为这份保证是本地的
+        title = _proposed_title(r)
+        sibling = sorted(d for d in doms_by_anchor.get(anchor, set()) if d and d != code)
+
+        rows.append({
+            "id": sid,
+            "domain": code,
+            "kind": kind,
+            "title": title,
+            "priority": _UNSET_PRIORITY,
+            "risk": _UNSET,
+            "tier": tier,
+            "state": "⬜",
+            "markdown": f"| {sid} | {title} | {_UNSET_PRIORITY} | {_UNSET} | {tier} | ⬜ |",
+            # 哪几个格子是我们**不知道**的，说清楚。留空的格子会被粘走而没人补
+            "todo": ["优先级 P", "风险 R"] + ([] if kind == "G1" else ["执行层"]),
+            "ambiguousDomains": sibling,
+            "evidence": {"method": r.get("method") or "", "path": r.get("path") or "",
+                         "pagePath": r.get("pagePath") or "",
+                         "controlAnchor": r.get("controlAnchor") or "",
+                         "group": r.get("group") or ""},
+        })
+
+    return {
+        "rows": rows,
+        "blocked": blocked,
+        # 三个数**都渲染，0 也渲染**。`unattributed` 是 `compute_gaps` 那边
+        # 就归不了属、连 G1/G2 都没进的端点 —— 提案表上不写一笔的话，
+        # 它们在这条链上彻底消失
+        "counters": {"proposed": len(rows), "blocked": len(blocked),
+                     "unattributed": len(gaps.get("endpointsUnattributed") or [])},
+    }
