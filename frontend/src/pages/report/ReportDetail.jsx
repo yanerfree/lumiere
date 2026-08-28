@@ -32,6 +32,15 @@ const causeLabel = {
   unknown: '看不出来',
 }
 
+// 和报告列表页 ReportList.jsx 同一套字面量与配色 —— 两页说同一件事，
+// 长得不一样会让人以为是两个维度。
+const EXEC_LABELS = { ui: 'UI', api: '接口', mixed: '混合' }
+const EXEC_STYLE = {
+  ui: { background: '#f5f0ff', color: '#7c5cbf' },
+  api: { background: '#e0f7f6', color: '#0ea5a0' },
+  mixed: { background: 'rgba(250,173,20,0.08)', color: '#ff7d00' },
+}
+
 const statusCfg = {
   passed: { label: '通过', color: '#0ea5a0', dot: '#0ea5a0' },
   failed: { label: '失败', color: '#e8453c', dot: '#e8453c' },
@@ -518,6 +527,10 @@ export default function ReportDetail() {
   const { projectId, reportId } = useParams()
   const [loading, setLoading] = useState(true)
   const [summary, setSummary] = useState(null)
+  // 这份报告跑的是接口场景还是 UI 脚本。**和「自动/手动」不是一回事** ——
+  // 那个说的是"人点的还是机器跑的"，这个说的是"跑的哪一维"。以前页面上只有前者，
+  // 于是一份纯接口报告和一份纯 UI 报告长得一模一样，得回列表页才看得出来。
+  const [execKind, setExecKind] = useState(null)
   const [modules, setModules] = useState([])
   const [scenarios, setScenarios] = useState([])
   const [tab, setTab] = useState('all')
@@ -540,7 +553,10 @@ export default function ReportDetail() {
         setSummary(reportRes.data.summary)
         setModules(reportRes.data.modules || [])
       }
-      if (resultsRes.data) setScenarios(resultsRes.data.scenarios || [])
+      if (resultsRes.data) {
+        setScenarios(resultsRes.data.scenarios || [])
+        setExecKind(resultsRes.data.report?.execKind || null)
+      }
     } catch { /* */ } finally { if (!silent) setLoading(false) }
   }, [projectId, reportId])
 
@@ -681,6 +697,23 @@ export default function ReportDetail() {
                 fontSize: 11, color: '#c9cdd4', transition: 'transform 0.2s',
                 transform: isExpanded ? 'rotate(90deg)' : 'none',
               }} />
+            )}
+            {/* 编号必须露出来。scenarioName 是**执行当时的名字快照**，用例后来改名
+                它不会跟着变（报告是历史，本来就不该变）—— 但行上只有这个名字时，
+                拿它去用例列表搜是搜不到的，看起来像"这条用例被删了"。
+                编号 case_code 不随改名变化，是这一行唯一能对回用例的把手。 */}
+            {execKind === 'mixed' && s.scriptType && (
+              <span style={{
+                fontSize: 11, padding: '0 5px', borderRadius: 5, flexShrink: 0,
+                ...(EXEC_STYLE[s.scriptType] || {}),
+              }}>
+                {EXEC_LABELS[s.scriptType] || s.scriptType}
+              </span>
+            )}
+            {s.caseCode && (
+              <span style={{ fontSize: 11, color: '#86909c', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+                {s.caseCode}
+              </span>
             )}
             <span style={{ fontWeight: 500, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {s.scenarioName}
@@ -829,6 +862,19 @@ export default function ReportDetail() {
         <Space size={8}>
           <Button type="text" icon={<ArrowLeftOutlined />} onClick={() => navigate(`/projects/${projectId}/reports`)} />
           <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0 }}>执行报告</h2>
+          {execKind ? (
+            <Tooltip title={execKind === 'mixed'
+              ? '这份报告里既有接口场景也有 UI 脚本，逐条看行上的标'
+              : execKind === 'ui' ? '跑的是 Playwright UI 脚本' : '跑的是编排接口场景'}>
+              <span style={{ fontSize: 12, padding: '2px 8px', borderRadius: 6, ...EXEC_STYLE[execKind] }}>
+                {EXEC_LABELS[execKind]}
+              </span>
+            </Tooltip>
+          ) : (
+            <Tooltip title="这份报告生成时还没记录执行方式，从计划和执行痕迹里都推不出来">
+              <span style={{ fontSize: 12, color: '#c9cdd4' }}>—</span>
+            </Tooltip>
+          )}
         </Space>
         <Space>
           <Button icon={<SyncOutlined />} onClick={fetchData}>刷新</Button>

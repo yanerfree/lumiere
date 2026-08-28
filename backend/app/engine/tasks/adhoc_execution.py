@@ -108,6 +108,15 @@ async def _run_orchestrated_scenario(session: AsyncSession, scenario, env_id: st
     lines = [f"场景：{scenario.title}", ""]
     first_err = None
     total_ms = 0
+    # **步骤明细要一起带回去。** 调用方（execution.py / run_adhoc_execution）拿
+    # `result["steps"]` 建 TestReportStep，报告详情的请求/响应下钻全靠这张表。
+    # 原来这里只回一段文字轨迹，于是**凡是走计划或批量回归的接口场景，报告里
+    # 一条步骤都没有** —— 展开只有那段纯文本，看不到发了什么、回了什么、
+    # 哪条断言挂的。同一条场景在页面上点「运行」却能下钻（那条走
+    # api_test_runner._create_report，它自己写了步骤），于是看起来像"报告页
+    # 时好时坏"，实际是两条写入路径只有一条写了。形状照 _create_report 那份来，
+    # 别再造第二种。
+    step_rows = []
     for i, st in enumerate(steps, 1):
         resp = st.last_response or {}
         ms = resp.get("duration", 0) or 0
@@ -121,11 +130,24 @@ async def _run_orchestrated_scenario(session: AsyncSession, scenario, env_id: st
                      + (f" → {code}" if code is not None else "") + f"]  {ms}ms")
         if st.last_status == "fail" and first_err is None:
             first_err = f"步骤「{st.name}」：{resp.get('error') or '断言不通过'}"
+        step_rows.append({
+            "step_name": st.name,
+            "status": st.last_status or "skip",
+            "http_method": st.method,
+            "url": url,
+            "status_code": code,
+            "duration_ms": ms,
+            "request_data": resp.get("request"),
+            "response_data": resp.get("body"),
+            "assertions": resp.get("assertions") or [],
+            "error_summary": resp.get("error"),
+        })
     return {
         "status": "passed" if result.get("passed") else "failed",
         "duration_ms": total_ms,
         "error_summary": first_err,
         "stdout": "\n".join(lines),
+        "steps": step_rows,
     }
 
 

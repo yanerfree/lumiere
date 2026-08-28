@@ -230,6 +230,10 @@ def _scenario_payload(s) -> dict:
         "phenomenon": run.failure_phenomenon if run else None,
         "ccAnalysis": run.cc_analysis if run else None,
         "confirmedCause": run.confirmed_cause if run else None,
+        # 这一条跑的是接口场景还是 UI 脚本。取执行痕迹（script_runs.script_type），
+        # 不取计划声明的 test_type —— 混合报告里两者会不一致，而这一行要说的是
+        # **这条实际跑了什么**。没有执行记录就是 None，前端留白。
+        "scriptType": run.script_type if run else None,
     }
 
 
@@ -371,7 +375,10 @@ async def get_results(
         return {"data": None}
     return {
         "data": {
-            "report": ReportResponse.model_validate(data["report"], from_attributes=True).model_dump(by_alias=True),
+            "report": {
+                **ReportResponse.model_validate(data["report"], from_attributes=True).model_dump(by_alias=True),
+                "execKind": await _exec_kind_of(session, data["report"]),
+            },
             "scenarios": [_scenario_payload(s) for s in data["scenarios"]],
         }
     }
@@ -570,6 +577,25 @@ async def abort_plan(
     # 没有报告的计划就会走进这条路（比如报告被删过），实测复现过。
     await session.refresh(plan)
     return {"data": PlanResponse.model_validate(plan, from_attributes=True).model_dump(by_alias=True)}
+
+
+async def _exec_kind_of(session: AsyncSession, report) -> str | None:
+    """单份报告的「接口 / UI / 混合」。走的是和报告列表同一个 _exec_kind_by_report，
+    详情页别另写一份口径 —— 两处对不上比没有更糟。"""
+    from sqlalchemy import select
+
+    from app.models.plan import Plan
+
+    plan_test_type = None
+    if report.plan_id:
+        plan_test_type = (await session.execute(
+            select(Plan.test_type).where(Plan.id == report.plan_id)
+        )).scalar_one_or_none()
+    kinds = await _exec_kind_by_report(
+        session, [report.id], {report.id: plan_test_type},
+        {report.id: report.report_type},
+    )
+    return kinds.get(report.id)
 
 
 # ---- 报告列表（项目级） ----
@@ -949,9 +975,13 @@ async def get_results_by_report_id(
     data = await execution_service.get_report_with_scenarios(session, report_id=report_id)
     if data is None:
         return {"data": None}
+    report = data["report"]
     return {
         "data": {
-            "report": ReportResponse.model_validate(data["report"], from_attributes=True).model_dump(by_alias=True),
+            "report": {
+                **ReportResponse.model_validate(report, from_attributes=True).model_dump(by_alias=True),
+                "execKind": await _exec_kind_of(session, report),
+            },
             "scenarios": [_scenario_payload(s) for s in data["scenarios"]],
         }
     }

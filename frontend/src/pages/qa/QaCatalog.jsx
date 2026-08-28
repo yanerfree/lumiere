@@ -408,9 +408,13 @@ export default function QaCatalog() {
   const urgentCount = useMemo(
     () => scenarios.filter(QUICK.urgent.test).length, [scenarios, QUICK])
 
-  // 缺口最多的域排前面 —— 「黑洞域」自己浮上来，不用人去 24 个域里翻
+  // **按域码固定排序，不按缺口。** 原来是缺口多的排前面（「黑洞域」自己浮上来），
+  // 代价是这一格的位置跟着覆盖进度走：补了两条 SEC，它就从第 17 位挪到第 20 位，
+  // 每次「拉取最新」整格重排一遍 —— 想再看一眼刚才那个域，得从 24 个里重新找。
+  // 排序本来是为了省下这次找，结果反而让人每次都找。
+  // 缺口大小照旧看得见（缺 N 是橙的、P0 是红的），只是不再决定它站在哪。
   const domainRows = useMemo(
-    () => [...(data?.domains || [])].sort((a, b) => (b.gap - a.gap) || (b.p0Gap - a.p0Gap) || a.code.localeCompare(b.code)),
+    () => [...(data?.domains || [])].sort((a, b) => a.code.localeCompare(b.code)),
     [data],
   )
 
@@ -802,14 +806,14 @@ export default function QaCatalog() {
         </div>
       )}
 
-      {/* 按域看：24 个域一屏看完，缺口多的自己浮到前面 */}
+      {/* 按域看：24 个域一屏看完。位置按域码钉死 —— 见 domainRows 上面那段 */}
       {configured && domainRows.length > 0 && (
         <Collapse
           size="small" defaultActiveKey={['d']} style={{ marginBottom: 12 }}
           items={[{
             key: 'd',
             label: <span style={{ fontSize: 13 }}>
-              按域看缺口（{domainRows.length} 个域 · 缺得多的排前面 · 点一行筛这个域 ·
+              按域看缺口（{domainRows.length} 个域 · 按域码排，位置不随进度动 · 点一行筛这个域 ·
               点「AI 评审」看这个域的脚本撑不撑得起清单）
             </span>,
             children: (

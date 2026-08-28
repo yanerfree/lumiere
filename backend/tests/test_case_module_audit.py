@@ -2146,3 +2146,71 @@ def test_不许再写第二份维度状态():
         "重复的场景状态列又回来了"
     src = inspect.getsource(script_run_service.apply_case_status)
     assert "scenario_status" not in src, "又在写第二份维度状态了"
+
+
+# ── 详情页的执行方式：必须和列表页同一个判据 ──────────────────────
+
+class _FakeSessionWithPlan:
+    """第一次 execute 回计划的 test_type，之后回执行痕迹。
+
+    `_exec_kind_of` 会先查一次 Plan.test_type（scalar_one_or_none），
+    再把结果喂给 _exec_kind_by_report（.all()）—— 两种取法都得应付。
+    """
+
+    def __init__(self, plan_test_type, rows):
+        self._plan_test_type = plan_test_type
+        self._rows = rows
+
+    async def execute(self, _stmt):
+        outer = self
+
+        class R:
+            def scalar_one_or_none(self):
+                return outer._plan_test_type
+
+            def all(self):
+                return outer._rows
+        return R()
+
+
+class _FakeReport:
+    def __init__(self, rid, plan_id=None, report_type="plan"):
+        self.id = rid
+        self.plan_id = plan_id
+        self.report_type = report_type
+
+
+@pytest.mark.asyncio
+async def test_详情页执行方式走计划声明():
+    """没有执行痕迹时，得把计划的 test_type 查出来喂给判据 ——
+    忘了查就永远只有第三级回退，纯 UI 的计划报告会显示「—」。"""
+    from app.api.plans import _exec_kind_of
+
+    rid, pid = uuid.uuid4(), uuid.uuid4()
+    got = await _exec_kind_of(
+        _FakeSessionWithPlan("e2e", []), _FakeReport(rid, plan_id=pid)
+    )
+    assert got == "ui"
+
+
+@pytest.mark.asyncio
+async def test_详情页无计划时退回报告类型():
+    from app.api.plans import _exec_kind_of
+
+    rid = uuid.uuid4()
+    got = await _exec_kind_of(
+        _FakeSessionWithPlan(None, []), _FakeReport(rid, report_type="api_test")
+    )
+    assert got == "api"
+
+
+@pytest.mark.asyncio
+async def test_详情页同样优先执行痕迹():
+    """详情页和列表页必须给同一个答案。这里计划声明 api、实际跑的 ui。"""
+    from app.api.plans import _exec_kind_of
+
+    rid, pid = uuid.uuid4(), uuid.uuid4()
+    got = await _exec_kind_of(
+        _FakeSessionWithPlan("api", [(rid, "ui")]), _FakeReport(rid, plan_id=pid)
+    )
+    assert got == "ui"
