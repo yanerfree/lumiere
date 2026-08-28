@@ -1416,12 +1416,19 @@ function Scanned({ res, r }) {
 }
 
 
-// 评审结论的正文。四块的顺序 = 测试员下一步该干什么的顺序：
-// 先看「声明了没验到」（覆盖率是虚的），再看环境跑不跑得起来，最后才是补什么、先补哪条。
+// 评审结论的正文。三块的顺序 = 测试员下一步该干什么的顺序：
+// 先看「声明了没验到」（覆盖率是虚的），再看环境跑不跑得起来，最后才是清单本身缺什么。
+//
+// 原来还有第四块「待补的先做哪条」（nextUp），2026-08-29 去掉了：分批读的时候
+// 每批只看得到一部分脚本却要给全域排序，各批各排一份再拼起来 —— 实测同一个域
+// 六批产出 18 行、去重后只有 3 件事，第 1/4/7/10/13/16 位全是同一条。
+// 存量结论的 result 里还留着这个键，这里不渲染它（不会崩，就是不显示）。
 function ReviewBody({ r, onOpenFile, projectId }) {
   const res = r.result || {}
+  // 注意别把 res.nextUp 加回来充数：存量结论里它有值，加回来会让一份
+  // 「这一轮什么都没说」的旧结论看起来像有内容。
   const empty = !res.scriptGaps?.length && !res.catalogGaps?.length
-    && !res.nextUp?.length && !res.envMissing?.length
+    && !res.envMissing?.length
   return (
     <div style={{ fontSize: 13 }}>
       <TakeAway r={r} projectId={projectId} />
@@ -1496,27 +1503,17 @@ function ReviewBody({ r, onOpenFile, projectId }) {
       <Section title="清单本身漏了什么" hint="这个域的场景之间明显缺的一环 —— 清单是别人维护的，这只是建议">
         {res.catalogGaps?.length ? res.catalogGaps.map((g, i) => (
           <div key={i} style={{ padding: '6px 0', lineHeight: 1.8 }}>
-            <Rich text={g.scenario || g.problem} />
+            <Space size={6}>
+              <Rich text={g.scenario || g.problem} />
+              {/* 域级结论每批都会各说一遍。修好去重键之后这里会**少掉一大截行** ——
+                  不说清"这条 N 批都提到"，读的人会以为这一趟少发现了东西。 */}
+              {g.mergedFrom > 1 && (
+                <Tag style={{ margin: 0 }}>{g.mergedFrom} 批都提到</Tag>
+              )}
+            </Space>
             {g.why && <div style={{ color: C.gray }}><Rich text={g.why} /></div>}
           </div>
         )) : <Nothing text="没看出明显缺的一环" />}
-      </Section>
-
-      <Section title="待补的先做哪条" hint="只在标「待补」的场景里挑">
-        {res.nextUp?.length ? res.nextUp.map((g, i) => (
-          <div key={i} style={{ padding: '6px 0', lineHeight: 1.8 }}>
-            <Space size={6}>
-              <Tag style={{ margin: 0 }}>{i + 1}</Tag>
-              {g.id && <Tag color="blue" style={{ margin: 0 }}>{g.id}</Tag>}
-              {/* 动手的人也要先知道这条归谁：改脚本解决不了的那些，别让他白改一遍 */}
-              <Tag style={{ margin: 0, color: BLAME[blameOf(g)].color,
-                            borderColor: BLAME[blameOf(g)].color }}>
-                {BLAME[blameOf(g)].title}
-              </Tag>
-            </Space>
-            <div><Rich text={g.why || g.problem} /></div>
-          </div>
-        )) : <Nothing text="这个域没有待补的场景" />}
       </Section>
 
       {empty && <Empty description="模型这一轮什么都没说 —— 重评一次试试" />}

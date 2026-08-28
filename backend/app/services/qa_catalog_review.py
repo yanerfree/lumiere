@@ -311,12 +311,20 @@ def env_gaps(scripts: list[dict], env_keys: set[str], lib_texts: list[str] | Non
 
 # ── prompt ────────────────────────────────────────────────────
 
+# 2026-08-29 这里少了一项：原来还有第 3 项「待补的先做哪条」（nextUp）。
+# 去掉的理由是**分批读的时候它算错**：每批只看得到一部分脚本却要给全域排序，
+# 各批各排一份再拼起来，拼出来的顺序不表示任何东西（实测同一个域六批 18 行、
+# 去重后只有 3 件事）。而排序代码能确定性地做 —— 本模块自己的规矩就是
+# 「数和排序不许问模型」。
+# ⚠ 别把这段解释写回下面那个字符串里：它是**发给模型的正文**，
+# 在里面讲"以前有第 3 项"等于花钱让模型读一段跟它无关的施工记录，
+# 还提示了一个我们不想要的输出键。
 _SYSTEM = """你在评审一个黑盒验收仓里**某一个域**的自动化覆盖质量。
 
 给你三样东西：这个域的场景清单（每条有 ID / 优先级 P / 风险分 R / 执行层 / 覆盖状态）、
 声明覆盖了这些场景的**脚本正文**、以及这次选定的运行环境。
 
-你只做三件判断，按重要性排：
+你只做两件判断，按重要性排：
 
 1. **声明覆盖了、其实没验到**（最重要）。脚本头写 `@scenario AGT-11`，就等于宣称它验了
    AGT-11 描述的那件事。逐条对照场景描述读脚本正文：只发个请求看不看返回、
@@ -325,7 +333,6 @@ _SYSTEM = """你在评审一个黑盒验收仓里**某一个域**的自动化覆
    仓库自己的门禁只能检查"有没有声明"，检查不了"有没有验到"。
 2. **清单本身漏了什么**。这个域已有场景之间明显缺的一环（例如只有创建和查询、
    没有删除后的越权访问）。
-3. **待补的那些先做哪条**。只在标记为「待补」的场景里挑，结合 P/R 和上面两条给顺序。
 
 **每条结论必须自报「谁动手」（`blame`），这是给人看那页的分栏依据：**
 
@@ -417,8 +424,7 @@ _SYSTEM = """你在评审一个黑盒验收仓里**某一个域**的自动化覆
      "evidence": "assert_status 200 \"$resp\"",
      "fix": "断言响应体 code == 403 且数据面返回为空"}
   ],
-  "catalogGaps": [{"scenario": "...", "why": "...", "dim": "coverage|grain|shape|…"}],
-  "nextUp": [{"id": "AGT-19", "why": "..."}]
+  "catalogGaps": [{"scenario": "...", "why": "...", "dim": "coverage|grain|shape|…"}]
 }
 ```"""
 
@@ -536,7 +542,9 @@ def parse_result(text: str) -> dict:
         "summary": str(data.get("summary") or "")[:800],
         "scriptGaps": _rows("scriptGaps"),
         "catalogGaps": _rows("catalogGaps"),
-        "nextUp": _rows("nextUp"),
+        # 这里没有 "nextUp"：2026-08-29 停产。模型即使照旧回了这个键也直接丢掉 ——
+        # **停产要停在解析这一层**，只删渲染的话它还在库里长，
+        # 下一个人翻到 result JSON 会以为它还是活的。
     }
 
 
@@ -690,26 +698,26 @@ def _clip_lines(text: str, limit: int = 600) -> tuple[str, bool]:
     return (head[:cut] if cut > 0 else head), True
 
 
-# `scriptGaps` 不参与跨批去重的**收紧版键**：它按 problem/why 前 60 字比，
-# 而各批的脚本本来就不相交 —— 真重复几乎不可能，误合并倒是随手就来
-# （两条讲同一份脚本的不同毛病，开头 60 字很容易一样）。
-_LOOSE_KINDS = frozenset({"scriptGaps"})
-
-
 def _gap_key(g: dict, kind: str = "") -> str:
-    """跨批去重的键。
+    """跨批去重的键。**两种 gap 分开定 —— 它们的"同一条"根本不是一回事。**
 
-    `scriptGaps` 用**全文不截断**：截 60 字是在制造静默合并，而它防不住什么 ——
-    每份脚本只出现在一个批里，跨批撞车本来就不成立。留精确去重是为了兜住
-    模型在**同一批**里把同一条写两遍，那个只有全等才该合。
-    `catalogGaps` / `nextUp` 是域级的（每批都看全量清单），保持原样。
-    ⚠ 但它俩的键仍然是自由文本 —— 实测（副-A）跨批去重**一条都没去掉**，
-    18 行 nextUp 其实只有 3 件事。那是 Epic 9 的事，不在本 story 范围内。
+    `scriptGaps` 是**脚本级**的：每份脚本只落在一个批里，跨批本来就撞不上，
+    去重只为兜住模型在**同一批**里把同一条写两遍 —— 那种只有全等才该合，
+    所以用**全文不截断**（截 60 字是在制造静默合并，而它防不住什么）。
+    键里原先还有一段 `scenario`：Epic 0 副-D 实测 **72/72 条全是空的**，
+    模型从来不填。留着会让这个键看起来考虑了三个维度、实际只有两个 —— 删掉。
+
+    `catalogGaps` 是**域级**的：每批都拿到全量场景清单，所以同一条会被各批
+    各说一遍，措辞还都不一样。副-A 实测这种自由文本键**一条都没去掉**
+    （同一个域 18 行 nextUp 其实只有 3 件事，catalogGaps 是同一个病）。
+    它的身份是「哪个场景的口径有问题」= `scenario`，不是后面那段解释文字，
+    所以键就用 `scenario`。模型没填 `scenario` 时**退回原来的截断键** ——
+    退化成"去不掉"，而不是拿一段自由文本去误合两条不同的发现。
     """
-    fields = ("id", "path", "scenario", "problem", "why")
-    if kind in _LOOSE_KINDS:
-        return "|".join(str(g.get(f) or "") for f in fields)
-    return "|".join(str(g.get(f) or "")[:60] for f in fields)
+    if kind == "catalogGaps":
+        sc = str(g.get("scenario") or "").strip()
+        return "scenario:" + sc.lower() if sc else "why:" + str(g.get("why") or "")[:60]
+    return "|".join(str(g.get(f) or "") for f in ("id", "path", "problem", "why"))
 
 
 def merge_results(parts: list[dict]) -> dict:
@@ -719,18 +727,23 @@ def merge_results(parts: list[dict]) -> dict:
     整个域就不能拿去当「认领都算数」用 —— 平均一下会把最要命的那批稀释掉。
     """
     out: dict = {"verdict": "ok", "summary": "", "brief": {},
-                 "scriptGaps": [], "catalogGaps": [], "nextUp": []}
-    seen: set[str] = set()
+                 "scriptGaps": [], "catalogGaps": []}
+    seen: dict[str, int] = {}          # 键 → 它在 out[key] 里的下标
     for part in parts:
         v = part.get("verdict")
         if _VERDICT_RANK.get(v, 9) < _VERDICT_RANK.get(out["verdict"], 9):
             out["verdict"] = v
-        for key in ("scriptGaps", "catalogGaps", "nextUp"):
+        for key in ("scriptGaps", "catalogGaps"):
             for g in part.get(key) or []:
                 k = key + "|" + _gap_key(g, key)
                 if k in seen:
+                    # 合掉了就得留个数。域级那些每批都会各说一遍，
+                    # 修好键之后页面上会**少掉一大截行** —— 不说清楚"这条 N 批都提到"，
+                    # 读的人会以为是这一趟少发现了东西。
+                    row = out[key][seen[k]]
+                    row["mergedFrom"] = int(row.get("mergedFrom") or 1) + 1
                     continue
-                seen.add(k)
+                seen[k] = len(out[key])
                 out[key].append(g)
     out["scriptGaps"].sort(key=lambda g: _SEV_RANK.get(g.get("severity"), 9))
     out["summary"] = " ".join((p.get("summary") or "").strip() for p in parts).strip()[:800]
@@ -778,9 +791,6 @@ def _merge_payload(domain: dict, merged: dict, batches: int, scripts: int) -> st
         lines += ["", "## 清单口径"]
         lines += [f"- {g.get('scenario') or ''}：{g.get('why') or ''}"
                   for g in merged["catalogGaps"]]
-    if merged.get("nextUp"):
-        lines += ["", "## 待补里先做哪条"]
-        lines += [f"- {g.get('id') or ''}：{g.get('why') or ''}" for g in merged["nextUp"]]
     lines += ["", "## 各批自己写的 summary", merged.get("summary") or "（空）"]
     return "\n".join(lines)
 
@@ -1246,16 +1256,13 @@ def to_markdown(r: QaCatalogReview) -> str:
     if not cg:
         L.append("（没看出明显缺的一环）")
     for g in cg:
-        L.append(f"- **{g.get('scenario') or g.get('problem') or '—'}** — {g.get('why') or ''}".rstrip(" —"))
-    L.append("")
-
-    L.append("## 待补的先做哪条")
-    L.append("")
-    nx = res.get("nextUp") or []
-    if not nx:
-        L.append("（这个域没有待补的场景）")
-    for i, g in enumerate(nx, 1):
-        L.append(f"{i}. **{g.get('id') or '—'}** — {g.get('why') or g.get('problem') or ''}")
+        line = f"- **{g.get('scenario') or g.get('problem') or '—'}** — {g.get('why') or ''}".rstrip(" —")
+        n = int(g.get("mergedFrom") or 1)
+        if n > 1:
+            # 不是"重复了 N 次"，是"分批读的时候 N 批各自都提到了它" ——
+            # 域级结论本来就每批看一遍，这个数说明它有多显眼，不是噪声。
+            line += f"（{n} 批都提到）"
+        L.append(line)
     L.append("")
 
     L.append("## 这次读了什么")

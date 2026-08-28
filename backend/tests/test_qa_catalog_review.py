@@ -260,7 +260,9 @@ class TestParseResult:
 
         assert out["verdict"] == "bad"
         assert out["scriptGaps"][0]["id"] == "AGT-11"
-        assert out["nextUp"][0]["id"] == "AGT-12"
+        # nextUp 2026-08-29 停产：模型照旧回了也**在解析这一层就丢掉**。
+        # 只删渲染的话它还会继续在库里长，下一个人翻 result JSON 会以为它是活的。
+        assert "nextUp" not in out
 
     def test_没围栏也能从花括号里扒出来(self):
         out = qr.parse_result('{"verdict":"ok","summary":"还行","scriptGaps":[]}')
@@ -684,9 +686,9 @@ class TestBatching:
 
     def test_合批取最坏的结论(self):
         merged = qr.merge_results([
-            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [], "nextUp": []},
-            {"verdict": "bad", "scriptGaps": [], "catalogGaps": [], "nextUp": []},
-            {"verdict": "risky", "scriptGaps": [], "catalogGaps": [], "nextUp": []},
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": []},
+            {"verdict": "bad", "scriptGaps": [], "catalogGaps": []},
+            {"verdict": "risky", "scriptGaps": [], "catalogGaps": []},
         ])
         # 平均一下会把最要命的那批稀释掉：5 批里 1 批「多数认领不算数」，整个域就不能当数
         assert merged["verdict"] == "bad"
@@ -695,8 +697,8 @@ class TestBatching:
         same = {"id": "MCP-07", "path": "a.sh", "problem": "没读回来确认",
                 "severity": "minor", "blame": "script"}
         merged = qr.merge_results([
-            {"verdict": "risky", "scriptGaps": [dict(same)], "catalogGaps": [], "nextUp": []},
-            {"verdict": "risky", "catalogGaps": [], "nextUp": [],
+            {"verdict": "risky", "scriptGaps": [dict(same)], "catalogGaps": []},
+            {"verdict": "risky", "catalogGaps": [],
              "scriptGaps": [dict(same),
                             {"id": "MCP-11", "path": "b.sh", "problem": "断言恒真",
                              "severity": "blocker", "blame": "script"}]},
@@ -1317,3 +1319,158 @@ class TestEvidenceDisclosure:
                        "evidence": "line0"})
 
         assert "入库时被截过" not in md
+
+
+class TestNextUpRetired:
+    """Epic 9：`nextUp` 停产。
+
+    删它的理由不是"没用"，是**分批模式下它算错**：每批只看得到一部分脚本，
+    却要给全域排序，各批各排一份再拼起来。实测同一个域六批产出 18 行、
+    去重后只有 3 件事，`MCP-76` 占了第 1/4/7/10/13/16 位 ——
+    "先做哪条"那一栏六分之一的信息量都不到。
+    而且排序代码能确定性地做，撞本模块自己的规矩「数和排序不许问模型」。
+    """
+
+    def test_解析层就不再收(self):
+        out = qr.parse_result(
+            '{"verdict":"ok","summary":"s","scriptGaps":[],"catalogGaps":[],'
+            '"nextUp":[{"id":"MCP-76","why":"P0"}]}')
+
+        assert "nextUp" not in out
+
+    def test_合批结果里也没有(self):
+        merged = qr.merge_results([
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [],
+             "nextUp": [{"id": "MCP-76", "why": "P0"}]},
+        ])
+
+        assert "nextUp" not in merged
+
+    def test_提示词说几件就得列几件(self):
+        """删第 3 项时差点留下「你只做三件判断」+ 只列两条 —— 提示词自己前后矛盾。
+
+        这种错模型不会报，它会自己找补：要么把两条硬拆成三条，要么补一个
+        我们已经不要的键。**改提示词的条目数就必须同时改这个数**，
+        所以把它锁成一条测试，而不是靠下一个人读到那一行。
+        """
+        import re
+        n = len(re.findall(r"^\d+\. \*\*", qr._SYSTEM, re.M))
+        cn = {2: "两", 3: "三", 4: "四"}[n]
+        assert f"你只做{cn}件判断" in qr._SYSTEM, f"正文列了 {n} 条"
+
+    def test_提示词不再要模型排序(self):
+        # 停产要停在**问都不问**这一层：提示词还留着第 3 项的话，
+        # 模型照样花 token 去算，只是算完被丢掉 —— 白花钱还拖慢每一批。
+        assert "nextUp" not in qr._SYSTEM
+        assert "先做哪条" not in qr._SYSTEM
+
+    def test_旧结论里带nextUp时页面不崩(self):
+        """存量结论的 result JSON 里还有这个键 —— 渲染要**不显示**，不是炸掉。"""
+        from datetime import datetime, timezone
+
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(
+            domain="MCP", domain_name="MCP 能力", status="done",
+            environment_name="uag-138:3000", commit_sha="dae9b4fc4150",
+            branch="main", actor="admin", scenario_count=1, script_count=1,
+            result={"verdict": "risky", "summary": "s", "brief": {},
+                    "scriptGaps": [], "catalogGaps": [], "envMissing": [],
+                    "nextUp": [{"id": "MCP-76", "why": "P0 R=9"}],
+                    "reviewedScripts": [], "scenarioCount": 1},
+        )
+        r.created_at = datetime(2026, 8, 29, 10, 0, tzinfo=timezone.utc)
+
+        md = qr.to_markdown(r)
+
+        assert "MCP-76" not in md
+        assert "先做哪条" not in md
+
+
+class TestCatalogGapsKey:
+    """副-C / 副-D：`catalogGaps` 的跨批去重换成结构键。
+
+    它是**域级**的 —— 每批都拿到全量场景清单，所以同一条会被各批各说一遍，
+    措辞还都不一样。旧键是 `id|path|scenario|problem|why` 各截 60 字的自由文本，
+    实测跨批**一条都没去掉**。身份在 `scenario`，不在后面那段解释文字。
+    """
+
+    def test_同一个场景换个措辞也算同一条(self):
+        merged = qr.merge_results([
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [
+                {"scenario": "MCP-76", "why": "只有创建和查询，没有删除后的越权访问"}]},
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [
+                {"scenario": "MCP-76", "why": "缺一条删除之后再访问的用例"}]},
+        ])
+
+        assert len(merged["catalogGaps"]) == 1
+
+    def test_合掉几条要说出来(self):
+        """修好键之后页面上会**少掉一大截行** —— 不说清楚就像这一趟少发现了东西。"""
+        merged = qr.merge_results([
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [
+                {"scenario": "MCP-76", "why": "措辞一"}]},
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [
+                {"scenario": "MCP-76", "why": "措辞二"}]},
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [
+                {"scenario": "MCP-76", "why": "措辞三"}]},
+        ])
+
+        assert merged["catalogGaps"][0]["mergedFrom"] == 3
+        assert "3 批都提到" in qr.to_markdown(_review_with(merged["catalogGaps"]))
+
+    def test_只提到一次的不加那个数(self):
+        merged = qr.merge_results([
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [
+                {"scenario": "MCP-76", "why": "只有这一批说了"}]},
+        ])
+
+        assert "mergedFrom" not in merged["catalogGaps"][0]
+        assert "批都提到" not in qr.to_markdown(_review_with(merged["catalogGaps"]))
+
+    def test_不同场景不许合(self):
+        merged = qr.merge_results([
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [
+                {"scenario": "MCP-76", "why": "同一句话"}]},
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [
+                {"scenario": "MCP-77", "why": "同一句话"}]},
+        ])
+
+        assert len(merged["catalogGaps"]) == 2
+
+    def test_模型没填scenario时退回去不掉而不是误合(self):
+        """退化的方向要选对：宁可留两条重复，也不能把两个不同的发现合成一条。"""
+        merged = qr.merge_results([
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [
+                {"why": "缺删除后的越权访问"}]},
+            {"verdict": "ok", "scriptGaps": [], "catalogGaps": [
+                {"why": "缺并发写的冲突处理"}]},
+        ])
+
+        assert len(merged["catalogGaps"]) == 2
+
+    def test_scriptGaps的键里不留那段永远为空的scenario(self):
+        """副-D：实测 72/72 条 `scenario` 全是空的，模型从来不填。
+
+        留着会让这个键看起来考虑了三个维度、实际只有两个 —— 而"看起来考虑了"
+        正是本模块在抓的那类错。
+        """
+        import inspect
+        src = inspect.getsource(qr._gap_key)
+        head, _, tail = src.partition('if kind == "catalogGaps"')
+        assert '"scenario"' not in tail.split('return "|".join')[1]
+
+
+def _review_with(catalog_gaps):
+    from datetime import datetime, timezone
+
+    from app.models.qa_catalog_review import QaCatalogReview
+    r = QaCatalogReview(
+        domain="MCP", domain_name="MCP 能力", status="done",
+        environment_name="uag-138:3000", commit_sha="dae9b4fc4150",
+        branch="main", actor="admin", scenario_count=1, script_count=1,
+        result={"verdict": "risky", "summary": "s", "brief": {}, "scriptGaps": [],
+                "catalogGaps": catalog_gaps, "envMissing": [],
+                "reviewedScripts": [], "scenarioCount": 1},
+    )
+    r.created_at = datetime(2026, 8, 29, 10, 0, tzinfo=timezone.utc)
+    return r

@@ -41,7 +41,7 @@ async def get_qa_review(
     - `domain='MCP'` → 那个域**最近一次已完成**的评审全文
     - `review_id=...` → 指定的那一次（复核历史结论时用，域名可能已经改过）
     - `format='md'` 给 Markdown 全文（贴 issue / 交给 AI 改脚本）；
-      `format='json'` 给结构化的 scriptGaps / envMissing / nextUp（自己拼报表时用）
+      `format='json'` 给结构化的 scriptGaps / envMissing / catalogGaps（自己拼报表时用）
     """
     try:
         pid = uuid.UUID(str(project_id))
@@ -132,7 +132,13 @@ def _one(r: QaCatalogReview, fmt: str) -> dict:
             "scriptGaps": res.get("scriptGaps") or [],
             "envMissing": res.get("envMissing") or [],
             "catalogGaps": res.get("catalogGaps") or [],
-            "nextUp": res.get("nextUp") or [],
+            # `nextUp` 2026-08-29 停产，这里**故意留一个空数组一个周期**再摘键：
+            # 对外契约上直接删字段，取用方的 `res["nextUp"]` 会 KeyError 当场炸；
+            # 留成 `[]` 则退化成"这个域没有"，读的人自己就不看了。
+            # 摘键的时候连这三行一起删。
+            # ⚠ 存量结论的 result 里还有旧数据，这里**不透传** ——
+            # 透传等于把停产的东西继续发出去，而且它算得就是错的（见 _gap_key 的注释）。
+            "nextUp": [],
         })
     else:
         out["markdown"] = qr.to_markdown(r)
