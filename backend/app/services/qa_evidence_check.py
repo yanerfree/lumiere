@@ -85,6 +85,23 @@ def _match(needles: list[str], hay_raw: str, whole_raw: str,
     return "stitched"
 
 
+def anchor_ok(row: dict, field: str = "evidence") -> bool:
+    """这条结论**拿不拿得出源文锚点**。纯谓词，不碰正文、不搜任何东西。
+
+    **跟 `check_evidence` 问的不是同一件事，别合并成一个。**
+    `check_evidence` 问「你给的这段，在正文里搜得到吗」—— 那是**质量**；
+    这里问「你到底给了没有」—— 那是**能不能被否掉**。
+
+    差别落在处置上，所以必须分开：`unmatched` 那条也许只是路径写错了、
+    也许是条真发现，读的人拿着那段字还能自己去仓库里搜一遍；
+    **一条没有锚点的结论，读的人连从哪儿查起都不知道** —— 它不是"存疑"，
+    是不可证伪。前者只该标记（见本模块开头那三行），后者才该丢。
+
+    长度线沿用 `MIN_EVIDENCE_CHARS`：`fi` / `}` 这种给了等于没给。
+    """
+    return len(_norm(row.get(field) or "")) >= MIN_EVIDENCE_CHARS
+
+
 def check_evidence(gaps: list[dict], batch_scripts: list[dict]) -> list[dict]:
     """给每条 gap 打上 `evidenceCheck`。原地改并返回同一个列表。
 

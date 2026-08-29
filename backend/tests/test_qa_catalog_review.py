@@ -312,9 +312,17 @@ class TestParseResult:
         assert out["verdict"] == "risky"
 
     def test_字符串数组也吃得下(self):
-        out = qr.parse_result('{"verdict":"ok","catalogGaps":["缺删除后越权"]}')
+        """S8.1 改了它的归宿，**没改它吃不吃得下**。
 
-        assert out["catalogGaps"][0]["problem"] == "缺删除后越权"
+        一句白话的清单缺口按定义就指不出出处，所以清单侧的落进被丢那一桶。
+        但**它没有消失** —— 原话还在，页面上数得出丢了几条。
+        """
+        out = qr.parse_result('{"verdict":"ok","catalogGaps":["缺删除后越权"],'
+                              '"scriptGaps":["断言太松"]}')
+
+        assert out["scriptGaps"][0]["problem"] == "断言太松"
+        assert out["catalogGaps"] == []
+        assert out["droppedNoAnchor"][0]["problem"] == "缺删除后越权"
 
     # ── Epic 2 #1：**替换**了原来的 test_每一项最多留六条 ──
     # 那条没写错，它忠实封样了当时的行为；本次改的就是那个行为。
@@ -941,9 +949,14 @@ class TestDimWhitelist:
 
     def _out(self, script=(), catalog=()):
         import json
+        # S8.1：清单侧的结论指不出出处会被**整条丢掉**。这一组测的是维度，
+        # 不是锚点 —— 不给默认出处的话每条夹具都在闸门那儿就没了，
+        # 底下的断言全变成 IndexError，红得跟维度一点关系都没有。
+        # `{**默认, **c}` 留了口子：调用方给空 `evidence` 就能测丢弃那条路。
+        cat = [{"evidence": 'assert_status 200 "$resp"', **c} for c in catalog]
         return qr.parse_result(json.dumps({
             "verdict": "bad", "summary": "x",
-            "scriptGaps": list(script), "catalogGaps": list(catalog)}))
+            "scriptGaps": list(script), "catalogGaps": cat}))
 
     # ── #28 ──
     def test_脚本那一堆不许落coverage(self):
@@ -1090,8 +1103,13 @@ class TestDimSpec3:
 
     def _out(self, script=(), catalog=(), spec=None):
         import json
+        # S8.1：清单侧的结论指不出出处会被**整条丢掉**。这一组测的是维度，
+        # 不是锚点 —— 不给默认出处的话每条夹具都在闸门那儿就没了，
+        # 底下的断言全变成 IndexError，红得跟维度一点关系都没有。
+        # `{**默认, **c}` 留了口子：调用方给空 `evidence` 就能测丢弃那条路。
+        cat = [{"evidence": 'assert_status 200 "$resp"', **c} for c in catalog]
         d = {"verdict": "bad", "summary": "x",
-             "scriptGaps": list(script), "catalogGaps": list(catalog)}
+             "scriptGaps": list(script), "catalogGaps": cat}
         if spec is not None:
             d["dimSpec"] = spec
         return qr.parse_result(json.dumps(d))
@@ -2421,6 +2439,143 @@ class TestEvidenceOnTheWire:
 
         assert "evidenceCheck" in (qc.__doc__ or "")
         assert "wrong-path" in (qc.__doc__ or "")
+
+
+
+class TestCatalogAnchorGate:
+    """S8.1 · 清单侧拿不出源文锚点的结论 —— 丢掉，但**丢得看得见**。
+
+    这道闸门跟 `TestEvidenceCheck` 那套问的**不是同一件事**：
+    那边问「你抄的这段在正文里搜得到吗」（质量），这边问「你到底抄了没有」
+    （可证伪性）。差别落在处置上 —— `unmatched` 那条读的人还能拿着那段字
+    自己去仓库搜一遍；**一条没有锚点的结论，读的人连从哪儿查起都不知道**。
+
+    只落在 `catalogGaps`，是因为 S8.3 之后那是模型唯一还能写覆盖面的地方，
+    而且**是这个模块唯一一处没被任何东西验过的输出**。
+    """
+
+    def _one(self, **kw):
+        import json
+        row = {"scenario": "删除后越权", "why": "清单里没有", "dim": "coverage"}
+        row.update(kw)
+        return qr.parse_result(json.dumps(
+            {"verdict": "bad", "summary": "x", "catalogGaps": [row]}))
+
+    def test_没锚点的清单结论不进正文(self):
+        out = self._one()
+        assert out["catalogGaps"] == []
+
+    def test_丢掉的整条都在别处摆着(self):
+        """**丢弃要留桶。** `qa_evidence_check` 开头那句「删了多少不可知」
+        反对的是**静默地删** —— 摊出来它就不成立了。
+
+        存的是整行不是一个数：只有整行还在，读的人才判得出
+        「丢的这几条里有没有真发现」。
+        """
+        out = self._one()
+        assert len(out["droppedNoAnchor"]) == 1
+        assert out["droppedNoAnchor"][0]["scenario"] == "删除后越权"
+        assert out["droppedNoAnchor"][0]["why"] == "清单里没有"
+
+    def test_有锚点的照旧进正文(self):
+        out = self._one(evidence='assert_status 200 "$resp"')
+        assert out["catalogGaps"][0]["scenario"] == "删除后越权"
+        assert out["droppedNoAnchor"] == []
+
+    def test_锚点太短等于没给(self):
+        """`fi` / `}` 这种给了等于没给 —— 沿用 `MIN_EVIDENCE_CHARS`。
+        不卡长度的话，闸门一行 `}` 就能绕过去，而绕过去之后它长得跟真锚点一样。
+        """
+        from app.services.qa_evidence_check import MIN_EVIDENCE_CHARS
+        assert MIN_EVIDENCE_CHARS > 2                      # 前提变了这条就该重想
+        assert self._one(evidence="fi")["catalogGaps"] == []
+        assert self._one(evidence="fi")["droppedNoAnchor"][0]["evidence"] == "fi"
+
+    def test_脚本侧维持只标不删(self):
+        """**故意的不对称，不是漏了。**
+
+        `scriptGaps` 每行都渲染 `evidenceCheck`、还有 `evidence_stats` 给分母，
+        可证伪性已经由「标」兑现了；再删一遍只会丢掉真发现 ——
+        没抄到原文不等于那条断言没问题，人还能自己打开那个文件。
+        清单侧没有那一列，所以才需要闸门。
+        """
+        out = qr.parse_result('{"verdict":"bad","scriptGaps":[{"problem":"断言太松"}]}')
+        assert out["scriptGaps"][0]["problem"] == "断言太松"
+        assert out["droppedNoAnchor"] == []
+
+    def test_提示词把这条写成硬要求(self):
+        """闸门不写进提示词就是纯扣分：模型不知道有这回事，
+        照旧不抄原文，然后每一趟都丢掉一半 —— 而它本来抄得出来。
+        """
+        assert "catalogGaps" in qr._SYSTEM
+        assert "丢掉" in qr._SYSTEM or "丢弃" in qr._SYSTEM
+
+        # 光有那句白话不够：schema 里得真给它一格。只写要求不给字段，
+        # 模型没地方放 —— 于是每一条都被丢，而日志上看起来是"模型不听话"。
+        schema = qr._SYSTEM.split('"catalogGaps"', 1)[1].split("]", 1)[0]
+        assert '"evidence"' in schema
+
+    def test_合并时按行去重不是按次数累加(self):
+        """一条被 5 批各丢一次，页面上得说「丢了 1 条」不是「丢了 5 条」。
+
+        攒出来的数会把闸门的严重程度按批数放大 —— 而批数是切分算法定的，
+        跟模型写得好不好一点关系都没有。
+
+        ⚠ 夹具**故意让两批措辞不同**：每批都拿到全量场景清单，同一条会被各批
+        各说一遍，说法从来不一样（`_gap_key` 那段注释里的实测数据）。
+        两行写得一模一样的话，脚本侧那把「全文拼起来」的键也能去掉 ——
+        测试照样绿，而「按清单口径归一」这件事一个字都没测到。
+        """
+        a = self._one(why="清单里没有")
+        b = self._one(why="这个域的清单漏了它")
+        m = qr.merge_results([a, b])
+        assert len(m["droppedNoAnchor"]) == 1
+
+    def _md(self, **result):
+        from app.models.qa_catalog_review import QaCatalogReview
+        r = QaCatalogReview(domain="MCP", domain_name="MCP 能力", status="done",
+                            environment_name="e", commit_sha="d" * 20, branch="main",
+                            actor="a", scenario_count=1, script_count=1,
+                            result={"verdict": "ok", "summary": "s", **result})
+        return qr.to_markdown(r)
+
+    def test_渲染时没查和查过了一条没丢不是一回事(self):
+        """**没查不是零** —— 同 `DIM_SINCE` 那套。
+
+        存量结论没经过这道闸门，渲染成「丢了 0 条」就是替它宣布
+        「这些都有出处」，而真相是这一版压根没查。
+        """
+        无 = self._md(catalogGaps=[])
+        assert "没经过锚点检查" in 无
+
+        空 = self._md(catalogGaps=[], droppedNoAnchor=[])
+        assert "没经过锚点检查" not in 空
+
+    def test_丢了几条摆在页面上(self):
+        有 = self._md(catalogGaps=[], droppedNoAnchor=[{"scenario": "删除后越权"}])
+        assert "**1 条**" in 有 and "**2 条**" not in 有
+        assert "删除后越权" in 有
+
+    def test_页面上也得说丢了几条(self):
+        """**页面是更醒目的那一面。** 只写进导出的 Markdown，等于把这道闸门
+        藏进了没人点开的那份里 —— 打开抽屉的人看的是页面。
+
+        三档一档都不能并（同 `DimUnavailable` 那套）：
+        `undefined` 是「这一版没查」，`[]` 是「查过了一条没丢」，有东西才摊开。
+        """
+        import pathlib as _p
+        src = (_p.Path(__file__).resolve().parents[2]
+               / "frontend/src/pages/qa/QaCatalog.jsx").read_text(encoding="utf-8")
+        body = src.split("function DroppedNoAnchor")[1].split("\n}")[0]
+
+        assert "<DroppedNoAnchor res={res} />" in src, "组件写了没挂上去"
+        # 存量那一档必须单独存在：合并成 0 就是替它宣布"这些都有出处"
+        assert "dn === undefined" in body, "「没查」和「零」并成一档了"
+        assert "没经过锚点检查" in body
+        # 计数从行本身数，不接受后端另给一个数。
+        # ⚠ 断的是**渲染出来的那个数**，不是 `dn.length` 四个字 ——
+        # 上面那句 `if (!dn.length) return null` 也含它，只断名字等于没断。
+        assert "{dn.length} 条" in body
 
 
 class TestEvidenceOnThePage:

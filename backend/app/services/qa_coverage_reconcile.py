@@ -231,13 +231,51 @@ def _ep_key(method: str, path: str) -> str:
     return f"{(method or '').upper()} {normalize_path(path)}".strip()
 
 
+# ── 「控件 → 端点」这条边从哪来 ──────────────────────────
+#
+# P 侧整套账都建在这条边上：点了这个控件，页面发了这几个请求。
+# 边一旦造假，G1/G2/G4 全跟着假，**而且是往"看起来更完整"的方向假** ——
+# 缺口消失，报告更好看，没有任何一条测试会红。
+#
+# 所以这里立一张白名单。它拦的不是恶意，是**图省事**：
+#   · `observed` —— HAR 里真观测到，这一趟点下去它真发了。
+#   · `aborted`  —— L1 把写请求拦下来了，但 method+path 已经到手。
+#                   **拦截既是闸门也是事实来源**：拦下来的那一刻，
+#                   「这个控件会发这个写请求」已经是观测到的事实。
+#   · `static`   —— 前端源码静态提取，**只在构建指纹对得上时**才算数。
+#                   源码里写着 ≠ 点下去真会发（条件分支、feature flag、死代码）；
+#                   而指纹对不上时连"源码里写着"都不成立 —— 那是另一个版本的源码。
+#
+# **模型推断不在此列，以后也不许加。** 那是把「猜」从场景层挪到端点层，
+# 还更隐蔽：场景层的猜写在 `catalogGaps` 里，读的人知道那是模型说的；
+# 端点层的猜混进 `pageEndpoints`，长得跟 HAR 抓来的一模一样。
+# 宁可 `endpoints` 为空 —— 空控件按页面归域，那是代码推的、可复现的保守近似。
+EDGE_SOURCES = ("observed", "aborted", "static")
+
+
+def edge_ok(ep: dict, build_fingerprint: str | None = None) -> bool:
+    """这条边**说不说得清自己从哪来**。
+
+    ⚠ **没写 `source` 的一律不算数，别默认成 `observed`。**
+    默认放行等于这道闸门不存在：以后任何一条新造边的路径，只要"忘了"
+    写来源就自动被采信 —— 而这里防的恰恰是忘。
+    """
+    src = (ep.get("source") or "").strip()
+    if src == "static":
+        # 指纹没传（`None`）也算对不上。**fail-closed**：
+        # 「没查」和「查过了、一致」在这儿绝不能是同一个结果。
+        return bool(build_fingerprint) and ep.get("buildFingerprint") == build_fingerprint
+    return src in EDGE_SOURCES
+
+
 def compute_gaps(*, page_items: list[dict] | None,
                  routes: list[dict] | None,
                  scripts: list[dict] | None,
                  index: dict,
                  claimed_domains: set[str] | None = None,
                  route_table_available: bool = True,
-                 page_survey_available: bool = True) -> dict:
+                 page_survey_available: bool = True,
+                 build_fingerprint: str | None = None) -> dict:
     """三个账本 → 五类缺口。**纯集合运算，不问模型。**
 
     `scripts` 每条 `{domain, scenarioId, path, text}`。
@@ -275,9 +313,26 @@ def compute_gaps(*, page_items: list[dict] | None,
     p_eps: dict[str, dict] = {}
     g4: list[dict] = []
     g5: list[dict] = []
+    edges_unsourced: list[dict] = []
     for it in page_items or []:
-        eps = it.get("endpoints") or []
         anchor = f"{it.get('page_path') or ''} :: {it.get('anchor') or it.get('label') or ''}"
+        raw_eps = it.get("endpoints") or []
+        eps: list[dict] = []
+        for e in raw_eps:
+            if edge_ok(e, build_fingerprint):
+                eps.append(e)
+            else:
+                edges_unsourced.append(
+                    {"anchor": anchor, "pagePath": it.get("page_path") or "",
+                     "method": (e.get("method") or "").upper(),
+                     "path": normalize_path(e.get("path") or ""),
+                     "source": str(e.get("source") or "")})
+        if raw_eps and not eps:
+            # 这个控件**发了请求，只是没有一条说得清出处**。
+            # 落进 G4（"点了没有请求"）就是拿一句假话填一个空位：
+            # 报告上它会长成「这按钮点下去什么都没发生」，而真相是
+            # "发了，但我不敢认"。数在 `edgesUnsourced` 里，别编。
+            continue
         if not eps:
             # 点了没有请求。**disabled 和 enabled 是两回事**：
             # 前者是情报（死按钮/flag 关掉），后者才需要判断值不值得测。
@@ -385,11 +440,15 @@ def compute_gaps(*, page_items: list[dict] | None,
             "endpointsUnattributed": len(unattributed),
             "domainsUnresolved": len(index.get("unresolved") or []),
             "scriptsScanned": len(scripts or []),
+            # 0 也要渲染，理由同上一行注释：这道闸门要是静默，
+            # 它就变成了自己要防的那个东西。
+            "edgesUnsourced": len(edges_unsourced),
             "pageEndpoints": len(p_eps),
             "routeEndpoints": len(r_eps),
         },
         "endpointsUnextracted": unextracted,
         "endpointsUnattributed": unattributed,
+        "edgesUnsourced": edges_unsourced,
         "pageDomains": sorted(page_domains),
     }
 

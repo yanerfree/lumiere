@@ -12,9 +12,11 @@
      必须**自己说出来**，否则报告看着像"跑过了、缺口不多"。
 """
 from app.services.qa_coverage_reconcile import (
+    EDGE_SOURCES,
     build_group_index,
     compute_gaps,
     covers,
+    edge_ok,
     extract_endpoints,
 )
 
@@ -34,13 +36,13 @@ _ROUTES = [
 _PAGE = [
     {"page_path": "/policies", "anchor": "[data-testid=bulk-reject]", "label": "批量驳回",
      "control_type": "button", "state": "enabled",
-     "endpoints": [{"method": "POST", "path": "/api/policies/27/reject"}]},
+     "endpoints": [{"source": "observed", "method": "POST", "path": "/api/policies/27/reject"}]},
     {"page_path": "/templates", "anchor": "[data-testid=save]", "label": "保存模板",
      "control_type": "button", "state": "enabled",
-     "endpoints": [{"method": "PUT", "path": "/api/templates/9"}]},
+     "endpoints": [{"source": "observed", "method": "PUT", "path": "/api/templates/9"}]},
     {"page_path": "/mcp", "anchor": "[data-testid=tools]", "label": "工具列表",
      "control_type": "tab", "state": "enabled",
-     "endpoints": [{"method": "GET", "path": "/api/mcp/tools"}]},
+     "endpoints": [{"source": "observed", "method": "GET", "path": "/api/mcp/tools"}]},
     {"page_path": "/policies", "anchor": "th.name", "label": "按名称排序",
      "control_type": "sorter", "state": "enabled", "endpoints": []},
     {"page_path": "/policies", "anchor": "[data-testid=export]", "label": "导出",
@@ -236,7 +238,7 @@ class Test归不了属的单独记账:
         g = _gaps(page_items=_PAGE + [
             {"page_path": "/x", "anchor": "[data-testid=z]", "label": "别处来的",
              "control_type": "button", "state": "enabled",
-             "endpoints": [{"method": "GET", "path": "/api/whatever"}]}])
+             "endpoints": [{"source": "observed", "method": "GET", "path": "/api/whatever"}]}])
         allp = [x.get("path") for k in ("g1", "g3") for x in g[k]]
         assert "/api/whatever" not in allp
         assert g["counters"]["endpointsUnattributed"] == 1
@@ -275,6 +277,95 @@ class Test两条降级声明:
                                    "g2": "verified"}
 
 
+class Test控件到端点那条边从哪来:
+    """S8.1 · P 侧整套账都建在这条边上，所以它必须**说得清自己从哪来**。
+
+    这里防的不是恶意，是**图省事**：让模型补一条"这个按钮大概会发这个请求"，
+    比让爬虫真点一遍便宜太多了。而那么做是把「猜」从场景层挪到端点层 ——
+    还更隐蔽：场景层的猜写在 `catalogGaps` 里，读的人知道那是模型说的；
+    端点层的猜混进 `pageEndpoints`，长得跟 HAR 抓来的一模一样。
+
+    ⚠ 造假的方向是**单向**的：多认一条边 ⇒ 缺口消失 ⇒ 报告更好看 ⇒ 没有一条测试会红。
+    """
+
+    def _one(self, ep):
+        return compute_gaps(
+            page_items=[{"page_path": "/policies", "anchor": "[data-testid=r]",
+                         "label": "驳回", "control_type": "button",
+                         "state": "enabled", "endpoints": [ep]}],
+            routes=_ROUTES, scripts=[], index=build_group_index(_DOMAINS),
+            claimed_domains={"POL"})
+
+    _EP = {"method": "POST", "path": "/api/policies/27/reject"}
+
+    def test_观测到的算数(self):
+        g = self._one({**self._EP, "source": "observed"})
+        assert g["counters"]["pageEndpoints"] == 1
+        assert g["counters"]["edgesUnsourced"] == 0
+
+    def test_被拦下来的写请求也算数(self):
+        """**L1 的拦截既是闸门也是事实来源。**
+
+        拦下来的那一刻，「这个控件会发这个写请求」已经是观测到的事实了 ——
+        不认它的话，安全护栏越严、P 侧账本越空，而空账本报出来是"没有缺口"。
+        """
+        g = self._one({**self._EP, "source": "aborted"})
+        assert g["counters"]["pageEndpoints"] == 1
+
+    def test_没写来源的一律不算数(self):
+        """⚠ **别默认成 `observed`。**
+
+        默认放行等于这道闸门不存在：以后任何一条新造边的路径，
+        只要"忘了"写来源就自动被采信 —— 而这里防的恰恰是忘。
+        """
+        g = self._one(dict(self._EP))
+        assert g["counters"]["pageEndpoints"] == 0
+        assert g["counters"]["edgesUnsourced"] == 1
+
+    def test_模型推断不在白名单里(self):
+        assert "model" not in EDGE_SOURCES
+        assert "inferred" not in EDGE_SOURCES
+        assert set(EDGE_SOURCES) == {"observed", "aborted", "static"}
+        assert self._one({**self._EP, "source": "model"})["counters"]["pageEndpoints"] == 0
+
+    def test_丢掉的边整条记账不是记个数(self):
+        """只有整行还在，读的人才判得出「丢的是哪几条、该去修哪条产出路径」。"""
+        g = self._one({**self._EP, "source": "model"})
+        assert g["edgesUnsourced"][0]["source"] == "model"
+        assert g["edgesUnsourced"][0]["path"] == "/api/policies/{}/reject"
+        assert "[data-testid=r]" in g["edgesUnsourced"][0]["anchor"]
+
+    def test_有请求但全没来源的控件不许算成G4(self):
+        """**这条是整组里最要紧的一条。**
+
+        G4 的字面意思是「点了没有请求」。把一个"发了请求、只是没一条说得清出处"
+        的控件塞进去，报告上它会长成「这按钮点下去什么都没发生」——
+        拿一句假话去填一个空位，比空着坏得多。
+        """
+        g = self._one({**self._EP, "source": "model"})
+        assert g["g4"] == []
+        assert g["g5"] == []
+        assert g["counters"]["edgesUnsourced"] == 1
+
+    def test_静态提取没指纹就不认(self):
+        """源码里写着 ≠ 点下去真会发（条件分支、feature flag、死代码）；
+        而指纹对不上时连"源码里写着"都不成立 —— 那是另一个版本的源码。
+
+        **fail-closed**：没人传指纹进来 ⇒ 一条都不认。
+        「没查」和「查过了、一致」在这儿绝不能是同一个结果。
+        """
+        assert edge_ok({"source": "static", "buildFingerprint": "abc"}) is False
+        assert edge_ok({"source": "static", "buildFingerprint": "abc"},
+                       build_fingerprint="def") is False
+        assert edge_ok({"source": "static"}, build_fingerprint="abc") is False
+        # 两头都没有 ⇒ `None == None` 会真过。**这是最容易漏的一格**：
+        # 谁把 `bool(build_fingerprint)` 当冗余删掉，一条"谁也没查过"的边
+        # 就成了合法边，而它长得跟指纹对上的那条一模一样。
+        assert edge_ok({"source": "static"}) is False
+        assert edge_ok({"source": "static", "buildFingerprint": "abc"},
+                       build_fingerprint="abc") is True
+
+
 class Test计数为0也要渲染:
     def test_一个都没有时计数仍然在(self):
         """只在非 0 时出现的计数，跟「没算过」长得一模一样。"""
@@ -282,4 +373,5 @@ class Test计数为0也要渲染:
                          index=build_group_index({}), claimed_domains=set())
         assert g["counters"] == {"endpointsUnextracted": 0, "endpointsUnattributed": 0,
                                  "domainsUnresolved": 0, "scriptsScanned": 0,
+                                 "edgesUnsourced": 0,
                                  "pageEndpoints": 0, "routeEndpoints": 0}

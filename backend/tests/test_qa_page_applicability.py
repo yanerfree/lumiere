@@ -142,7 +142,7 @@ class Test跟compute_gaps接上:
         g = compute_gaps(
             page_items=[{"page_path": "/p", "anchor": "a", "label": "驳回",
                          "control_type": "button", "state": "enabled",
-                         "endpoints": [{"method": "POST", "path": "/api/policies/1/reject"}]}],
+                         "endpoints": [{"source": "observed", "method": "POST", "path": "/api/policies/1/reject"}]}],
             routes=[{"group": "Policies", "method": "POST",
                      "path": "/api/policies/{}/reject"}],
             scripts=[], index=idx, claimed_domains=set())
@@ -157,7 +157,7 @@ class Test跟compute_gaps接上:
         g = compute_gaps(
             page_items=[{"page_path": "/p", "anchor": "a", "label": "驳回",
                          "control_type": "button", "state": "enabled",
-                         "endpoints": [{"method": "POST", "path": "/api/policies/1/reject"}]}],
+                         "endpoints": [{"source": "observed", "method": "POST", "path": "/api/policies/1/reject"}]}],
             routes=[{"group": "Policies", "method": "POST",
                      "path": "/api/policies/{}/reject"}],
             scripts=[{"domain": "POL", "scenarioId": "POL-01",

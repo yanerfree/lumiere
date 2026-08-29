@@ -1581,11 +1581,47 @@ function ReviewBody({ r, onOpenFile, projectId }) {
             {g.why && <div style={{ color: C.gray }}><Rich text={g.why} /></div>}
           </div>
         )) : <Nothing text="没看出明显缺的一环" />}
+        <DroppedNoAnchor res={res} />
       </Section>
 
       {empty && <Empty description="模型这一轮什么都没说 —— 重评一次试试" />}
 
       <Scanned res={res} r={r} />
+    </div>
+  )
+}
+
+// S8.1 · 清单侧结论指不出出处的，后端整条丢掉了。**这里必须说丢了几条。**
+//
+// 闸门本身不是问题，**静默的闸门才是** —— 一条没丢和丢了 8 条要是在页面上长得一样，
+// 这道闸门就变成了它自己要防的那个东西（这个模块存在的意义就是抓这种形状）。
+//
+// 三档，一档都不能并：
+//   · `undefined` —— 存量结论，那一趟压根没有这道闸门。**「没查」不是「零」**，
+//     渲染成 0 就是替它宣布"这些都有出处"。同 `DimUnavailable` 那套。
+//   · `[]` —— 查过了，一条没丢。这才是那个可以安静的档。
+//   · 有东西 —— 摊开原话，划掉。列出来不是让人去改，是让「丢了几条」可见。
+function DroppedNoAnchor({ res }) {
+  const dn = res.droppedNoAnchor
+  if (dn === undefined) {
+    return (
+      <div style={{ marginTop: 8, color: C.gray, fontSize: 12 }}>
+        这一趟评的时候还没有「清单侧结论必须指得出出处」这道闸门，上面这些<b>没经过锚点检查</b>。
+        不是它们都有出处，是这一版没查。
+      </div>
+    )
+  }
+  if (!dn.length) return null
+  return (
+    <div style={{ marginTop: 8, color: C.gray, fontSize: 12 }}>
+      ⚠ 另有 <b>{dn.length} 条</b>指不出出处，已经丢掉，没算进上面。模型说清单缺这些，
+      却一句原文都抄不出来 —— 指不出出处的结论<b>没人能十秒内否掉它</b>，
+      不该混进要发给清单主人的整改建议里。列在这儿只为让「丢了几条」可见，不是让你去改：
+      {dn.map((g, i) => (
+        <div key={i} style={{ marginTop: 2 }}>
+          <s>{g.scenario || g.why || g.problem || '—'}</s>
+        </div>
+      ))}
     </div>
   )
 }

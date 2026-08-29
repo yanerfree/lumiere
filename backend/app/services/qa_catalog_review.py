@@ -43,6 +43,7 @@ from app.models.qa_catalog_review import QaCatalogReview
 from app.services.ai import llm_client
 from app.services.qa_evidence_check import (
     PASS_STATES,
+    anchor_ok,
     check_evidence,
     evidence_stats,
     state_cn,
@@ -493,6 +494,11 @@ _SYSTEM = """你在评审一个黑盒验收仓里**某一个域**的自动化覆
 要具体到能直接动手：哪个文件、哪一句断言、改成什么。
 - `evidence` 从脚本正文里**原样抄**一小段（≤3 行）当判据锚点，让接手的人一搜就定位。
   抄不出来就留空，**不许编**一段仓库里没有的代码。
+- **`catalogGaps` 的 `evidence` 是硬的：没有锚点的那条会被直接丢掉，不进页面。**
+  抄哪一句都行 —— 让你认定"清单缺这条"的那份脚本正文，或者清单里那一行本身；
+  但**必须是原文**，不是你的转述。这一栏空着的结论，读的人连从哪儿查起都不知道，
+  而否不掉的结论不该被当成发现。
+  **写不出锚点就别写这一条** —— 覆盖面已经另有一份代码算出来的账，不缺一条猜的。
 
 只输出 JSON，不要任何解释：
 ```json
@@ -514,7 +520,8 @@ _SYSTEM = """你在评审一个黑盒验收仓里**某一个域**的自动化覆
      "evidence": "assert_status 200 \"$resp\"",
      "fix": "断言响应体 code == 403 且数据面返回为空"}
   ],
-  "catalogGaps": [{"scenario": "...", "why": "...", "dim": "coverage|grain|shape"}]
+  "catalogGaps": [{"scenario": "...", "why": "...", "dim": "coverage|grain|shape",
+                   "evidence": "让你这么说的那一句，原样抄；没有就别写这一条"}]
 }
 ```"""
 
@@ -601,6 +608,13 @@ def parse_result(text: str) -> dict:
     if not isinstance(data, dict):
         raise ValueError("模型回了个不是对象的东西")
 
+    # S8.1：被丢掉的行**整条**留在这儿，不是记一个数。
+    # `qa_evidence_check` 开头写着「只打标记，不删」，理由是「删了多少不可知，
+    # 『一条没删』和『删了 8 条』在页面上长得一模一样」—— 那条理由反对的是
+    # **静默地删**。留了桶它就不成立了：丢了几条、丢的是哪几条，都摊在页面上，
+    # 而计数照旧是从行本身数出来的（`len(droppedNoAnchor)`），不是攒出来的。
+    dropped: list[dict] = []
+
     def _rows(key: str) -> list[dict]:
         # 这一堆行属于哪一侧。`catalogGaps` 之外的都按 script 算 —— 这个默认值
         # 只在有人加了第三个数组、又忘了在这里登记时才生效，那时候它会让
@@ -641,15 +655,35 @@ def parse_result(text: str) -> dict:
                 out.append(row)
             elif x:
                 out.append({"problem": str(x)[:600]})
-        return out
+        if side != "catalog":
+            # **`scriptGaps` 维持「只标不删」。** 那一侧每行都渲染 `evidenceCheck`、
+            # 还有 `evidence_stats` 给分母，读的人一眼看得见"这条没判据" ——
+            # 可证伪性已经由「标」兑现了，再删一遍只会丢掉真发现（没抄到原文
+            # 不等于这条断言没问题，人还能自己打开那个文件）。
+            return out
+        # 清单侧没有那一列。S8.3 之后覆盖面已经有一份**代码算出来的**账
+        # （G1/G2/G3），模型在这儿写的又是唯一一处没被任何东西验过的覆盖面结论 ——
+        # 一条指不出出处的「清单缺这条场景」，读的人连从哪儿查起都不知道。
+        kept = []
+        for row in out:
+            (kept if anchor_ok(row) else dropped).append(row)
+        return kept
+
+    # **顺序有意义**：`dropped` 是 `_rows` 的副产物，得先把两个数组都跑完。
+    # 写在返回字典的字面量里也能work（dict 按书写顺序求值），但那是在拿语言细节
+    # 当契约 —— 谁把 `droppedNoAnchor` 那行往上挪一行，桶就静默变空。
+    script_rows = _rows("scriptGaps")
+    catalog_rows = _rows("catalogGaps")
 
     verdict = str(data.get("verdict") or "").strip().lower()
     return {
         "verdict": verdict if verdict in ("ok", "risky", "bad") else "risky",
         "brief": _brief(data.get("brief"), data.get("summary")),
         "summary": str(data.get("summary") or "")[:800],
-        "scriptGaps": _rows("scriptGaps"),
-        "catalogGaps": _rows("catalogGaps"),
+        "scriptGaps": script_rows,
+        "catalogGaps": catalog_rows,
+        # S8.1：拿不出源文锚点、被挡在 `catalogGaps` 外面的那些。整条留着。
+        "droppedNoAnchor": dropped,
         # 这里没有 "nextUp"：2026-08-29 停产。模型即使照旧回了这个键也直接丢掉 ——
         # **停产要停在解析这一层**，只删渲染的话它还在库里长，
         # 下一个人翻到 result JSON 会以为它还是活的。
@@ -828,6 +862,10 @@ def _gap_key(g: dict, kind: str = "") -> str:
     return "|".join(str(g.get(f) or "") for f in ("id", "path", "problem", "why"))
 
 
+#: 哪些数组的「同一条」按别的数组那套算。见 `merge_results` 里的注释。
+_MERGE_KIND = {"droppedNoAnchor": "catalogGaps"}
+
+
 def merge_results(parts: list[dict]) -> dict:
     """把分批的结果并成一份。
 
@@ -835,15 +873,19 @@ def merge_results(parts: list[dict]) -> dict:
     整个域就不能拿去当「认领都算数」用 —— 平均一下会把最要命的那批稀释掉。
     """
     out: dict = {"verdict": "ok", "summary": "", "brief": {},
-                 "scriptGaps": [], "catalogGaps": []}
+                 "scriptGaps": [], "catalogGaps": [], "droppedNoAnchor": []}
     seen: dict[str, int] = {}          # 键 → 它在 out[key] 里的下标
     for part in parts:
         v = part.get("verdict")
         if _VERDICT_RANK.get(v, 9) < _VERDICT_RANK.get(out["verdict"], 9):
             out["verdict"] = v
-        for key in ("scriptGaps", "catalogGaps"):
+        for key in ("scriptGaps", "catalogGaps", "droppedNoAnchor"):
             for g in part.get(key) or []:
-                k = key + "|" + _gap_key(g, key)
+                # 被丢的那些也是清单侧的行，**去重键得跟 `catalogGaps` 用同一套**：
+                # 每批都拿到全量场景清单，同一条会被各批各说一遍。不去重的话
+                # 「丢了 5 条」其实是同一条丢了 5 次 —— 而这个数是要摆在页面上
+                # 给人判"模型有多爱瞎写"的，虚报 5 倍比不报更坏。
+                k = key + "|" + _gap_key(g, _MERGE_KIND.get(key, key))
                 if k in seen:
                     # 合掉了就得留个数。域级那些每批都会各说一遍，
                     # 修好键之后页面上会**少掉一大截行** —— 不说清楚"这条 N 批都提到"，
@@ -1526,6 +1568,24 @@ def to_markdown(r: QaCatalogReview) -> str:
             # 域级结论本来就每批看一遍，这个数说明它有多显眼，不是噪声。
             line += f"（{n} 批都提到）"
         L.append(line)
+    # S8.1：**丢了几条必须看得见。** 闸门本身不是问题，静默的闸门才是 ——
+    # 一条没丢和丢了 8 条要是在页面上长得一样，这道闸门就变成了它自己要防的东西。
+    dn = res.get("droppedNoAnchor")
+    if dn is None:
+        # `None` 是「这一趟压根没有这道闸门」，`[]` 是「查过了，一条没丢」。
+        # 两者绝不能合并写成 0 —— 同 `DIM_SINCE` 那套：**没查不是零**。
+        L.append("")
+        L.append("> 这一趟评的时候还没有「清单侧结论必须指得出出处」这道闸门，"
+                 "上面这些**没经过锚点检查**。不是它们都有出处，是这一版没查。")
+    elif dn:
+        L.append("")
+        L.append(f"> ⚠ 另有 **{len(dn)} 条**指不出出处，已经丢掉，没算进上面。"
+                 "模型说清单缺这些，却一句原文都抄不出来 —— 指不出出处的结论"
+                 "**没人能十秒内否掉它**，不该混进要发给清单主人的整改建议里。"
+                 "列在这儿只为让「丢了几条」可见，不是让你去改：")
+        for g in dn:
+            said = str(g.get("scenario") or g.get("why") or g.get("problem") or "—")
+            L.append(f">   - ~~{said[:60]}~~")
     L.append("")
 
     L.append("## 这次读了什么")
