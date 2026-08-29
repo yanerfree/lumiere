@@ -41,7 +41,19 @@ _ROW_RE = re.compile(
     r"^\|\s*(?P<id>[A-Z][A-Z0-9]{1,5}-\d{2,3})\s*\|(?P<rest>.*)\|\s*$"
 )
 # 域码表行：| `SMK` | 冒烟 | Health, Docs, System |
-_DOMAIN_RE = re.compile(r"^\|\s*`(?P<code>[A-Z][A-Z0-9]{1,5})`\s*\|\s*(?P<name>[^|]+?)\s*\|")
+# **第三列必须捕获**：它是「API 组 → 域码」映射的**唯一**出处，丢了它，
+# 「这个端点归哪个域」就只剩下猜。第三列写成可选组而不是硬要求 —— 老清单
+# 只有两列，硬要求会让整张域码表一行都读不进来（然后所有域名变空字符串，
+# 页面上看着像"域码表没写"，其实是正则多要了一列）。
+_DOMAIN_RE = re.compile(
+    r"^\|\s*`(?P<code>[A-Z][A-Z0-9]{1,5})`\s*\|\s*(?P<name>[^|]+?)\s*\|"
+    r"(?:\s*(?P<groups>[^|]*?)\s*\|)?"
+)
+# 组名的形状：**大写字母开头**，可带数字和内部短横（`Health`、`MCP-Tools`、`Root`）。
+# 大写这条不是洁癖：第三列里混着路径前缀（`PUB` 那行写的是「按路径前缀
+# `/api/public/v1/*` 划定」），不要求大写的话 `api` / `public` / `v1` 三个
+# 路径段会被当成组名 —— 造出三个对不上任何路由的组，然后报「这几个组没人打过」。
+_GROUP_TOKEN_RE = re.compile(r"[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*")
 # 「看着像场景行、却没解析成」的首列形状。故意放宽（小写、一位数字、下划线、
 # 中文破折号都算），因为漏一行 = 少一条场景**而且永远不报错**；多报一行只是
 # 让人回清单里瞄一眼。域码表（`SMK`）、统计表（层级名）、分隔行（---）都不带
@@ -80,8 +92,36 @@ def _first_cell(line: str) -> str:
     return parts[1].strip().strip("`*").strip() if len(parts) > 1 else ""
 
 
-def parse_catalog(text: str) -> tuple[list[dict], dict[str, str], dict]:
-    """解析清单 markdown。返回 (场景行, 域码->域名, 读不进来的行)。
+def _group_cell(raw: str) -> tuple[list[str], str]:
+    """域码表第三列 → (组名列表, 认不出来的那部分原文)。
+
+    **原样返回，不归一化**（大小写/单复数归一是对账那一侧的事，见
+    `qa_coverage_reconcile`）—— 在这里就归一的话，页面上再也显示不出
+    清单原文写的是什么，而"清单把 `Tags` 改成了 `Tag`"正是要看见的信号。
+    """
+    text = (raw or "").replace("**", " ").replace("`", " ")
+    groups: list[str] = []
+    leftover: list[str] = []
+    for chunk in re.split(r"[,，、;；]", text):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        if _GROUP_TOKEN_RE.fullmatch(chunk):
+            if chunk not in groups:
+                groups.append(chunk)
+            continue
+        # 混了散文的那一段（`外加 Templates`）：**捞出组名，同时把整段记账**。
+        # 两个方向都得走 —— 只捞不记账，`PUB` 的路径前缀规则就静默消失了；
+        # 只记账不捞，`Templates` 这个真组就丢了，而丢组是**不会红**的那一种错。
+        leftover.append(chunk)
+        for m in _GROUP_TOKEN_RE.finditer(chunk):
+            if m.group(0) not in groups:
+                groups.append(m.group(0))
+    return groups, " ".join(leftover).strip()
+
+
+def parse_catalog(text: str) -> tuple[list[dict], dict[str, dict], dict]:
+    """解析清单 markdown。返回 (场景行, 域码->{name,groups,groupsRaw}, 读不进来的行)。
 
     只认「场景清单」正文里的行；统计段里那张"已实现清单"表首列是层级不是 ID，
     天然不会命中 _ROW_RE，所以不需要额外切段。
@@ -92,7 +132,8 @@ def parse_catalog(text: str) -> tuple[list[dict], dict[str, str], dict]:
     以及同一个 ID 出现两次（保留第一条，第二条的内容整行丢掉）。
     """
     scenarios: list[dict] = []
-    domains: dict[str, str] = {}
+    domains: dict[str, dict] = {}
+    groups_unreadable: list[dict] = []
     seen: set[str] = set()
     unparsed: list[dict] = []
     duplicates: list[str] = []
@@ -100,7 +141,14 @@ def parse_catalog(text: str) -> tuple[list[dict], dict[str, str], dict]:
     for lineno, line in enumerate(text.splitlines(), 1):
         dm = _DOMAIN_RE.match(line)
         if dm:
-            domains.setdefault(dm.group("code"), dm.group("name").strip())
+            code = dm.group("code")
+            if code not in domains:
+                raw = (dm.group("groups") or "").strip()
+                groups, leftover = _group_cell(raw)
+                domains[code] = {"name": dm.group("name").strip(),
+                                 "groups": groups, "groupsRaw": raw}
+                if leftover:
+                    groups_unreadable.append({"code": code, "raw": leftover[:160]})
             continue
 
         m = _ROW_RE.match(line)
@@ -148,7 +196,23 @@ def parse_catalog(text: str) -> tuple[list[dict], dict[str, str], dict]:
             "stateNote": state_note,
         })
 
-    return scenarios, domains, {"unparsedRows": unparsed, "duplicateIds": duplicates}
+    return scenarios, domains, {"unparsedRows": unparsed, "duplicateIds": duplicates,
+                                "domainGroupsUnreadable": groups_unreadable}
+
+
+def domain_index(domains: dict[str, dict]) -> dict[str, set[str]]:
+    """`{组名: {域码, ...}}` —— **值必须是集合**。
+
+    域码表里一个组会同时属于好几个域，这是清单**故意**这么写的：
+    `PUB` 按路径前缀划定、和 `TEM/PRV/AGT/MCP` 重叠，`Root` 组同属 `SMK/MCP/SEC`。
+    写成 `dict[str, str]` 的话后一个域把前一个覆盖掉，**一个字都不会报错**，
+    而对账那边算出来的缺口从此少一整个域 —— 少算的缺口不会红，没人发现得了。
+    """
+    out: dict[str, set[str]] = {}
+    for code, meta in (domains or {}).items():
+        for g in meta.get("groups") or []:
+            out.setdefault(g, set()).add(code)
+    return out
 
 
 def _scenario_ids(value: str) -> list[str]:
@@ -446,13 +510,13 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
     })
 
 
-def _assemble(scenarios: list[dict], domain_names: dict[str, str], cases: list[dict],
+def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[dict],
               catalog_issues: dict, repo_meta: dict) -> dict:
     by_id = {s["id"]: s for s in scenarios}
     for s in scenarios:
         s["scripts"] = []
         s["knownBugs"] = []
-        s["domainName"] = domain_names.get(s["domain"], "")
+        s["domainName"] = (domain_meta.get(s["domain"]) or {}).get("name", "")
 
     orphan_scripts: list[dict] = []
     for c in cases:
@@ -496,9 +560,12 @@ def _assemble(scenarios: list[dict], domain_names: dict[str, str], cases: list[d
     for code in sorted({s["domain"] for s in scenarios}):
         rows = [s for s in scenarios if s["domain"] == code and s["state"] != "deprecated"]
         gaps = [s for s in rows if s["state"] == "gap"]
+        meta = domain_meta.get(code) or {}
         domains.append({
             "code": code,
-            "name": domain_names.get(code, ""),
+            "name": meta.get("name", ""),
+            # 第三列原样带出来：对账要用，页面上也要看得见清单写的是什么
+            "groups": meta.get("groups") or [],
             "total": len(rows),
             "covered": len([s for s in rows if s["state"] == "covered"]),
             # 页面按缺口排序找「黑洞域」，P0 缺口决定先啃哪个

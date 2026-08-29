@@ -62,9 +62,12 @@ def test_parse_catalog_rows():
     ids = [s["id"] for s in scen]
     # §4 统计段那张表首列是层级不是 ID，不能被当成场景行读进来
     assert ids == ["SMK-01", "SMK-08", "SMK-09", "MCP-38", "MCP-99"]
-    assert domains == {"SMK": "冒烟", "MCP": "MCP 能力"}
+    assert {c: m["name"] for c, m in domains.items()} == {"SMK": "冒烟", "MCP": "MCP 能力"}
+    # 域码表第三列 = 「API 组 → 域码」映射的唯一出处，丢了它对账就只能猜
+    assert domains["SMK"]["groups"] == ["Health", "Docs", "System"]
     # 这份夹具是干净的：一行都没漏读，页面上那两个"少读了多少"必须是 0
-    assert issues == {"unparsedRows": [], "duplicateIds": []}
+    assert issues == {"unparsedRows": [], "duplicateIds": [],
+                      "domainGroupsUnreadable": []}
 
     first = scen[0]
     assert first["domain"] == "SMK"
@@ -553,3 +556,74 @@ def test_parse_catalog_treats_dash_tier_as_no_tier():
     assert by_id["SMK-01"]["tier"] == "smoke"
     assert by_id["SMK-02"]["tier"] == ""
     assert by_id["SMK-03"]["tier"] == ""
+
+
+# ---- S7.1 域码表第三列：API 组 → 域码 ----
+
+_GROUP_CATALOG = """\
+## 2. 域码表
+
+| 域码 | 名称 | 覆盖的 API 组 |
+|---|---|---|
+| `SMK` | 冒烟 | Health, Docs, Root |
+| `MCP` | MCP 能力 | MCP-Tools, Root |
+| `SEC` | 安全 | Root, Internal |
+| `PUB` | 对外公共 API | **按路径前缀 `/api/public/v1/*` 划定（18 条）**，外加 Templates |
+| `OLD` | 老域没有第三列 |
+
+## 3. 场景清单
+
+| ID | 场景 | P | R | 层 | 状 |
+|---|---|---|---|---|---|
+| SMK-01 | `GET /healthz` | P0 | 6 | smoke | ✅ |
+"""
+
+
+class Test域码表第三列:
+    def _domains(self):
+        return parse_catalog(_GROUP_CATALOG)[1]
+
+    def test_第三列读进来了(self):
+        assert self._domains()["MCP"]["groups"] == ["MCP-Tools", "Root"]
+
+    def test_一个组同属多个域时一个都不许丢(self):
+        """`Root` 组同属 SMK/MCP/SEC，`PUB` 按路径前缀划定且**故意**跟别的域重叠 ——
+        这是清单自己的设计，不是笔误。映射写成 `dict[str, str]` 的话后一个域
+        把前一个覆盖掉，**一个字都不报错**，而对账那边从此少算一整个域的缺口。
+        少算的缺口不会红，谁都发现不了。
+        """
+        from app.services.qa_catalog import domain_index
+        idx = domain_index(self._domains())
+        assert idx["Root"] == {"SMK", "MCP", "SEC"}
+        assert isinstance(idx["Root"], set)
+
+    def test_只有两列的老行照读不炸(self):
+        """第三列是可选的。写成硬要求的话整张域码表一行都读不进来，
+        页面上所有域名变空 —— 看着像"清单没写域码表"，其实是正则多要了一列。"""
+        d = self._domains()
+        assert d["OLD"]["name"] == "老域没有第三列"
+        assert d["OLD"]["groups"] == []
+
+    def test_中文说明不当成组名(self):
+        """`PUB` 那一行第三列写的是散文。把「按路径前缀 … 划定（18 条）」
+        当组名，会造出一个对不上任何路由的组，然后 G2 报「这个组没人打过」。"""
+        assert self._domains()["PUB"]["groups"] == ["Templates"]
+
+    def test_认不出来的那部分要记账(self):
+        """跟 `unparsedRows` 同一条纪律：这次少读了什么必须说出来。
+        `PUB` 的路径前缀规则就藏在这段散文里 —— 静默丢掉的话，
+        「PUB 域一条路由都没有」看起来会像事实。"""
+        issues = parse_catalog(_GROUP_CATALOG)[2]
+        bad = issues["domainGroupsUnreadable"]
+        assert [b["code"] for b in bad] == ["PUB"]
+        assert "/api/public/v1/*" in bad[0]["raw"]
+
+    def test_原文一并带出来不归一化(self):
+        """归一化（大小写/单复数）是对账那一侧的事。在这里就归一，
+        页面上再也看不出清单原文写的是什么 —— 而「清单把 Tags 改成了 Tag」
+        正是要看见的那个信号。"""
+        assert self._domains()["SMK"]["groupsRaw"] == "Health, Docs, Root"
+
+    def test_没有域码表时映射是空的不是猜的(self):
+        from app.services.qa_catalog import domain_index
+        assert domain_index({}) == {}

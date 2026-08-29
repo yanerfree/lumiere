@@ -6,7 +6,19 @@
 bash backend/scripts/selftest/selftest_api_scenario.sh   # 接口场景整模块 16 项
 python3 backend/scripts/selftest/selftest_neighbors.py   # 共用层出口 14 项（在仓库根跑）
 python3 backend/scripts/selftest/scan_overflow.py        # 全站横向溢出（28 页 × 2 视口）
+
+LUMIERE_PROJ=<项目UUID> \
+python3 backend/scripts/selftest/qa_dropped_no_anchor.py # QA 评审抽屉「丢了几条」三档渲染
 ```
+
+`qa_dropped_no_anchor.py` 验的是**「没查」「查过没丢」「丢了 N 条」三档不许合并**。
+它拦下 `reviews` 响应把 `droppedNoAnchor` 换成三档喂给真页面 —— 不造数据跑真评审，
+是因为**「这个键不存在」的存量结论在真库里造不出来**：新代码跑过一次就一定带上它。
+这脚本自己假绿过一次，值得抄走：响应外面套着 `{"data": {"reviews": [...]}}`，
+拦截函数在最外层找 `reviews`，**一条都没改到**，三档于是全渲染成「没查」那一档 ——
+**「注入没生效」和「第一档渲染正确」在页面上长得一模一样**。所以它现在递归认对象
+（带 `domain` + `result` 的就是一条评审），并把「拦到几次 / 改了几条」打进每行输出：
+改了 0 条就不可能是「渲染对了」。
 
 `scan_overflow.py` 是**布局类 bug 的兜底**：找"把父容器撑破"的元素。
 这类 bug 源码里长得跟正常代码一模一样（根因是 CSS 计算结果，典型是 flex 子项

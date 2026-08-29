@@ -1,0 +1,426 @@
+[
+ {
+  "domain": "MCP",
+  "path": "api/mcp/builtin-batch-toggle.sh",
+  "evidence": "assert_in \"$(_enabled \"$T1_ID\")\" \"收尾前 ${T1} 处于启用态\" True true 1\ninfo \"结论:批量操作的正确性依赖前端的状态判断 + 无回滚的串行循环\"",
+  "expected": "unmatched",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/mcp/builtin-batch-toggle.sh",
+    "content": "#!/usr/bin/env bash\n# @scenario MCP-64\n# @tier api\n#\n# MCP-64  MCP Hub 的**批量启用 / 批量停用** —— 它没有批量端点,是**前端客户端循环**,\n#         由此带来四个「光看页面看不出来、读了实现才知道要测」的点。\n#\n# ── 实现(`web/src/routes/mcp-tools/index.tsx:383`,注释是产品自己写的)──────────\n#   // --- Batch actions (no batch endpoint: loop client-side) ---\n#   for (const tl of tools) {\n#     if (action === \"delete\")      await deleteMutation({ id: tl.id, force: true });\n#     else if (action === \"enable\"  && !tl.enabled) await toggleMutation(tl.id);\n#     else if (action === \"disable\" &&  tl.enabled) await toggleMutation(tl.id);\n#   }\n#\n# 四个必测点:\n#   ① **中途失败留半完成态** —— `catch` 在循环**外**,第 k 个失败则前 k-1 个已生效\n#      且**不回滚**,而 toast 只弹一个错。批量 15 个、第 8 个失败 → 用户看到一个错、\n#      实际 7 个已改,而页面上无从分辨哪些改了。\n#   ② **`toggle` 是翻转语义,不是 set** —— 产品注释自陈「据此批量写会作用在**陈旧快照**上」。\n#      含义:批量操作的结果依赖**发起那一刻前端手里的列表**,换页/换筛选/并发都会翻错对象。\n#   ③ **批量删除带 `force: true`** —— 绕过 409 `MCP_TOOL_HAS_ASSIGNMENTS` 守卫\n#      (那个守卫是产品做对的部分,见 MCP-65)。**批量入口把它绕开了**,\n#      且弹窗不提授权 —— 这正是 GL#549 说的「批量删除会放大后果」。\n#   ④ **状态已符合的行不发请求** —— 批量「启用」一批**已全部启用**的工具,\n#      应当发 **0 个**请求。这条可断言,而且是①的前置(知道会发几个请求,才能算半完成态)。\n#\n# ── 本条验哪些、不验哪些 ────────────────────────────────────────────────────\n# 「批量」在后端**没有对应端点**,所以本条从 API 侧验的是**循环的每一步的语义**:\n#   · ④ 幂等性:对已是目标态的工具再发 toggle,会**翻反**(证明它不是 set)——\n#     这直接证明了前端那个 `&& !tl.enabled` 判断是必需的,少了它批量启用会把已启用的关掉\n#   · ① 半完成态:连续 toggle 两个工具,中间一个用**不存在的 id** 制造失败,\n#     确认前面那个**已经生效且不回滚**\n# ③ 的 `force` 绕守卫归 MCP-65(那条已验 409 守卫本身);\n# UI 侧的按钮/复选框三态归 MCP-71。\n#\n# ⚠️ 安全边界:本条会停用/启用真实的内置工具。收尾**无条件**把所有动过的工具恢复原状,\n#    并**读回来确认** —— 否则一条用例的失败会把工具留在停用态,污染整个环境。\nsource \"$(cd \"$(dirname \"$0\")/../..\" && pwd)/config/env.sh\" || exit 2\nsource \"$QA_ROOT/lib/mcpbuiltin.sh\"\n\nrequire_login\n\n# 挑两个无标签只读工具当靶子(影响面最小)\nmapfile -t CAND < <(mcpb_visible_tools \"$TOKEN\" \"$(mcpb_find_by_name \"/agents\" \"uag-qa-seed-agent\")\" 2>/dev/null | head -20)\nT1=\"\"; T2=\"\"\nfor t in \"${CAND[@]}\"; do\n  case \"$t\" in list_*|get_*) : ;; *) continue ;; esac\n  # ⚠️⚠️ 这一行原来写的是 `[ -n \"$(mcpb_tool_tags \"$t\")\" ] && continue`,**判据是反的**:\n  #   `mcpb_tool_tags` 对**无标签**工具打印的是 **`[]`** —— 一个**非空字符串**。\n  #   于是 `-n` 恒真 → **每个候选都被跳过** → T1/T2 永远为空 → 每次都走 skip_case。\n  #\n  # 后果:**本条从来没跑过**,而清单里标着 ✅、汇总里显示 SKIP。\n  #   而 SKIP 在汇总里长得像「环境不具备」——**没人会去查**。\n  #   这就是 CLAUDE.md 点名的「拿 skip_case 掩盖失败」,只是这次不是故意的:\n  #   一个**恒真的过滤条件**把守卫变成了「什么都不放过」。\n  #\n  # → 判据:**「无标签」不等于「取值为空」。** 取 JSON 数组的函数,空数组是 `[]` 而不是空串。\n  #   凡是「筛掉某类,剩下的当靶子」的循环,写完必须验一次\n  #   **它到底选中了什么**(下面那行 info 就是为此加的)—— 否则筛空了也只会安静地 skip。\n  [ \"$(mcpb_tool_tags \"$t\")\" != \"[]\" ] && continue      # 跳过带治理标签的(空标签是 \"[]\")\n  if [ -z \"$T1\" ]; then T1=\"$t\"; elif [ -z \"$T2\" ]; then T2=\"$t\"; break; fi\ndone\n# ★ 把「选中了什么」打出来。上面那个恒真过滤能潜伏这么久,就是因为它失败时\n#   只留下一句「找不到靶子」,看起来像环境问题 —— 没有任何信息说明**候选有几个、筛掉了几个**。\ninfo \"候选内置工具 ${#CAND[@]} 个 → 选中靶子:T1=${T1:-<空>} T2=${T2:-<空>}\"\nif [ -z \"$T1\" ] || [ -z \"$T2\" ]; then\n  # 筛不出来时,把每个候选的标签打出来,让下一个人一眼看出是**环境没有**还是**判据写反了**\n  for t in \"${CAND[@]}\"; do info \"  候选 ${t} 的 tags=$(mcpb_tool_tags \"$t\")\"; done\n  skip_case \"找不到两个「无标签只读」的内置工具当批量靶子(上面列了每个候选的 tags —— 若它们大多是 [] 却仍筛不出来,说明筛选判据写反了,不是环境问题)\"\nfi\nT1_ID=$(builtin_tool_id \"$T1\"); T2_ID=$(builtin_tool_id \"$T2\")\n[ -n \"$T1_ID\" ] && [ -n \"$T2_ID\" ] || fail_case \"取不到 ${T1}/${T2} 的 id\"\n\n_enabled() { jget \"$(api_get \"/mcp-tools/$1\")\" data.enabled; }\n_is_on()   { case \"$(_enabled \"$1\")\" in True|true|1) return 0 ;; *) return 1 ;; esac; }\n_toggle()  { api_json_code PATCH \"/mcp-tools/$1/toggle\" '{}'; }\n\nrestore() {\n  # 无条件恢复成「启用」并读回来确认 —— 停用态残留会污染全环境\n  for id in \"$T1_ID\" \"$T2_ID\"; do\n    _is_on \"$id\" || { _toggle \"$id\" >/dev/null 2>&1; info \"已恢复工具 ${id:0:8} 为启用\"; }\n  done\n  return 0\n}\ntrap restore EXIT\n\ninfo \"批量靶子:${T1} / ${T2}\"\n\nstep \"MCP-64  前置:两个靶子都处于启用态(基线)\"\n_is_on \"$T1_ID\" || _toggle \"$T1_ID\" >/dev/null\n_is_on \"$T2_ID\" || _toggle \"$T2_ID\" >/dev/null\nassert_in \"$(_enabled \"$T1_ID\")\" \"${T1} 基线为启用\" True true 1\nassert_in \"$(_enabled \"$T2_ID\")\" \"${T2} 基线为启用\" True true 1\n\nstep \"MCP-64  ★toggle 是**翻转**不是 set —— 对已启用的再发一次会**关掉**它\"\n# 这条证明前端 `if (action === \"enable\" && !tl.enabled)` 那个判断是**必需的**:\n# 少了它,「批量启用」一批已启用的工具会把它们全部**关掉** —— 正好反了。\nc=$(_toggle \"$T1_ID\")\nassert_in \"$c\" \"对已启用的工具发 toggle 返回 2xx\" 200 204\nassert_in \"$(_enabled \"$T1_ID\")\" \"★结果是**变成停用** —— 证明它是翻转语义,不是「设为启用」\" False false 0\n_toggle \"$T1_ID\" >/dev/null   # 翻回来\nassert_in \"$(_enabled \"$T1_ID\")\" \"再翻一次回到启用(两次 toggle 回到原点)\" True true 1\n\nstep \"MCP-64  ★半完成态:循环中途失败,**前面已生效的不回滚**\"\n# 模拟前端那个 for 循环:先停用 T1(成功)→ 再对一个不存在的 id 发 toggle(失败)。\n# 前端的 catch 在循环外,一失败就跳出,**不会**把 T1 撤回来。\n_toggle \"$T1_ID\" >/dev/null\nassert_in \"$(_enabled \"$T1_ID\")\" \"循环第 1 步:${T1} 已停用\" False false 0\nBOGUS=\"00000000-0000-4000-8000-0000000000ff\"\nbc=$(_toggle \"$BOGUS\")\nassert_in \"$bc\" \"循环第 2 步:对不存在的工具 toggle 失败\" 404 400 422 500\n# 反面:失败响应不得回显任何内部细节(不存在的 id 不该换来一段栈或 SQL)\nbbody=$(api_json PATCH \"/mcp-tools/${BOGUS}/toggle\" '{}')\nassert_not_contains \"SELECT\" \"$bbody\" \"失败响应**不含** SQL 片段\"\nassert_not_contains \"goroutine\" \"$bbody\" \"失败响应**不含** Go 栈\"\nassert_ne \"$T1_ID\" \"$BOGUS\" \"自证:构造的不存在 id 与靶子 id 不同(否则上面在拿自己当替身)\"\n# ★ 这就是那个「一个错误提示背后藏着 k-1 个已生效的改动」\nassert_in \"$(_enabled \"$T1_ID\")\" \"★第 2 步失败后,第 1 步的停用**仍然生效**(半完成态,不回滚)\" False false 0\ninfo \"★ 用户视角:批量停用 2 个,只看到一个错误提示,而实际上已经有 1 个被停用了\"\n_toggle \"$T1_ID\" >/dev/null   # 恢复\n\nstep \"MCP-64  ★「状态已符合的行不该发请求」—— 这条是前端逻辑,后端侧证其必要性\"\n# 后端没有批量端点,所以「发不发请求」由前端决定。本步从后端侧证明:\n# **如果前端不做那个判断,批量启用会把已启用的翻成停用**(上面第 2 步已证)。\n# 因此这条前端逻辑不是优化,是**正确性必需**。\nassert_in \"$(_enabled \"$T1_ID\")\" \"收尾前 ${T1} 处于启用态\" True true 1\nassert_in \"$(_enabled \"$T2_ID\")\" \"收尾前 ${T2} 未被本条改动(只动了 T1)\" True true 1\ninfo \"结论:批量操作的正确性依赖前端的状态判断 + 无回滚的串行循环 —— 两者都无后端保护\"\n\n# ⚠️ **必须以 finish 收尾**。缺了它脚本会以最后一条命令的状态退出(通常是 0),\n#    于是 CASE_FAILURES 从来没人看 —— **断言红了也退 0**,runner 计为 PASS。\n#    本模块曾有 17 个用例集体缺它(见 docs/case-ledger.md §3.32),\n#    后果是「断言跑了、红了、然后被丢掉」——**等于白做**。\nfinish"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "scenarios/mcp/builtin-tool-delete-effect.sh",
+  "evidence": "if [ \"${UAG_ALLOW_DESTRUCTIVE:-0}\" != \"1\" ]; then\n  skip \"force 删除是**不可逆**操作\"",
+  "expected": "unmatched",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "scenarios/mcp/builtin-tool-delete-effect.sh",
+    "content": "#!/usr/bin/env bash\n# @scenario MCP-65 MCP-02\n# @tier scenario\n#\n# MCP-65  **删除内置工具**后的影响 —— 三段式,后两段是本条真正要证的。\n#\n# ── 缺陷形态(GL#549 实测)────────────────────────────────────────────────────\n#   净效果:**用户以为自己删掉了一个工具,实际结果是工具没删掉、授权被搞没了。**\n#   1. 删的那一刻:工具从列表消失,所有已授权 Agent 立即无法调用,授权记录被清空\n#   2. 到下次重启之间:工具真的不存在,空窗期长短取决于什么时候恰好重启,不可预测\n#   3. 重启之后:工具**自动回到列表**(15 条又齐了),但**授权没有回来**;\n#      而且是**新 id 的新行**(实测 `get_agent` 的 id 从 46aee401… 变成 35120b67…),\n#      不是原行恢复 —— 事后从页面上完全看不出被删过\n#\n#   这些工具跟着代码走,页面上没有也不该有「创建」入口,所以人工无法重建;\n#   唯一恢复手段是重启控制面(普通管理员做不到)。\n#   批量删除会放大后果:全选 15 个点一次「删除」,15 个工具的全部授权一起清掉。\n#\n# ── 期望(需求方在 issue 里给的)──────────────────────────────────────────────\n#   内置工具**不该提供删除入口**;若保留删除,**删除前必须明确告知会断掉哪些\n#   Agent 的使用授权,并允许放弃**。\n#   实际:删除按钮可用、点了就删,弹窗只显示「近 30 天调用 N 次」和「日志保留 90 天」,\n#   **一个字都没提授权**。\n#\n# ── 接口层契约(issue 实测,本条据此断言)────────────────────────────────────\n#   | 操作 | 期望 |\n#   |---|---|\n#   | `DELETE /mcp-tools/{id}`（**无**授权） | 204,直接删 |\n#   | `DELETE /mcp-tools/{id}`（内置工具,无论有无授权） | **409 `MCP_TOOL_INTERNAL_CANNOT_DELETE`** —— 内置工具一律不可删(939180efd 之后) |\n#   | `DELETE /mcp-tools/{id}?force=true`（有授权） | 204,工具与授权**一并删除** |\n#\n#   → 409 这条是**产品已经做对的守卫**,本条把它钉住(别被人不小心放开);\n#     `force=true` 那条是**缺陷面**:它让 UI 的「删除」按钮绕过守卫且不作提示。\n#\n# ⚠️⚠️ 安全边界 —— 本条会**真的删掉一个内置工具**,而且**删了就装不回来**\n#      (页面无创建入口,只能等控制面重启自动重建)。所以:\n#        · 只挑**无标签的只读**工具(影响面最小)\n#        · 不带 force 的那次断言 409 —— 那次**不会**真删\n#        · 带 force 的那次**放在最后**,并在收尾里明确记下「该工具已被删除,\n#          需重启控制面才会自动重建」,让后续用例的红有据可查\n#        · 若环境不允许(psql 缺失等),整条 skip 而不是硬删\nsource \"$(cd \"$(dirname \"$0\")/../..\" && pwd)/config/env.sh\" || exit 2\nsource \"$QA_ROOT/lib/mcpbuiltin.sh\"\n\nrequire_login\nrequire_apikey\n\nTOOL=$(builtin_untagged_tool)\n[ -n \"$TOOL\" ] || skip_case \"环境里找不到「无标签且 enabled」的内置工具\"\nTOOL_ID=$(builtin_tool_id \"$TOOL\")\n[ -n \"$TOOL_ID\" ] || fail_case \"挑到了 ${TOOL} 却取不到 id\"\nAGENT_ID=$(mcpb_find_by_name \"/agents\" \"uag-qa-seed-agent\")\n[ -n \"$AGENT_ID\" ] || skip_case \"找不到播种 agent uag-qa-seed-agent,先跑 ./env/seed.sh\"\n# ★ 按该工具的 `input_schema` 装配**正确入参**,而不是挑一个「不用填参数」的工具。\n#   候选池 13 个里 7 个带必填参数(get_agent 要 agent_id、list_team_members 要 team_id…),\n#   空参 `{}` 打它们回 `MCP_DISPATCH_FAILED`,而 `mcp_call_payload` 对它返回**空** ——\n#   与「被审批/权限/停用挡住」**完全同形**,于是「XX 之后调不通」这类断言**假绿**,\n#   那个开关一次都没验到(2026-08-28 审 MCP-73 抓出)。\n#   ⚠️ 第一版改成「排除带参数的工具」是**回避** —— 会把覆盖面锁死在 6 个零参数工具上。\n#      判据与参数映射见 lib/mcpbuiltin.sh 里 `mcp_args_for` 的注释。\nARGS=$(mcp_args_for \"$TOOL\" \"$AGENT_ID\") \\\n  || skip_case \"装不出 ${TOOL} 的入参 —— 见上面 stderr(缺映射=用例要补,取不到值=环境未铺该能力)\"\n\nDELETED=0\ncleanup() {\n  if [ \"$DELETED\" = \"1\" ]; then\n    info \"⚠️ 内置工具 ${TOOL} 已被本用例**删除**(force)。\"\n    info \"   它跟着代码走、页面无创建入口 —— **需重启控制面(docker restart uag-bff)才会自动重建**,\"\n    info \"   且重建的是**新 id 的新行**,原有授权不会回来(GL#549)。\"\n    info \"   在重启之前,依赖 ${TOOL} 的其它用例会红,根因在这里。\"\n  else\n    mcpb_revoke \"$AGENT_ID\" \"$TOOL_ID\"\n  fi\n  return 0\n}\ntrap cleanup EXIT\n\nstep \"MCP-65  前置:给该工具授权,并确认数据面调得通(制造「有授权」状态)\"\nout=$(mcpb_post_as \"$TOKEN\" \"/agents/${AGENT_ID}/mcp-permissions\" \"{\\\"tool_ids\\\":[\\\"${TOOL_ID}\\\"]}\")\nassert_eq \"1\" \"$(jget \"$(body_of \"$out\")\" data.granted)\" \"授权成功\"\nmcpb_set_perm \"${AGENT_ID}\" \"${TOOL_ID}\" \"call\"\n_ok() { [ -n \"$(mcp_call_payload \"$TOOL\" \"$ARGS\")\" ]; }\nwait_until \"${TOOL} 已可调用(基线)\" 15 _ok || fail_case \"基线不成立:授权后 15s 内仍调不通\"\n\nstep \"MCP-65  ★守卫:有授权时**不带 force** 删除 → 应 409 且列出受影响的 Agent\"\nout=$(http_once DELETE \"${API}/mcp-tools/${TOOL_ID}\" -H \"Authorization: Bearer ${TOKEN}\")\ncode=$(code_of \"$out\"); body=$(body_of \"$out\")\ninfo \"不带 force 的删除:${code} → $(printf '%s' \"$body\" | head -c 260)\"\nassert_eq \"409\" \"$code\" \"★有授权时删除被守卫拦住(409,不是静默删掉)\"\n# ══════════════════════════════════════════════════════════════════════════════\n# ⚠️⚠️ **这两条断言在 2026-08-26 改过,因为产品的修法比我的期望更彻底。**\n#\n# 旧期望(我自己设计的):409 `MCP_TOOL_HAS_ASSIGNMENTS` + 响应里列出受影响的 agent,\n#                        然后允许带 force 强删。\n# 产品实际(提交 `939180efd fix(mcp-hub): 禁止删除内置工具,并明示删除会解除 Agent 授权`):\n#   **直接禁止删除内置工具** ——\n#   409 `MCP_TOOL_INTERNAL_CANNOT_DELETE`\n#   \"Built-in tools are managed by the platform and re-created on restart; they cannot be deleted\"\n#\n# → 产品这个修法**更好**:GL#549 的核心诉求是「删了之后授权被永久清掉、而工具自己长回来」,\n#   而「根本不让删」把这个问题从源头消掉了 —— 也就没有「受影响的 agent 列表」可列,\n#   因为删除压根不会发生。\n#\n# ★ 判据:**期望值是「需求要达成什么」,不是「我设想的实现长什么样」。**\n#   我把自己设计的错误码和响应结构写成了断言,产品用另一种方式满足了同一个需求,\n#   于是我的用例红了 —— **红的是用例**。\n#   区分方法:回到需求本身问「用户的问题解决了吗」,而不是「实现和我想的一样吗」。\n# ══════════════════════════════════════════════════════════════════════════════\nassert_contains \"MCP_TOOL_INTERNAL_CANNOT_DELETE\" \"$body\" \\\n  \"★错误码点明原因:内置工具不可删除(而不是一个笼统的 409)\"\n# 反面:错误信息里要说清**为什么**,让用户不必去猜\nassert_contains \"cannot be deleted\" \"$body\" \\\n  \"★错误信息说清了「不可删除」这个结论本身\"\n# 反面:被拦住就必须什么都没变\nassert_eq \"$TOOL_ID\" \"$(jget \"$(api_get \"/mcp-tools/${TOOL_ID}\")\" data.id)\" \"被拦后工具仍在\"\nassert_eq \"true\" \"$(mcpb_perm_granted \"$AGENT_ID\" \"$TOOL\")\" \"被拦后授权仍在\"\n\nstep \"MCP-65  ★缺陷面:force=true 会**连授权一起删掉**,且此后该工具人工装不回来\"\n# ══════════════════════════════════════════════════════════════════════════════\n# ⚠️ 这一步**不可逆**:删掉的内置工具页面上没有创建入口,只能等控制面重启自动重建,\n#    而重建出来是**新 id 的新行**、原授权不回来(GL#549)。在重启之前,\n#    环境里所有依赖该工具的用例都会红,且根因藏在这条用例里、极难归因。\n#\n#    所以它挂**显式开关**:默认不跑。要跑就得有人明确知道自己在做什么:\n#        UAG_ALLOW_DESTRUCTIVE=1 ./scripts/run-scenarios.sh mcp\n#    跑完记得 `docker restart uag-bff` 让工具重建。\n#\n#    上面的 409 守卫那一步**没有**这个问题(它不会真删),所以常跑。\n#    —— 这不是拿 skip 掩盖失败:被跳过的是**我方的破坏性动作**,\n#       不是产品的某个能力(CLAUDE.md 的 skip 判据)。\n# ══════════════════════════════════════════════════════════════════════════════\nif [ \"${UAG_ALLOW_DESTRUCTIVE:-0}\" != \"1\" ]; then\n  skip \"force 删除是**不可逆**操作(删掉的内置工具只能靠重启控制面重建,原授权不回来)\"\n  info \"  要验这一半:UAG_ALLOW_DESTRUCTIVE=1 重跑本条,跑完 docker restart uag-bff\"\n  info \"  已验的那一半(409 守卫 + 受影响 agent 列表)是本条的常跑部分\"\n  # ══════════════════════════════════════════════════════════════════════════\n  # ⚠️⚠️ 这里**不能 `finish`**(原来就是这么写的,是个真问题)。\n  #\n  # 本文件带 `@known-bug GL#549`,而 GL#549 的缺陷面**正是**被跳过的这一半。\n  # 若这里 `finish` → 上半段全绿 → **exit 0** → runner 判「跑绿了」→\n  # 因为带 `@known-bug`,进一步响亮报「**疑似已修复**」。\n  #\n  # 但缺陷面**根本没跑过**。「没验」被读成了「修好了」——\n  # 而这个提示的下一步动作是**摘掉 @known-bug 标记**,\n  # 标记一摘,GL#549 在本仓就永久隐形了。实测踩过(§3.32)。\n  #\n  # 正确语义:**没验证缺陷面 = SKIP,不是 PASS。**\n  # 但**不能无条件 exit 99** —— 那就成了「拿 skip 掩盖失败」:\n  # 上半段(409 守卫)若真的红了,exit 99 会把那个红吞掉。\n  # 所以分流:**已经有失败 → 照实 FAIL;一条没红 → 才 SKIP。**\n  # ══════════════════════════════════════════════════════════════════════════\n  if [ \"${CASE_FAILURES:-0}\" -ne 0 ]; then\n    info \"  上半段(409 守卫)已有 ${CASE_FAILURES} 处失败 —— 照实判 FAIL,不用 SKIP 掩盖\"\n    finish\n  fi\n  info \"  缺陷面(force)未跑 → 整条判 **SKIP**,避免被误读成「GL#549 已修复」\"\n  exit 99\nfi\nbefore_granted=$(mcpb_perm_granted \"$AGENT_ID\" \"$TOOL\")\nassert_eq \"true\" \"$before_granted\" \"删除前:授权确实存在(下一条断言才有意义)\"\nout=$(http_once DELETE \"${API}/mcp-tools/${TOOL_ID}?force=true\" -H \"Authorization: Bearer ${TOKEN}\")\nassert_in \"$(code_of \"$out\")\" \"force 删除返回 2xx\" 200 204\nDELETED=1\nassert_eq \"\" \"$(jget \"$(api_get \"/mcp-tools/${TOOL_ID}\")\" data.id)\" \"工具已从目录消失\"\n# ★ 这条是 GL#549 的核心痛点:授权被永久清掉,而工具将来会自己长回来\nassert_ne \"true\" \"$(mcpb_perm_granted \"$AGENT_ID\" \"$TOOL\")\" \\\n  \"★授权被一并清掉 —— 而工具重启后会自动重建(新 id),授权**不会**跟着回来(GL#549)\"\n\nstep \"MCP-65  ★影响:数据面立即不再广告,已授权 agent 立即调不通\"\n_gone() { ! mcp_tool_names | grep -qx \"$TOOL\"; }\nwait_until \"tools/list 已不再广告 ${TOOL}\" 20 _gone || true\nassert_eq \"\" \"$(mcp_call_payload \"$TOOL\" \"$ARGS\")\" \"★删除后该工具在数据面调不通\"\n# 正面对照:排除「数据面整个挂了」的假绿\nn=$(mcp_tool_names | grep -c . || true)\nassert_ne \"0\" \"$n\" \"正面对照:tools/list 仍有其它工具(数据面是活的)\"\n\nstep \"MCP-65  内置工具目录数量少了一个 —— 且**页面无创建入口**,人工装不回来\"\nn_internal=$(mcpb_visible_tools \"$TOKEN\" \"$AGENT_ID\" | grep -c . || true)\ninfo \"当前超管可见的内置工具数:${n_internal}(删除前是 15)\"\nassert_ne \"15\" \"$n_internal\" \"内置工具数确实少了(证明删的是内置源里的一条,不是别的)\"\ninfo \"⚠️ 恢复方式只有「重启控制面让它自动重建」,而重建出来是新 id、授权不回来 —— 这正是 GL#549\"\n\n# ⚠️ 末尾必须是 finish(闸门 3 · A11)。此前本文件末尾是一行 info,\n#    正常路径(跑了破坏性那半)会以 info 的状态退出 —— 断言红了也退 0。\nfinish"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "ui/tests/mcp/mcp-hub-list.spec.ts",
+  "evidence": "const pageText = await page.locator('body').innerText()\nexpect(pageText, …).toContain(tag)",
+  "expected": "unmatched",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "ui/tests/mcp/mcp-hub-list.spec.ts",
+    "content": "// @scenario MCP-71 MCP-69\n// @tier ui\n//\n// MCP Hub 工具列表页(`/mcp-tools`)的两件事:\n//   MCP-71  复选框与批量操作栏的**三态** —— 无 `platform_mcp:edit` 时整列隐藏\n//   MCP-69  「风险等级」「调用所需角色」两列的**展示正确性**\n//\n// ── 这两条为什么此前写不了 ──────────────────────────────────────────────────\n// 该页原本**只有 1 个 data-testid**(`mcp-hub-overcapacity-banner`)。\n// 按 `CLAUDE.md:61`「缺 testid 就去前端补并提 MR」,我方补了 9 个\n// (被测仓 MR !56,已合入 `588802059`),这两条才有了抓手。\n//\n// ── ⚠️ MCP-71 的方向是**改过的**,读之前先知道来龙去脉 ──────────────────────\n// 需求方手工测出 GL#552:「无编辑权限的用户仍能勾选复选框,勾完批量按钮全是灰的」。\n// 我最初按「应隐藏**或**置灰」写。但在写用例期间产品已经修了 ——\n//   `93f4c7b17 fix(web/mcp-hub): 无 platform_mcp:edit 时隐藏工具复选框与批量操作栏`\n// 走的是 `docs/permission-spec.md:263` 三态里的**「整块无关→隐藏」**,\n// 而不是置灰。所以本条从「等一个缺陷」改成**「守住这个修复」**:\n//   → 断言无权角色的复选框**不在 DOM 里**(`count() === 0`),\n//     **不是** `disabled=true`。断成置灰会永远红,而红的是用例不是产品。\n//\n// ── 判据出处(spec 明文,不是自己发明的)────────────────────────────────────\n// `docs/permission-spec.md:275`(§13 前端三态 + 菜单投影):\n//   > 三态:整块无关→**隐藏** / 能看不能改→**置灰+原因** / 兜底→**后端 403**。\n//   > **杜绝「能编辑、点保存才报错」。**\n// 分裂点是 **`platform_mcp:edit`**,仅 super_admin / platform_admin 持有\n// (GL#552 的 issue 正文里逐角色实测过 5 个账号)。\n//\n// ── ⚠️ 「枚举一遍」不是口号 ────────────────────────────────────────────────\n// GL#552 的形态是:**同页大部分控件都做对了、唯独两处复选框漏了同一道判断**\n// (启停开关、编辑、删除、批量按钮都已正确置灰)。\n// 所以本条把该页的写操作控件**逐个**验一遍,不挑代表性控件 ——\n// 挑一个验正好可能挑中做对的那个。\n//\n// ⚠️ 本条会造临时账号并登录。登录是 (账号+IP) 限流大户,\n//    别和整轮 API 域跑背靠背执行(见 docs/case-ledger.md §0.40)。\nimport { test, expect } from '@playwright/test'\nimport { sel, routes, hintFor } from '../../support/selectors'\nimport { requireCreds, login, expectLoggedIn, creds } from '../../support/auth'\nimport {\n  apiLogin, apiGet, apiPost, apiDelete, internalTools,\n  anyTeam, makeTeamMember, dropFromTeam,\n} from '../../support/mcpapi'\n\n/** 造一个指定平台角色的临时账号。失败抛错,不返回半个对象。 */\nasync function makeIdentity(adminTok: string, role: string) {\n  const user = `uag-qa-ui-hub-${role}-${Date.now()}-${Math.floor(Math.random() * 9999)}`\n  const pass = `Qa#UiHub-${Math.floor(Math.random() * 99999)}9a`\n  const r = await apiPost(adminTok, '/admin-users', { username: user, password: pass, platform_role: role })\n  const id = r.body?.data?.id\n  if (!id) throw new Error(`造 ${role} 身份失败(HTTP ${r.status}):${JSON.stringify(r.body).slice(0, 200)}`)\n  return { id, user, pass }\n}\n\n/**\n * 按 source_type 各挑一个工具名回来:`{ internal, upstream? }`。\n *\n * ⚠️ 为什么要按**行**挑、而不是勾「分组全选」:\n *    页面是**按服务器分组**渲染的(`index.tsx:900-925`,每组一张表)。\n *    勾分组全选时,选中的是**那一组**;而「批量删除是否可用」取决于\n *    **选中项**的成分(`selectionAllInternal`),不是环境里有没有非内置工具。\n *    按行挑能让两侧都**确定**:内置那一行必然置灰、上游那一行必然可用。\n */\nasync function pickToolNames(adminTok: string): Promise<{ internal?: string; upstream?: string }> {\n  // ⚠️ `apiGet` 返回的是**已解析的 JSON 本身**,没有 `.body` 包封\n  //    (`apiPost` / `apiPut` 才返回 `{status, body}`)。照着 apiPost 的形状写会拿到\n  //    undefined,而 undefined 在这里表现成「环境里没有内置工具」—— 一个指向环境的假象。\n  const d = await apiGet(adminTok, '/mcp-tools?page=1&page_size=200')\n  const rows: Array<{ name?: string; source_type?: string }> = d?.data ?? []\n  return {\n    internal: rows.find((t) => t.source_type === 'internal')?.name,\n    upstream: rows.find((t) => t.source_type && t.source_type !== 'internal')?.name,\n  }\n}\n\n/**\n * 打开 MCP Hub 工具页并等到列表真的渲染出来(不是骨架屏)。\n *\n * ⚠️ `.first()` 不是偷懒 —— 页面**按服务器分组**,每组一张表、各带一份表头,\n *    于是 `mcp-hub-col-risk` 会命中**多个**元素。不加 `.first()` 时 Playwright\n *    报 `strict mode violation`,而且报的是「未命中」的提示语,极易误读成前端改名了。\n *    这里要的语义是「**列表成形了**」,任何一组的表头出现都足以证明,所以取第一个。\n * ⚠️ 2026-08-29 实测:**只要环境里存在任何一个上游**,整个 mcp ui 套件的 4 条\n *    **全部**红在这一行上 —— 此前它们能绿,只是因为环境里恰好一个上游都没有。\n *    → 判据:**「当前环境只有一组/一页/一条」这种前提,不写出来就等于交给运气。**\n */\nasync function openHub(page: any) {\n  await page.goto(routes.mcpHub)\n  // 等到「风险等级」列头出现 —— 它对所有角色都渲染,是列表已成形的可靠信号。\n  // ⚠️ 不能等复选框:无权角色下它**根本不存在**,那样会把正确行为等成超时。\n  await expect(page.locator(sel.mcpHubList.colRisk).first(), hintFor(sel.mcpHubList.colRisk))\n    .toBeVisible({ timeout: 25_000 })\n}\n\ntest.describe('MCP-71 MCP Hub 复选框与批量栏的三态', () => {\n  let adminTok = ''\n  let team: { teamId: string; ownerId: string } | null = null\n  const trash: string[] = []\n  const inTeam: string[] = []      // 放进过团队的人,收尾要先摘再删\n\n  test.beforeAll(async () => {\n    if (!creds.password) return\n    adminTok = await apiLogin(creds.user, creds.password)\n    team = await anyTeam(adminTok)\n  })\n\n  test.afterAll(async () => {\n    // 先从团队里摘掉再删账号 —— 反了会留下指向已删账号的 membership。\n    for (const id of inTeam) if (team) await dropFromTeam(adminTok, team.teamId, id)\n    for (const id of trash) {\n      const code = await apiDelete(adminTok, `/admin-users/${id}`)\n      if (code < 200 || code >= 300) console.warn(`临时账号 ${id} 删除返回 ${code},需人工清理`)\n    }\n  })\n\n  test.beforeEach(() => requireCreds(test))\n\n  test('超管:复选框与批量栏**都在**,且勾选后批量按钮可用 @smoke', async ({ page }) => {\n    // 正面基线。没有它,下面「无权角色看不到」可能只是 testid 写错了 —— 那是假绿。\n    await login(page)\n    await expectLoggedIn(page)\n    await openHub(page)\n\n    // 复选框列存在(超管有 platform_mcp:edit)。⚠️ `.first()`:每个分组一份表头。\n    await expect(page.locator(sel.mcpHubList.selectGroup).first(), hintFor(sel.mcpHubList.selectGroup))\n      .toBeVisible()\n\n    const names = await pickToolNames(adminTok)\n    expect(names.internal, '前提:环境里至少有一个内置工具(否则下面没得勾)').toBeTruthy()\n\n    // ── ① 勾一个**内置**工具 ────────────────────────────────────────────────\n    await page.locator(sel.mcpHubList.selectRow(names.internal!)).click()\n\n    // 启用 / 停用:对超管**永远**可用 —— 它们不看选中项的类型(`:602`/`:616`)\n    for (const s of [sel.mcpHubList.batchEnable, sel.mcpHubList.batchDisable]) {\n      const btn = page.locator(s)\n      await expect(btn, hintFor(s)).toBeVisible()\n      await expect(btn, `超管的批量按钮不该是禁用态:${s}`).toBeEnabled()\n    }\n\n    // ⚠️ 批量删除**不是**「超管就一定可用」,它取决于**选中了什么**。\n    // 产品规则(`web/src/routes/mcp-tools/index.tsx:428-432, 640-643`):\n    //     selectionAllInternal = 选中项非空 && 每一项 source_type === \"internal\"\n    //     disabled = … || selectionAllInternal\n    // 内置工具**删不掉**(行内菜单同样的判断在 `:1197`),\n    // 所以选中的全是内置工具时按钮置灰,并给出原因 `hub.internal_undeletable` ——\n    // 正是 permission-spec §13 三态里的「能看不能改 → 置灰 + **原因**」。\n    const del = page.locator(sel.mcpHubList.batchDelete)\n    await expect(del, hintFor(sel.mcpHubList.batchDelete)).toBeVisible()\n    await expect(del, '★选中的是内置工具 → 批量删除应当置灰(内置工具删不掉)').toBeDisabled()\n    await expect(del, '★置灰还不够,必须给出原因(permission-spec §13:置灰 + 原因)')\n      .toHaveAttribute('aria-disabled', 'true')\n\n    // ── ② ★镜像面:勾一个**上游**工具 → 删除必须**可用** ─────────────────────\n    // 没有这一支,①「置灰」这条断言在一个**永远把删除置灰**的实现下同样成立 ——\n    // 那是恒真的第 4 种形态(只验否定面)。\n    await page.locator(sel.mcpHubList.clearSelection).click()\n    if (names.upstream) {\n      await page.locator(sel.mcpHubList.selectRow(names.upstream)).click()\n      await expect(del, '★★选中的是上游工具 → 批量删除应当**可用**(它删得掉)').toBeEnabled()\n      await page.locator(sel.mcpHubList.clearSelection).click()\n    } else {\n      // 不是静默跳过:说清楚这一次**没有**验到镜像面,以及为什么。\n      test.info().annotations.push({\n        type: 'partial',\n        description: '本次环境里没有上游工具,「删除可用」那一侧未验到 —— ' +\n          '①的置灰断言因此不构成「产品区分了两类工具」的证据。' +\n          '要补验:注册一个可达上游(见 api/mcp/upstream-sync-success-lifecycle.sh)后重跑。',\n      })\n    }\n  })\n\n  // 三个无 platform_mcp:edit 的角色逐个验 —— GL#552 的 issue 里这三个都实测复现过。\n  for (const role of ['auditor', 'none'] as const) {\n    test(`${role}:复选框与批量栏**整块不在 DOM 里**(三态之「隐藏」)`, async ({ page }) => {\n      const u = await makeIdentity(adminTok, role)\n      trash.push(u.id)\n\n      // ⚠️ `none` 不进团队就**进不了控制台** —— 落地页是「你的账号还不属于任何团队」\n      //    拦截页,页面上任何业务 testid 都不存在。实测踩过:症状是\n      //    「mcp-hub-col-risk 找不到」,**看起来像前端删了 testid**,\n      //    其实是这个人根本没走进 MCP Hub。\n      //    平台角色(auditor 等)是团队无关的,不需要这一步。\n      if (role === 'none') {\n        test.skip(!team, '环境里找不到带 owner_id 的团队,造不出「有团队的普通成员」')\n        expect(await makeTeamMember(adminTok, team!.teamId, team!.ownerId, u.id),\n          `把 ${u.user} 加进团队 ${team!.teamId} 失败(名单是全量替换,漏掉持有资产的现有成员会 409)`)\n          .toBe(true)\n        inTeam.push(u.id)\n      }\n\n      await page.context().clearCookies()\n      await login(page, u.user, u.pass)\n      await expectLoggedIn(page)\n      await openHub(page)\n\n      // ★ 枚举该页的写操作控件,逐个断言「不在 DOM 里」——\n      //   不是 disabled(GL#552 修成了隐藏,断成置灰会永远红)\n      const mustBeAbsent: Array<[string, string]> = [\n        ['分组全选复选框', sel.mcpHubList.selectGroup],\n        ['批量启用', sel.mcpHubList.batchEnable],\n        ['批量停用', sel.mcpHubList.batchDisable],\n        ['批量删除', sel.mcpHubList.batchDelete],\n      ]\n      for (const [name, s] of mustBeAbsent) {\n        expect(await page.locator(s).count(),\n          `${role} 无 platform_mcp:edit,${name} 应当整块隐藏(不在 DOM 里),实测存在`)\n          .toBe(0)\n      }\n\n      // ★ 逐行复选框也要枚举 —— GL#552 的形态正是「表头做对了、行内漏了」(或反之)\n      const tools = await internalTools(adminTok)\n      const sample = tools.slice(0, 3).map((t) => t.name).filter(Boolean)\n      expect(sample.length, '前提:环境里至少有几个内置工具可供逐行检查').toBeGreaterThan(0)\n      for (const name of sample) {\n        expect(await page.locator(sel.mcpHubList.selectRow(name)).count(),\n          `${role} 的第「${name}」行复选框也应当不在 DOM 里(表头与行内必须同门)`)\n          .toBe(0)\n      }\n\n      // 正面对照:页面本身是渲染出来的(列头在),排除「整页没加载」造成的假绿\n      // ⚠️ `.first()`:分组渲染 ⇒ 表头有多份。上面几条用的是 `.count()`,多元素无妨;\n      //    这里是 `toBeVisible()`,不加会 strict mode violation。\n      await expect(page.locator(sel.mcpHubList.colRisk).first(), '页面已渲染(上面的「不存在」不是整页空白)')\n        .toBeVisible()\n    })\n  }\n})\n\ntest.describe('MCP-69 「风险等级」「调用所需角色」两列的展示正确性', () => {\n  let adminTok = ''\n\n  test.beforeAll(async () => {\n    if (!creds.password) return\n    adminTok = await apiLogin(creds.user, creds.password)\n  })\n  test.beforeEach(() => requireCreds(test))\n\n  test('两列都渲染，且「调用所需角色」列的取值与 API 的 tags 一致', async ({ page }) => {\n    await login(page)\n    await expectLoggedIn(page)\n    await openHub(page)\n\n    // ⚠️ `.first()`:页面按服务器分组,每组一张表各带一份表头 —— 不加会 strict mode violation。\n    await expect(page.locator(sel.mcpHubList.colRisk).first(), hintFor(sel.mcpHubList.colRisk)).toBeVisible()\n    await expect(page.locator(sel.mcpHubList.colRole).first(), hintFor(sel.mcpHubList.colRole)).toBeVisible()\n\n    // ★ 真值来源是 API 的 tags —— 页面这一列展示的就是它。\n    //   带标签的工具(实测 create_provider=平台管理员 / delete_team=超级管理员)\n    //   的标签文本必须出现在页面上;不带标签的不该凭空多出角色文本。\n    const tools = await internalTools(adminTok)\n    const tagged = tools.filter((t) => (t.tags?.length ?? 0) > 0)\n    expect(tagged.length, '前提:环境里至少有一个带治理标签的内置工具(否则这一列没内容可验)')\n      .toBeGreaterThan(0)\n\n    const pageText = await page.locator('body').innerText()\n    for (const t of tagged) {\n      for (const tag of t.tags ?? []) {\n        expect(pageText,\n          `工具 ${t.name} 的治理标签「${tag}」应当出现在「调用所需角色」列里`)\n          .toContain(tag)\n      }\n    }\n  })\n})"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "scenarios/mcp/builtin-risk-level-effect.sh",
+  "evidence": "[ -n \"$AGENT_ID\" ] || skip_case \"找不到播种 agent uag-qa-seed-agent(数据面 apikey 绑的就是它)\"",
+  "expected": "wrong-path",
+  "naiveExact": "hit",
+  "foundIn": "scenarios/mcp/builtin-call-error-attribution.sh",
+  "scripts": [
+   {
+    "path": "scenarios/mcp/builtin-risk-level-effect.sh",
+    "content": "#!/usr/bin/env bash\n# @scenario MCP-73\n# @tier scenario\n#\n# MCP-73  改「风险等级」**保存之后真的生效** —— 一路验到数据面调用行为。\n#\n# ── 这条为什么存在:需求方看页面发现的缺口 ────────────────────────────────────\n# MCP Hub 的「查看工具」抽屉对内置工具是**只读**的,顶部明写:\n#   「基本信息、连接与 Schema 由上游同步,不可在网关侧修改;\n#     此处仅可调整风险与审批策略。」\n# 也就是说 —— **「风险等级」是这个抽屉里唯一可编辑的字段**,\n# 而它旁边的说明是「决定该工具触发时的审批策略」:\n#   低 = 只读/公开数据 · 默认无需审批\n#   中 = 写操作或受限数据 · 建议二次确认\n#   高 = 破坏性/不可逆 · **须人工审批**\n#\n# 本仓此前对它**零覆盖** —— 既没验写入,更没验「保存后生效」。\n# 而这恰恰是**页面上唯一一个「点了会改变系统行为」的编辑动作**:\n# 漏了它,等于这个抽屉的功能一条都没测到。\n#\n# → 教训已记进 `docs/case-ledger.md` §3.33 与 `qa-module` 阶段 3:\n#   **「这个页面上有哪些可编辑的字段」要逐个列出来对着覆盖**,\n#   不能只验「入口可达 / 展示正确」。展示对了不等于改了有用。\n#\n# ── 判据出处(读的是策略文件,不是猜)──────────────────────────────────────────\n# `control-plane/policies/mcp_tool_call.rego`(与 internal/service/policies/ 下同名文件一致):\n#\n#   :20-22   decision := \"pending_approval\" if { input.risk_level == \"high\" }\n#   :36-38   reason   := \"High-risk tool requires approval\"   (当 risk_level == \"high\")\n#   :52-55   policy_rule := \"high_risk_tool\" if { decision == \"pending_approval\"\n#                                                 input.risk_level == \"high\" }\n#   :59-61   policy_rule := \"call_with_approval\" if { … input.risk_level != \"high\" }\n#\n# ★最后一条是本用例能**精确**的关键:审批可以由两条路触发 ——\n#   ① risk_level == \"high\"                  → policy_rule = high_risk_tool\n#   ② permission_level == call_with_approval → policy_rule = call_with_approval\n# rego 用 `input.risk_level != \"high\"` 把②与①分开。所以只断言「变成待审批」\n# **是不够的** —— 那样把 permission_level 调成 call_with_approval 也能让用例绿,\n# 证明不了「是风险等级起的作用」。必须断言 **policy_rule / reason 指向 high_risk_tool**。\n#\n# 写入侧契约(`service/mcp_tool_service.go:46-63` UpdateMCPToolRequest,指针型可单发):\n#   PUT /api/v1/mcp-tools/:tool_id   body {\"risk_level\":\"low|medium|high\"}\n#   路由挂 mcpManageGlobal(平台级 mcp:manage),`handler/mcp_tool_handler.go:79`\n#   ⚠️ 与**删除**不同:Update **没有** source_type=internal 的拦截,\n#      所以内置工具的 risk_level 确实改得动 —— 与 UI 的「仅风险等级可调」一致。\n#\n# ⚠️ 两个概念别混(查过才没误报):\n#   · **工具**上的 `permission_level` 是 low/medium/high(domain/mcp_tool.go:27-31)\n#   · **授权关系**上的 `permission_level` 是 view/call/call_with_approval\n#   本条动的是**工具**的 `risk_level`,与两者都不是一回事。\n#\n# ── 已知边界 ────────────────────────────────────────────────────────────────\n#   - 本条**必须改回去**:risk_level 是全局属性,留在 high 会让其他用例的调用\n#     全部变成待审批。收尾无条件还原,并**读回来确认还原成功**。\n#   - 下发有延迟:改完不是立刻生效(要等 bundle 同步),所以用轮询等待而不是 sleep 固定值。\nsource \"$(cd \"$(dirname \"$0\")/../..\" && pwd)/config/env.sh\" || exit 2\nsource \"$QA_ROOT/lib/identity.sh\"\nsource \"$QA_ROOT/lib/mcpbuiltin.sh\"\n\nrequire_login\nrequire_apikey        # 数据面调用要 apikey —— 初版漏了它\n\n# ⚠️ 数据面调用的身份是**这把 apikey 所属的 agent**,不是随便哪个 agent。\n#    初版我把工具授权给了 `mcpb_fixture` 的夹具 agent,而 `mcp_call` 用的是\n#    播种 agent 的 apikey → 数据面回 `unknown tool \"list_teams\"`(**没广告给它**),\n#    基线直接不成立。\n#    症状是「调不通」,看起来像「风险等级把它挡了」——**恰好和本用例要证的结论撞车**,\n#    是最危险的一种自误判:它会让人以为 risk_level 生效了,其实是从来没通过。\n#    → 判据:**验「某个开关让调用被挡」之前,必须先证明「没开开关时它调得通」**,\n#      而且那个「调得通」必须是**同一个身份**打的。\n#    口径与 MCP-65 一致:授权给播种 agent(`uag-qa-seed-agent`)。\nAGENT_ID=$(mcpb_find_by_name \"/agents\" \"uag-qa-seed-agent\")\n[ -n \"$AGENT_ID\" ] || skip_case \"找不到播种 agent uag-qa-seed-agent,先跑 ./env/seed.sh\"\n\n# 挑一个**只读**工具:它本身不该触发审批,这样「变成待审批」只能是 risk_level 造成的。\n# 拿写操作工具会混进 HITL 拦截(MCP-55 实测 set_team_budget 回 APPROVAL_PENDING),\n# 那时红了说不清是谁挡的。\n#\nTOOL=$(builtin_untagged_tool)\n[ -n \"$TOOL\" ] || skip_case \"环境里找不到「无标签且 enabled」的内置工具\"\nTOOL_ID=$(builtin_tool_id \"$TOOL\")\n[ -n \"$TOOL_ID\" ] || fail_case \"挑到了 ${TOOL} 却取不到 id\"\n\n# ★ 按该工具的 `input_schema` 装配**正确入参**,而不是挑一个「不用填参数」的工具。\n#\n# 2026-08-28 审本条时抓出的**假绿**:候选池 13 个里 7 个带必填参数\n# (get_agent 要 agent_id、list_team_members 要 team_id…),而本条原来一律 `'{}'` 空参调用。\n# 空参打它们回 `MCP_DISPATCH_FAILED: missing required path parameter`,\n# 而 `mcp_call_payload` 对它返回**空** —— 与「被审批挡住」**完全同形**。\n# 挑中那 7 个里任何一个,下面那条「risk_level=high 之后不再直接放行」就**恒绿**,\n# 开关一次都没验到。挑中哪个只取决于 `/mcp-tools` 的返回顺序 —— 今天挑到 list_teams 是运气。\n#\n# ⚠️ 第一版我的修法是「把带参数的工具从候选池排除掉」——**那是回避,不是解决**:\n#    它把覆盖面永久锁死在 6 个零参数工具上。MCP-54 的头部注释早已写明\n#    「每个工具的参数装配路径都不一样,list_teams 恰好是里面最简单的那个」。\n#    把参数填对才对:基线一定成立,顺带验了 `bucketByPosition` 的 path/query/body 分桶。\n#    判据与参数映射见 lib/mcpbuiltin.sh 里 `mcp_args_for` 的注释。\nARGS=$(mcp_args_for \"$TOOL\" \"$AGENT_ID\") \\\n  || skip_case \"装不出 ${TOOL} 的入参 —— 见上面 stderr(缺映射=用例要补,取不到值=环境未铺该能力)\"\ninfo \"被测工具 ${TOOL},入参 ${ARGS}\"\n\nORIG_RISK=$(jget \"$(api_get \"/mcp-tools/${TOOL_ID}\")\" data.risk_level)\n[ -n \"$ORIG_RISK\" ] || fail_case \"读不到 ${TOOL} 的 risk_level(字段名或端点不对?)\"\n\nRESTORED=0\ncleanup() {\n  # ── ⓿ 撤掉本条造的授权 ────────────────────────────────────────────────────\n  # ⚠️ 这一段也是补上去的,而且它造成过一次**指不回来的红**:\n  #    本条为了打通数据面,给**播种 agent** 授了这个工具,收尾却没撤 →\n  #    `builtin-audit-completeness.sh`(用**同一个播种 agent**)紧接着跑时,\n  #    它那句「授权成功(data.granted==1)」拿到 0(工具本来就已授权)而红,\n  #    而红点出现在**别的文件**里、根因指不回这里(§3.39)。\n  #\n  #    我在 ① 那段已经写过「残留工单不是无害的脏数据」,却**只想到了工单、没想到授权** ——\n  #    同一个道理没推广到自己造的另一样东西上。\n  #    → 判据:收尾要清的是**本条造过的一切**,逐样列出来对,\n  #      不是「清掉我印象里最显眼的那样」。\n  mcpb_revoke \"$AGENT_ID\" \"$TOOL_ID\"\n\n  # ── ① 收掉本条制造的**高风险调用审批工单** ─────────────────────────────────\n  # ⚠️ 这一段是补上去的:初版跑完会在环境里**留一张 pending 工单**。\n  #    残留工单不是「无害的脏数据」—— §3.29 ② 就是一张没收掉的免审窗口\n  #    把另一条老用例打红,而根因指不回制造它的那条用例。\n  #    这里按 operation_type 精确挑,只收 mcp_tool_call_high_risk 且指向本工具的,\n  #    绝不误伤别的用例正在用的工单。\n  local ids\n  ids=$(list_all \"/approvals?status=pending\" 2>/dev/null | python3 -c '\nimport sys, json\ntid = sys.argv[1]\nfor line in sys.stdin:\n    try: o = json.loads(line)\n    except Exception: continue\n    if o.get(\"operation_type\") != \"mcp_tool_call_high_risk\":\n        continue\n    if (o.get(\"operation_payload\") or {}).get(\"tool_id\") != tid:\n        continue\n    if o.get(\"id\"): print(o[\"id\"])\n' \"$TOOL_ID\" 2>/dev/null)\n  local t\n  for t in $ids; do\n    api_json_code POST \"/approvals/${t}/reject\" '{\"reason\":\"uag-qa MCP-73 收尾\"}' >/dev/null 2>&1\n  done\n\n  # ── ② 无条件还原 risk_level,而且**读回来确认** ────────────────────────────\n  # risk_level 是**全局**属性:留在 high 会让所有用例的这个工具调用都变成待审批,\n  # 症状是「别的用例莫名变红」,根因指不回这里(§3.29 ② 同一类事故)。\n  [ \"$RESTORED\" = \"1\" ] && return 0\n  api_json_code PUT \"/mcp-tools/${TOOL_ID}\" \"{\\\"risk_level\\\":\\\"${ORIG_RISK}\\\"}\" >/dev/null 2>&1\n  local back\n  back=$(jget \"$(api_get \"/mcp-tools/${TOOL_ID}\")\" data.risk_level)\n  if [ \"$back\" != \"$ORIG_RISK\" ]; then\n    echo \"  ⚠️ 收尾还原失败:${TOOL} 的 risk_level 现在是 ${back}(原值 ${ORIG_RISK})\" >&2\n    echo \"     **需人工还原**:PUT /mcp-tools/${TOOL_ID} {\\\"risk_level\\\":\\\"${ORIG_RISK}\\\"}\" >&2\n  fi\n  return 0\n}\ntrap cleanup EXIT\n\n# 授权 + 档位设成普通 call,把「审批」这条路上的另一个触发因素排除掉。\n# ⚠️ 函数名不许凭印象编:授权走 `POST /agents/:id/mcp-permissions`(体 tool_ids),\n#    档位改用 `PATCH /agents/:aid/mcp-tools/:tid/permission`,读回用\n#    `mcpb_tool_field … agent_permission_level` —— 三个都是从\n#    `api/mcp/builtin-permission-levels.sh` 抄的**现成口径**,不是自己发明的。\n#    (初版我写了 `mcpb_grant` / `mcpb_perm_level` 两个**不存在**的函数,\n#     grep 一次 lib 就发现了 —— 正是 qa-module 阶段 4 那条「没翻 lib 就自己写取值」。)\napi_json POST \"/agents/${AGENT_ID}/mcp-permissions\" \"{\\\"tool_ids\\\":[\\\"${TOOL_ID}\\\"]}\" >/dev/null 2>&1\nmcpb_set_perm \"${AGENT_ID}\" \"${TOOL_ID}\" \"call\"\n\nstep \"MCP-73  基线:risk_level=low + 档位 call → 调用应当**直接放行**\"\napi_json_code PUT \"/mcp-tools/${TOOL_ID}\" '{\"risk_level\":\"low\"}' >/dev/null 2>&1\nassert_eq \"low\" \"$(jget \"$(api_get \"/mcp-tools/${TOOL_ID}\")\" data.risk_level)\" \\\n  \"写入 low 并读回来确认(不信写接口的返回)\"\nassert_eq \"true\" \"$(mcpb_perm_granted \"$AGENT_ID\" \"$TOOL\")\" \\\n  \"该工具确实已授权给播种 agent(否则下面调不通是「没授权」而不是「风险等级」)\"\nassert_eq \"call\" \"$(mcpb_tool_field \"$TOKEN\" \"$AGENT_ID\" \"$TOOL\" agent_permission_level)\" \\\n  \"档位确实是 call(排除 call_with_approval 这条审批路径,否则下面证明不了是 risk 起的作用)\"\n\n# 等 bundle 下发。用轮询而不是固定 sleep —— 同步延迟不固定。\n#\n# ★ 把成功那次的**载荷本身**留下来(BASE_PAYLOAD),不只是留一个 0/1 标志。\n#   下面的「拦截不泄漏」反面断言要拿它当探针 —— 判据必须来自**这个工具真实返回过什么**,\n#   不能来自「我以为它返回团队列表」。初版探针去查 /teams 拿团队名,\n#   而 TOOL 是动态挑的:挑到 list_providers 时那个探针什么也探不到(见下)。\nBASE_OK=0; BASE_PAYLOAD=\"\"\nfor i in $(seq 1 20); do\n  BASE_PAYLOAD=$(mcp_call_payload \"$TOOL\" \"$ARGS\")\n  [ -n \"$BASE_PAYLOAD\" ] && { BASE_OK=1; info \"基线放行(第 ${i}s 达成,载荷 ${#BASE_PAYLOAD} 字节)\"; break; }\n  sleep 1\ndone\n# ⚠️ 基线不成立必须**就地阻断**,不能只记一条 fail 往下跑。\n#    往下跑会产生**假绿**:后面那条「不再直接放行」判的是「payload 取不到」,\n#    而基线本来就取不到 —— 于是它 PASS,报告上看起来「风险等级生效了」。\n#    基线是整条用例的地基,地基塌了后面每条断言都失去意义。\n[ \"$BASE_OK\" = \"1\" ] || fail_case \"基线不成立:${TOOL} 在 low+call 下 20s 内仍调不通(下面的对照全部失去意义,就地阻断)\"\npass \"★基线:low + call 时该工具**调得通**(下面的对照才有意义)\"\n\nstep \"MCP-73  ★把风险等级改成 high 并读回来确认\"\nuc=$(api_json_code PUT \"/mcp-tools/${TOOL_ID}\" '{\"risk_level\":\"high\"}')\nassert_in \"$uc\" \"PUT /mcp-tools/:id 接受内置工具的 risk_level 修改(2xx)\" 200 201\nassert_eq \"high\" \"$(jget \"$(api_get \"/mcp-tools/${TOOL_ID}\")\" data.risk_level)\" \\\n  \"★读回来确认已落库为 high(页面「更新」按钮打的就是这个端点)\"\n\nstep \"MCP-73  ★★保存后**真的生效**:同一次调用变成待审批,且原因指向 high_risk_tool\"\n# 轮询等下发。判据分两层:\n#   ① 载荷拿不到了(不再直接放行)—— mcp_call_payload 为空\n#   ② 挡它的是**风险等级**这条路 —— 错误码/原因里出现 approval 语义\n#\n# ⚠️ **RAW 不截断**。初版是 `| head -c 400`,而下面的「不泄漏」判据要在 RAW 里找数据 ——\n#    真泄漏时带出来的是整份列表,数据部分正好在 400 字节之外,判据会漏检。\n#    截断只该发生在**打印**的时候(见下面的 info),不该发生在**判据取值**的时候。\n#\n# ⚠️ 一次调用取三样,不要连打三次。产品在 approvalPendingResult 的注释里明写\n#    「请勿重试本次调用(重试只会重复建单)」;虽然 GL#359 的 dedupe 兜住了不会建三张单,\n#    每次仍会各写一条 mcp_call_events(202) + security_events + 审计行 —— 白污染环境。\nGOT_BLOCK=0; ERRC=\"\"; RAW=\"\"\nfor i in $(seq 1 30); do\n  RAW=$(mcp_call \"$TOOL\" \"$ARGS\")\n  if [ -z \"$(printf '%s' \"$RAW\" | mcp_payload_of)\" ]; then\n    ERRC=$(printf '%s' \"$RAW\" | mcp_errcode_of)\n    GOT_BLOCK=1; info \"调用已被挡(第 ${i}s);错误码=${ERRC:-<空>}\"\n    break\n  fi\n  sleep 1\ndone\nassert_eq \"1\" \"$GOT_BLOCK\" \"★risk_level=high 之后该工具**不再直接放行**(改动真的生效了)\"\ninfo \"原始响应片段:$(printf '%s' \"$RAW\" | head -c 400)\"\n# ★关键:必须区分「被审批挡住」和「因别的原因调不通」。\n#   这一条是上面那条断言的**必要补丁**,不是锦上添花:上面判的是「payload 取不到」,\n#   而 payload 取不到至少有四种来源 —— 被审批挡、参数不对、没广告、身份不对。\n#   少了这一条,任何一种「调不通」都会被读成「风险等级生效了」。\n#\n# ⚠️ 判据用**双条件**(满足其一即可),而不是只认英文单词 APPROVAL:\n#     ① 错误码/文案里有 approval 语义   —— 当前实现走这条\n#     ② 文案里给出了工单号(ticket 前缀) —— 产品 i18n 成中文后靠这条兜底\n#   内建路径的拦截走 NewMCPPolicyError,回的是**纯文本**(不是 JSON 错误信封),\n#   实测 mcp_call_error_code 在这条路上**恒取空** —— 也就是说 ① 现在完全依赖\n#   门面那句英文原文 \"requires approval\"。只押 ① 的话,产品哪天把文案换成中文\n#   「需要审批」,这条就变成**假红**(产品没坏,用例坏了)。\nBLOCK_REASON_OK=0\ncase \"$(printf '%s' \"${ERRC}${RAW}\" | tr '[:lower:]' '[:upper:]')\" in\n  *APPROVAL*) BLOCK_REASON_OK=1 ;;\nesac\nprintf '%s' \"$RAW\" | grep -qE 'ticket [0-9a-f]{8}' && BLOCK_REASON_OK=1\nassert_eq \"1\" \"$BLOCK_REASON_OK\" \\\n  \"★挡它的是**审批**语义(而不是权限不足/参数错之类的别的原因)\"\n\n# ── ★反面断言:被审批挡住时,**不能把本该返回的数据带出来** ────────────────────\n#\n# 这条是审核(qa-audit 审 1 · A6)点出来后补的,而它**不是为过闸门凑的**:\n# 「拦截生效」和「拦截不泄漏」是两件事。一个只把数据**同时**塞进响应、\n# 另外再附一句「已提交审批」的实现,上面那两条断言**全绿** ——\n# 而用户实际上已经拿到了不该拿的数据。\n#\n# 判据挑「本该返回的数据长什么样」——而「长什么样」必须来自**基线那次真实返回的载荷**\n# (BASE_PAYLOAD),不能来自我以为它返回什么。\n#\n# ⚠️ 初版这里去查 `/teams` 拿一个团队名当探针,注释还写着「基线那次成功调用回的是团队列表」——\n#    可 TOOL 是 builtin_untagged_tool **动态挑**的,挑到 list_providers /\n#    list_request_logs / get_usage_cost_summary 时,团队名探针什么也探不到,\n#    这半条判据直接失效。2026-08-28 审出来:当时它对得上纯属挑中了 list_teams 的巧合。\n#    → 判据必须和**被测对象**绑定,不能和「我以为的被测对象」绑定。\nLEAK=0\ncase \"$RAW\" in\n  *'\"total\"'*|*'\"page_size\"'*) LEAK=1 ;;   # 列表信封的特征字段\nesac\n# ★从基线载荷里挖一个足够特异的字符串当探针(取最长的那个 string 值)。\n#   不挑固定字段名:不同工具回的结构不一样(有的有 data 信封、有的是裸对象),\n#   挑「最长的字符串值」对任何结构都成立,且长串几乎不可能在拦截文案里偶然出现。\nPROBE=$(printf '%s' \"$BASE_PAYLOAD\" | python3 -c '\nimport sys, json\ndef strs(o):\n    if isinstance(o, str): yield o\n    elif isinstance(o, dict):\n        for v in o.values(): yield from strs(v)\n    elif isinstance(o, list):\n        for v in o: yield from strs(v)\ntry: d = json.load(sys.stdin)\nexcept Exception: sys.exit(0)\n# 长度 >= 8 才够特异:短串(状态码、\"true\"、单字团队名)在文案里可能碰巧命中 → 假红\ncands = [s for s in strs(d) if len(s) >= 8]\nif cands: print(max(cands, key=len))\n' 2>/dev/null)\nif [ -n \"$PROBE\" ]; then\n  info \"泄漏探针(取自基线载荷):$(printf '%s' \"$PROBE\" | head -c 60)\"\n  case \"$RAW\" in *\"$PROBE\"*) LEAK=1 ;; esac\nelse\n  # 探不到探针要说出来 —— 否则这半条判据静默失效,而报告上看不出区别。\n  info \"⚠️ 基线载荷里挖不出长度 ≥8 的字符串,本条只靠列表信封特征字段判泄漏\"\nfi\nassert_eq \"0\" \"$LEAK\" \\\n  \"★被审批拦住的响应里**没有**把本该返回的数据带出来(拦截生效 ≠ 拦截不泄漏)\"\n\nstep \"MCP-73  ★★工单的 operation_type 直接指名是**高风险**触发的(本条最强的一条判据)\"\n# ── 这一步是怎么找对判据的,值得写下来 ──────────────────────────────────────────\n# 初版我断言的是工单里的 `tool_risk_info.risk_level == \"high\"`,依据是\n# `service/approval_service.go:312-328` 确实把 tool.RiskLevel 写进了 ticket.ToolRiskInfo。\n# 实跑发现:**工单能按号找到,但列表响应里根本没有 `tool_risk_info` 这个字段** ——\n# 服务端写了,列表**不返回**。这正是 qa-audit 审 3 的第 2 种恒真模式\n# 「读回确认挑错观测面」:同一份数据在不同端点暴露的字段不一样,\n# 挑错了观测面,断言就永远取到空值。\n#\n# 而实测响应里给了一个**更强**的字段:\n#     \"operation_type\": \"mcp_tool_call_high_risk\"\n# 它**直接指名这张工单是「高风险工具调用」**产生的 —— 比任何字符串包含判据都硬,\n# 而且正是本条需要的那个区分:\n#     risk_level==\"high\"                    → mcp_tool_call_high_risk\n#     permission_level==\"call_with_approval\" → 另一种 operation_type(见 MCP-16/42)\n# 所以改断这个。**先看真实响应长什么样,再定判据**,别按服务端写了什么去猜返回什么。\n#\n# 定位工单用**门面响应里的工单号**(截断 8 位前缀,不是完整 UUID,别拿去打 /approvals/:id),\n# 而不是拿 tool_id 去列表里碰 —— 按 tool_id 会撞上同工具的历史工单。\nTICKET_PREFIX=$(printf '%s' \"$RAW\" | sed -n 's/.*ticket \\([0-9a-f]\\{8\\}\\).*/\\1/p' | head -1)\nassert_ne_empty \"$TICKET_PREFIX\" \"★门面在拦截文案里给出了工单号(用户据此才能去找审批人)\"\n\nTICKET_OP=$(list_all \"/approvals\" | python3 -c '\nimport sys, json\npre = sys.argv[1]\nif not pre: sys.exit(0)\nfor line in sys.stdin:\n    try: o = json.loads(line)\n    except Exception: continue\n    if str(o.get(\"id\") or \"\").startswith(pre):\n        print(o.get(\"operation_type\") or \"\"); break\n' \"$TICKET_PREFIX\")\nassert_eq \"mcp_tool_call_high_risk\" \"$TICKET_OP\" \\\n  \"★★工单 operation_type=mcp_tool_call_high_risk —— **直接证明是风险等级(而非档位)触发的审批**\"\n\n# 附带确认工单载荷里认得出是哪个工具、哪个 agent —— 否则审批人看不出该批什么。\nTICKET_BLOB=$(list_all \"/approvals\" | python3 -c '\nimport sys, json\npre = sys.argv[1]\nif not pre: sys.exit(0)\nfor line in sys.stdin:\n    try: o = json.loads(line)\n    except Exception: continue\n    if str(o.get(\"id\") or \"\").startswith(pre):\n        print(json.dumps(o.get(\"operation_payload\") or {}, ensure_ascii=False)); break\n' \"$TICKET_PREFIX\")\nassert_contains \"$TOOL\" \"$TICKET_BLOB\" \"工单载荷里带得出工具名(审批人看得出在批什么)\"\nassert_contains \"$TOOL_ID\" \"$TICKET_BLOB\" \"工单载荷里带得出 tool_id(可精确关联回目录)\"\n\nstep \"MCP-73  ★改回 low 之后调用**恢复放行**(证明这是可逆的策略,不是把工具搞坏了)\"\nrc2=$(api_json_code PUT \"/mcp-tools/${TOOL_ID}\" \"{\\\"risk_level\\\":\\\"${ORIG_RISK}\\\"}\")\nassert_in \"$rc2\" \"改回原值返回 2xx\" 200 201\nassert_eq \"$ORIG_RISK\" \"$(jget \"$(api_get \"/mcp-tools/${TOOL_ID}\")\" data.risk_level)\" \\\n  \"读回来确认已还原为 ${ORIG_RISK}\"\nRESTORED=1\n\nRECOVER=0\nfor i in $(seq 1 30); do\n  [ -n \"$(mcp_call_payload \"$TOOL\" \"$ARGS\")\" ] && { RECOVER=1; info \"恢复放行(第 ${i}s 达成)\"; break; }\n  sleep 1\ndone\nassert_eq \"1\" \"$RECOVER\" \"★改回 ${ORIG_RISK} 后调用恢复放行(可逆,且收尾没留副作用)\"\n\n# ⚠️ **必须以 finish 收尾**。缺了它脚本会以最后一条命令的状态退出(通常是 0),\n#    于是 CASE_FAILURES 从来没人看 —— **断言红了也退 0**,runner 计为 PASS。\n#    本模块曾有 17 个用例集体缺它(见 docs/case-ledger.md §3.32),\n#    后果是「断言跑了、红了、然后被丢掉」——**等于白做**。\nfinish"
+   },
+   {
+    "path": "scenarios/mcp/builtin-call-error-attribution.sh",
+    "content": "require_apikey\n\nAGENT_ID=$(mcpb_find_by_name \"/agents\" \"uag-qa-seed-agent\")\n[ -n \"$AGENT_ID\" ] || skip_case \"找不到播种 agent uag-qa-seed-agent(数据面 apikey 绑的就是它)\"\n\nTOOL=\"get_provider\"\nTOOL_ID=$(builtin_tool_id \"$TOOL\")\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/login-contract.sh",
+  "evidence": "pass \"账号启用了 MFA,首步返回 mfa_required\"\ninfo \"本账号启用 MFA,后续依赖 token 的断言无法在本用例内完成\"",
+  "expected": "stitched",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/login-contract.sh",
+    "content": "if [ \"$mfa\" = \"True\" ] || [ \"$mfa\" = \"true\" ]; then\n  # 这是**正确**的产品行为(auth_handler.go:203),不是缺陷:启用 MFA 的\n  # super_admin 首步只发 challenge,不发 token。断言它没发 token 才是重点。\n  pass \"账号启用了 MFA,首步返回 mfa_required\"\n  assert_ne_empty \"$(jget \"$body\" data.challenge_token)\" \"返回 challenge_token\"\n  assert_eq \"\" \"$(jget \"$body\" data.access_token)\" \"首步**不**下发 access_token(fail-closed)\"\n  info \"本账号启用 MFA,后续依赖 token 的断言无法在本用例内完成\"\nelse\n  assert_ne_empty \"$(jget \"$body\" data.access_token)\" \"返回 data.access_token\"\n  assert_ne_empty \"$(jget \"$body\" data.refresh_token)\" \"返回 data.refresh_token\"\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/token-refresh.sh",
+  "evidence": "step \"AUT-04  伪造 refresh_token 被拒\"\nforged=\"${rt%?}X\"",
+  "expected": "stitched",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/token-refresh.sh",
+    "content": "  assert_in \"$code\" \"新 access_token 可用于受保护端点\" 200\nfi\n\nstep \"AUT-04  伪造 refresh_token 被拒\"\n# 在合法 token 尾部改一个字符 —— 签名必然对不上。\n# 用完全随机的串也行,但改一位更贴近真实攻击,且能顺带验证签名校验而非格式校验。\nforged=\"${rt%?}X\"\nforged_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time \"$HTTP_TIMEOUT\" -X POST \\\n  -H 'Content-Type: application/json' \\\n  -d \"{\\\"refresh_token\\\":\\\"${forged}\\\"}\" \\\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "scenarios/mcp/builtin-call-error-attribution.sh",
+  "evidence": "    if e.get(\"tool_name\") == tool and e.get(\"agent_id\") == agent:\n        sc = e.get(\"status_code\")\n    if len(out) >= 2: break",
+  "expected": "stitched",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "scenarios/mcp/builtin-call-error-attribution.sh",
+    "content": "except Exception: sys.exit(1)\nn = 0\nfor e in d.get(\"data\") or []:\n    if e.get(\"tool_name\") == tool and e.get(\"agent_id\") == agent:\n        sc = e.get(\"status_code\")\n        if isinstance(sc, int) and sc >= 400: n += 1\nsys.exit(0 if n >= 2 else 1)\n' \"$TOOL\" \"$AGENT_ID\"\n}\nwait_until \"两条失败记录都已落库\" 30 _two_fails || fail_case \"30s 内没等到两条失败记录落库(日志管道?)\"\n\nFAILS=$(api_get \"/logs/mcp-calls?page=1&page_size=50\" | python3 -c '\nimport sys, json\ntool, agent = sys.argv[1], sys.argv[2]\nd = json.load(sys.stdin)\nout = []\nfor e in d.get(\"data\") or []:\n    if e.get(\"tool_name\") == tool and e.get(\"agent_id\") == agent:\n        sc = e.get(\"status_code\")\n        if isinstance(sc, int) and sc >= 400:\n            out.append({\n              \"status_code\": sc,\n              \"error_category\": e.get(\"error_category\") or \"\",\n              \"error_message\": (e.get(\"error_message\") or \"\")[:120],\n            })\n    if len(out) >= 2: break\nprint(json.dumps(out, ensure_ascii=False))\n' \"$TOOL\" \"$AGENT_ID\")\ninfo \"取到的两条失败记录:${FAILS}\"\n\n# ★ 判据一:状态码不能是 502。502 的含义是「上游故障」,而这两次失败与服务健康无关。\nS1=$(printf '%s' \"$FAILS\" | python3 -c 'import sys,json;a=json.load(sys.stdin);print(a[0][\"status_code\"] if a else \"\")')\nS2=$(printf '%s' \"$FAILS\" | python3 -c 'import sys,json;a=json.load(sys.stdin);print(a[1][\"status_code\"] if len(a)>1 else \"\")')\nassert_ne \"502\" \"$S1\" \"★失败记录①的状态码不该是 502(它的含义是上游故障,与本次失败无关)\"\nassert_ne \"502\" \"$S2\" \"★失败记录②的状态码不该是 502\"\n\n# ★ 判据二:错误类别与信息必须有内容 —— 这是「能不能据此排障」的最低要求。\nC1=$(printf '%s' \"$FAILS\" | python3 -c 'import sys,json;a=json.load(sys.stdin);print(a[0][\"error_category\"] if a else \"\")')\nM1=$(printf '%s' \"$FAILS\" | python3 -c 'import sys,json;a=json.load(sys.stdin);print(a[0][\"error_message\"] if a else \"\")')\nassert_ne_empty \"$C1\" \"★失败记录带 error_category(否则排障时看不出失败性质)\"\nassert_ne_empty \"$M1\" \"★失败记录带 error_message\"\n\n# ★ 判据三(本条的核心):两条**性质不同**的失败,在日志里必须**能区分**。\n#   只断「有记录」「字段非空」都不够 —— GL#561 的形态正是「四条记录三列完全一致」。\n#   所以这里断「两条记录不全等」:状态码或错误类别至少有一处不同。\nassert_ne \"${S1}|${C1}\" \"${S2}|$(printf '%s' \"$FAILS\" | python3 -c 'import sys,json;a=json.load(sys.stdin);print(a[1][\"error_category\"] if len(a)>1 else \"\")')\" \\\n  \"★★两条性质不同的失败在日志里可区分(状态码或错误类别至少一处不同)\"\n\nstep \"MCP-75  ★★同案对照(L5):同一张表的**权限拦截**路径会正确填错误归因\"\n# ══════════════════════════════════════════════════════════════════════════════\n# 这一步是本条最强的判据,也是审核时补的。\n#\n# 前面证明了「门面失败的两条记录无法区分」。但那还留一个反驳空间:\n# **「也许这套字段本来就没启用」** —— 如果整张表从来没有一行填过,\n# 那我要求的东西产品从没做过,期望值就站不住。\n#\n# 所以这里在**同一条用例内**造一次会走**权限拦截**的失败(把档位降成 view 再调用):\n# 那条路实测会填 `403 / auth_failed / permission denied at authorization …`。\n#\n# 两者摆在一起,结论就没有退路了:\n#   **同一张表、同一个内置工具,权限拦截那条路填得好好的,门面那条路一律 502+空。**\n#   不是「做不到」,是「这条路没做」。\n# ══════════════════════════════════════════════════════════════════════════════\n# ⚠️⚠️ 这里原来写的是 `{\"permission_level\":\"view\"}`,**而产品白名单里没有 `view`**:\n#\n#     control-plane/internal/service/mcp_tool_service.go:1164\n#     control-plane/internal/service/mcp_permission_service.go:18\n#       validate:\"required,oneof=call call_with_approval view_only\"\n#\n#   于是这个 PATCH 一直 **400**,档位**从来没有被降级过** ——\n#   而原来还写着 `>/dev/null 2>&1`,**把 400 连同原因一起吞了**。\n#   结果:本用例最强的那一步「同案对照」实际跑在**原档位**上。\n#\n#   → 判据一:**枚举值必须去产品源码抄,不许自己拼。**\n#     这是「自拼名单」这个同源坑的**第六处**(前五处见台账;\n#     其中第五处还是在 TypeScript 里)。\n#   → 判据二:**前提步骤的返回码必须查,不许 `>/dev/null 2>&1`。**\n#     这是「吞错误原因」的**第七处** —— 我一个月前宣布过「同源清零 6 处」,\n#     而这一处就在那之后写下的。**「清零」只清了我当时搜到的那几处。**\n#   → 判据三:**降级失败要 `fail`,不能 `skip`,更不能静默。**\n#     判据是那句老问题:「这一步失败,是『环境本来就没铺这个能力』吗?」\n#     不是 —— 端点存在、agent 存在,是**我把值写错了**。\n#     那就是用例自己的错,必须红。\n#   → 判据四:**同一个动作不要在 13 个地方各写一遍。**\n#     全仓有 13 处在设权限档位,而我只在这一处发现了 view/view_only 的错 ——\n#     另外 12 处没错只是运气。现在收成 `mcpb_set_perm`(lib/mcpbuiltin.sh):\n#     它把**白名单硬编码在入口**(写错档位名直接 fail_case,不用等 400),\n#     并且**必查返回码**。自证 10/10:`scripts/selftest-set-perm.sh`。\nmcpb_set_perm \"${AGENT_ID}\" \"${TOOL_ID}\" \"view_only\"\n_denied_logged() {\n  api_get \"/logs/mcp-calls?page=1&page_size=30\" | python3 -c '\nimport sys, json\ntool, agent = sys.argv[1], sys.argv[2]\ntry: d = json.load(sys.stdin)\nexcept Exception: sys.exit(1)\nfor e in d.get(\"data\") or []:\n    if e.get(\"tool_name\") == tool and e.get(\"agent_id\") == agent:\n        if (e.get(\"error_category\") or \"\").strip():\n            print(json.dumps({\"sc\": e.get(\"status_code\"),\n                              \"cat\": e.get(\"error_category\"),\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "scenarios/mcp/builtin-crossvisible-grant.sh",
+  "evidence": "KEY=$(mcpb_fresh_key \"$AGENT\")\n[ -n \"$KEY\" ] || fail_case \"给自有 agent 发凭据失败(HTTP 500)—— **产品缺陷,见 docs/product-findings.md F-8**;\\",
+  "expected": "stitched",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "scenarios/mcp/builtin-crossvisible-grant.sh",
+    "content": "  \"★主人视图里没有这条授权 —— 若产品放行了授权,这里就暴露「授得进、主人撤不掉」\"\n\nstep \"MCP-60  ★数据面:广告集 ↔ 可调集必须一致(不该出现「广告了却调不通」)\"\nKEY=$(mcpb_fresh_key \"$AGENT\")\n# ⚠️ 这一步现在**必然失败** —— 不是造数写错了,是产品侧的缺陷:\n#    给 `self_owned` agent 发凭据一律 500(团队 agent 正常,对照见 docs/product-findings.md F-8)。\n#    F-8 里列了**已经排除的五个假说**,接手的人别重复查。\n#    ⚠️ 照实判 FAIL,**不用 skip 掩盖** —— 这不是「环境没铺这个能力」。\n[ -n \"$KEY\" ] || fail_case \"给自有 agent 发凭据失败(HTTP 500)—— **产品缺陷,见 docs/product-findings.md F-8**;\\\n团队 agent 同样调用返回 201(对照已做),故不是用例或环境问题。根因未读到行,按三条件未提单。\"\n_adv() { UAG_APIKEY=\"$KEY\" mcp_tool_names | grep -qx \"$HI_TOOL\"; }\nwait_until \"tools/list 是否广告 ${HI_TOOL}\" 12 _adv || true\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "scenarios/mcp/builtin-inject-mode.sh",
+  "evidence": "n=$(mcp_tool_names | grep -c . || true)\nassert_ne \"0\" \"$n\" \"★inject_mode=${mode} 时 tools/list 非空(切换开关没有把数据面弄坏)\"",
+  "expected": "stitched",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "scenarios/mcp/builtin-inject-mode.sh",
+    "content": "  esac\n  _seen() { mcp_tool_names | grep -qx \"$TOOL\"; }\n  wait_until \"inject=${mode} 时数据面已稳定\" 12 _seen || true\n  n=$(mcp_tool_names | grep -c . || true)\n  info \"inject_mode=${mode} → tools/list 共 ${n} 个工具\"\n  assert_ne \"0\" \"$n\" \"★inject_mode=${mode} 时 tools/list 非空(切换开关没有把数据面弄坏)\"\ndone\nmcpb_revoke \"$AGENT_ID\" \"$TOOL_ID\"\n\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "scenarios/mcp/builtin-pending-ticket-not-voided-on-level-change.sh",
+  "evidence": "STATUS=$(jget \"$(api_get \"/approvals/${TICKET}\")\" data.status)\nassert_ne \"pending\" \"$STATUS\" \\",
+  "expected": "stitched",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "scenarios/mcp/builtin-pending-ticket-not-voided-on-level-change.sh",
+    "content": "sleep 5\n\nstep \"MCP-79  ★★★判据:那张在途待审单**必须**已经失效\"\nSTATUS=$(jget \"$(api_get \"/approvals/${TICKET}\")\" data.status)\ninfo \"变更档位之后,该单状态=${STATUS}\"\nassert_ne \"pending\" \"$STATUS\" \\\n  \"★★★变更档位后,在途待审单**不再是 pending**(GL#580:「按旧声明排队的申请不该继续有效」)\"\n\nstep \"MCP-79  ★同一判据的第二个观测面:它不该还挂在待审列表里\"\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "api/mcp/mcp-tools-read.sh",
+  "evidence": "vcode=$(api_code GET \"/mcp-tools/${tid}/versions\")\nassert_in \"$vcode\" \"版本列表响应正常\" 200 404",
+  "expected": "reflowed",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/mcp/mcp-tools-read.sh",
+    "content": "else\n  assert_eq 200 \"$(api_code GET \"/mcp-tools/${tid}\")\" \"详情返回 200\"\n  # 版本与统计端点在无数据时可能 404,那不是缺陷;5xx 才是。\n  vcode=$(api_code GET \"/mcp-tools/${tid}/versions\")\n  assert_in \"$vcode\" \"版本列表响应正常\" 200 404\n  # 回 200 时**信封必须完整** —— 光看返回码太弱:GL#532 那种「列名对不上」的\n  # 破损如果哪天以「200 + 空壳」的形式回归,只验返回码抓不到。\n  # (CLAUDE.md:列表要确认 data 是数组且 meta 完整,否则 list_all 会静默取空。)\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "ui/tests/mcp/mcp-entries.spec.ts",
+  "evidence": "await expect(page.locator(sel.mcpCallLogs.timeRange), hintFor(sel.mcpCallLogs.timeRange)).toBeVisible()\nawait expect(page.locator(sel.mcpCallLogs.streamBtn)).toBeVisible()",
+  "expected": "reflowed",
+  "naiveExact": "miss",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "ui/tests/mcp/mcp-entries.spec.ts",
+    "content": "    expect(body).toHaveProperty('data')\n    expect(body).toHaveProperty('meta.total')\n\n    await expect(page.locator(sel.mcpCallLogs.timeRange), hintFor(sel.mcpCallLogs.timeRange)).toBeVisible()\n    await expect(page.locator(sel.mcpCallLogs.streamBtn)).toBeVisible()\n  })\n})\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/admin-user-crud.sh",
+  "evidence": "# (POST 建号在下一步单独验,因为它的「副作用为零」要靠列表数,不是读回)",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/admin-user-crud.sh",
+    "content": "\nstep \"AUT-13  ★同一红线的其余三个入口:拒绝 + 副作用为零\"\n# 产品注释点名这个守卫形状出现在 5 个入口。上一步验了 PUT,这里补另外三个\n# (POST 建号在下一步单独验,因为它的「副作用为零」要靠列表数,不是读回)。\nif [ -z \"${OUT_TOKEN:-}\" ]; then\n  skip \"无低权限身份,本步整体跳过(理由同上)\"\nelse\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/auditor-readonly.sh",
+  "evidence": "assert_eq \"\" \"$(_diff \"$CAT\" \"$AUD\" has_edit)\" \\\n  \"★★auditor 一个 :edit 都没有(目录共 $(_diff \"$CAT\" \"$AUD\" n_edit) 个)\"",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/auditor-readonly.sh",
+    "content": "step \"AUT-28  ★② 只读:目录里的每一个 :edit,auditor 一个都不许沾\"\n# 产品在 AuditorPermissions() 的注释里**自己点名**了会漂的那条路\n# (误并入 TeamMemberDefaultPermissions 会带进两个写权限)。这条断言守的就是它。\nassert_eq \"\" \"$(_diff \"$CAT\" \"$AUD\" has_edit)\" \\\n  \"★★auditor 一个 :edit 都没有(目录共 $(_diff \"$CAT\" \"$AUD\" n_edit) 个)\"\n# own 域只允许**只读**的那两个;写类 own 权限(personal_credential_manage_own /\n# agent_manage_own)混进来同样破坏不变量,而它们不含冒号、上面那条抓不到\nown_write=$(printf '%s' \"$AUD\" | python3 -c '\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/invitation-accept-ownership.sh",
+  "evidence": "assert_eq \"$(err_code \"$gb\")\" \"$(err_code \"$nb\")\" \\\n  \"★「不是你的」与「不存在」错误码一致($(err_code \"$nb\"))—— 不泄漏 token 是否存在\"",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/invitation-accept-ownership.sh",
+    "content": "gb=$(body_of \"$gout\"); gcode=$(code_of \"$gout\")\nassert_eq 404 \"$gcode\" \"不存在的 token 也返回 404(对照面成立)\"\nassert_eq \"$gcode\" \"$code\" \"状态码一致\"\nassert_eq \"$(err_code \"$gb\")\" \"$(err_code \"$nb\")\" \\\n  \"★「不是你的」与「不存在」错误码一致($(err_code \"$nb\"))—— 不泄漏 token 是否存在\"\n\nstep \"AUT-26  正面:所有者接受 → 204\"\ncode=$(code_of \"$(_accept \"$AT1\" \"$T3\")\")\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/invitation-preview-public.sh",
+  "evidence": "assert_eq \"True\" \"$(jget \"$pv_body\" data.can_set_password)\" \"该邮箱尚无账号 → 可自助设密\"",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/invitation-preview-public.sh",
+    "content": "assert_eq 200 \"$pv_code\" \"未认证 GET preview 返回 200(这是刻意的公开端点)\"\nassert_eq \"$EMAIL\" \"$(jget \"$pv_body\" data.email)\" \"回显的是**这条**邀请的邮箱\"\nassert_eq \"member\" \"$(jget \"$pv_body\" data.tier)\" \"回显档位 member\"\nassert_eq \"True\" \"$(jget \"$pv_body\" data.can_set_password)\" \"该邮箱尚无账号 → 可自助设密\"\n\nstep \"AUT-24  ★回显字段恰好是白名单,多一个键就是新增的泄漏面\"\n# 判据是**键集合**,不是「某个字段对不对」—— 后者只能守住已知字段,\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/invitation-preview-public.sh",
+  "evidence": "ghost=$(http_once GET \"${AUTH}/invitations/preview?token=$(uniq_name uag-qa-ghost)\")",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/invitation-preview-public.sh",
+    "content": "step \"AUT-24  失效 token:404,且不区分失效原因\"\n# 未认证端点区分「不存在 / 已过期 / 已接受 / 已撤销」等于告诉调用方\n# 「这个 token 曾经存在过」(service/invitation_service.go:918 的红线)。\nghost=$(http_once GET \"${AUTH}/invitations/preview?token=$(uniq_name uag-qa-ghost)\")\ng_body=$(body_of \"$ghost\"); g_code=$(code_of \"$ghost\")\nassert_eq 404 \"$g_code\" \"不存在的 token 返回 404\"\nassert_err_code \"NOT_FOUND\" \"$g_body\" \"错误码 NOT_FOUND\"\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/login-contract.sh",
+  "evidence": "assert_in \"$ghost_code\" \"不存在账号同样被拒\" 401 429\nif [ \"$ghost_code\" = \"$wrong_code\" ]; then",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/login-contract.sh",
+    "content": "out=$(login_once \"uag-qa-ghost-$$\" \"uag-qa-definitely-wrong-$$\")\nghost_body=$(body_of \"$out\"); ghost_code=$(code_of \"$out\")\n\nassert_in \"$ghost_code\" \"不存在账号同样被拒\" 401 429\nif [ \"$ghost_code\" = \"$wrong_code\" ]; then\n  pass \"存在与不存在的账号返回相同状态码($ghost_code)\"\nelse\n  fail \"状态码泄漏账号存在性(存在账号=$wrong_code 不存在账号=$ghost_code)\"\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/login-contract.sh",
+  "evidence": "info \"已触发登录限流(429),本轮跳过错误码断言 —— 限流本身由 AUT-06 覆盖\"",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/login-contract.sh",
+    "content": "if [ \"$wrong_code\" = \"401\" ]; then\n  assert_err_code \"INVALID_CREDENTIALS\" \"$wrong_body\" \"错误码为 INVALID_CREDENTIALS\"\nelse\n  info \"已触发登录限流(429),本轮跳过错误码断言 —— 限流本身由 AUT-06 覆盖\"\nfi\nassert_eq \"\" \"$(jget \"$wrong_body\" data.access_token)\" \"被拒时**不**下发 token\"\n\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/permission-catalog-completeness.sh",
+  "evidence": "grid = {v for v in eff_vals if \":\" in v and not v.startswith(\"platform_\")}",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/permission-catalog-completeness.sh",
+    "content": "perms = perms if isinstance(perms, list) else []\neff_vals = {p.get(\"permission\") for p in perms if p.get(\"permission\")}\n\ngrid = {v for v in eff_vals if \":\" in v and not v.startswith(\"platform_\")}\nexcluded = eff_vals - grid\n\nif op == \"catalog\":\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/aut/scim-internal-gate.sh",
+  "evidence": "skip_case \"SCIM 端点整体关闭(503,UAG_SCIM_API_TOKEN 未配)—— 本环境未铺这个能力\"",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/aut/scim-internal-gate.sh",
+    "content": "if [ \"$c\" = \"503\" ]; then\n  # 环境事实:UAG_SCIM_API_TOKEN 未配 ⇒ 该端点整体关闭(fail-closed),\n  # 「密钥校验」这件事在本环境上不存在,没有可验的对象。\n  skip_case \"SCIM 端点整体关闭(503,UAG_SCIM_API_TOKEN 未配)—— 本环境未铺这个能力\"\nfi\nassert_eq 401 \"$c\" \"无 X-Internal-Token 被拒(401)\"\nassert_err_code \"UNAUTHORIZED\" \"$b\" \"错误码 UNAUTHORIZED\"\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/sec/jwt-and-session.sh",
+  "evidence": "if [ -z \"$lt\" ]; then\n  skip \"本轮登录未直接拿到 access_token(MFA?),跳过 logout 失效验证\"",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/sec/jwt-and-session.sh",
+    "content": "pair=$(curl -s --max-time \"$HTTP_TIMEOUT\" -X POST -H 'Content-Type: application/json' \\\n  -d \"{\\\"username\\\":\\\"${ADMIN_USER}\\\",\\\"password\\\":\\\"${PASSWORD}\\\"}\" \"${AUTH}/login\")\nlt=$(jget \"$pair\" data.access_token)\nif [ -z \"$lt\" ]; then\n  skip \"本轮登录未直接拿到 access_token(MFA?),跳过 logout 失效验证\"\nelse\n  assert_in \"$(api_code_as \"$lt\" GET /agents)\" \"logout 前该 token 可用\" 200\n  assert_in \"$(curl -s -o /dev/null -w '%{http_code}' --max-time \"$HTTP_TIMEOUT\" -X POST -H \"Authorization: Bearer $lt\" \"${AUTH}/logout\")\" \"logout 成功\" 200 204\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "api/sec/jwt-and-session.sh",
+  "evidence": "post_body=$(curl -s --max-time \"$HTTP_TIMEOUT\" -X POST \\\n  -H 'Content-Type: application/json' -d \"{\\\"username\\\":\\\"${suser}\\\",\\\"password\\\":\\\"${spass}\\\"}\" \"${AUTH}/login\")",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/sec/jwt-and-session.sh",
+    "content": "\n# 前置:挂起前口令是对的(否则后面的 403 分不清是挂起还是口令错)。\npre=$(curl -s -o /dev/null -w '%{http_code}' --max-time \"$HTTP_TIMEOUT\" -X POST \\\n  -H 'Content-Type: application/json' -d \"{\\\"username\\\":\\\"${suser}\\\",\\\"password\\\":\\\"${spass}\\\"}\" \"${AUTH}/login\")\nassert_in \"$pre\" \"挂起前该账号口令正确、可登录\" 200\n\nassert_in \"$(api_json_code PUT \"/admin-users/${scid}\" '{\"status\":\"suspended\"}')\" \"挂起账号\" 200\n\npost_body=$(curl -s --max-time \"$HTTP_TIMEOUT\" -X POST \\\n  -H 'Content-Type: application/json' -d \"{\\\"username\\\":\\\"${suser}\\\",\\\"password\\\":\\\"${spass}\\\"}\" \"${AUTH}/login\")\npost_code=$(curl -s -o /dev/null -w '%{http_code}' --max-time \"$HTTP_TIMEOUT\" -X POST \\\n  -H 'Content-Type: application/json' -d \"{\\\"username\\\":\\\"${suser}\\\",\\\"password\\\":\\\"${spass}\\\"}\" \"${AUTH}/login\")\nassert_in \"$post_code\" \"挂起后**口令仍正确**但登录被拒\" 403\nassert_err_code \"ACCOUNT_NOT_ACTIVE\" \"$post_body\" \"错误码为 ACCOUNT_NOT_ACTIVE(与 INVALID_CREDENTIALS 区分)\"\n\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "scenarios/aut/gdpr-erase-effect.sh",
+  "evidence": "if [ -z \"${PA_TOKEN:-}\" ]; then\n  skip \"无 platform_admin,本步整体跳过(理由见上一处 skip)\"",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "scenarios/aut/gdpr-erase-effect.sh",
+    "content": "assert_not_contains \"$EMAIL\"       \"$all_users\" \"★全量列表里**不再出现**原邮箱\"\n\nstep \"AUT-22  ★② 审计事件本身没被删,且对非豁免读者已打码\"\nif [ -z \"${PA_TOKEN:-}\" ]; then\n  skip \"无 platform_admin,本步整体跳过(理由见上一处 skip)\"\nelse\n  IFS=$'\\t' read -r AFTER_N AFTER_NAME AFTER_PAYLOAD <<< \"$(_audit_rows \"$PA_TOKEN\" \"$VICTIM_ID\")\"\n  # ②的正题:行数一条都不能少 —— 删审计比不擦除更严重,而且不可逆\n"
+   }
+  ]
+ },
+ {
+  "domain": "AUT",
+  "path": "ui/tests/aut/logout.spec.ts",
+  "evidence": "const hasTestid = await trigger.count()\n    test.skip(\n      hasTestid === 0,",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "ui/tests/aut/logout.spec.ts",
+    "content": "    // ── 前置探测:testid 在不在 ──────────────────────────────────────────\n    // 探不到就 skip(理由带 MR 地址),不红。见文件头的 ⚠️。\n    const trigger = page.locator(sel.userMenu.trigger)\n    const hasTestid = await trigger.count()\n    test.skip(\n      hasTestid === 0,\n      '用户菜单缺 data-testid —— 依赖被测仓 MR !69(qa/user-menu-testids)合并;' +\n        '合并前不按文案兜底定位(本仓硬约束)。' +\n        'http://code.paraview.cn/uag/unified-agent-gateway/-/merge_requests/69',\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "api/mcp/builtin-auditor-readonly.sh",
+  "evidence": "del_code=$(api_code_as \"$AU_TOKEN\" DELETE \"/agents/${MCPB_AGENT}/mcp-permissions/${TOOL_ID}\")\nassert_in \"$del_code\" \"auditor 撤销授权被拒\" 403 404",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/mcp/builtin-auditor-readonly.sh",
+    "content": "# 反面:被拒之后不该留下任何痕迹(「先写了再报错」才是最危险的形态)\nassert_eq \"false\" \"$(mcpb_perm_granted \"$MCPB_AGENT\" \"$TOOL\")\" \"★被拒后夹具 agent 上没有被偷偷加上授权\"\n\ndel_code=$(api_code_as \"$AU_TOKEN\" DELETE \"/agents/${MCPB_AGENT}/mcp-permissions/${TOOL_ID}\")\nassert_in \"$del_code\" \"auditor 撤销授权被拒\" 403 404\n\nstep \"MCP-51  ★写要零(二):改档位 / 改标签 / 开关工具 都必须被拒且无副作用\"\npc=$(api_code_as \"$AU_TOKEN\" PATCH \"/agents/${MCPB_AGENT}/mcp-tools/${TOOL_ID}/permission\" \\\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "api/mcp/builtin-auto-approval-window.sh",
+  "evidence": "info \"非法请求后窗口总数=${n}\"",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/mcp/builtin-auto-approval-window.sh",
+    "content": "try: d=json.load(sys.stdin)\nexcept Exception: print(-1); sys.exit(0)\nprint((d.get(\"meta\") or {}).get(\"total\", len(d.get(\"data\") or [])))')\ninfo \"非法请求后窗口总数=${n}\"\n\nstep \"MCP-42  合法时长开窗口成功,并出现在窗口列表里\"\nout=$(mcpb_post_as \"$TOKEN\" \"/approvals/${TICKET}/auto-approval-window\" '{\"duration\":\"1h\"}')\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "api/mcp/builtin-auto-approval-window.sh",
+  "evidence": "assert_contains \"expires\" \"$wlist\" \"窗口带到期时间字段(免审期必须有明确终点)\"",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/mcp/builtin-auto-approval-window.sh",
+    "content": "wlist=$(api_get \"/auto-approval-windows?page=1&page_size=100\")\nassert_contains \"$WINDOW_ID\" \"$wlist\" \"窗口列表含刚开的窗口\"\n# 一个「不知道什么时候结束」的免审窗口是不可接受的 —— 必须带到期时间。\nassert_contains \"expires\" \"$wlist\" \"窗口带到期时间字段(免审期必须有明确终点)\"\n\nstep \"MCP-42  窗口可撤销,撤销后不再出现在列表里\"\ndc=$(api_code DELETE \"/auto-approval-windows/${WINDOW_ID}\")\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "api/mcp/builtin-batch-toggle.sh",
+  "evidence": "assert_in \"$bc\" \"循环第 2 步:对不存在的工具 toggle 失败\" 404 400 422 500",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/mcp/builtin-batch-toggle.sh",
+    "content": "assert_in \"$(_enabled \"$T1_ID\")\" \"循环第 1 步:${T1} 已停用\" False false 0\nBOGUS=\"00000000-0000-4000-8000-0000000000ff\"\nbc=$(_toggle \"$BOGUS\")\nassert_in \"$bc\" \"循环第 2 步:对不存在的工具 toggle 失败\" 404 400 422 500\n# 反面:失败响应不得回显任何内部细节(不存在的 id 不该换来一段栈或 SQL)\nbbody=$(api_json PATCH \"/mcp-tools/${BOGUS}/toggle\" '{}')\nassert_not_contains \"SELECT\" \"$bbody\" \"失败响应**不含** SQL 片段\"\n"
+   }
+  ]
+ },
+ {
+  "domain": "MCP",
+  "path": "api/mcp/builtin-grant-routing.sh",
+  "evidence": "approver_view=$(api_get \"/approvals?status=pending&page=1&page_size=100\")",
+  "expected": "verbatim",
+  "naiveExact": "hit",
+  "foundIn": null,
+  "scripts": [
+   {
+    "path": "api/mcp/builtin-grant-routing.sh",
+    "content": "# 刻意不用 /me/pending-approvals —— 那个铃铛端点只认 member_credential_create,\n# grant_mcp_tool 不进那里(见文件头「已知边界」)。拿它当判据会永远红,\n# 而红的原因是用例挑错了观测面,不是产品没通知。\napprover_view=$(api_get \"/approvals?status=pending&page=1&page_size=100\")\nassert_contains \"$TICKET\" \"$approver_view\" \"审批人的待审列表含该工单\"\n# 申请人本人也要能追踪自己的申请状态。\nstep \"MCP-23  申请人在「我的申请」看得到自己那条,状态为 pending\"\n"
+   }
+  ]
+ }
+]

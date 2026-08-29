@@ -18,6 +18,25 @@ mkdir -p "$(dirname "$LOG")"
 
 pids_on_port() { ss -ltnp 2>/dev/null | grep ":$PORT " | grep -oP 'pid=\K[0-9]+' | sort -u; }
 
+# ── 解释器要在**杀之前**定下来 ──
+# 这个脚本先 kill 再 nohup。解释器找不到就是「旧的杀了、新的起不来」——
+# 后端停机，而报出来只是一行 nohup 的 No such file。**先验后杀**，验不过一个都不动。
+# （2026-08-29 在 worktree 里真撞了一次：worktree 的 backend/ 下没有 .venv，
+#   而第 35 行写的是相对路径 `.venv/bin/python`。）
+# worktree 没有自己的 venv 是正常的 —— venv 不进 git，只有主 checkout 有一份。
+# 所以兜底到主 checkout 那个：`--git-common-dir` 在 worktree 里指的就是主库的 .git。
+PYBIN=""
+for _cand in "$REPO/backend/.venv/bin/python" \
+             "$(git -C "$REPO" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)/../backend/.venv/bin/python"; do
+  if [ -x "$_cand" ]; then PYBIN="$(cd "$(dirname "$_cand")" && pwd)/python"; break; fi
+done
+if [ -z "$PYBIN" ]; then
+  echo "✗ 找不到可用的解释器，$REPO/backend/.venv 和主 checkout 的都不在。"
+  echo "  **没有动正在跑的后端** —— 先把 venv 装好再来。"
+  exit 1
+fi
+[ "$PYBIN" = "$REPO/backend/.venv/bin/python" ] || echo "注意: 本地无 venv，借用 $PYBIN"
+
 OLD=$(pids_on_port)
 if [ -n "$OLD" ]; then
   echo "停止旧后端: $OLD"
@@ -31,8 +50,9 @@ if [ -n "$OLD" ]; then
   fi
 fi
 
+# cwd 必须是 backend/ —— .env 是按 cwd 找的，换个目录起会静默丢掉它（429 降级通道跟着没）。
 cd "$REPO/backend"
-nohup .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" > "$LOG" 2>&1 &
+nohup "$PYBIN" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" > "$LOG" 2>&1 &
 echo "启动中 (pid $!) …"
 
 for _ in $(seq 1 40); do

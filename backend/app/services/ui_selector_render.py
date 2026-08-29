@@ -140,6 +140,49 @@ def infer_kind(selector: str) -> str:
     return "structure"
 
 
+def anchor_selector(*, testid: str = "", elem_id: str = "", text: str = "") -> str:
+    """把爬到的控件属性拼成一条选择器字面量 —— **按稳定性顺序退**。
+
+    页面枚举（`qa_page_survey_crawl.collect_items`）拿它算 `anchor_kind`，
+    S6.5 拿同一条去 `lum_upsert_selectors` 登记。**必须是同一个函数**：
+    两边各拼一次，就会有两套词表，而登记表里的 `kind` 和 survey 里的 `anchor_kind`
+    一旦对不上，「爬到的和登记的不符」这条待整改就永远报不准。
+
+    三样都空返回 `""` —— 那种控件（无 testid、无 id、无可读文案的图标按钮）
+    **没有名字可以对齐两趟**，调用方按「认不出」记账，不要凭序号编一个：
+    编出来的锚点会随 DOM 顺序飘，下次插一个兄弟节点就报成「功能没了」。
+    """
+    if testid:
+        return f'[data-testid="{testid}"]'
+    if elem_id:
+        return f"#{elem_id}"
+    if text:
+        return f"text={text}"
+    return ""
+
+
+def selector_of_item(*, anchor: str = "", anchor_kind: str = "") -> str:
+    """把 survey 里存下来的一行**还原**成选择器字面量。
+
+    爬取存的是 `anchor`（testid / id / 文案的**原值**）+ `anchor_kind`，不是拼好的
+    选择器 —— key 要拿原值去对齐两趟，拼好的串太长也不好看。S6.5 要把它登记进
+    选择器表，那就得再拼一次，而这里**必须走 `anchor_selector`**，不许照着
+    `f'[data-testid="{anchor}"]'` 另写一遍：写第二遍就是第二套词表，
+    登记表的 `kind` 和 survey 的 `anchor_kind` 一旦对不上，
+    「爬到的与登记不符」那条待整改就永远报不准（S6.4 已经为这件事提过一次公共函数）。
+
+    认不出的 kind 返回 `""` —— **不猜**。上游拿空串登记不成 `active`
+    （`upsert_selectors` 硬拦空选择器），只能落 `gap`，这个方向是对的。
+    """
+    if anchor_kind == "testid":
+        return anchor_selector(testid=anchor)
+    if anchor_kind == "id":
+        return anchor_selector(elem_id=anchor)
+    if anchor_kind == "text":
+        return anchor_selector(text=anchor)
+    return ""
+
+
 # 定位 API 的字符串参数 —— 只扫这些，普通字符串和注释不算（脚本头的说明里
 # 出现 `.card` 不该被报）。
 _LOCATOR_CALL = re.compile(

@@ -24,3 +24,12 @@ from app.models.exploratory import (  # noqa: F401 — 同上，「探索测试�
     ExploratoryFinding,
     ExploratorySession,
 )
+
+# `QaPageSurvey` / `QaPageSurveyItem`：Epic 6 的页面枚举账本。**现在还没有 api/service
+# import 它**（爬虫编排层在 S6.3 才落地），而少了这条链的后果就是上面那三条：
+# autogenerate 提议 DROP、测试库 create_all 建不出这两张表、CASCADE 封样漏掉它们。
+# 编排层落地后这一行可以删 —— 但**先确认那条 import 链真的从 app.main 走得通**再删。
+from app.models.qa_page_survey import (  # noqa: F401
+    QaPageSurvey,
+    QaPageSurveyItem,
+)

@@ -142,6 +142,11 @@ async def common_issues(session, case_ids: list) -> list[dict]:
     return sorted(buckets.values(), key=lambda x: (-x["count"], x["kind"]))[:10]
 
 
+# 一次塞给模型的可操作项上限。跟 MAX_TITLES 一样，超了要在正文里说清楚 ——
+# 悄悄截断会让"缺口清单"看起来是完整的。
+MAX_ACTIONS = 40
+
+
 async def coverage_gaps(session, cases: list, ai_config,
                         observed_actions: list | None = None) -> tuple[list, int]:
     """覆盖缺口：一次模型调用。返回 (归并后的缺口, 归并前总条数)。"""
@@ -156,7 +161,14 @@ async def coverage_gaps(session, cases: list, ai_config,
     user = "现有用例：\n" + "\n".join(lines)
     if observed_actions:
         user += ("\n\n页面上实际探到的可操作项：\n"
-                 + "\n".join(f"- {str(a)[:80]}" for a in observed_actions[:40]))
+                 + "\n".join(f"- {str(a)[:80]}" for a in observed_actions[:MAX_ACTIONS]))
+        # **截断了就得说出来。** 这一列 S6.5 之后是从 survey 表自动读的，
+        # 一个模块几百个控件很正常 —— 不说的话模型拿着 40 条当"页面上的全部"，
+        # 算出来的缺口看着是完整的，实际漏掉的那部分永远不会被提起。
+        # （`scriptsRead` 数的是读到的份数、模型只看了一部分，就是这个病。）
+        if len(observed_actions) > MAX_ACTIONS:
+            user += (f"\n（这个模块页面上共 {len(observed_actions)} 个可操作项，"
+                     f"上面只列了前 {MAX_ACTIONS} 个）")
     if len(cases) > MAX_TITLES:
         user += f"\n\n（这个模块共 {len(cases)} 条，上面只列了前 {MAX_TITLES} 条）"
 
@@ -213,12 +225,24 @@ async def run(session, branch_id, *, folder_id=None, module: str | None = None,
                 "coverageGaps": [], "coverageSkew": {"total": 0, "notes": []},
                 "note": "这个模块还没有用例"}
 
+    from app.models.project import Branch
+    pid = (await session.execute(
+        select(Branch.project_id).where(Branch.id == bid))).scalars().first()
+
     if ai_config is None:
-        from app.models.project import Branch
         from app.services.ai_config_resolver import resolve_ai_config
-        pid = (await session.execute(
-            select(Branch.project_id).where(Branch.id == bid))).scalars().first()
         ai_config = await resolve_ai_config(pid, session, capability="lum-quality-review")
+
+    # **不传就从最近一趟页面枚举里读**（S6.5）。今天这一列靠 CC 在页面上手抄，
+    # 于是绝大多数体检根本没有它，缺口只能凭用例标题猜。
+    # 读不到（没跑过枚举、或者这个模块对不上任何页面）就是空 —— **退回今天的行为**，
+    # 不拿整个产品的控件去凑：串台的控件产出的是「这个模块没测导出功能」这种
+    # 查一次就发现根本不存在的假缺口。
+    从枚举读的 = False
+    if not observed_actions and pid:
+        from app.services.qa_survey_byproducts import observed_actions_for_module
+        observed_actions = await observed_actions_for_module(session, pid, folder.name)
+        从枚举读的 = bool(observed_actions)
 
     issues = await common_issues(session, [c.id for c in cases])
     gaps, gaps_total = await coverage_gaps(session, cases, ai_config, observed_actions)
@@ -250,7 +274,10 @@ async def run(session, branch_id, *, folder_id=None, module: str | None = None,
                   "覆盖分布（coverageSkew）是纯代码算的：P0 占比、六类操作"
                   "（创建/查询/修改/删除/异常/权限）各几条、缺哪一类 —— "
                   "缺口靠模型看内容，分布靠代码数个数，两个都不是门禁。"
-                  + ("" if observed_actions else
+                  + (f" 这一趟的「页面上实际探到的可操作项」是**从最近一趟页面枚举里读的**"
+                     f"（{len(observed_actions)} 项），没让你手抄。"
+                     if 从枚举读的 else
+                     "" if observed_actions else
                      " 传 observed_actions（你在页面上探到的可操作项）能让缺口准得多 —— "
                      "不传的话它只能凭用例标题猜。")),
     }

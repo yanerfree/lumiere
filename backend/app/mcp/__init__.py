@@ -883,7 +883,7 @@ _register(
                 "平台这边没有任何东西会因为它变红或变绿。"
                 "不传 domain = 列出每个域最近一次评了什么（带 verdict 和一句话结论），再按域取全文。"
                 "参数: project_id(项目UUID), domain(可选，域码如 'MCP'), review_id(可选，复核历史结论用), "
-                "format(md=Markdown全文，默认 / json=结构化的 scriptGaps/envMissing/nextUp)",
+                "format(md=Markdown全文，默认 / json=结构化的 scriptGaps/envMissing/catalogGaps)",
 )
 
 
