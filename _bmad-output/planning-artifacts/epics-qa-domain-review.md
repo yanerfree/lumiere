@@ -1378,7 +1378,20 @@ G4 的字面意思是「点了没有请求」，报在那儿就是**拿一句假
 `test_qa_catalog_review.py` 212 passed（新增 `TestCatalogAnchorGate` 10 条）、
 `test_qa_coverage_reconcile_gaps.py` 37 passed（新增 `Test控件到端点那条边从哪来` 7 条）；
 backend/tests **2037 passed**；根目录 tests/ **551 passed**（与 S7.8 基线一致）；
-前端 `vite build` 通过。
+前端 `vite build` 通过 —— **但 build 通过不算自测**（仓库规矩：不能只看编译过就交）。
+前端那一格另跑了一趟 Playwright 真开页面：`selftest_dropped.py` 拦下
+`**/qa-catalog/reviews**` 的响应，把 `droppedNoAnchor` 换成三档喂给真页面，
+点开 MCP 域的评审抽屉、切到「给 AI / 整改」页签，各截一张：
+A 只出「没经过锚点检查」/ B 两样都不出 / C 只出「另有 2 条指不出出处」加两条划掉的原话
+—— **三档都对上，判据写在脚本里**（`want` 表，不符就 exit 1）。
+拦响应而不是造数据跑真评审，是因为 **A 档在真库里造不出来**：新代码只要跑过一次，
+`droppedNoAnchor` 这个键就一定在，而 A 档要的恰恰是「这个键不存在」的存量结论。
+
+> 这趟自测自己先假绿过一次，值得记：响应外面套着 `{"data": {"reviews": [...]}}`，
+> 而拦截脚本在最外层找 `reviews`，**一条都没改到**，于是三档全渲染成 A 档。
+> 「注入没生效」和「A 档渲染正确」在页面上长得一模一样。补救不是把形状猜对，
+> 是**别猜形状**：递归认对象（带 `domain` + `result` 的 dict 就是一条评审），
+> 再把「拦到几次 / 改了几条」打进每行输出 —— 改了 0 条就不可能是「渲染对了」。
 
 四条第一轮没达成，**一条是真洞，三条是哨兵/断言的毛病**：
 
