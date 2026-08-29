@@ -67,7 +67,10 @@
   实测数据和推理见下方文档「数据归属与隔离」的 §5。
 - **QA 仓永远只读**（项目上那份 `qa_repo` 配置）。那是别人维护的黑盒验收仓，
   清单文件是他自己门禁（`check-coverage.sh`）的判据来源，平台往里写一笔，他那边就会
-  红在一个查不到原因的地方。`services/qa_catalog.py` 只允许 `show`/`ls-tree`/`rev-parse`/`log`/`grep`，
+  红在一个查不到原因的地方。`services/qa_catalog.py` 只允许
+  `show`/`ls-tree`/`rev-parse`/`log`/`grep`/`blame` —— 全是只读；`blame` 是
+  2026-08-29 为「每个域最近有人动吗」那一列加的（封样拦的是 push/commit/worktree 那一类，
+  只读子命令本来就不在拦截名单里 —— 但**这份清单是给人看的，加了就得跟着改**），
   有封样测试盯着；也**不要求对方仓库为我们加任何字段/文件/钩子**。要做回写先跟仓库主人谈，
   别从这个模块长出来。**配置在「QA 对账」页里配，不在编辑项目弹窗**；只有仓库地址必填，
   分支/清单路径/脚本范围留空 = 自动识别，**别给它们塞 uag-qa 的默认值**（见文档 §3）。
@@ -110,7 +113,7 @@ cd /home/dreamer/lumiere && DATABASE_URL='postgresql+asyncpg://postgres:postgres
 | **版本升级怎么复用上一版用例**：分支对账（端点反查）、三堆分法、状态流转、废弃审核 | [docs/version-upgrade-branch-diff.md](docs/version-upgrade-branch-diff.md) |
 | **数据归属与隔离**：MCP Key 为什么管不住数据、环境改项目级、哪些表该留全局（含一条「假隔离」陷阱） | [docs/data-scoping-and-isolation.md](docs/data-scoping-and-isolation.md) |
 | **权限模型**：440 个端点各挂什么守卫、角色档位（系统 admin/user/guest + 项目 manager/member）、前端按权限藏入口的口径、**2026-08-29 为什么砍到这几档** | [docs/permission-audit-2026-08.md](docs/permission-audit-2026-08.md) + `backend/app/core/permissions.py`（权限点与角色映射的唯一出处） |
-| **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、页面为什么这么排（P/R 口径照抄对方定义）、脚本正文白名单、**域级 AI 评审**（环境缺口那一列的四个坑） | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
+| **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、页面为什么这么排（P/R 口径照抄对方定义）、脚本正文白名单、**域级 AI 评审**（环境缺口那一列的四个坑）、**每个域最近有人动吗**（为什么「近 7 天」这种判据在这份数据上必然恒真） | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
 
 ## 长驻服务
 

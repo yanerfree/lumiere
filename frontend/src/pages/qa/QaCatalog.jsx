@@ -104,6 +104,90 @@ function Panel({ title, extra, children, tone }) {
 }
 
 // 看板上的每一行都能点 —— 看到一个数字，下一步动作永远是"给我看这些条"
+// ── 「这个域最近有人动吗」──────────────────────────────────────────
+// 时间一律在渲染时算相对值，**不让后端把「3 天前」算好存进缓存** —— 那份缓存按
+// commit 命中，QA 那边不提交就一直不失效，页面会一直说「3 天前」直到有人推代码。
+
+function relWhen(iso, now) {
+  if (!iso) return '—'
+  const t = new Date(iso).getTime()
+  if (!Number.isFinite(t)) return '—'
+  const mins = Math.round((now - t) / 60000)
+  if (mins < 60) return mins < 1 ? '刚刚' : `${mins} 分钟前`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.round(hours / 24)
+  if (days < 30) return `${days} 天前`
+  const months = Math.round(days / 30)
+  return months < 12 ? `${months} 个月前` : `${Math.round(months / 12)} 年前`
+}
+
+const absWhen = iso => (iso ? new Date(iso).toLocaleString('zh-CN', { hour12: false }) : '—')
+
+// 「最近更新」的判据：**跟仓库里最新的那次动静比，不跟今天比。**
+//
+// 拿自然日窗口（近 7 天）当判据在这份数据上直接失效：uag-qa 的 2026-08-27 20:42
+// 是一次批量恢复，24 个域全被扫到，"近 7 天"于是把 24 个域全标亮 —— 标记恒真，
+// 等于没标。反过来，锚在"最新那次动静"上：仓库搁置半年，最后动过的那几个域照样
+// 标得出来（那本来就是「最近在做的」的正确答案），而它们旁边写着「6 个月前」，
+// 不会有人误以为是今天干的。
+const FRESH_WINDOW_MS = 24 * 3600 * 1000
+
+function freshCutOf(domains) {
+  const times = (domains || [])
+    .map(d => (d.updatedAt ? new Date(d.updatedAt).getTime() : NaN))
+    .filter(Number.isFinite)
+  return times.length ? Math.max(...times) - FRESH_WINDOW_MS : null
+}
+
+// 域行右侧那格「最近更新」。两侧时间都塞进 tooltip，格子里只显示一个 ——
+// 24 行 × 两个时间平铺出来没人看得完，而"谁在动"这件事一眼就得能扫出来。
+function DomainWhen({ d, now, freshCut }) {
+  const fresh = d.updatedAt && freshCut != null && new Date(d.updatedAt).getTime() >= freshCut
+  const onlyCatalog = d.updatedFrom === 'catalog'
+  const line = (label, at, commit, empty) => (
+    <div style={{ marginBottom: 4 }}>
+      <span style={{ opacity: 0.7 }}>{label}</span>{' '}
+      {at ? absWhen(at) : empty}
+      {commit?.sha && (
+        <div style={{ opacity: 0.7, paddingLeft: 42 }}>
+          <code>{commit.sha}</code>{commit.subject ? ` ${commit.subject}` : ''}
+        </div>
+      )}
+    </div>
+  )
+  return (
+    <Tooltip
+      title={
+        <div style={{ fontSize: 12, lineHeight: 1.7, maxWidth: 420 }}>
+          {line('脚本侧', d.scriptUpdatedAt, d.scriptCommit, '这个域一个脚本都没有')}
+          {line('清单侧', d.catalogUpdatedAt, d.catalogCommit, '清单里读不到这个域的行')}
+          <div style={{ opacity: 0.7, borderTop: '1px solid rgba(255,255,255,0.2)', paddingTop: 4 }}>
+            格子里显示的是{onlyCatalog ? '清单侧' : '脚本侧'}。
+            {/* 这句是这一列最容易被误读的地方：整仓批量提交（重命名、一次性恢复）
+                会把所有域的清单侧刷成同一时间，那不是"这个域在推进" */}
+            清单侧常常是一次批量提交扫的（看提交标题就知道），所以有脚本时以脚本侧为准。
+            <div>「在动」= 落在本仓最后一次动静往前 24 小时内。</div>
+          </div>
+        </div>
+      }
+    >
+      <span
+        style={{
+          width: 86, textAlign: 'right', whiteSpace: 'nowrap',
+          color: !d.updatedAt ? C.faint : fresh ? C.teal : C.gray,
+          fontWeight: fresh ? 600 : 400,
+        }}
+        onClick={e => e.stopPropagation()}
+      >
+        {fresh && <span style={{ marginRight: 3 }}>●</span>}
+        {onlyCatalog && d.updatedAt && <span style={{ color: C.hint, marginRight: 3 }}>清单</span>}
+        {relWhen(d.updatedAt, now)}
+      </span>
+    </Tooltip>
+  )
+}
+
 function Hit({ onClick, active, children, style }) {
   return (
     <div
@@ -430,6 +514,13 @@ export default function QaCatalog() {
     () => [...(data?.domains || [])].sort((a, b) => a.code.localeCompare(b.code)),
     [data],
   )
+  // 判"最近"用的那条线，和算相对时间用的"现在"。两个都跟着 data 走：
+  // 同一次渲染里所有域必须用同一个 now，否则 24 行会各自取一次时间，
+  // 边界上偶发地这行标亮、那行不标
+  const freshCut = useMemo(() => freshCutOf(domainRows), [domainRows])
+  // data 就是这里唯一想依赖的：每拉一次数据重新取一次「现在」，而不是每次重渲染都跳一下
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const renderedAt = useMemo(() => Date.now(), [data])
 
   const sortOrderOf = key => (sorter.columnKey === key ? sorter.order : null)
 
@@ -828,9 +919,18 @@ export default function QaCatalog() {
             label: <span style={{ fontSize: 13 }}>
               按域看缺口（{domainRows.length} 个域 · 按域码排，位置不随进度动 · 点一行筛这个域 ·
               点「AI 评审」看这个域的脚本撑不撑得起清单）
+              {summary?.activityUnavailable ? (
+                <Tag color="warning" style={{ marginLeft: 8 }}>更新时间这次没算出来</Tag>
+              ) : summary?.activityTruncated ? (
+                <Tooltip title="只走了最近 5000 个提交。更早改过的域会显示成「更早」，不是「没动过」">
+                  <Tag color="warning" style={{ marginLeft: 8 }}>时间只算到最近 5000 个提交</Tag>
+                </Tooltip>
+              ) : null}
             </span>,
+            // 592 = 这一行的 min-content（在浏览器里量的，不是估的）。多了「最近更新」
+            // 那一格之后它从 498 涨到 592 —— min 还留在 490 的话进度条会被挤成 0 宽
             children: (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(490px, 1fr))', gap: '2px 24px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(592px, 1fr))', gap: '2px 24px' }}>
                 {domainRows.map(d => {
                   const rv = reviews[d.code]
                   return (
@@ -845,6 +945,7 @@ export default function QaCatalog() {
                       <span style={{ width: 96, textAlign: 'right', color: d.gap ? C.orange : C.faint }}>
                         缺 {d.gap}{d.p0Gap ? <b style={{ color: C.red }}> · P0 {d.p0Gap}</b> : null}
                       </span>
+                      <DomainWhen d={d} now={renderedAt} freshCut={freshCut} />
                       <span style={{ width: 88, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                         {REVIEW_RUNNING(rv?.status) ? (
                           <Tag icon={<LoadingOutlined />} color="processing" style={{ margin: 0, cursor: 'pointer' }}

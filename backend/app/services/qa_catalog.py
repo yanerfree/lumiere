@@ -434,6 +434,113 @@ def _last_fetch_at(repo: Path) -> str | None:
     return None
 
 
+
+# ---- 「这个域最近在动吗」：谁最后改的、什么时候 ----
+
+# 一次 log 走完整个历史，取每个路径**第一次出现**的那个提交 —— 提交按时间倒序出来，
+# 所以第一次出现 = 最后一次改它。**别退化成「一个路径一次 `git log -1`」**：
+# 152 个脚本就是 152 次进程启动，比整趟走一遍慢两个数量级，结果一模一样。
+# 上限是防「仓库十万个提交时把内存和超时一起撑爆」，不是判据；真撞上了如实说
+# （`activityTruncated`），别让「走到一半停了」长得像「这个域从来没人动过」——
+# 那正好是本页最要紧的那句话说反了。
+_ACTIVITY_MAX_COMMITS = 5000
+
+# blame --line-porcelain 的行头：`<40 位 sha> <原行号> <新行号> [同组行数]`
+_BLAME_HEAD_RE = re.compile(r"^([0-9a-f]{40}) \d+ \d+")
+
+
+def _repo_activity(repo: Path, ref: str, catalog_path: str) -> dict:
+    """读出两份时间线，**分开放，不合并**：
+
+      · `paths`  路径 → 最后改它的提交（脚本侧：真有人在写用例）
+      · `rows`   场景 ID → 最后改这一行的提交（清单侧：有人在改计划）
+
+    为什么必须分两份：uag-qa 实测 2026-08-27 20:42 有一次**整体导入**，一个提交
+    把 24 个域的清单行全刷了一遍。两份合成一个 max 之后，24 个域显示同一个时间、
+    「最近更新」标记全亮 —— **一个恒真的标记比没有标记更坏，它看着像信息**。
+    分开之后「脚本侧 8-29 / 清单侧 8-27」一眼分得出「真在写」和「只是被那次导入扫到」。
+    """
+    commits: dict[str, dict] = {}
+    paths: dict[str, str] = {}
+    try:
+        out = _run_git([
+            "--git-dir", str(repo), "log", f"--max-count={_ACTIVITY_MAX_COMMITS}",
+            "--name-only", "--format=%x01%H%x02%cI%x02%s", ref,
+        ])
+    except GitError as e:
+        # 时间读不到不该把整页拖垮（清单和覆盖率跟它无关）：这次不给时间，页面上说明白
+        logger.warning("qa activity: log 走不通(%s)，这次不给时间", e)
+        return {"paths": {}, "rows": {}, "commits": {}, "truncated": False, "unavailable": True}
+
+    sha = ""
+    for line in out.splitlines():
+        if line.startswith("\x01"):
+            sha, _, rest = line[1:].partition("\x02")
+            date, _, subject = rest.partition("\x02")
+            commits[sha] = {"sha": sha[:9], "date": date, "subject": subject}
+            continue
+        # 合并提交默认不列文件：文件真正落地的那个提交照样在历史里，日期取它自己的
+        if line and sha and line not in paths:
+            paths[line] = sha
+
+    rows = _blame_catalog_rows(repo, ref, catalog_path, commits) if catalog_path else {}
+    return {
+        "paths": paths,
+        "rows": rows,
+        "commits": commits,
+        "truncated": len(commits) >= _ACTIVITY_MAX_COMMITS,
+        "unavailable": False,
+    }
+
+
+def _blame_catalog_rows(repo: Path, ref: str, catalog_path: str,
+                        commits: dict[str, dict]) -> dict[str, str]:
+    """清单里每条场景行**最后一次被改**是哪个提交（`git blame`，只读）。
+
+    没有脚本的域（实测 uag-qa 有 6 个是 0 脚本）在脚本侧永远是空的，只有这一份能
+    回答它们「是刚立项还是躺了半年」。一次逐行 blame 拿全，不按域分别 blame ——
+    那是 24 次进程启动换同一份数据。
+    """
+    try:
+        out = _run_git(["--git-dir", str(repo), "blame", "--line-porcelain", ref,
+                        "--", catalog_path])
+    except GitError as e:
+        logger.warning("qa activity: blame 走不通(%s)，清单侧这次没有时间", e)
+        return {}
+
+    rows: dict[str, str] = {}
+    sha = ""
+    ct: int | None = None
+    for line in out.splitlines():
+        m = _BLAME_HEAD_RE.match(line)
+        if m:
+            sha, ct = m.group(1), None
+            continue
+        if line.startswith("committer-time "):
+            try:
+                ct = int(line.split()[1])
+            except (IndexError, ValueError):
+                ct = None
+            continue
+        if not line.startswith("\t"):
+            continue
+        # 正文行：首列是场景 ID 才算数（域码表、统计表、散文都不是）
+        sid = _first_cell(line[1:])
+        if not _ID_RE.fullmatch(sid):
+            continue
+        if sha in commits:
+            rows[sid] = sha
+        elif ct is not None:
+            # 提交落在 max-count 之外：log 那趟没收进来，退回 blame 自己报的时间。
+            # 标题拿不到（blame 不给），留空 —— 空标题比编一个准确
+            commits.setdefault(sha, {
+                "sha": sha[:9],
+                "date": datetime.fromtimestamp(ct, tz=timezone.utc).astimezone().isoformat(timespec="seconds"),
+                "subject": "",
+            })
+            rows[sid] = sha
+    return rows
+
 def _drop_stale_cache(repo: Path, url: str) -> None:
     """缓存目录按项目建，改了仓库地址就得丢掉重来。
 
@@ -494,7 +601,9 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
             continue  # 没声明 ID 的文件不是用例（支持库/夹具）
         cases.append({"path": path, **header})
 
-    return _assemble(scenarios, domain_names, cases, catalog_issues, {
+    activity = _repo_activity(repo, ref, catalog_path)
+
+    return _assemble(scenarios, domain_names, cases, catalog_issues, activity=activity, repo_meta={
         "url": url,
         "branch": branch_name,
         "branchAuto": not (cfg.get("branch") or ""),
@@ -510,8 +619,70 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
     })
 
 
+def _parse_iso(value: str):
+    """git 的 `%cI` 在 UTC 提交上给的是 `...Z`，别的时区给 `+08:00`。
+
+    **不能拿字符串直接比大小**：`2026-08-29T09:00:00Z`（= 北京 17:00）比
+    `2026-08-29T10:00:00+08:00` 字典序大，但它其实更早。混着两种写法的仓库
+    （实测两家 QA 仓一家 Z 一家 +08:00）会因此把"谁最近"排反，而排反了不报错。
+    """
+    try:
+        return datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _latest(commits: dict[str, dict], shas) -> dict | None:
+    """一堆提交里最新的那个（按真实时刻比，见 `_parse_iso`）。"""
+    best = None
+    best_at = None
+    for sha in shas:
+        c = commits.get(sha)
+        at = _parse_iso((c or {}).get("date", ""))
+        if at is None:
+            continue
+        if best_at is None or at > best_at:
+            best, best_at = c, at
+    return best
+
+
+def _domain_activity(domain_scen: list[dict], activity: dict | None) -> dict:
+    """一个域的「最近有人动」——**脚本侧和清单侧分开给，不取合并的 max**。
+
+    合并的坏处见 `_repo_activity` 的注释（整体导入会把所有域刷成同一天）。
+    显示用哪个由前端决定，这里只负责如实给两个数：
+      · 脚本侧 = 这个域的场景被哪些脚本覆盖，那些文件最后一次被改
+      · 清单侧 = 这个域在清单里的那些行最后一次被改
+    `updatedAt` 是给「一列显示不下两个」的地方用的合成值：**优先脚本侧** ——
+    有人在写用例才叫"在做这个域"，清单被一次批量重排扫到不算。
+    """
+    act = activity or {}
+    commits = act.get("commits") or {}
+    paths = act.get("paths") or {}
+    rows = act.get("rows") or {}
+
+    script_shas = {
+        paths[c["path"]]
+        for s in domain_scen for c in (s.get("scripts") or [])
+        if c["path"] in paths
+    }
+    row_shas = {rows[s["id"]] for s in domain_scen if s["id"] in rows}
+
+    by_script = _latest(commits, script_shas)
+    by_catalog = _latest(commits, row_shas)
+    winner = by_script or by_catalog
+    return {
+        "scriptUpdatedAt": (by_script or {}).get("date"),
+        "scriptCommit": by_script,
+        "catalogUpdatedAt": (by_catalog or {}).get("date"),
+        "catalogCommit": by_catalog,
+        "updatedAt": (winner or {}).get("date"),
+        "updatedFrom": "script" if by_script else ("catalog" if by_catalog else ""),
+    }
+
+
 def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[dict],
-              catalog_issues: dict, repo_meta: dict) -> dict:
+              catalog_issues: dict, repo_meta: dict, activity: dict | None = None) -> dict:
     by_id = {s["id"]: s for s in scenarios}
     for s in scenarios:
         s["scripts"] = []
@@ -561,6 +732,8 @@ def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[d
         rows = [s for s in scenarios if s["domain"] == code and s["state"] != "deprecated"]
         gaps = [s for s in rows if s["state"] == "gap"]
         meta = domain_meta.get(code) or {}
+        # 「这个域最近有人动吗」—— 已废弃的场景也算：它被废掉本身就是这个域的动静
+        domain_scen = [s for s in scenarios if s["domain"] == code]
         domains.append({
             "code": code,
             "name": meta.get("name", ""),
@@ -571,6 +744,7 @@ def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[d
             # 页面按缺口排序找「黑洞域」，P0 缺口决定先啃哪个
             "gap": len(gaps),
             "p0Gap": len([s for s in gaps if s["priority"] == "P0"]),
+            **_domain_activity(domain_scen, activity),
         })
 
     known_bug_scenarios = [s["id"] for s in scenarios if s["knownBugs"]]
@@ -620,6 +794,9 @@ def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[d
             # 跟「没算过」长得一模一样
             "unparsedRows": len(catalog_issues.get("unparsedRows") or []),
             "duplicateIds": len(catalog_issues.get("duplicateIds") or []),
+            # 「更新时间」那一列这次算没算成 / 有没有走到底。0 也要出现，理由同上两条
+            "activityUnavailable": bool((activity or {}).get("unavailable")),
+            "activityTruncated": bool((activity or {}).get("truncated")),
             "byPriority": by_priority,
         },
         "domains": domains,

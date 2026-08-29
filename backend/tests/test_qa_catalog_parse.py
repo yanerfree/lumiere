@@ -3,6 +3,7 @@
 数据取自真实的 uag-qa 仓（357 行清单 / 84 个用例文件）里的代表性片段：
 多 ID 声明、`//` 与 `#` 两种注释、状态列挂 `@known-bug`、已废弃行。
 """
+import os
 import re
 import subprocess
 import time
@@ -627,3 +628,143 @@ class Test域码表第三列:
     def test_没有域码表时映射是空的不是猜的(self):
         from app.services.qa_catalog import domain_index
         assert domain_index({}) == {}
+
+
+# ── 「这个域最近有人动吗」──────────────────────────────────────────
+# 这一节盯的是一个具体的坑：uag-qa 的 2026-08-27 20:42 是一次**批量恢复**
+# （`fix(qa): 一次性恢复被移出 git 的...`），一个提交扫过 24 个域的清单行。
+# 把「脚本侧」和「清单侧」合成一个 max 之后，24 个域全显示那一天、「最近更新」
+# 标记全亮 —— **一个恒真的标记比没有标记更坏，它看着像信息**。所以两份分开存、
+# 分开断言，谁把它们合了这一节会红。
+
+def _git_at(repo: Path, when: str, *args: str) -> str:
+    """在指定时刻提交。`%cI` 取的是 committer date，所以两个日期都得钉住。"""
+    out = subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", *args],
+        cwd=str(repo), capture_output=True, text=True,
+        env={**os.environ, "GIT_COMMITTER_DATE": when, "GIT_AUTHOR_DATE": when},
+    )
+    assert out.returncode == 0, out.stderr
+    return out.stdout.strip()
+
+
+BULK_AT = "2026-08-27T20:42:59+08:00"
+LATER_AT = "2026-08-29T18:51:00+08:00"
+
+
+@pytest.fixture
+def qa_repo_two_waves(tmp_path: Path) -> Path:
+    """一次批量提交扫过所有域，之后只有 MCP 这个域被单独改过。
+
+    三个域各代表一种情况：MCP 有脚本且后来动过、SMK 有脚本但只被批量扫到、
+    NOD 清单里有行但一个脚本都没有（uag-qa 实测有 6 个域是这样）。
+    """
+    work = tmp_path / "waves"
+    work.mkdir()
+    _git(work, "init", "-q", "-b", "qa-main")
+    (work / "docs").mkdir()
+    (work / "docs" / "catalog.md").write_text(
+        "| ID | 场景 | P | R | 层 | 状 |\n"
+        + "".join(f"| MCP-{i:02d} | MCP 场景 {i} | P0 | 6 | api | ✅ |\n" for i in range(1, 4))
+        + "".join(f"| SMK-{i:02d} | 冒烟场景 {i} | P0 | 5 | smoke | ✅ |\n" for i in range(1, 4))
+        + "".join(f"| NOD-{i:02d} | 节点场景 {i} | P1 | 4 | api | ⬜ |\n" for i in range(1, 4))
+    )
+    (work / "api").mkdir()
+    (work / "api" / "mcp.sh").write_text("#!/usr/bin/env bash\n# @scenario MCP-01\n# @tier api\n")
+    (work / "api" / "smoke.sh").write_text("#!/usr/bin/env bash\n# @scenario SMK-01\n# @tier smoke\n")
+    _git(work, "add", "-A")
+    _git_at(work, BULK_AT, "commit", "-q", "-m", "fix(qa): 一次性恢复被移出 git 的用例")
+
+    # 第二波：只动 MCP —— 脚本改了，清单里 MCP 的行也加了一条
+    (work / "api" / "mcp.sh").write_text("#!/usr/bin/env bash\n# @scenario MCP-01 MCP-02\n# @tier api\n")
+    cat = work / "docs" / "catalog.md"
+    cat.write_text(cat.read_text().replace(
+        "| MCP-02 | MCP 场景 2 | P0 | 6 | api | ✅ |",
+        "| MCP-02 | MCP 场景 2（改了措辞） | P0 | 6 | api | ✅ |"))
+    _git(work, "add", "-A")
+    _git_at(work, LATER_AT, "commit", "-q", "-m", "feat(qa): MCP-02 补脚本")
+    return work / ".git"
+
+
+def _domains_of(repo: Path) -> dict:
+    """照 sync_and_read 的走法把活动时间算出来，返回 {域码: 域字典}。"""
+    from app.services.qa_catalog import _repo_activity, parse_case_header, _show, _ls_tree
+    ref = "refs/heads/qa-main"
+    catalog_path = "docs/catalog.md"
+    scen, dom_meta, issues = parse_catalog(_show(repo, ref, catalog_path))
+    cases = []
+    for path in _ls_tree(repo, ref):
+        if path == catalog_path:
+            continue
+        header = parse_case_header(_show(repo, ref, path) or "")
+        if header["ids"]:
+            cases.append({"path": path, **header})
+    activity = _repo_activity(repo, ref, catalog_path)
+    data = _assemble(scen, dom_meta, cases, issues, {"url": "git@x:qa.git"}, activity=activity)
+    return {d["code"]: d for d in data["domains"]}, data
+
+
+def test_domain_script_time_is_that_domains_own_last_commit(qa_repo_two_waves: Path):
+    doms, _ = _domains_of(qa_repo_two_waves)
+    # MCP 后来单独动过 → 拿第二波的时间；SMK 只被批量扫到 → 停在第一波
+    assert doms["MCP"]["scriptUpdatedAt"].startswith("2026-08-29T18:51")
+    assert doms["SMK"]["scriptUpdatedAt"].startswith("2026-08-27T20:42")
+    assert doms["MCP"]["scriptCommit"]["subject"] == "feat(qa): MCP-02 补脚本"
+
+
+def test_bulk_commit_does_not_make_every_domain_look_active(qa_repo_two_waves: Path):
+    """这一条是整个特性的理由：批量提交不许把所有域刷成"最近在做"。
+
+    合并 max 的写法下 SMK 会跟着 MCP 一起亮 —— 页面上 24 个域全标"最近更新"，
+    等于没标。断言的是"两个域的显示值必须不一样"，不是某个具体时间。
+    """
+    doms, _ = _domains_of(qa_repo_two_waves)
+    assert doms["MCP"]["updatedAt"] != doms["SMK"]["updatedAt"]
+    # 而且 SMK 的两侧都还停在批量那一刻（它确实什么都没发生）
+    assert doms["SMK"]["scriptUpdatedAt"][:10] == doms["SMK"]["catalogUpdatedAt"][:10] == "2026-08-27"
+
+
+def test_domain_without_any_script_still_gets_a_time_from_the_catalog(qa_repo_two_waves: Path):
+    """0 脚本的域在脚本侧永远是空的。只给脚本侧的话它一直显示 `—`，
+    「刚立项」和「躺了半年」就分不出来 —— 而这两件事的处置完全相反。"""
+    nod = _domains_of(qa_repo_two_waves)[0]["NOD"]
+    assert nod["covered"] == 0 and nod["scriptUpdatedAt"] is None
+    assert nod["catalogUpdatedAt"].startswith("2026-08-27T20:42")
+    assert nod["updatedFrom"] == "catalog"
+
+
+def test_script_side_wins_when_both_sides_have_a_time(qa_repo_two_waves: Path):
+    """合成值优先脚本侧：有人在写用例才叫"在做这个域"，清单被批量重排扫到不算。"""
+    mcp = _domains_of(qa_repo_two_waves)[0]["MCP"]
+    assert mcp["updatedFrom"] == "script"
+    assert mcp["updatedAt"] == mcp["scriptUpdatedAt"]
+
+
+def test_activity_flags_ride_along_in_summary(qa_repo_two_waves: Path):
+    """「这次算没算成」得跟着数据一起出现在页面上。只在出事时才冒出来的标志，
+    跟"从来没算过"长得一模一样 —— 页面上那两个 0（解析漏读）就是这么定的规矩。"""
+    _, data = _domains_of(qa_repo_two_waves)
+    assert data["summary"]["activityUnavailable"] is False
+    assert data["summary"]["activityTruncated"] is False
+
+
+def test_assemble_without_activity_keeps_working():
+    """时间是加料，不是必需品：git 那趟挂了页面照常出清单和覆盖率。"""
+    data = _assembled()          # 没传 activity
+    d = {x["code"]: x for x in data["domains"]}["SMK"]
+    assert d["updatedAt"] is None and d["updatedFrom"] == ""
+    assert data["summary"]["activityUnavailable"] is False
+
+
+def test_iso_times_compare_by_real_instant_not_string_order():
+    """`%cI` 在 UTC 提交上给 `...Z`、别的时区给 `+08:00`，两家 QA 仓实测各占一种。
+    拿字符串比大小的话 `09:00Z`（= 北京 17:00）会输给 `10:00+08:00`（= 北京 10:00），
+    「谁最近」直接排反 —— 而排反了不报错，页面上只是标错了域。"""
+    from app.services.qa_catalog import _latest
+    commits = {
+        "a": {"sha": "a", "date": "2026-08-29T09:00:00Z", "subject": "晚（北京 17:00）"},
+        "b": {"sha": "b", "date": "2026-08-29T10:00:00+08:00", "subject": "早（北京 10:00）"},
+    }
+    assert _latest(commits, ["a", "b"])["sha"] == "a"
+    assert _latest(commits, []) is None
+    assert _latest(commits, ["没这个 sha"]) is None
