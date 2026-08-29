@@ -114,6 +114,30 @@ def diff_items(before, after, *, before_ledger: dict | None = None,
 # ── 落库 ────────────────────────────────────────────────────────────────
 
 
+async def latest_survey(session, project_id: uuid.UUID, env_id=None):
+    """同项目 + 同环境**最近落库的那一趟**；一趟都没有就是 `None`。
+
+    喂给 `qa_survey_cache.plan_reuse` 判「这次还要不要再爬」的就是它。
+
+    两条写法上的讲究：
+
+    1. **环境必须进 WHERE**，不能"env_id 为空就不筛"。不筛的话，A 环境的爬取
+       会被当成 B 环境的上一趟 —— 而这个值决定的正是「要不要再去爬一趟」，
+       认错环境不是少一次缓存命中那个量级的错。`env_id is None` 也照样是一个
+       独立的口径（没绑环境的那些趟），用 `is_(None)` 精确匹配。
+    2. **不按状态筛。** 「最近一趟是 running / failed」是个**要交给
+       `plan_reuse` 的事实**，不是这里该悄悄跳过的行 —— 跳过它就会翻出更早那趟
+       `done` 来复用，而它前面还压着一趟没跑完的。可复用与否只有一个判官。
+    """
+    cond = (QaPageSurvey.env_id.is_(None) if env_id is None
+            else QaPageSurvey.env_id == env_id)
+    return (await session.execute(
+        select(QaPageSurvey)
+        .where(QaPageSurvey.project_id == project_id, cond)
+        .order_by(QaPageSurvey.started_at.desc())
+        .limit(1))).scalars().first()
+
+
 async def _first_seen_map(session, project_id: uuid.UUID, keys: list[str]) -> dict:
     """这些 key 以前是在哪一趟第一次见到的。没见过的不在字典里。"""
     if not keys:

@@ -13,15 +13,17 @@ Test ID: qa-page-survey-store-IT-001
 封样测试写在被它守护的那份源码旁边时，一句文档就能把它骗过去。真判据是"撞了要炸"。
 """
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
+from app.models.environment import Environment
 from app.models.qa_page_survey import QaPageSurvey, QaPageSurveyItem
 from app.schemas.project import CreateProjectRequest
 from app.services import project_service
-from app.services.qa_page_survey import save_survey
+from app.services.qa_page_survey import latest_survey, save_survey
 from tests.conftest import create_test_user
 
 
@@ -155,3 +157,102 @@ class Test事务边界:
             select(QaPageSurvey).where(QaPageSurvey.id == survey.id))).scalar_one()
         assert got.status == "failed"
         assert got.ledger["shardsFailed"] == ["TimeoutError"]
+
+
+class TestLatestSurvey:
+    """`latest_survey` —— 「上一趟是哪一趟」。
+
+    它是 `plan_reuse` 的**唯一入参来源**，答错的后果不是少命中一次缓存，
+    是**拿另一个环境（或更早一趟）的爬取当成这一轮的结论端出去**。
+    所以这三条必须在真库上验：排序、认环境、不按状态筛。
+    """
+
+    @staticmethod
+    async def _envs(db_session, project_id):
+        """新建项目会自动铺 4 个环境（`project_defaults.py`），取头两个用。"""
+        rows = (await db_session.execute(
+            select(Environment).where(Environment.project_id == project_id)
+            .order_by(Environment.name))).scalars().all()
+        assert len(rows) >= 2, "默认环境没铺出来，这条测试的前提就不成立"
+        return rows[0], rows[1]
+
+    @staticmethod
+    async def _trip(db_session, project_id, env_id, *, status, at, fp=""):
+        s = await save_survey(db_session, project_id=project_id, env_id=env_id,
+                              build_fingerprint=fp, status=status, items=[])
+        s.started_at = at          # 显式压时间：不靠插入顺序，也不靠时钟精度
+        await db_session.commit()
+        return s
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_取最近那一趟_不是最后插进去那一趟(self, db_session):
+        """**故意把更早的那一趟后插入。**
+
+        照插入顺序（或按 id）取的实现在这里才会红 —— 而两种写法在
+        "顺着插" 的数据上给出的答案一模一样，测不出来。
+        """
+        proj = await _project(db_session, "survey-latest")
+        e1, _ = await self._envs(db_session, proj.id)
+        new = await self._trip(db_session, proj.id, e1.id, status="done",
+                               at=datetime(2026, 8, 28, 10, tzinfo=timezone.utc), fp="新")
+        await self._trip(db_session, proj.id, e1.id, status="done",
+                         at=datetime(2026, 8, 20, 10, tzinfo=timezone.utc), fp="旧")
+
+        got = await latest_survey(db_session, proj.id, e1.id)
+        assert got is not None and got.id == new.id and got.build_fingerprint == "新"
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_别的环境那一趟不算这个环境的上一趟(self, db_session):
+        """它爬的是**别人的测试环境**。认错环境 ⇒ 把 A 环境的爬取当成 B 环境的结论，
+        而页面上两者长得一模一样。"""
+        proj = await _project(db_session, "survey-env-scope")
+        e1, e2 = await self._envs(db_session, proj.id)
+        await self._trip(db_session, proj.id, e2.id, status="done",
+                         at=datetime(2026, 8, 28, 10, tzinfo=timezone.utc), fp="别的环境")
+        mine = await self._trip(db_session, proj.id, e1.id, status="done",
+                                at=datetime(2026, 8, 20, 10, tzinfo=timezone.utc), fp="我的")
+
+        got = await latest_survey(db_session, proj.id, e1.id)
+        assert got.id == mine.id      # 时间更早，但环境对得上
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_没绑环境的那些趟是独立的一档(self, db_session):
+        """`env_id is None` 不是"不筛"，是一个自己的口径。
+        当成通配的话，没绑环境的一趟会冒充任何一个环境的上一趟。"""
+        proj = await _project(db_session, "survey-env-null")
+        e1, _ = await self._envs(db_session, proj.id)
+        await self._trip(db_session, proj.id, e1.id, status="done",
+                         at=datetime(2026, 8, 28, 10, tzinfo=timezone.utc), fp="绑了环境")
+        naked = await self._trip(db_session, proj.id, None, status="done",
+                                 at=datetime(2026, 8, 20, 10, tzinfo=timezone.utc), fp="没绑")
+
+        assert (await latest_survey(db_session, proj.id, None)).id == naked.id
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_最近一趟是failed也照样返回它(self, db_session):
+        """**不在这里按状态筛。**
+
+        跳过 failed 去翻出更早那趟 `done`，就等于"上一趟没跑成"这件事从没发生过 ——
+        而它前面还压着一趟没跑完的。可复用与否只有一个判官（`plan_reuse`），
+        这里只负责把事实原样交上去。
+        """
+        proj = await _project(db_session, "survey-failed-latest")
+        e1, _ = await self._envs(db_session, proj.id)
+        await self._trip(db_session, proj.id, e1.id, status="done",
+                         at=datetime(2026, 8, 20, 10, tzinfo=timezone.utc), fp="好的那趟")
+        bad = await self._trip(db_session, proj.id, e1.id, status="failed",
+                               at=datetime(2026, 8, 28, 10, tzinfo=timezone.utc), fp="挂了那趟")
+
+        got = await latest_survey(db_session, proj.id, e1.id)
+        assert got.id == bad.id and got.status == "failed"
+
+    @pytest.mark.integration
+    @pytest.mark.asyncio
+    async def test_一趟都没有就是None(self, db_session):
+        proj = await _project(db_session, "survey-none")
+        e1, _ = await self._envs(db_session, proj.id)
+        assert await latest_survey(db_session, proj.id, e1.id) is None

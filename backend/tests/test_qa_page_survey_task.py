@@ -117,3 +117,188 @@ class Test没开爬:
         assert "没配 BASE_URL" in 记状态[-1]["message"]
         # 没爬起来就没有"存不下来"这回事
         assert "persisted" not in r
+
+
+# ── 复用判断（S7.8 / 架构 AD-8）────────────────────────────────────────────
+#
+# 这一层唯一的新活儿是**要不要真的去爬**。判据全在 `qa_survey_cache`（纯函数、
+# 单独一份测试钉着），所以这里钉的是另外三件它管不到的事：
+#   ① 说"复用"的时候，那趟爬取**真的没发生**（省下来的就是这一趟）；
+#   ② 复用的产物里没有一个凭空捏的数（`itemCount: 0` 那种）；
+#   ③ 查库失败时说的是**我们自己那句话**，不是 `plan_reuse` 的「没有上一趟」。
+
+FP = "build-2026-08-29"
+
+
+@pytest.fixture
+def 数爬取(monkeypatch):
+    """跟 `假爬取` 一样，但**数一下到底爬没爬**。
+
+    复用那条路径的全部价值就是"这一趟没发生"，而它跟"爬了但结果一样"在返回值上
+    分不出来 —— 只有计数分得出来。
+    """
+    from app.engine.surveys import qa_page_survey_crawl as c
+    box = {"calls": 0, "payload": _payload()}
+
+    async def fake(**kw):
+        box["calls"] += 1
+        return box["payload"]
+
+    monkeypatch.setattr(c, "run_survey", fake)
+    return box
+
+
+@pytest.fixture
+def 假上一趟(monkeypatch):
+    """替掉查库那一步。默认查得到、可复用、三格都没变。"""
+    box = {"raise": None, "prev": None, "calls": []}
+
+    async def fake(*, project_id, env_id, qa_commit_sha):
+        box["calls"].append({"projectId": str(project_id), "envId": str(env_id),
+                             "qaCommitSha": qa_commit_sha})
+        if box["raise"] is not None:
+            raise box["raise"]
+        return box["prev"]
+
+    monkeypatch.setattr(t, "_previous", fake)
+    return box
+
+
+def _prev(pid, eid, *, status="done", fp=FP, rt="rt-1", sha="sha-1"):
+    return {"surveyId": "s-9", "status": status, "crawledAt": "2026-08-28 10:00:00",
+            "projectId": str(pid), "envId": str(eid), "buildFingerprint": fp,
+            "routeTableHash": rt, "qaCommitSha": sha}
+
+
+async def _run(pid, eid, **kw):
+    kw.setdefault("build_fingerprint", FP)
+    kw.setdefault("route_table_hash", "rt-1")
+    kw.setdefault("qa_commit_sha", "sha-1")
+    return await t.run_page_survey({}, "task-1", str(pid), ["admin"], ["/svc"],
+                                   env_id=str(eid), **kw)
+
+
+class Test能复用就别去爬:
+    async def test_复用那一轮一次都没爬(self, 记状态, 数爬取, 假落库, 假上一趟):
+        pid, eid = uuid.uuid4(), uuid.uuid4()
+        假上一趟["prev"] = _prev(pid, eid)
+        r = await _run(pid, eid)
+        assert r["action"] == "reuse"
+        assert 数爬取["calls"] == 0            # ← 省下来的就是这一趟
+        assert r["surveyId"] == "s-9"          # 上一趟那个，不是这一轮落库的
+
+    async def test_复用的结论必须写明是哪一趟(self, 记状态, 数爬取, 假落库, 假上一趟):
+        """「已复用缓存」四个字等于没说 —— 看的人无从判断它是几天前的。
+
+        出处必须和结论在**同一句话**里：拆成两个字段，页面上迟早只渲染前半句。
+        """
+        pid, eid = uuid.uuid4(), uuid.uuid4()
+        假上一趟["prev"] = _prev(pid, eid)
+        r = await _run(pid, eid)
+        note = r["cacheNote"]
+        assert "s-9" in note and "2026-08-28" in note and FP in note
+        assert 记状态[-1]["message"] == note   # 页面上看到的就是这一句
+
+    async def test_复用一趟partial不许渲染成爬全了(self, 记状态, 数爬取, 假落库, 假上一趟):
+        """终态照抄被复用那一趟的。写死 `done` 的话，一趟少了几页的爬取
+        复用之后跟整站爬完长得一模一样，缺的那些页面就此消失。"""
+        pid, eid = uuid.uuid4(), uuid.uuid4()
+        假上一趟["prev"] = _prev(pid, eid, status="partial")
+        r = await _run(pid, eid)
+        assert r["status"] == "partial" and 记状态[-1]["status"] == "partial"
+        assert "partial" in 记状态[-1]["message"]
+
+    async def test_复用那一轮不许给出任何一个没数过的数(self, 记状态, 数爬取, 假落库,
+                                                        假上一趟):
+        """这一轮没有去数控件。给个 `itemCount: 0` 就是把「没观测」渲染成
+        「观测到 0」—— CLAUDE.md 里那条「新增字段在旧后端上渲染成假的 0」的自造版。
+        让下游 KeyError，比让它画一个 0 好查。
+        """
+        pid, eid = uuid.uuid4(), uuid.uuid4()
+        假上一趟["prev"] = _prev(pid, eid)
+        r = await _run(pid, eid)
+        assert "itemCount" not in r and "items" not in r and "ledger" not in r
+
+    async def test_只重算也不用去爬(self, 记状态, 数爬取, 假落库, 假上一趟):
+        """QA 仓 commit 变了 ⇒ 只重算 Q 侧。**AD-8 想省的就是这个。**"""
+        pid, eid = uuid.uuid4(), uuid.uuid4()
+        假上一趟["prev"] = _prev(pid, eid, sha="老的")
+        r = await _run(pid, eid)
+        assert r["action"] == "recompute" and r["recompute"] == ["qaCatalog"]
+        assert 数爬取["calls"] == 0
+
+    async def test_查上一趟得带着项目和环境去查(self, 记状态, 数爬取, 假落库, 假上一趟):
+        """查错环境不是"少一次缓存命中"那个量级的错 —— 它爬的是别人的测试环境。"""
+        pid, eid = uuid.uuid4(), uuid.uuid4()
+        假上一趟["prev"] = _prev(pid, eid)
+        await _run(pid, eid)
+        assert 假上一趟["calls"] == [{"projectId": str(pid), "envId": str(eid),
+                                      "qaCommitSha": "sha-1"}]
+
+
+class Test该爬的时候一定去爬:
+    async def test_指纹变了就真去爬(self, 记状态, 数爬取, 假落库, 假上一趟):
+        pid, eid = uuid.uuid4(), uuid.uuid4()
+        假上一趟["prev"] = _prev(pid, eid, fp="上一版")
+        r = await _run(pid, eid)
+        assert 数爬取["calls"] == 1
+        assert r["provenance"]["source"] == "freshCrawl"
+        assert r["surveyId"] == str(假落库["id"])
+
+    async def test_重爬那一轮也带出处_只是空的(self, 记状态, 数爬取, 假落库, 假上一趟):
+        """只在复用时才出现的出处，跟"没记过出处"长得一模一样。"""
+        pid, eid = uuid.uuid4(), uuid.uuid4()
+        假上一趟["prev"] = _prev(pid, eid, fp="上一版")
+        r = await _run(pid, eid)
+        assert set(r["provenance"]) == {"source", "surveyId", "crawledAt",
+                                        "buildFingerprint", "surveyStatus"}
+        assert r["provenance"]["surveyId"] == ""
+
+    async def test_没有构建指纹就不去翻库(self, 记状态, 数爬取, 假落库, 假上一趟):
+        """算不出身份的那一轮，`plan_reuse` 第一支就判重爬、`previous` 根本不看,
+        所以那趟库可以不查。
+
+        ⚠ 但**理由仍然得是 `plan_reuse` 说的那句**：任务层要是自己编一句
+        「没指纹，重爬」，就出现了第二个判官 —— 两边口径哪天分叉，
+        页面上会显示一个跟实际行为对不上的原因。
+        """
+        pid, eid = uuid.uuid4(), uuid.uuid4()
+        r = await _run(pid, eid, build_fingerprint="")
+        assert 假上一趟["calls"] == []
+        assert 数爬取["calls"] == 1
+        assert "身份" in r["cacheNote"]
+
+    async def test_查不着上一趟_按重爬走但这句话得自己说(self, 记状态, 数爬取, 假落库,
+                                                          假上一趟):
+        """**这一条是这个文件里最要紧的。**
+
+        查库炸了的时候把 `{}` 喂给 `plan_reuse`，它会答「没有上一趟：首次必须整站」
+        —— 一句我们**并没有验证过**的话。上一趟很可能好端端在库里，只是这一下没读到。
+        行为上两者都是重爬（对的方向），差别全在**页面上写的那句话**：
+        一句是事实，另一句是我们编的。这正是这个模块存在的意义要抓的那类错。
+        """
+        pid, eid = uuid.uuid4(), uuid.uuid4()
+        假上一趟["raise"] = RuntimeError("connection reset")
+        r = await _run(pid, eid)
+        assert 数爬取["calls"] == 1            # 拿不准 ⇒ 重爬，代价看得见
+        assert "没能查到上一趟" in r["cacheNote"]
+        assert "首次" not in r["cacheNote"]    # ← 绝不许借那句话
+        assert r["provenance"]["source"] == "freshCrawl"
+
+    async def test_查库炸了必须抛出来_不许在这一层吞成空(self, monkeypatch):
+        """上一条成立的**前提**：`_previous` 自己不吞异常。
+
+        吞了的话「库里确实没有上一趟」和「查这一下失败了」会长成同一个 `{}`，
+        而 `plan_reuse` 拿到 `{}` 说的正是那句「没有上一趟：首次必须整站」——
+        于是上一条测试照样绿，谎话却已经说出去了。
+        （上面那条测的是任务层怎么处理这个异常，这条测的是异常真的到得了任务层。）
+        """
+        from app.deps import db as dbmod
+
+        def boom(*a, **kw):
+            raise RuntimeError("pool exhausted")
+
+        monkeypatch.setattr(dbmod, "async_session_factory", boom)
+        with pytest.raises(RuntimeError):
+            await t._previous(project_id=str(uuid.uuid4()), env_id=None,
+                              qa_commit_sha="sha-1")
