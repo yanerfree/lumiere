@@ -762,20 +762,30 @@ class TestBatching:
         （否则下一份就该塞进来了）。所以 B 批需要总量
         > (B-1) × (BATCH_SCRIPT_BYTES - MAX_SCRIPT_BYTES)，
         而总量被 TOTAL_SCRIPT_BYTES 钉住 ⇒ 撞到 MAX_BATCHES 需要
-        (MAX_BATCHES-1) × 72_000 = 504_000 字节，预算只有 480_000 ⇒ **够不着**。
+        (MAX_BATCHES-1) × 58_000 = 870_000 字节，预算只有 720_000 ⇒ **够不着**。
 
-        今天不丢靠的就是这个 24_000 字节的余量，而**没有任何东西写着这件事**。
-        谁把 TOTAL_SCRIPT_BYTES 调过 504_000 而没动 MAX_BATCHES，
+        今天不丢靠的就是这个 150_000 字节的余量，而**没有任何东西写着这件事**。
+        谁把 TOTAL_SCRIPT_BYTES 调过 870_000 而没动 MAX_BATCHES，
         静默丢当场开始 —— 现在这条会先替他红一次。
-        （MCP 域脚本数已从 47 长到 49，调大预算不是假想的改动。）
+
+        **它已经替我红过一次了。** 2026-08-29 复量发现 MCP 域涨到 63 份 / 576KB，
+        把 TOTAL 从 480_000 提到 720_000、单份上限从 18_000 提到 32_000 之后，
+        旧的 MAX_BATCHES=8 立刻不满足（7 × 58_000 = 406_000 < 720_000），
+        这条**和 test_take_scripts_能产出的任何输入都一份不丢 一起**当场红
+        —— MAX_BATCHES 才跟着提到 16。回填之后我又把 16 改回 8 复验过一次，
+        确认红的就是这两条（常量版证明 + 真实输入版证明各一条，不是同一句话说两遍）。
+        「调大预算不是假想的改动」那句话原来写在这里当预言，两天后就兑现了。
         """
         assert (qr.MAX_BATCHES - 1) * (qr.BATCH_SCRIPT_BYTES - qr.MAX_SCRIPT_BYTES) \
             >= qr.TOTAL_SCRIPT_BYTES
 
     def test_单份上限装得下实测最大的脚本(self):
-        # 2026-08-27 量过 uag-qa 109 份：中位数 5.3KB、p90 11.6KB、最大 17.7KB。
+        # 2026-08-29 复量 uag-qa 149 份：中位 6.9KB、p90 11.4KB、**最大 22941 字节**。
+        # （2026-08-27 那次是 109 份 / 最大 17.7KB —— 两天涨了一档，见常量块注释。）
+        # 下限写精确字节不写 22_400：那个数放过最大那份只差 541 字节。
         # 这个数掉回 6000 的话，全仓一半的脚本会被截 —— 而截断的不下结论。
-        assert qr.MAX_SCRIPT_BYTES >= 18_000
+        # 复量：cd backend && .venv/bin/python scripts/qa_review_remeasure.py
+        assert qr.MAX_SCRIPT_BYTES >= 22_941
 
     def test_合批取最坏的结论(self):
         merged = qr.merge_results([
