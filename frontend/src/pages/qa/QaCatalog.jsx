@@ -87,6 +87,31 @@ function Rich({ text }) {
   })
 }
 
+// 截到 n 行，多的省略。行高必须固定 —— 这一页的场景说明能有 500 字，
+// 一行铺开就是 200px+，20 行等于几千像素，翻页和对照全废了。
+// 一行文字 21px，两行 42px —— 场景列固定占这么高，行高才齐得住
+const CELL_H = 42
+
+const clampTo = n => ({
+  display: '-webkit-box', WebkitLineClamp: n, WebkitBoxOrient: 'vertical',
+  overflow: 'hidden', wordBreak: 'break-word',
+})
+
+/** ISO8601 → 「3 天前」。看这一列是为了找"多久没动过"，绝对时刻放 Tooltip 里 */
+function relTime(iso) {
+  if (!iso) return null
+  const mins = Math.round((Date.now() - new Date(iso).getTime()) / 60000)
+  if (!Number.isFinite(mins)) return null
+  if (mins < 1) return '刚刚'
+  if (mins < 60) return `${mins} 分钟前`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours} 小时前`
+  const days = Math.round(hours / 24)
+  if (days < 30) return `${days} 天前`
+  const months = Math.round(days / 30)
+  return months < 12 ? `${months} 个月前` : `${Math.round(months / 12)} 年前`
+}
+
 function Panel({ title, extra, children, tone }) {
   const border = tone === 'bad' ? 'rgba(232,69,60,0.35)' : tone === 'warn' ? 'rgba(255,125,0,0.35)' : undefined
   return (
@@ -445,14 +470,20 @@ export default function QaCatalog() {
       ),
     },
     {
+      // 行高必须**固定**，不是"最多两行"。备注最长 889 字，不截的话单行能到 200px+，
+      // 一屏放不下两条，「哪些域缺得多」这种对照着看的事就做不了了。
+      // 只封顶还不够：一行的标题 39px、两行的 59px，列表照样是锯齿状的，
+      // 眼睛要跨行横着对「状态」和「更新时间」时，每行错开 20px 就得重新找一次。
+      // 所以这里给死 CELL_H（正好两行），有备注就让备注占掉其中一行。
+      // 全文走悬浮 —— 不是把信息删掉，是把它挪到需要时再看。
       title: '场景（这条要证明什么）', dataIndex: 'title',
       render: (v, r) => {
         // 「已废弃」「@known-bug GL#530」这类备注在别的列已经写着了，别重复占地方
         const note = r.stateNote && !/^@known-bug/.test(r.stateNote) && r.stateNote !== '已废弃'
           ? r.stateNote : null
-        return (
-          <div>
-            <div style={{ lineHeight: 1.6 }}>
+        const body = (
+          <div style={{ height: CELL_H, overflow: 'hidden' }}>
+            <div style={{ lineHeight: 1.6, ...clampTo(note ? 1 : 2) }}>
               <Rich text={v} />
               {r.claimedButUncovered && (
                 <Tooltip title="清单标了 ✅ 但仓库里没有任何脚本声明这个 ID —— QA 自己的 check-coverage.sh 管这叫「抓清单说谎」，会 BLOCK">
@@ -460,8 +491,32 @@ export default function QaCatalog() {
                 </Tooltip>
               )}
             </div>
-            {note && <div style={{ fontSize: 11, color: C.gray, marginTop: 2 }}>{note}</div>}
+            {note && (
+              <div style={{ fontSize: 11, color: C.gray, marginTop: 2, lineHeight: 1.5, ...clampTo(1) }}>
+                <Rich text={note} />
+              </div>
+            )}
           </div>
+        )
+        // 短到没截断的行没必要挂浮层：悬浮弹一个和原文一模一样的框只是噪音
+        const long = (v || '').length > 46 || note
+        if (!long) return body
+        return (
+          <Popover
+            placement="topLeft" title={`${r.id} 全文`}
+            content={
+              <div style={{ maxWidth: 660, maxHeight: 460, overflow: 'auto', lineHeight: 1.7, fontSize: 13 }}>
+                <Rich text={v} />
+                {note && (
+                  <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px solid ${C.line}`, fontSize: 12, color: C.gray }}>
+                    <Rich text={note} />
+                  </div>
+                )}
+              </div>
+            }
+          >
+            <div style={{ cursor: 'help' }}>{body}</div>
+          </Popover>
         )
       },
     },
@@ -512,24 +567,78 @@ export default function QaCatalog() {
     },
     {
       title: '覆盖脚本', dataIndex: 'scripts', width: 240,
-      render: (list) => !list?.length ? <span style={{ color: C.faint }}>—</span> : (
-        <Space direction="vertical" size={2} style={{ width: '100%' }}>
-          {list.map(s => (
-            <Tooltip key={s.path} title={`${s.path}（点开看内容）`}>
-              <span
-                onClick={() => openFile(s.path)}
-                style={{
-                  fontSize: 12, fontFamily: 'var(--font-mono)', cursor: 'pointer',
-                  color: s.primary ? C.teal : C.gray, textDecoration: 'underline dotted',
-                }}
+      // 平铺最多 2 条 —— 再多就把这一行撑得比场景列还高，行高又不齐了。
+      // 现网最多的一条有 3 个脚本，第 3 条收进「+N」的悬浮里，不是丢掉。
+      render: (list) => {
+        if (!list?.length) return <span style={{ color: C.faint }}>—</span>
+        const link = s => (
+          <span
+            onClick={() => openFile(s.path)}
+            style={{
+              fontSize: 12, fontFamily: 'var(--font-mono)', cursor: 'pointer', display: 'block',
+              color: s.primary ? C.teal : C.gray, textDecoration: 'underline dotted',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}
+          >
+            <FileTextOutlined style={{ marginRight: 4, color: C.faint }} />
+            {s.path.split('/').pop()}
+          </span>
+        )
+        // 两行是硬预算：2 条正好铺满；超过 2 条就只铺 1 条，第二行让给「+N 个」，
+        // 否则「+N」自己被 overflow 切掉 —— 那就成了「悄悄少显示几个脚本」，比截断更坏
+        const shown = list.length > 2 ? list.slice(0, 1) : list
+        const rest = list.slice(shown.length)
+        return (
+          <div style={{ maxHeight: CELL_H, overflow: 'hidden' }}>
+            {shown.map(s => (
+              <Tooltip key={s.path} title={`${s.path}（点开看内容）`}>{link(s)}</Tooltip>
+            ))}
+            {rest.length > 0 && (
+              <Popover
+                placement="topRight" title="还有这些脚本覆盖了它"
+                content={<div style={{ minWidth: 200 }}>{rest.map(s => (
+                  <div key={s.path} style={{ marginBottom: 2 }}>{link(s)}</div>
+                ))}</div>}
               >
-                <FileTextOutlined style={{ marginRight: 4, color: C.faint }} />
-                {s.path.split('/').pop()}
-              </span>
-            </Tooltip>
-          ))}
-        </Space>
+                <span style={{ fontSize: 11, color: C.faint, cursor: 'pointer' }}>+{rest.length} 个</span>
+              </Popover>
+            )}
+          </div>
+        )
+      },
+    },
+    {
+      title: (
+        <Tooltip title="清单行和覆盖脚本，两边取更晚的那次改动。待补的场景没有脚本，看的就是这条需求是什么时候写进清单的">
+          <span>更新时间 <InfoCircleOutlined style={{ fontSize: 11, color: C.faint }} /></span>
+        </Tooltip>
       ),
+      dataIndex: 'updatedAt', width: 116, key: 'updatedAt',
+      sorter: (a, b) => (a.updatedAt || '').localeCompare(b.updatedAt || ''),
+      sortOrder: sortOrderOf('updatedAt'),
+      render: (v, r) => {
+        if (!v) return <span style={{ color: C.faint }}>—</span>
+        // 两个分量分开显示：「脚本三个月没动、清单昨天刚改」和「两边一起改的」
+        // 是两回事，只给一个合成值就分不出来了
+        const rows = [
+          ['清单行', r.rowUpdatedAt],
+          ['覆盖脚本', r.scriptUpdatedAt],
+        ].filter(([, t]) => t)
+        return (
+          <Tooltip title={
+            <div style={{ fontSize: 12 }}>
+              {rows.map(([k, t]) => (
+                <div key={k}>{k}：{new Date(t).toLocaleString('zh-CN')}</div>
+              ))}
+              {!r.scriptUpdatedAt && <div style={{ opacity: 0.75, marginTop: 4 }}>还没有脚本</div>}
+            </div>
+          }>
+            <span style={{ fontSize: 12, color: C.gray, whiteSpace: 'nowrap', cursor: 'help' }}>
+              {relTime(v)}
+            </span>
+          </Tooltip>
+        )
+      },
     },
     {
       title: '已知缺陷', dataIndex: 'knownBugs', width: 210,
@@ -945,7 +1054,7 @@ export default function QaCatalog() {
           // 分页器被推到十几屏之外，翻页得先滚半天。
           // 表体自己滚（表头跟着固定），整页高度才可预期。写法跟用例管理页保持一致，
           // 不写死 px：小屏会被撑爆，大屏又白白浪费。
-          scroll={{ x: 1180, y: 'calc(100vh - 300px)' }}
+          scroll={{ x: 1300, y: 'calc(100vh - 300px)' }}
           onChange={(_p, _f, s) => setSorter({ columnKey: s?.columnKey, order: s?.order })}
           pagination={{
             current: page, pageSize, showSizeChanger: true, showTotal: t => `共 ${t} 条`,

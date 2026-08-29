@@ -315,6 +315,80 @@ def _grep(repo: Path, ref: str, args: list[str], pathspec: list[str] | None = No
     return [line for line in out.splitlines() if line]
 
 
+def _file_mtimes(repo: Path, ref: str) -> dict[str, str]:
+    """每个文件最后一次被改动的提交时间（ISO8601）。
+
+    一次 `git log --name-only` 扫完整段历史，**不是每个文件打一次 git** ——
+    QA 仓 171 个脚本，逐个 `log -1 -- <path>` 就是 171 次进程启动；
+    全量一次实测 16ms（252 个提交）。
+    历史是从新往旧走的，所以**第一次见到某个路径就是它的最后改动**，见过的别再覆盖。
+    """
+    try:
+        out = _run_git(["--git-dir", str(repo), "log", "--format=@@%cI", "--name-only", ref])
+    except GitError:
+        return {}
+    result: dict[str, str] = {}
+    when = ""
+    for line in out.splitlines():
+        if line.startswith("@@"):
+            when = line[2:]
+        elif line and when and line not in result:
+            result[line] = when
+    return result
+
+
+def _catalog_row_mtimes(repo: Path, ref: str, catalog_path: str) -> dict[str, str]:
+    """清单里每条场景行最后一次被改动的提交时间。
+
+    为什么不能只看脚本时间：**待补的场景一个脚本都没有**，只看脚本它们全是空的，
+    而「这条待补项是上周才提的，还是躺了三个月」恰恰是最该看见的。
+    做法是一次 `git log -p -U0` 拉清单文件的逐行 diff（实测 36ms / 757KB），
+    从新往旧扫，`+| ID |` 第一次出现的那次提交就是这行的最后改动。
+
+    只认 `+` 行：`-` 行是被换掉的旧内容，拿它当"更新"会把**删除**记成**修改**。
+    `@@ ` 开头的是 diff 的 hunk 头（`@@ -966 +966 @@`），和我们自己的提交时间行
+    （`@@2026-…`，故意不带空格）靠这个空格区分 —— 认错了整段时间会全串位。
+    """
+    try:
+        out = _run_git([
+            "--git-dir", str(repo), "log", "--format=@@%cI", "-p", "-U0", "--no-color",
+            ref, "--", catalog_path,
+        ])
+    except GitError:
+        return {}
+    result: dict[str, str] = {}
+    when = ""
+    for line in out.splitlines():
+        if line.startswith("@@ "):
+            continue
+        if line.startswith("@@"):
+            when = line[2:]
+            continue
+        # `+++ b/docs/…` 也是 `+` 开头，要求紧跟 `|` 才算表格行
+        if not when or not line.startswith("+|"):
+            continue
+        sid = _first_cell(line[1:])
+        if _ID_RE.fullmatch(sid) and sid not in result:
+            result[sid] = when
+    return result
+
+
+def _latest(*stamps: str | None) -> str | None:
+    """取最晚的一个 ISO8601 时间戳。
+
+    按 datetime 比而不是按字符串比 —— 同一个仓库里混着 `+08:00` 和 `Z` 两种写法时，
+    两种序会给出**相反**的答案：`2026-08-29T01:00:00+08:00`（= 08-28T17:00Z）
+    按字符串排在 `2026-08-28T20:00:00Z` 后面，可它其实早 3 小时。
+    """
+    vals = [s for s in stamps if s]
+    if not vals:
+        return None
+    try:
+        return max(vals, key=datetime.fromisoformat)
+    except ValueError:
+        return max(vals)
+
+
 def detect_catalog_path(repo: Path, ref: str) -> str:
     """没配清单路径时自己找：仓库里场景行最多的那份 markdown。
 
@@ -494,6 +568,12 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
             continue  # 没声明 ID 的文件不是用例（支持库/夹具）
         cases.append({"path": path, **header})
 
+    # 「更新时间」两个来源：清单行改动 + 覆盖脚本改动。各一次 git log 扫完，不按行/按文件循环。
+    mtimes = {
+        "files": _file_mtimes(repo, ref),
+        "rows": _catalog_row_mtimes(repo, ref, catalog_path),
+    }
+
     return _assemble(scenarios, domain_names, cases, catalog_issues, {
         "url": url,
         "branch": branch_name,
@@ -507,11 +587,11 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
         "commitSubject": commit_subject,
         "fetchedAt": _last_fetch_at(repo),
         "caseFiles": len(files),
-    })
+    }, mtimes=mtimes)
 
 
 def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[dict],
-              catalog_issues: dict, repo_meta: dict) -> dict:
+              catalog_issues: dict, repo_meta: dict, mtimes: dict | None = None) -> dict:
     by_id = {s["id"]: s for s in scenarios}
     for s in scenarios:
         s["scripts"] = []
@@ -541,6 +621,17 @@ def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[d
     # 清单说 ✅ 但没有任何脚本声明它 —— QA 仓的 check-coverage.sh 管这叫「抓清单说谎」
     for s in scenarios:
         s["claimedButUncovered"] = s["state"] == "covered" and not s["scripts"]
+
+    # 更新时间：清单行和覆盖脚本取更晚的那次改动，两个分量也一起带出去 ——
+    # 「脚本三个月没动、清单昨天刚改」和「两边一起改的」是两回事，合成一个数就看不出来了。
+    file_mtimes = (mtimes or {}).get("files") or {}
+    row_mtimes = (mtimes or {}).get("rows") or {}
+    for s in scenarios:
+        row_at = row_mtimes.get(s["id"])
+        script_at = _latest(*(file_mtimes.get(x["path"]) for x in s["scripts"]))
+        s["rowUpdatedAt"] = row_at
+        s["scriptUpdatedAt"] = script_at
+        s["updatedAt"] = _latest(row_at, script_at)
 
     total = len([s for s in scenarios if s["state"] != "deprecated"])
     covered = len([s for s in scenarios if s["state"] == "covered"])

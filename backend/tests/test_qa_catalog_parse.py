@@ -3,6 +3,7 @@
 数据取自真实的 uag-qa 仓（357 行清单 / 84 个用例文件）里的代表性片段：
 多 ID 声明、`//` 与 `#` 两种注释、状态列挂 `@known-bug`、已废弃行。
 """
+import os
 import re
 import subprocess
 import time
@@ -13,6 +14,9 @@ import pytest
 from app.services.git_service import GitError, ensure_bare_repo, fetch_origin
 from app.services.qa_catalog import (
     _assemble,
+    _catalog_row_mtimes,
+    _file_mtimes,
+    _latest,
     _glob_to_re,
     _last_fetch_at,
     _match_globs,
@@ -627,3 +631,93 @@ class Test域码表第三列:
     def test_没有域码表时映射是空的不是猜的(self):
         from app.services.qa_catalog import domain_index
         assert domain_index({}) == {}
+
+
+# ---- 更新时间：清单行 / 覆盖脚本各自的最后改动 ----
+
+
+def _commit_at(repo: Path, when: str) -> None:
+    """在指定时刻提交。%cI 取的是 committer date，只能靠环境变量定。"""
+    subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True, capture_output=True)
+    env = {**os.environ, "GIT_COMMITTER_DATE": when, "GIT_AUTHOR_DATE": when}
+    out = subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+         "commit", "-q", "-m", when],
+        cwd=str(repo), env=env, capture_output=True, text=True,
+    )
+    assert out.returncode == 0, out.stderr
+
+
+def test_file_mtimes_takes_the_last_change_not_the_first(qa_repo: Path):
+    work = qa_repo.parent
+    (work / "api" / "smoke.sh").write_text("#!/usr/bin/env bash\n# @scenario SMK-01 SMK-02\n# 改了一行\n")
+    _commit_at(work, "2026-08-20T10:00:00+08:00")
+
+    mt = _file_mtimes(qa_repo, "qa-main")
+    # 历史是从新往旧扫的，第一次见到某个路径才是它的最后改动 —— 别被更早的提交覆盖掉
+    assert mt["api/smoke.sh"].startswith("2026-08-20T10:00:00")
+    # 没跟着改的文件停在它自己那次
+    assert not mt["ui/login.spec.ts"].startswith("2026-08-20")
+
+
+def test_catalog_row_mtimes_are_per_row(qa_repo: Path):
+    work = qa_repo.parent
+    cat = work / "docs" / "catalog.md"
+    cat.write_text(cat.read_text().replace("| SMK-03 | 场景 3 |", "| SMK-03 | 场景 3 改过 |"))
+    _commit_at(work, "2026-08-25T09:00:00+08:00")
+
+    rows = _catalog_row_mtimes(qa_repo, "qa-main", "docs/catalog.md")
+    assert rows["SMK-03"].startswith("2026-08-25T09:00:00")
+    # 同一份文件里没被碰过的行不能跟着变新，否则「多久没动过」整列都是最后一次提交时间
+    assert not rows["SMK-04"].startswith("2026-08-25")
+    assert len(rows) == 10
+
+
+def test_catalog_row_mtimes_ignores_deletions(qa_repo: Path):
+    """删掉一行不算「更新」—— diff 的 `-` 行不能记成改动，否则删除会把它复活成最近更新。"""
+    work = qa_repo.parent
+    cat = work / "docs" / "catalog.md"
+    cat.write_text("".join(l + "\n" for l in cat.read_text().splitlines() if "SMK-07" not in l))
+    _commit_at(work, "2026-08-26T09:00:00+08:00")
+
+    rows = _catalog_row_mtimes(qa_repo, "qa-main", "docs/catalog.md")
+    assert not rows.get("SMK-07", "").startswith("2026-08-26")
+
+
+def test_catalog_row_mtimes_survives_a_row_that_looks_like_a_hunk_header(qa_repo: Path):
+    """diff 的 hunk 头是 `@@ -3 +3 @@`，我们自己的时间行是 `@@2026-…`（故意不带空格）。
+    认错一个，从那儿往下的时间会整段串位。"""
+    work = qa_repo.parent
+    cat = work / "docs" / "catalog.md"
+    cat.write_text(cat.read_text() + "| SMK-11 | @@ 看着像 hunk 头 | P1 | 3 | api | ⬜ |\n")
+    _commit_at(work, "2026-08-27T09:00:00+08:00")
+
+    rows = _catalog_row_mtimes(qa_repo, "qa-main", "docs/catalog.md")
+    assert rows["SMK-11"].startswith("2026-08-27T09:00:00")
+    assert not rows["SMK-01"].startswith("2026-08-27")   # 早先那次，没被串掉
+
+
+def test_latest_compares_instants_not_strings():
+    # 这一对上，字符串序和真实先后是**反的**：+08:00 那个字符串更大，实际却早 3 小时
+    assert _latest("2026-08-29T01:00:00+08:00", "2026-08-28T20:00:00Z") == "2026-08-28T20:00:00Z"
+    assert _latest(None, "2026-08-01T00:00:00+08:00") == "2026-08-01T00:00:00+08:00"
+    assert _latest(None, None) is None
+
+
+def test_assemble_merges_row_and_script_times():
+    # 用真清单解析出来的场景，别自己捏半份 dict —— 捏漏字段测的就不是同一个东西了
+    scen, domains, issues = parse_catalog(CATALOG)
+    cases = [{"path": "api/smk/health.sh", "ids": ["SMK-01"], "tier": "smoke", "knownBugs": []}]
+    data = _assemble(scen, domains, cases, issues, {"url": "git@x:qa.git", "branch": "main"}, mtimes={
+        "files": {"api/smk/health.sh": "2026-08-20T10:00:00+08:00"},
+        "rows": {"SMK-01": "2026-08-10T10:00:00+08:00", "MCP-38": "2026-08-15T10:00:00+08:00"},
+    })
+    by_id = {s["id"]: s for s in data["scenarios"]}
+    # 两边都有就取更晚的那个（这里是脚本）
+    assert by_id["SMK-01"]["updatedAt"] == "2026-08-20T10:00:00+08:00"
+    assert by_id["SMK-01"]["rowUpdatedAt"] == "2026-08-10T10:00:00+08:00"
+    # 没有脚本的场景也必须有时间，否则那 184 条待补的在「更新时间」列上全是空的
+    assert by_id["MCP-38"]["updatedAt"] == "2026-08-15T10:00:00+08:00"
+    assert by_id["MCP-38"]["scriptUpdatedAt"] is None
+    # 两边都没有记录的行如实留空，别编一个
+    assert by_id["MCP-99"]["updatedAt"] is None
