@@ -1082,6 +1082,141 @@ class TestDimWhitelist:
         assert "落错了数组" not in qr.to_markdown(r)
 
 
+class TestDimSpec3:
+    """S8.3：覆盖面那一栏换血 —— `coverage` 换定义，另加 `unmet`(G3) / `blind`(G2)。
+
+    这三条从此都是**算**出来的（页面枚举 ∩ 路由表 ∩ 清单），不是模型猜的。
+    """
+
+    def _out(self, script=(), catalog=(), spec=None):
+        import json
+        d = {"verdict": "bad", "summary": "x",
+             "scriptGaps": list(script), "catalogGaps": list(catalog)}
+        if spec is not None:
+            d["dimSpec"] = spec
+        return qr.parse_result(json.dumps(d))
+
+    # ── ★#30 ──
+    def test_维度口径变了DIM_SPEC必须跟着升(self):
+        """**这条是整个 Epic 8 的闸门。**
+
+        加一条子项而不升 `DIM_SPEC`，存量结论会把「这一趟压根没查」渲染成一个
+        漂亮的 0 —— 页面上那一格写着 0，读的人得到的信息是"这一维没问题"。
+        **假安心比报错难发现得多**，而且它不会自己好。
+
+        所以词表按版本钉死在这里：动 `AXES` 的键 ⇒ 这条红；
+        升了 `DIM_SPEC` 却忘了给新键登记 `DIM_SINCE` ⇒ 也红
+        （`DIM_SINCE.get(k, 1)` 默认 1 = "第 1 版就有"，那正是渲染成 0 的那条路）。
+        """
+        vocab = {
+            1: {"both", "skip", "grain", "assert", "claim", "depth"},
+            2: {"both", "skip", "grain", "assert", "claim", "depth",
+                "coverage", "shape", "expect"},
+            3: {"both", "skip", "grain", "assert", "claim", "depth",
+                "coverage", "shape", "expect", "unmet", "blind"},
+        }
+        assert qr.DIM_SPEC == 3
+        assert set(qr.DIM_KEYS) == vocab[qr.DIM_SPEC]
+        for k in qr.DIM_KEYS:
+            since = min(v for v, ks in vocab.items() if k in ks)
+            assert qr.DIM_SINCE.get(k, 1) == since, k
+        # 反过来也钉：`DIM_SINCE` 里不许有词表外的键（改名留下的孤儿会一直"生效"）
+        assert set(qr.DIM_SINCE) <= set(qr.DIM_KEYS)
+
+    def test_新那两条在旧结论上标没查不是零(self):
+        """存量结论（`dimSpec: 2`）没被问过 G2/G3，那两格得是「这一趟没查」。
+
+        这儿**直接造结论字典**，不走 `parse_result` —— 那一层压根不盖 `dimSpec`
+        （盖戳的是 `review_domain`），从它出来的东西一律按第 1 版算，
+        "第 2 版的存量结论"这个情形根本造不出来。
+        """
+        def rolled(spec):
+            return {i["key"]: i
+                    for a in qr.dim_rollup({"verdict": "risky", "scriptGaps": [],
+                                            "catalogGaps": [], "dimSpec": spec})
+                    for i in a.get("items", [])}
+
+        old, fresh = rolled(2), rolled(3)
+
+        assert old["unmet"]["unavailable"] and old["blind"]["unavailable"]
+        assert not old["coverage"]["unavailable"]          # 第 2 版就有了
+        assert not any(fresh[k]["unavailable"] for k in ("unmet", "blind", "coverage"))
+
+    def test_G3归脚本_G2归清单_两条blame反号(self):
+        """**别图省事写成"覆盖面的都归清单"。** G3 是清单认领了、脚本没写
+        （账在脚本），G2 是路由表里有、两头都没人管（账在清单）。"""
+        assert qr.DIM_SIDE["unmet"] == ("script",)
+        assert qr.DIM_SIDE["blind"] == ("catalog",)
+
+    def test_这两条只许代码写_模型写了一律改判(self):
+        """模型手上没有页面枚举、路由表、清单这三份输入，它写出来的 `unmet`
+        只能是猜的 —— 而猜出来的和算出来的摆在页面上长得一模一样，
+        还更可信，因为它带着一个像事实的维度名。"""
+        out = self._out(script=[{"id": "A-1", "dim": "unmet"}],
+                        catalog=[{"scenario": "x", "dim": "blind"}])
+
+        assert out["scriptGaps"][0]["dim"] == "other"
+        assert out["scriptGaps"][0]["dimRaw"] == "unmet"
+        assert out["catalogGaps"][0]["dim"] == "other"
+        assert out["catalogGaps"][0]["dimRaw"] == "blind"
+        assert qr.dim_coerced(out) == 2
+
+    def test_模型写在哪个数组里都不算数(self):
+        """就算写对了 `DIM_SIDE` 登记的那一侧，也照样改判 —— 这条判的是
+        **谁写的**，不是**写在哪**。"""
+        out = self._out(script=[{"id": "A-1", "dim": "unmet"}])      # unmet 正是 script 侧
+        assert out["scriptGaps"][0]["dim"] == "other"
+
+        out = self._out(catalog=[{"scenario": "x", "dim": "blind"}])  # blind 正是 catalog 侧
+        assert out["catalogGaps"][0]["dim"] == "other"
+
+    def test_coverage不在代码专用里(self):
+        """G1 是代码找出来的，但「该补哪条场景」仍然要模型写（S8.1）。
+        把 `coverage` 一起锁掉，模型就再没有任何一格能写覆盖面的问题了。"""
+        assert "coverage" not in qr.DIM_CODE_ONLY
+        out = self._out(catalog=[{"scenario": "缺删除后越权", "dim": "coverage"}])
+        assert out["catalogGaps"][0]["dim"] == "coverage"
+
+    def test_提示词不许给模型这两个维度(self):
+        """列进提示词 = 请它猜。提示词里得**点名说不许写**，
+        光是"没提到"不够：上面还写着「都套不上就挑最接近的」。"""
+        p = qr._SYSTEM
+        for k in qr.DIM_CODE_ONLY:
+            assert k in p, k                       # 得点名
+        assert "不给你用" in p
+        # 但不许出现在那两行"只许用"的枚举里
+        allow = [ln for ln in p.splitlines() if "只许用" in ln]
+        assert allow and not any(k in ln for ln in allow for k in qr.DIM_CODE_ONLY)
+
+    def test_提示词里那个数字得等于模型真能用的条数(self):
+        """提示词里写着「九选一」。S8.3 之前这个数就是维度总数，改不错；
+        现在 `DIM_KEYS` 有 11 条而模型只能用 9 条，**这个数第一次跟别的东西脱钩了**。
+
+        写错了模型不会报错，它会自己找补 —— 数字比列表大就硬凑一个出来
+        （多半是从「都套不上就挑最接近的」那句里挑），比列表小就漏掉最后几条。
+        同 Epic 9 的 `test_提示词说几件就得列几件`：**前后矛盾的提示词，
+        错在输出里，不在日志里。**
+        """
+        usable = [k for k in qr.DIM_KEYS if k not in qr.DIM_CODE_ONLY]
+        cn = "零一二三四五六七八九十"
+
+        assert len(usable) == 9                      # 变了就得有人来改这一行和提示词
+        assert "%s选一" % cn[len(usable)] in qr._SYSTEM
+
+    def test_维度名不许一个是另一个的前缀(self):
+        """**这条是给命名地雷设的。**
+
+        本文原本把 G3 叫 `claimed`，而断言轴上早就有个 `claim`（断的不是认领的
+        那件事）。两个都跟"认领"有关、一字之差、**而且都是脚本侧** ——
+        `DIM_SIDE` 那套白名单一条都拦不住，写错了就静默落进另一个大维度。
+        所以改名 `unmet`，并把这条不变量钉在这儿：任何两个维度键，
+        谁都不许是谁的前缀。
+        """
+        ks = list(qr.DIM_KEYS) + [qr.DIM_OTHER[0]]
+        bad = [(a, b) for a in ks for b in ks if a != b and b.startswith(a)]
+        assert not bad, bad
+
+
 class TestHowItWorksDisclosure:
     """「你到底怎么评的、靠得住吗、为什么不跑」—— 报告里得答，别等人问。"""
 
