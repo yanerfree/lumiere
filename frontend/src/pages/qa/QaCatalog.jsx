@@ -596,17 +596,34 @@ export default function QaCatalog() {
             QA 维护的验收场景分母 + 仓库里真实存在的脚本分子，两边对照着看。平台只读，不回写。
           </div>
         </div>
-        <Space>
-          <Popover content={LEGEND} title="这一页的列都是什么意思" placement="bottomRight">
-            <Button icon={<InfoCircleOutlined />} type="text">怎么读这一页</Button>
-          </Popover>
-          {canConfig && (
-            <Button icon={<SettingOutlined />} onClick={openConfig}>{configured ? '仓库配置' : '配置 QA 仓'}</Button>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+          <Space>
+            <Popover content={LEGEND} title="这一页的列都是什么意思" placement="bottomRight">
+              <Button icon={<InfoCircleOutlined />} type="text">怎么读这一页</Button>
+            </Popover>
+            {canConfig && (
+              <Button icon={<SettingOutlined />} onClick={openConfig}>{configured ? '仓库配置' : '配置 QA 仓'}</Button>
+            )}
+            <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={refreshing} disabled={!configured}>
+              拉取最新
+            </Button>
+          </Space>
+          {/* 拉取时间和 commit 必须挨着「拉取最新」：点完按钮眼睛就停在这儿，
+              「这份数字是什么时候、哪个 commit 的」正是这一刻要回答的问题。
+              以前压在页脚，而行高不齐时列表能有几千像素高 —— 那行字等于不存在。
+              悬浮展开是完整来源（仓库/分支/清单/脚本数/提交主题）。 */}
+          {configured && repo?.commitShort && (
+            <Popover content={sourceDetail} title="QA 仓（只读）" placement="bottomRight">
+              <div style={{ fontSize: 12, color: fetchAge?.stale ? C.orange : C.gray, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {repo.fetchedAt
+                  ? `拉取于 ${new Date(repo.fetchedAt).toLocaleString('zh-CN')}${fetchAge ? `（${fetchAge.text}）` : ''}`
+                  : '还没拉取过'}
+                {' · '}
+                <code style={{ textDecoration: 'underline dotted' }}>{repo.commitShort}</code>
+              </div>
+            </Popover>
           )}
-          <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={refreshing} disabled={!configured}>
-            拉取最新
-          </Button>
-        </Space>
+        </div>
       </div>
 
       {!loading && configured === false && (
@@ -925,7 +942,7 @@ export default function QaCatalog() {
           loading={loading}
           size="small"
           // 行高很不齐：带判据说明的场景单行能到 200px+，20 行铺开就是几千像素，
-          // 把下面的「数据来源 / 拉取于」页脚推到十几屏之外，等于那行字不存在。
+          // 分页器被推到十几屏之外，翻页得先滚半天。
           // 表体自己滚（表头跟着固定），整页高度才可预期。写法跟用例管理页保持一致，
           // 不写死 px：小屏会被撑爆，大屏又白白浪费。
           scroll={{ x: 1180, y: 'calc(100vh - 300px)' }}
@@ -963,23 +980,6 @@ export default function QaCatalog() {
             ]}
           />
         </Card>
-      )}
-
-      {/* 数据来源是运维信息，一天看一次都嫌多 —— 压到页脚一行，细节收进 Popover */}
-      {configured && repo?.commitShort && (
-        <div style={{ fontSize: 12, color: C.gray, marginTop: 12, display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
-          <span>数据来源</span>
-          <Popover content={sourceDetail} title="QA 仓（只读）" placement="topLeft">
-            <span style={{ cursor: 'pointer', textDecoration: 'underline dotted' }}>
-              {repo.url} · {repo.branch} · <code>{repo.commitShort}</code>
-            </span>
-          </Popover>
-          {repo.fetchedAt && (
-            <span style={fetchAge?.stale ? { color: C.orange } : undefined}>
-              拉取于 {new Date(repo.fetchedAt).toLocaleString('zh-CN')}{fetchAge ? `（${fetchAge.text}）` : ''}
-            </span>
-          )}
-        </div>
       )}
 
       {/* QA 仓配置：只在这一页维护 —— 它只影响这一页，认错了也只在这一页报错 */}
