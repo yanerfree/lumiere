@@ -725,6 +725,22 @@ def brief_of(result: dict | None) -> dict:
     return _brief(res.get("brief"), res.get("summary"))
 
 
+def brief_source_of(result: dict | None) -> str | None:
+    """人话那段是**怎么来的**。四态，一个都不许并：
+
+    - `merged` —— 分批之后把各批结论收成一段的那一趟跑成了；
+    - `stitched` —— 那一趟挂了，退回把各批 summary 拼起来（headline 是概述的前 120 字，
+      重点/下一步/撑得住的部分全空）；
+    - `single` —— 只有一批，本来就没有收口这一步；
+    - `None` —— **这一趟没记**（加这个字段之前的存量结论）。
+
+    `None` 不许折成 `merged`：存量里同样混着收口挂过的那些，折进去就是把
+    「不知道」渲染成「跑成了」—— 跟这个模块要抓的病同形。
+    """
+    v = (result or {}).get("briefSource")
+    return v if v in ("merged", "stitched", "single") else None
+
+
 # ── 编排 ──────────────────────────────────────────────────────
 
 def collect(catalog: dict, domain_code: str) -> tuple[dict, list[dict], list[str]]:
@@ -988,6 +1004,9 @@ async def run_review(*, domain: dict, scenarios: list[dict],
     completeness: dict[str, str] = {}
     if len(batches) == 1:
         out, completeness["1"] = await _one(batches[0], None)
+        # 只有一批，人话那段就是这一批自己写的，没有收口这一步。**不是"收口成功"**，
+        # 两者得分开记，否则「没跑过」和「跑成了」又并成一个值。
+        out["briefSource"] = "single"
     else:
         n = len(batches)
         # 并发发出去，但**限流**。分批是为了每批读得完整，不是为了排队 ——
@@ -1032,8 +1051,14 @@ async def run_review(*, domain: dict, scenarios: list[dict],
             m = parse_result(resp.content or "")
             out["brief"] = m["brief"]
             out["summary"] = m["summary"] or out["summary"]
+            out["briefSource"] = "merged"
         except Exception:  # noqa: BLE001
-            # 收口这一步挂了不算评审失败：分批的结论都在，人话那段退回拼接的 summary
+            # 收口这一步挂了不算评审失败：分批的结论都在，人话那段退回拼接的 summary。
+            # **但必须盖个戳。** 退回之后 `_brief` 会拿 summary 前 120 字充当 headline、
+            # 重点/下一步/撑得住的部分全空 —— 页面上那一页于是长成「这个域没什么重点」，
+            # 跟「总结那一趟根本没跑成」一模一样。2026-08-29 验收跑 TEM 时真撞到：
+            # 网关限流把收口打成空响应，明细列表 14+6 条都在，人看的那页却是白的。
+            out["briefSource"] = "stitched"
             logger.exception("QA 域评审：分批收口失败，退回拼接版 domain=%s", domain.get("code"))
     out["envMissing"] = missing
     # 第三档。只存**键名**，给「缺 2 个」配个分母 —— 没分母的话
@@ -1327,6 +1352,14 @@ def to_markdown(r: QaCatalogReview) -> str:
     if b.get("nextStep"):
         L.append("")
         L.append(f"**下一步**：{b['nextStep']}")
+    # 拼接版必须当场说，不能只写在末尾的免责清单里 —— 上面那三行空着的时候，
+    # 读的人已经得出「这个域没什么重点」了，翻到末尾也改不回来。
+    if brief_source_of(res) == "stitched":
+        L.append("")
+        L.append("> ⚠ **上面这段是拼接版**：把各批结论收成一段人话的那一趟没跑成"
+                 "（网关限流或超时），所以只剩一句概述，重点和下一步是空的 —— "
+                 "**「没列重点」是这次没写出来，不是这个域没有重点**。"
+                 "逐条发现都在下面，一条没少；重跑一次这个域就补上了。")
     L.append("")
 
     # 别人第一次看到这份结论，第一个念头是"你凭什么这么说" —— 先答了再往下看。
@@ -1403,6 +1436,13 @@ def to_markdown(r: QaCatalogReview) -> str:
     L.append("- ⚠ **环境那一列判的是我们这侧**：QA 自己跑的时候有没有那些变量，平台看不到。")
     if (res.get("coverage") or {}).get("batchesFailed"):
         L.append("- ⚠ **这一趟有批次没读成**（见下方「这次读了什么」），那几批等于没看。")
+    _bs = brief_source_of(res)
+    if _bs == "stitched":
+        L.append("- ⚠ **人话那段是拼接版**：收口那一趟没跑成，重点/下一步是空的，"
+                 "**不是这个域没有重点**。")
+    elif _bs is None:
+        L.append("- ⚠ **这一趟没记「人话那段是怎么来的」**：旧口径评的，当时不区分"
+                 "「收口跑成了」和「收口挂了退回拼接」——**别把空着的重点读成没有重点**。")
     # 「模型有没有把话说完」。三态，`unknown` 的说法必须和 `complete` 明确不同 ——
     # 把"没人知道"渲染成"写完了"，跟这个模块要抓的「跑绿了但没验到」是同一个病。
     comp = (res.get("coverage") or {}).get("completeness")

@@ -466,6 +466,28 @@ class TestBrief:
             "headline": "老记录只有 summary", "points": [], "nextStep": "", "solid": []}
         assert qr.brief_of(None)["headline"] == ""
 
+    def test_人话那段是怎么来的四态不许并(self):
+        """`briefSource`。**2026-08-29 验收跑 TEM 时撞出来的活体缺陷。**
+
+        收口那一趟（把各批结论收成一段人话）被网关限流打成空响应，代码按设计
+        退回拼接版 —— 明细 14 条脚本缺口 + 6 条清单缺口一条没少，可「给人看」
+        那一页只剩一句 120 字的概述，重点 / 下一步 / 撑得住的部分**全是空的**。
+        读的人得出的是「这个域没什么重点」，不是「总结那一趟没跑成」。
+        **退回本身没错，不盖戳才是错** —— 和这个模块要抓的
+        「跑绿了但没验到」是同一个病，它自己又犯了一次。
+        """
+        assert qr.brief_source_of({"briefSource": "merged"}) == "merged"
+        assert qr.brief_source_of({"briefSource": "stitched"}) == "stitched"
+        assert qr.brief_source_of({"briefSource": "single"}) == "single"
+        # 认不出的值一律当没记：宁可多说一句"不知道"，也不谎报一个"跑成了"
+        assert qr.brief_source_of({"briefSource": "ok"}) is None
+
+    def test_存量没这个键不许折成收口跑成了(self):
+        """老记录里同样混着收口挂过的那些，折进去就是把「不知道」渲染成「跑成了」。"""
+        assert qr.brief_source_of({"verdict": "ok", "summary": "老记录"}) is None
+        assert qr.brief_source_of({}) is None
+        assert qr.brief_source_of(None) is None
+
     def test_points给成一句话也吃得下(self):
         out = qr.parse_result('{"verdict":"ok","brief":{"points":"就一条"},"summary":"s"}')
 
@@ -510,6 +532,37 @@ class TestMarkdown:
         for k, v in kw.items():
             setattr(r, k, v)
         return r
+
+    def test_拼接版要在人话那一节里当场说(self):
+        """**不能只写在末尾的免责清单里。** 上面那三行空着的时候，读的人已经得出
+        「这个域没什么重点」了，翻到末尾再看到一句解释也改不回来。
+        """
+        r = self._review()
+        r.result = {**r.result, "briefSource": "stitched",
+                    "brief": {"headline": "一句概述", "points": [], "nextStep": "", "solid": []}}
+        head = qr.to_markdown(r).split("## 我是怎么看的")[0]
+
+        assert "拼接版" in head
+        assert "不是这个域没有重点" in head
+
+    def test_收口跑成了就不说这句(self):
+        r = self._review()
+        r.result = {**r.result, "briefSource": "merged"}
+
+        assert "拼接版" not in qr.to_markdown(r)
+
+    def test_单批也不算收口跑成了但同样不用报警(self):
+        """只有一批本来就没有收口这一步 —— 既不是 `merged` 也不该吓唬人。"""
+        r = self._review()
+        r.result = {**r.result, "briefSource": "single"}
+        md = qr.to_markdown(r)
+
+        assert "拼接版" not in md
+        assert "没记「人话那段是怎么来的」" not in md
+
+    def test_存量结论导出要说这一趟没记(self):
+        """老记录的 brief 可能本来就是拼接来的，看不出来 —— 那就说"没记"，别装作跑成了。"""
+        assert "没记「人话那段是怎么来的」" in qr.to_markdown(self._review())
 
     def test_带齐复核这份结论要的三样(self):
         md = qr.to_markdown(self._review())
@@ -2301,6 +2354,59 @@ class TestEvidenceCheckWiring:
         assert ev["total"] == len(out["scriptGaps"])
         assert ev["verified"] == 0 and ev["unchecked"] == 0
 
+    async def _run(self, monkeypatch, merge, scripts=None):
+        """跑一趟 run_review。`merge` 给 None 表示收口那一趟抛异常。"""
+        async def fake(messages, **kw):
+            user = messages[-1]["content"]
+            if "## 合并后的结论" in user:
+                if merge is None:
+                    raise ValueError("模型没按 JSON 回：Expecting value")
+                return self._Resp(merge)
+            return self._Resp('```json\n{"verdict":"risky","summary":"分批的话",'
+                              '"scriptGaps":[{"id":"G","path":"a.sh","severity":"major",'
+                              '"problem":"p","evidence":"e"}]}\n```')
+
+        monkeypatch.setattr(qr.llm_client, "complete", fake)
+        return await qr.run_review(
+            domain={"code": "AGT", "name": "智能体"}, scenarios=[],
+            scripts=self._scripts() if scripts is None else scripts,
+            env_name="e", env_keys=[], lib_texts=[])
+
+    @pytest.mark.asyncio
+    async def test_收口跑成了盖merged(self, monkeypatch):
+        out = await self._run(monkeypatch,
+                              '```json\n{"brief":{"headline":"h","points":["p"]},'
+                              '"summary":"合并"}\n```')
+
+        assert out["briefSource"] == "merged"
+
+    @pytest.mark.asyncio
+    async def test_收口挂了退回拼接必须盖戳(self, monkeypatch):
+        """**2026-08-29 验收跑 TEM 时的活体缺陷。**
+
+        网关限流把收口那一趟打成空响应，代码按设计退回拼接版 —— 明细一条没少，
+        可 `brief` 的 headline 变成概述的前 120 字、重点/下一步/撑得住的部分全空。
+        页面上那一页于是长成「这个域没什么重点」，和「总结那一趟根本没跑成」
+        一模一样。**退回本身没错，不盖戳才是错。**
+
+        这条同时钉住两件事：戳要盖上，**而且明细不许跟着丢** ——
+        把收口失败升级成评审失败就是另一种错法（14 条真发现陪葬）。
+        """
+        out = await self._run(monkeypatch, None)
+
+        assert out["briefSource"] == "stitched"
+        assert len(out["scriptGaps"]) >= 1          # 明细一条不许少
+        assert out["summary"]                       # 拼接版的概述还在
+
+    @pytest.mark.asyncio
+    async def test_只有一批盖single不算收口跑成了(self, monkeypatch):
+        """单批本来就没有收口这一步。**并进 `merged` 就是把"没跑过"说成"跑成了"。**"""
+        out = await self._run(monkeypatch, None,
+                              scripts=[{"path": "a.sh", "content": "echo a\n",
+                                        "truncated": False}])
+
+        assert out["briefSource"] == "single"
+
     def test_收口的提示词把存疑的标出来(self):
         """#19 的另一半：喂给收口那一趟的清单里，存疑的要带记号。
 
@@ -2576,6 +2682,38 @@ class TestCatalogAnchorGate:
         # ⚠ 断的是**渲染出来的那个数**，不是 `dn.length` 四个字 ——
         # 上面那句 `if (!dn.length) return null` 也含它，只断名字等于没断。
         assert "{dn.length} 条" in body
+
+
+class Test人话那段的来路要露在页面上:
+    """**页面是更醒目的那一面。** 只在导出的 Markdown 里标「这段是拼接版」，
+    等于把它藏在没人拉的那份里 —— 打开抽屉的人看的是页面，而且他看到的正是
+    那三行空着的重点。
+
+    2026-08-29 验收跑 TEM 时撞到：收口被网关限流打成空响应，退回拼接版，
+    明细 14+6 条都在，人看的那一页却是白的。
+    """
+
+    FE = (pathlib.Path(__file__).resolve().parents[2]
+          / "frontend/src/pages/qa/QaCatalog.jsx")
+
+    def _brief(self):
+        src = self.FE.read_text(encoding="utf-8")
+        return src.split("function ReviewBrief")[1].split("\nfunction ")[0]
+
+    def test_拼接版当场说而且不许折起来(self):
+        b = self._brief()
+
+        assert "res.briefSource === 'stitched'" in b, "页面根本没看这个字段"
+        assert "拼接版" in b
+        # 这句话的全部作用就是拦住"没重点 = 没问题"这个念头，含糊过去等于没写
+        assert "不是这个域没有重点" in b
+
+    def test_存量那一档不许折成收口跑成了(self):
+        """老记录没这个键。当成「跑成了」就是把「不知道」渲染成「跑成了」。"""
+        b = self._brief()
+
+        assert "!res.briefSource" in b, "「没记」这一档在页面上不存在"
+        assert "旧口径" in b
 
 
 class TestEvidenceOnThePage:
