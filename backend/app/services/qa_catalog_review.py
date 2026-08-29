@@ -124,16 +124,35 @@ _VAR_REF_RE = re.compile(r"\$\{(?P<braced>[A-Za-z_]\w*)(?P<mod>[^}]*)\}|\$(?P<ba
 # 只认每行第一个，后面那些就全变成"环境缺的" —— 2026-08-26 在 uag-qa 的 MCP 域上
 # 实测，14 份脚本报出 5 个假缺口（MB_ID/MB_USER/MB_PASS/MCPB_AGENT/MCPB_OWNER）。
 _STMT_SPLIT_RE = re.compile(r"[;&|]{1,2}|\n")
+# 开头那一段 `(?:if|elif|while|until)\s+` + `!\s*`：**赋值可以裹在条件里**。
+#     if ! FIX=$(find_team_with_models 2); then
+# 锚死在语句开头的话，`FIX` 就永远不算"定义过"，于是它作为"环境缺的变量"
+# 报出来 —— 2026-08-29 验收实测，TEM 域 6 份脚本一起报 `FIX` 缺失。
+# 这个方向只会**减少**缺口（多认出几个定义），不会把真缺口洗白：
+# `if X=…` 本来就是一次真赋值。
 _ASSIGN_RE = re.compile(
-    r"^\s*(?:export\s+|local\s+|declare\s+-\w+\s+|readonly\s+|typeset\s+)?"
+    r"^\s*(?:(?:if|elif|while|until)\s+)?(?:!\s*)?"
+    r"(?:export\s+|local\s+|declare\s+-\w+\s+|readonly\s+|typeset\s+)?"
     r"(?P<name>[A-Z_a-z]\w*)\s*=")
 # `export A=1 B=2` / `local a b c`：关键字后面跟着的每一个名字都算定义过了
 _DECL_LINE_RE = re.compile(
     r"^\s*(?:export|local|readonly|typeset|declare(?:\s+-\w+)?)\s+(?P<rest>.+)$")
 _NAME_RE = re.compile(r"[A-Za-z_]\w*")
 _FOR_RE = re.compile(r"^\s*for\s+(?P<name>\w+)\s+in\b", re.M)
-# `read -r A B C` —— 一次能读进好几个
-_READ_RE = re.compile(r"\bread\s+(?P<rest>(?:-\w+\s+)*[A-Z_]\w*(?:\s+[A-Za-z_]\w*)*)", re.M)
+# `read -r A B C` —— 一次能读进好几个。
+# `mapfile`/`readarray` 是同一件事的数组版（`mapfile -t CAND < <(…)`），
+# 不认它就把 CAND 当成"环境缺的变量" —— 2026-08-29 验收实测，MCP 域报了一条。
+_READ_RE = re.compile(
+    r"\b(?:mapfile|readarray|read)\s+(?P<rest>(?:-\w+\s+)*[A-Z_]\w*(?:\s+[A-Za-z_]\w*)*)", re.M)
+# 反斜杠续行：`export A="$x" \` + 下一行 `B="$y"`。
+# 下半截不以 `export` 开头，`_DECL_LINE_RE` 不认；`_ASSIGN_RE` 一条语句只取第一个名字
+# —— 于是续行上除第一个以外的赋值全成了"环境缺的" **（实测 MCPB_SELFOWN）**。
+# ⚠ **只在 `_defined_names` 里合并，别顺手也用到 `passthrough_names` 上。**
+# 那个函数靠 `_ASSIGN_RE` 一条语句取一个名字，合并之后
+# `export UAG_APIKEY="${UAG_APIKEY:-}" \` + `PSQL_DSN="${PSQL_DSN:-}"` 会只剩前一个，
+# **把真缺口洗掉一个** —— 方向正好是这次要防的反面。
+# （今天 config/env.sh 是一行一条、够不着这个坑，但那是它的写法，不是我们的保证。）
+_CONT_RE = re.compile(r"\\\n[ \t]*")
 # 名字是运行时拼出来的：`printf -v "${var}_ID"` / `export "${var}_TOKEN"`。
 # 具体前缀（MB / TA / …）由调用方传，静态看不出来；但**后缀**看得出来，
 # 所以把 `*_ID`/`*_TOKEN` 这一族整体放过。宁可漏报不可误报。
@@ -170,7 +189,16 @@ _AMBIENT = {
 # 尾注释必须放过 —— config/env.sh 里最该报的那一条恰好带着注释：
 #     export PASSWORD="${PASSWORD:-}"          # 刻意不给默认值,强制外部注入
 # 匹配失败不是"不知道"，是直接倒向另一边被当成"定义过了"，于是这个缺口一声不吭。
-_PASSTHRU_RE = re.compile(r"""^\s*["']?\$\{(?P<name>\w+):?[-=]["']*\}["']?\s*(?:\#.*)?$""")
+#
+# **匹配到边界为止，不要求吃满整个右值。** 原来锚 `$`，于是右值后面多任何东西都失配：
+#     export UAG_APIKEY="${UAG_APIKEY:-}" \        ← 续行反斜杠
+#     export UAG_APIKEY="${UAG_APIKEY:-}" PSQL_DSN="${PSQL_DSN:-}"   ← 一行两条
+# 两种写法下这一条都被当成"定义过了"，**真缺口一声不吭地消失**。
+# 2026-08-29 由本文件配套的防倒车哨兵抓出来（不是活体撞的：uag-qa 今天一行一条，
+# 够不着 —— 但那是它的写法，不是我们的保证）。
+# 边界必须留着：`X="${X:-}yes"` 是给了默认值，**不是** passthrough。
+_PASSTHRU_RE = re.compile(
+    r"""^\s*["']?\$\{(?P<name>\w+):?[-=]["']*\}["']?(?=\s|$|\\|\#)""")
 
 
 def _is_passthrough(name: str, rhs: str) -> bool:
@@ -180,6 +208,7 @@ def _is_passthrough(name: str, rhs: str) -> bool:
 
 def _defined_names(text: str) -> set[str]:
     names: set[str] = set()
+    text = _CONT_RE.sub(" ", text)          # 见 `_CONT_RE`：只在这里合并，不在 passthrough 那边
     for stmt in _STMT_SPLIT_RE.split(text):
         m = _ASSIGN_RE.match(stmt)
         if m and not _is_passthrough(m.group("name"), stmt[m.end():]):
@@ -239,6 +268,53 @@ def _referenced_names(text: str) -> set[str]:
         # `${X:-兜底}` / `${X:=兜底}` / `${X-兜底}`：脚本自己给了默认值，环境没有也能跑
         if name and not re.match(r"^:?[-=]", mod):
             out.add(name)
+    return out
+
+
+# ── 按文件类型选语法 ──────────────────────────────────────────
+#
+# `${VAR}` 在 shell 里是取变量，在 TypeScript 模板串里是插值 —— **两者长得一模一样**。
+# 拿 shell 的正则去扫 `ui/tests/**/*.spec.ts`：`${JSON.stringify(x)}` 报出一个叫
+# `JSON` 的"环境变量"，`${FIXTURE_AGENT}`（同一份文件里 `const FIXTURE_AGENT = '…'`
+# 定义的常量，而 `const X =` 不是 shell 赋值、`_ASSIGN_RE` 认不出来）也一样 ——
+# 2026-08-29 验收实测，MCP + TEM 两个域一共 5 条假阳出自这一条。
+#
+# **只对 JS/TS 改口径，别的后缀一律照旧走 shell。** `.gitlab-ci.yml`、无后缀的
+# 可执行脚本里确实写着真环境变量，把"不认识的后缀"整类跳过等于凭后缀名开一个
+# 静默盲区 —— 那是这个模块自己要抓的错。
+_JS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+# `process.env.X` / `process.env["X"]` —— JS 侧取外部输入只有这一种写法
+_JS_ENV_RE = re.compile(
+    r"process\.env\.(?P<dot>[A-Za-z_]\w*)"
+    r"|process\.env\[\s*[\"'](?P<idx>[A-Za-z_]\w*)[\"']\s*\]")
+# `?? 'http://…'` / `|| "x"`：非空兜底 = 没配也照样跑，不算缺。
+# 跟 shell 那边对齐：`${X:-兜底}` 不算缺、`${X:-}` 空兜底算（那是在明说要外部注入）。
+_JS_FALLBACK_RE = re.compile(
+    r"""\s*(?:\?\?|\|\|)\s*(?P<q>["'`])(?P<val>[^"'`]*)(?P=q)""")
+
+
+def _is_js_path(path: str) -> bool:
+    return path.lower().endswith(_JS_EXT)
+
+
+def js_env_names(text: str) -> set[str]:
+    """TS/JS 脚本引用的外部变量。
+
+    ⚠ **今天 `ui/tests/**` 里一条 `process.env` 都没有**（2026-08-29 在 sha
+    `173af7aa87` 上数的：0 处）。真正在用它的是 `ui/playwright.config.ts` 和
+    `ui/support/{auth,mcpapi}.ts` 共 5 处，而那三份文件不在本模块收集的脚本集里。
+    所以这个函数**在今天的数据上一条都提不出来** —— 写它是因为另一条路更坏：
+    上面那条改动把 TS 的 shell 式扫描去掉了，不补这一半，哪天 spec 里真写了
+    `process.env.BFF`，缺口会**一声不吭地变成 0**。
+    要让它有活样本，得把那三份 support 文件也纳入收集范围，那是另一件事。
+    """
+    out = set()
+    for m in _JS_ENV_RE.finditer(text):
+        name = m.group("dot") or m.group("idx")
+        fb = _JS_FALLBACK_RE.match(text, m.end())
+        if fb and fb.group("val"):          # 有非空兜底 → 不算缺
+            continue
+        out.add(name)
     return out
 
 
@@ -340,6 +416,8 @@ def scan_env_vars(scripts: list[dict], env_keys: set[str], lib_texts: list[str] 
             if src and src not in wanted[n]:
                 wanted[n].append(src)
     for s in scripts:
+        if _is_js_path(s.get("path") or ""):
+            continue                       # JS/TS 没有 shell 那套声明形态，见 `js_env_names`
         defined |= _defined_names(s.get("content") or "")
         for n in passthrough_names(s.get("content") or ""):
             wanted.setdefault(n, [])
@@ -360,7 +438,9 @@ def scan_env_vars(scripts: list[dict], env_keys: set[str], lib_texts: list[str] 
             continue
         hits[name] = srcs[:6]
     for s in scripts:
-        for name in _referenced_names(s.get("content") or ""):
+        text = s.get("content") or ""
+        refs = js_env_names(text) if _is_js_path(s.get("path") or "") else _referenced_names(text)
+        for name in refs:
             if name in defined or name in _AMBIENT:
                 continue
             if any(name.endswith(x) for x in suffixes):

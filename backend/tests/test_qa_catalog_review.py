@@ -2886,3 +2886,83 @@ class Test跨两趟怎么算同一条:
         # `if m["state"] == "unmeasurable"` 里也有，断言它等于什么都没守住
         # （实测：把给人看的那句话整段换掉，那种断言照样绿）。要断的是**说给人的那句**。
         assert "不是 0%，是没得比" in src, "unmeasurable 那一档得对人说清楚，不是只在代码里判一下"
+
+
+class TestEnv假阳_20260829验收:
+    """S5 验收实测挖出来的 4 类假阳。**每条的样本都是从 QA 仓正文里抄的真写法。**
+
+    共同形状是「漏认定义」，方向全部倒向**多报**：脚本自己的局部变量被当成
+    「环境缺的外部输入」。它跟 `_family` 注释防的方向正好相反（那条防的是
+    "修误报时把真阳一起洗掉"），所以这一组每条都配一句：**不许放宽家族匹配** ——
+    一放宽，`PSQL_DSN` / `UAG_APIKEY` 两个真缺口会跟着被洗白。
+    """
+
+    def test_赋值裹在if里也算定义过(self):
+        """`if ! FIX=$(…); then` —— 实测 TEM 域 6 份脚本一起报「缺 FIX」。"""
+        body = 'if ! FIX=$(find_team_with_models 2); then\n  exit 1\nfi\necho "$FIX"\n'
+
+        assert qr.env_gaps([{"path": "a.sh", "content": body}], set()) == []
+
+    def test_mapfile读进来的不算缺(self):
+        """`mapfile -t CAND < <(…)` 跟 `read -r CAND` 是同一件事的数组版。"""
+        body = 'mapfile -t CAND < <(list_agents)\necho "${CAND[0]}"\necho "$CAND"\n'
+
+        assert qr.env_gaps([{"path": "a.sh", "content": body}], set()) == []
+
+    def test_反斜杠续行上的第二个赋值也算定义过(self):
+        """`export A="$x" \\` + 下一行 `B="$y"` —— 实测漏掉 MCPB_SELFOWN。
+
+        下半截不以 `export` 开头，`_DECL_LINE_RE` 不认；`_ASSIGN_RE` 一条语句只取
+        第一个名字。于是续行上除第一个以外的赋值全成了"环境缺的"。
+        """
+        lib = ('  export MCPB_MEMBER_ID="$uid" MCPB_MEMBER_USER="$m" \\\n'
+               '         MCPB_MEMBER_TOKEN="$tok" MCPB_SELFOWN="$aid"\n')
+        use = 'SELF_AGENT="$MCPB_SELFOWN"\necho "$MCPB_MEMBER_TOKEN"\n'
+
+        assert qr.env_gaps([{"path": "a.sh", "content": use}], set(), [lib]) == []
+
+    def test_ts里的模板串不是shell变量(self):
+        """`${JSON.stringify(x)}` 在 shell 眼里是取变量 —— 两种语法长得一模一样。
+
+        `const FIXTURE_AGENT = '…'` 也不是 shell 赋值，`_ASSIGN_RE` 认不出来，
+        于是同一份文件里定义又引用的常量被报成"环境缺的"。实测 MCP + TEM 共 5 条。
+        """
+        spec = ("const FIXTURE_AGENT = 'agent-1'\n"
+                "test('x', async () => {\n"
+                "  await api.post(`/agents/${FIXTURE_AGENT}`, `${JSON.stringify({a: 1})}`)\n"
+                "})\n")
+
+        assert qr.env_gaps([{"path": "ui/tests/mcp/a.spec.ts", "content": spec}], set()) == []
+
+    def test_ts里的process_env照样要报(self):
+        """上一条是"删"，这条是"补" —— 只删不补的话 TS 侧会变成一个静默盲区。
+
+        ⚠ 今天 `ui/tests/**` 里一处 `process.env` 都没有（sha `173af7aa87` 实数 0），
+        所以这一条**在活体数据上提不出任何东西**，样本是照 `ui/support/auth.ts`
+        的真写法造的。这不是"测了个不存在的东西"，是**守住那个会变成 0 的口子**。
+        """
+        spec = ("const BFF = process.env.BFF\n"
+                "const WEB = process.env.WEB_URL ?? 'http://127.0.0.1:3000'\n"
+                "const PW = process.env.PASSWORD ?? ''\n")
+
+        names = [g["name"] for g in
+                 qr.env_gaps([{"path": "ui/tests/a.spec.ts", "content": spec}], set())]
+
+        assert names == ["BFF", "PASSWORD"], names
+        # `?? '默认值'` 跟 shell 的 `${X:-默认值}` 同一档：没配也照样跑，不算缺；
+        # `?? ''` 空兜底则相反 —— 那是在明说"这个得从外面传"。
+
+    def test_合并续行不许把passthrough真缺口洗掉(self):
+        """**这条是防倒车的。** 续行合并只能做在 `_defined_names` 里。
+
+        `passthrough_names` 靠 `_ASSIGN_RE` 一条语句取一个名字：一旦也在那边合并，
+        `export UAG_APIKEY="${UAG_APIKEY:-}" \\` + `PSQL_DSN="${PSQL_DSN:-}"`
+        就只剩前一个，**真缺口少一个** —— 方向正是这一组要防的反面。
+        （今天 config/env.sh 是一行一条、够不着这个坑，但那是它的写法，不是我们的保证。）
+        """
+        lib = ('export UAG_APIKEY="${UAG_APIKEY:-}" \\\n'
+               '       PSQL_DSN="${PSQL_DSN:-}"\n')
+
+        names = [g["name"] for g in qr.env_gaps([], set(), [lib], ["config/env.sh"])]
+
+        assert names == ["PSQL_DSN", "UAG_APIKEY"], names
