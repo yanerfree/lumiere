@@ -23,6 +23,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
+from app.services.qa_role_visibility import merge_shards
 from app.services.ui_selector_render import anchor_selector, infer_kind
 from app.services.qa_survey_guard import (
     MAIN_CRAWL_ROLE,
@@ -239,6 +240,10 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
         page = await context.new_page()
         if not await _login(page, base_url, role, ledger):
             return items
+        # 这个角色**真正走到**的页面，一页一记。矩阵那边靠它把「没探到」
+        # 和「看不见」分开 —— 只有 `pagesVisited` 那个总数的话，
+        # 一个浅扫角色在第 41 页什么都没看见，会被算成「它被禁掉了」。
+        probed = ledger.setdefault("pagesProbed", {}).setdefault(role, [])
         for path in page_paths:
             try:
                 await page.goto(urljoin(base_url + "/", path.lstrip("/")),
@@ -260,6 +265,9 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
             title = await page.title()
             items.extend(collect_items(path, title, raw, ledger))
             ledger["pagesVisited"] = ledger.get("pagesVisited", 0) + 1
+            # 走到了就记，**哪怕这一页一个控件都没有** —— 空页恰恰是
+            # 「探过了，确实看不见」，那是可比的格子，不是未探测。
+            probed.append(path)
     finally:
         # HAR 只在 close 时落盘 —— 不 close 就是一个空文件。
         await context.close()
@@ -307,7 +315,7 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
 
     shards = [(main_role, page_paths)] + [(r, page_paths[:SHALLOW_MAX_PAGES]) for r in others]
     ledger["shardsTotal"] = len(shards)
-    items: list[dict] = []
+    shard_rows: list[dict] = []
     hars: dict[str, dict] = {}
     ok = 0
 
@@ -332,17 +340,16 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
                 continue
             role, rows = res
             ok += 1
-            # 主爬那份是账本本体；浅扫只贡献「这个角色看得见哪些 key」。
-            if role == main_role:
-                items = rows
-            else:
-                seen = {r["key"] for r in rows}
-                for row in items:
-                    if row["key"] in seen:
-                        row.setdefault("roles_visible", []).append(role)
+            # 并集在 `qa_role_visibility.merge_shards` 里，这里只收集分片。
+            # 原先这段是「拿主爬那份当底、浅扫只做标注」—— 那样
+            # **只有浅扫角色看得见的控件整个消失**，而「低权角色看得见、
+            # 主爬这个只读账号看不见」正是角色维度唯一有价值的信号。
+            shard_rows.append({"role": role, "items": rows})
             har = sanitize_har(har_dir / f"{role}.har")
             if har is not None:
                 hars[role] = har
+
+    items = merge_shards(shard_rows, main_role=main_role)
 
     totals_after = await totals_probe() if totals_probe else None
     status = resolve_terminal_status(shards_total=len(shards), shards_ok=ok,
