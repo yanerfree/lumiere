@@ -43,7 +43,12 @@ from fastmcp.server.middleware import Middleware
 #
 # project_id 也一起缓存：数据范围校验挂在每一次 tools/call 上，是最热的那条路，
 # 不能为它再打一次库。
-_CACHE: dict[str, tuple[list[str] | None, str | None, str | None, str | None, float]] = {}
+# owner_role 也一起缓存：MCP 这条路**从来不读 users.role** —— 鉴权只把 bearer 哈希后
+# 比对 mcp_api_keys。于是一个用户被降成游客后，他**降级前建的 Key 照样能写**，
+# 而 HTTP 那边的只读闸门对这条通道一点作用都没有。2026-08-29 加游客角色时补上。
+_CACHE: dict[
+    str, tuple[list[str] | None, str | None, str | None, str | None, str | None, float]
+] = {}
 _TTL_SECONDS = 30
 
 
@@ -71,8 +76,12 @@ def invalidate_scope_cache(key_hash: str | None = None) -> None:
         _CACHE.pop(key_hash, None)
 
 
-async def _lookup_key() -> tuple[list[str] | None, str | None, str | None, str | None]:
-    """返回 (工具白名单, 调用方 user_id, Key 名, 归属 project_id)。None = 该维度不限制。
+async def _lookup_key() -> (
+    tuple[list[str] | None, str | None, str | None, str | None, str | None]
+):
+    """返回 (工具白名单, 调用方 user_id, Key 名, 归属 project_id, Key 主人的系统角色)。
+
+    前四项 None = 该维度不限制；owner_role 为 None 表示查不到主人（env key 等）。
 
     没有 bearer（环境变量 key 走的是 MCPAuthMiddleware 那条）→ 全 None：
     那条路子不是"某个 Key"，没有项目可归，与放行口径保持一致。
@@ -82,10 +91,10 @@ async def _lookup_key() -> tuple[list[str] | None, str | None, str | None, str |
     headers = get_http_headers(include={"authorization"})
     auth = headers.get("authorization", "")
     if not auth.startswith("Bearer "):
-        return None, None, None, None
+        return None, None, None, None, None
     token = auth[7:].strip()
     if not token:
-        return None, None, None, None
+        return None, None, None, None, None
 
     key_hash = hashlib.sha256(token.encode()).hexdigest()
     hit = _CACHE.get(key_hash)
@@ -93,18 +102,20 @@ async def _lookup_key() -> tuple[list[str] | None, str | None, str | None, str |
     # 每次都要把 TTL 的下标跟着挪，而写错不会报错 —— `monotonic() - "uag-cc使用"`
     # 抛的 TypeError 被外层 except 吞掉，症状是"缓存静默失效、每次都查库"。
     if hit and (time.monotonic() - hit[-1]) < _TTL_SECONDS:
-        return hit[0], hit[1], hit[2], hit[3]
+        return hit[0], hit[1], hit[2], hit[3], hit[4]
 
     allowed: list[str] | None = None
     user_id: str | None = None
     key_name: str | None = None
     key_project: str | None = None
+    owner_role: str | None = None
     try:
         from sqlalchemy import select
 
         from app.deps.db import async_session_factory
         from app.models.mcp_api_key import McpApiKey
         from app.models.project import Project
+        from app.models.user import User
 
         async with async_session_factory() as session:
             # LEFT JOIN：Key 归属项目 → 用项目的范围；没归属（存量 Key）→ 用 Key 自己那份。
@@ -116,9 +127,11 @@ async def _lookup_key() -> tuple[list[str] | None, str | None, str | None, str |
                     McpApiKey.user_id,
                     McpApiKey.project_id,
                     McpApiKey.name,
+                    User.role,
                 )
                 .select_from(McpApiKey)
                 .join(Project, Project.id == McpApiKey.project_id, isouter=True)
+                .join(User, User.id == McpApiKey.user_id, isouter=True)
                 .where(
                     McpApiKey.key_hash == key_hash,
                     McpApiKey.is_active == True,  # noqa: E712
@@ -127,18 +140,19 @@ async def _lookup_key() -> tuple[list[str] | None, str | None, str | None, str |
             row = result.first()
             # 查不到（环境变量 key 等）→ 不限制；查到但范围为 NULL → 不限制
             if row:
-                project_scope, legacy_scope, uid, project_id, name = row
+                project_scope, legacy_scope, uid, project_id, name, role = row
                 allowed = pick_scope(project_id, project_scope, legacy_scope)
                 if uid:
                     user_id = str(uid)
                 key_name = name or None
                 key_project = str(project_id) if project_id else None
+                owner_role = role or None
     except Exception:
         # 查库失败不能把 MCP 打死，退化为不限制
-        return None, None, None, None
+        return None, None, None, None, None
 
-    _CACHE[key_hash] = (allowed, user_id, key_name, key_project, time.monotonic())
-    return allowed, user_id, key_name, key_project
+    _CACHE[key_hash] = (allowed, user_id, key_name, key_project, owner_role, time.monotonic())
+    return allowed, user_id, key_name, key_project, owner_role
 
 
 async def _lookup_allowed_tools() -> list[str] | None:
@@ -318,7 +332,25 @@ class ToolScopeMiddleware(Middleware):
         # 只是审计那条路从没问过它。挂在 on_call_tool 上 = 所有 lum_* 工具一次性覆盖。
         #
         # 一次 _lookup_key 同时供审计和两层范围校验用（本来就带 30s 缓存，但没必要查三遍）。
-        allowed, uid, key_name, key_project = await _lookup_key()
+        allowed, uid, key_name, key_project, owner_role = await _lookup_key()
+
+        # 游客的 Key 一律拒 —— 包括只读工具。
+        #
+        # HTTP 那条路的只读闸门按「方法安不安全」判，MCP 这条路没有 HTTP 方法可判；
+        # 而 lum_* 谁读谁写**没有任何结构化元数据**（工具就是普通函数，没有 readonly 标注）。
+        # 靠函数名手工分一遍五十多个工具，分错一个就是「游客能写」——
+        # 恰恰是本次要修的那类洞，而且分错了不会报错。
+        #
+        # 所以这里选**整条拒绝**：多挡掉游客的只读调用是看得见、可恢复的；
+        # 漏放一个写工具是静默的。将来真要给游客开只读 MCP，正确做法是先给工具加
+        # readonly 标注（让「是不是只读」变成可查的事实），不是在这里凭名字猜。
+        if owner_role == "guest":
+            raise ToolError(
+                "这把 Key 的主人是游客账号，游客只有只读权限，不能通过 MCP 调用工具。"
+                "（HTTP 那边游客也只能读。）需要写权限请让管理员在「系统管理 → 用户管理」"
+                "把该账号改成普通用户。"
+            )
+
         try:
             from app.core.audit import set_audit_context
             set_audit_context(user_id=uuid.UUID(uid) if uid else None,

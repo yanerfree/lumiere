@@ -4,9 +4,11 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_201_CREATED
 
+from app.core import permissions as perms
 from app.core.audit import write_audit_log
 from app.deps.auth import get_current_user, require_project_role, require_role
 from app.deps.db import get_db
+from app.deps.permissions import require_system_permission
 from app.models.user import User
 from app.schemas.common import MessageResponse
 from app.schemas.project import (
@@ -26,8 +28,11 @@ router = APIRouter(prefix="/api/projects", tags=["projects"])
 async def create_project(
     body: CreateProjectRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_system_permission(perms.P_PROJECT_CREATE)),
 ):
+    """建项目。此前只要登录就能建 —— P_PROJECT_CREATE 这个权限点是声明了、
+    却没有任何端点校验它，属于「自报一套、强制另一套」。挂上之后游客建不了项目
+    （封顶把它削没了），而不是只在前端把按钮藏掉。"""
     project = await project_service.create_project(session, body, current_user)
     await write_audit_log(session, action="create", target_type="project", target_id=project.id, target_name=project.name)
     return {
@@ -53,7 +58,7 @@ async def list_projects(
 async def get_project(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """单个项目详情。
 
@@ -102,7 +107,7 @@ async def delete_project(
 async def list_members(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     members = await member_service.list_members(session, project_id)
     return {
@@ -117,7 +122,7 @@ async def add_member(
     project_id: uuid.UUID,
     body: AddMemberRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     member = await member_service.add_member(session, project_id, body)
     await write_audit_log(session, action="add_member", target_type="project", target_id=project_id,
@@ -131,7 +136,7 @@ async def update_member_role(
     user_id: uuid.UUID,
     body: UpdateMemberRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     member = await member_service.update_member_role(session, project_id, user_id, body)
     await write_audit_log(session, action="update_member", target_type="project", target_id=project_id,
@@ -144,7 +149,7 @@ async def remove_member(
     project_id: uuid.UUID,
     user_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     await member_service.remove_member(session, project_id, user_id)
     await write_audit_log(session, action="remove_member", target_type="project", target_id=project_id,

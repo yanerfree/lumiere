@@ -93,7 +93,7 @@ function AppLayout() {
   const navigate = useNavigate()
   const location = useLocation()
   const { t, lang, setLang } = useLang()
-  const { has } = usePermissions()
+  const { has, systemRole } = usePermissions()
 
   const user = JSON.parse(localStorage.getItem('user') || '{}')
 
@@ -187,7 +187,7 @@ function AppLayout() {
       children: [
         { key: '/projects', icon: <FolderOutlined />, label: t('menu.projects') },
         // AI 服务配置 / 通知渠道是**平台级设施**（通知渠道全局、provider 由平台分配给项目），
-        // 归 admin/operator。项目经理用的是项目壳里的「AI 配置」，不是这里。
+        // 归系统管理员。项目经理用的是项目壳里的「AI 配置」，不是这里。
         { key: '/settings/ai-providers', icon: <RobotOutlined />, label: t('menu.aiProviders'), perm: PERM.SYS_PROVIDER_READ },
         { key: '/settings/channels', icon: <BellOutlined />, label: t('menu.channels'), perm: PERM.SYS_CHANNEL_READ },
       ],
@@ -195,21 +195,24 @@ function AppLayout() {
     {
       // Mock 也在这一档：造可控上游本来就是为了让被测系统跑起来，跟压测、抓包是一类事
       key: 'g-tools', icon: <ToolOutlined />, label: t('menu.group.tools'),
+      // 这一组整体挂 SYS_TOOLS_USE。此前八项**一个 perm 都没有**，于是任何登录用户
+      // 都看得见入口 —— 游客点进去八个页面全 403，正好违反 PRD 那条
+      //「打不开的入口不再显示」。子项被 gate() 过滤光了整组自动消失。
       children: [
-        { key: '/tools/api-mock', icon: <GlobalOutlined />, label: t('menu.apiMock') },
-        { key: '/tools/llm-mock', icon: <RobotOutlined />, label: t('menu.llmMock') },
-        { key: '/tools/mcp-mock', icon: <ApiOutlined />, label: t('menu.mcpMock') },
-        { key: '/tools/oauth2-mock', icon: <SafetyCertificateOutlined />, label: t('menu.oauth2Mock') },
-        { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: t('menu.proxyProbe') },
-        { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient') },
-        { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox') },
-        { key: '/tools/load-test', icon: <ThunderboltOutlined />, label: t('menu.loadTest') },
+        { key: '/tools/api-mock', icon: <GlobalOutlined />, label: t('menu.apiMock'), perm: PERM.SYS_TOOLS_USE },
+        { key: '/tools/llm-mock', icon: <RobotOutlined />, label: t('menu.llmMock'), perm: PERM.SYS_TOOLS_USE },
+        { key: '/tools/mcp-mock', icon: <ApiOutlined />, label: t('menu.mcpMock'), perm: PERM.SYS_TOOLS_USE },
+        { key: '/tools/oauth2-mock', icon: <SafetyCertificateOutlined />, label: t('menu.oauth2Mock'), perm: PERM.SYS_TOOLS_USE },
+        { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: t('menu.proxyProbe'), perm: PERM.SYS_TOOLS_USE },
+        { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient'), perm: PERM.SYS_TOOLS_USE },
+        { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox'), perm: PERM.SYS_TOOLS_USE },
+        { key: '/tools/load-test', icon: <ThunderboltOutlined />, label: t('menu.loadTest'), perm: PERM.SYS_TOOLS_USE },
       ],
     },
     {
       key: 'g-system', icon: <DeploymentUnitOutlined />, label: t('menu.group.system'),
       children: [
-        // 「系统管理」整档是平台自己的东西：用户、系统审计日志（admin），服务端口（operator+admin）。
+        // 「系统管理」整档是平台自己的东西：用户、系统审计日志、服务端口，都只给系统管理员。
         // 每项挂 perm，由下方 gate() 统一按 /me/permissions 过滤 —— 同一份权限点，菜单和后端守卫一处对齐，
         // 不再前端硬编码 role === 'admin'。普通用户三项全无 → 整个「系统管理」组自动消失。
         { key: '/settings/users', icon: <UserOutlined />, label: t('menu.users'), perm: PERM.SYS_USER_MANAGE },
@@ -277,7 +280,11 @@ function AppLayout() {
     ]
   }
 
-  const displayName = user.username === 'admin' ? '管理员' : user.username || '用户'
+  // 按**系统角色**取称呼，不按用户名。此前写的是 username === 'admin' ——
+  // 于是第二个管理员账号显示成自己的用户名、而一个恰好叫 admin 的普通用户
+  // 会被称作「管理员」。角色是事实，用户名只是巧合。
+  const ROLE_TITLE = { admin: '管理员', guest: '游客' }
+  const displayName = ROLE_TITLE[systemRole] ?? (user.username || '用户')
 
   return (
     <Layout className="app-layout-root" style={{ minHeight: '100vh' }}>

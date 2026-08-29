@@ -5,6 +5,7 @@ from fastapi import Depends, Request
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import readonly_gate
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.permissions import canonical_project_role
 from app.core.security import decode_token
@@ -42,11 +43,40 @@ async def get_current_user(request: Request, session: AsyncSession = Depends(get
     trace_id = getattr(getattr(request, "state", None), "trace_id", None)
     set_audit_context(user_id=user.id, trace_id=trace_id)
 
+    _enforce_guest_readonly(request, user)
+
     return user
 
 
+def _enforce_guest_readonly(request: Request, user: User) -> None:
+    """游客硬封顶的**唯一真闸门**：系统角色 guest 打不了任何非安全方法。
+
+    放在这里而不是各端点上，是因为 /api 下 129 条写路由根本没有项目语境、
+    挂不上权限点守卫（理由见 app/core/readonly_gate 的模块 docstring）。
+    这是个收口点：新加端点默认就是拒绝的，不会漏。
+
+    比的是**路径模板**不是原始 URL —— FastAPI 匹配路由时会写
+    `child_scope["route"] = self`（fastapi/routing.py:807），依赖执行时路由早已匹配完，
+    所以 `scope["route"].path` 就是 `/api/projects/{project_id}` 这样的模板串，
+    id 不会混进比较。取不到 route 时按拒绝处理（fail-closed）。
+    """
+    if user.role != "guest":
+        return
+    route = request.scope.get("route")
+    path_template = getattr(route, "path", None)
+    if path_template is None:
+        if request.method.upper() in readonly_gate.SAFE_METHODS:
+            return
+        raise ForbiddenError(code="GUEST_READONLY", message="游客账号仅有只读权限")
+    if readonly_gate.blocks_guest(request.method, path_template):
+        raise ForbiddenError(code="GUEST_READONLY", message="游客账号仅有只读权限")
+
+
 def require_role(*roles: str) -> Callable:
-    """系统级角色检查依赖工厂。用法: Depends(require_role("admin"))"""
+    """系统级角色检查依赖工厂。用法: Depends(require_role("admin"))
+
+    只认**系统角色**（admin/user/guest），不做项目角色归一。
+    """
     async def _check(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role not in roles:
             raise ForbiddenError(code="ROLE_DENIED", message="无权限执行此操作")
@@ -57,7 +87,7 @@ def require_role(*roles: str) -> Callable:
 def require_project_role(*roles: str) -> Callable:
     """项目级角色检查依赖工厂。
 
-    用法: Depends(require_project_role("project_admin", "developer", "tester"))
+    用法: Depends(require_project_role(*perms.TIER_WRITE))
 
     规则：
     - 系统 admin 直接通过（绕过项目级检查）

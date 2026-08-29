@@ -13,6 +13,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.exceptions import AppError, NotFoundError
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
@@ -69,7 +70,7 @@ async def list_script_versions(
     case_id: uuid.UUID,
     script_type: str = Query(alias="type", default="api"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     versions = await script_service.list_versions(session, case_id, script_type)
     return {
@@ -87,7 +88,7 @@ async def get_active_script(
     case_id: uuid.UUID,
     script_type: str = Query(alias="type", default="api"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     script = await script_service.get_active_script(session, case_id, script_type)
     if not script:
@@ -104,7 +105,7 @@ async def create_script(
     case_id: uuid.UUID,
     body: CreateScriptRequest,
     session: AsyncSession = Depends(get_db),
-    user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     script = await script_service.create_script(
         session,
@@ -143,7 +144,7 @@ async def preflight_run(
     env_id: uuid.UUID | None = Query(default=None, alias="envId"),
     role: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """执行前门禁：预检全局资源(缺→待确认) + 报告 token/场景变量就绪情况。
     前端跑前调用；envVars 不回传敏感值(仅键名 + token 是否就绪)。"""
@@ -167,7 +168,7 @@ async def run_script(
     script_type: str = Query(alias="type", default="api"),
     env_id: uuid.UUID | None = Body(default=None, alias="envId", embed=True),
     session: AsyncSession = Depends(get_db),
-    user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """直接运行 DB 中的脚本，返回执行结果并持久化到 script_runs 表。"""
     script = await script_service.get_active_script(session, case_id, script_type)
@@ -256,7 +257,7 @@ async def run_script_stream(
     script_type: str = Query(alias="type", default="ui"),
     env_id: uuid.UUID | None = Body(default=None, alias="envId", embed=True),
     session: AsyncSession = Depends(get_db),
-    user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """SSE 流式执行脚本 — 支持 Python pytest 和 TypeScript npx playwright test"""
     import asyncio
@@ -659,7 +660,7 @@ async def list_script_runs(
     script_type: str | None = Query(alias="type", default=None),
     limit: int = Query(default=20, le=100),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """获取用例的脚本执行历史列表。
 
@@ -713,7 +714,7 @@ async def list_script_runs(
 async def get_run_analysis(
     project_id: uuid.UUID, branch_id: uuid.UUID, case_id: uuid.UUID, run_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """一次执行的三层失败判断：平台现象 / CC 归因 / 人工确认。"""
     from app.services.analysis_service import CAUSES
@@ -740,7 +741,7 @@ async def confirm_run_cause(
     cause: str = Body(..., embed=True),
     note: str = Body(default="", embed=True),
     session: AsyncSession = Depends(get_db),
-    user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """人工确认失败原因 —— **这是结论的唯一写入口**。
 
@@ -766,7 +767,7 @@ async def activate_script_version(
     case_id: uuid.UUID,
     script_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     script = await script_service.activate_version(session, script_id)
     if not script:
@@ -813,7 +814,7 @@ async def export_scripts(
     lang: str = Query(default="zh"),
     include_credentials: bool = Query(default=False, alias="includeCredentials"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """导出分支下所有 active 脚本为 zip —— **下下来就能 pytest 跑**。
 

@@ -52,14 +52,14 @@ class TestCreateProject:
         assert branches[0].name == "default"
         assert branches[0].branch == "main"
 
-        # Then: 创建者自动加入 project_members (role=project_admin)
+        # Then: 创建者自动加入 project_members (role=manager)
         result = await db_session.execute(
             select(ProjectMember).where(ProjectMember.project_id == project_id)
         )
         members = result.scalars().all()
         assert len(members) == 1
         assert members[0].user_id == admin.id
-        assert members[0].role == "project_admin"
+        assert members[0].role == "manager"
 
 
 # ---------------------------------------------------------------------------

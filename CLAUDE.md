@@ -36,6 +36,17 @@
   推论两条：① 新加写操作**必须记账**（`api_collection_service.py` 有封样测试盯着：
   函数里调了 `flush` 就必须调 `_audit_node`）；② **别拿「没人用了」当下线理由** ——
   那是结果不是原因，理由要说清它**产出的东西为什么没价值**（例见文档 §15.1）。
+- **游客（系统角色 `guest`）的只读是「硬封顶」，强制点不在权限模型里。**
+  真正把门的是 `app/deps/auth.py` 里的**非 GET 闸门**（判据在 `app/core/readonly_gate.py`）：
+  游客打 `/api` 下任何非安全方法一律 403。白名单**只有 6 条**，每条都写了「为什么它不是真的写」
+  —— `/api/auth/*` 四条 + `POST /api/assistant/chat`（只出提案不落库，`/execute` **故意不在**）
+  + `.../scenario-variables/preview`（纯函数展开）。
+  **别改成靠 `require_permission` 来管**：`/api` 下 264 条写路由里有 129 条不含 `{project_id}`
+  （mock/load-test/toolbox/http-client…），那个工厂的签名靠它取项目语境，**结构上挂不上去**。
+  `core/permissions.SYSTEM_ROLE_CEILING` 那条 `∩` 只管**呈现**（前端按钮、助手能力面），
+  它一个人挡不住写 —— 角色折叠后守卫元组一律 `("manager","member")`，游客作为成员会直接通过。
+  两处封样盯着：`tests/test_authz_seal.py`（对全部写路由取反向差集 + 验闸门**真的被调用**）、
+  `tests/test_mcp_guest_key.py`（:18800 从不读 `users.role`，降级前建的 Key 否则照样能写）。
 - **建 MCP Key 必须绑项目。** Key 的 `project_id` 现在管两件事：工具范围**和数据范围**
   （能读写哪个项目的用例/环境）。`project_id` 为 NULL 的 Key **不受数据范围限制** ——
   这是为存量 Key 留的口子，不是给新 Key 用的。发 Key 前用
@@ -98,7 +109,7 @@ cd /home/dreamer/lumiere && DATABASE_URL='postgresql+asyncpg://postgres:postgres
 | **CC ↔ 平台闭环的边界规则、红线、Story 清单**（改这一块之前先读） | [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) |
 | **版本升级怎么复用上一版用例**：分支对账（端点反查）、三堆分法、状态流转、废弃审核 | [docs/version-upgrade-branch-diff.md](docs/version-upgrade-branch-diff.md) |
 | **数据归属与隔离**：MCP Key 为什么管不住数据、环境改项目级、哪些表该留全局（含一条「假隔离」陷阱） | [docs/data-scoping-and-isolation.md](docs/data-scoping-and-isolation.md) |
-| **权限模型**：440 个端点各挂什么守卫、角色档位（viewer ⊂ tester ⊂ member ⊂ manager）、前端按权限藏入口的口径 | [docs/permission-audit-2026-08.md](docs/permission-audit-2026-08.md) + `backend/app/core/permissions.py`（权限点与角色映射的唯一出处） |
+| **权限模型**：440 个端点各挂什么守卫、角色档位（系统 admin/user/guest + 项目 manager/member）、前端按权限藏入口的口径、**2026-08-29 为什么砍到这几档** | [docs/permission-audit-2026-08.md](docs/permission-audit-2026-08.md) + `backend/app/core/permissions.py`（权限点与角色映射的唯一出处） |
 | **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、页面为什么这么排（P/R 口径照抄对方定义）、脚本正文白名单、**域级 AI 评审**（环境缺口那一列的四个坑） | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
 
 ## 长驻服务

@@ -17,6 +17,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.exceptions import AppError, NotFoundError
 from app.schemas.common import BaseSchema
 from app.deps.auth import require_project_role
@@ -36,8 +37,8 @@ router = APIRouter(
 # S1.2 阈值配置链接入后改读配置
 MAX_CONTENT_CHARS = 200_000
 
-EDIT_ROLES = ("project_admin", "developer", "tester")
-READ_ROLES = ("project_admin", "developer", "tester", "viewer")
+EDIT_ROLES = perms.TIER_WRITE
+READ_ROLES = perms.TIER_READ
 
 
 def _task_to_dict(t: GenerationTask, *, last_seq: int | None = None, has_model: bool | None = None) -> dict:

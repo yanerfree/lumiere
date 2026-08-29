@@ -26,14 +26,14 @@ class TestAddMember:
         # When: 添加成员
         response = await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
             "userId": str(user.id),
-            "role": "tester",
+            "role": "member",
         })
 
         # Then: 201 + 成员信息
         assert response.status_code == 201
         data = response.json()["data"]
         assert data["username"] == "mem_user"
-        assert data["role"] == "tester"
+        assert data["role"] == "member"
 
     @pytest.mark.asyncio
     async def test_add_duplicate_member_returns_409(self, client, db_session):
@@ -47,12 +47,12 @@ class TestAddMember:
         })
         project_id = r.json()["data"]["id"]
         await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
-            "userId": str(user.id), "role": "tester",
+            "userId": str(user.id), "role": "member",
         })
 
         # When: 重复添加
         response = await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
-            "userId": str(user.id), "role": "developer",
+            "userId": str(user.id), "role": "manager",
         })
 
         # Then: 409

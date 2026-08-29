@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_201_CREATED
 
+from app.core import permissions as perms
 from app.core.audit import write_audit_log
 from app.deps.auth import get_current_user, require_project_role, require_role
 from app.deps.db import get_db
@@ -44,8 +45,8 @@ gvar_router = APIRouter(prefix="/api/projects/{project_id}/global-variables",
 
 # 环境和全局变量共用同一套角色：两者都是"这个项目的测试怎么跑"的配置，
 # 权限口径不该不一样（分开定义迟早会漂）。
-_VAR_READ = ("project_admin", "developer", "tester", "guest")
-_VAR_WRITE = ("project_admin", "developer", "tester")
+_VAR_READ = perms.TIER_READ
+_VAR_WRITE = perms.TIER_WRITE
 
 
 # ---- 全局变量 API（项目级）----

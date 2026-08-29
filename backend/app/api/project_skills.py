@@ -19,6 +19,7 @@ from pydantic import Field
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.exceptions import AppError
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
@@ -32,11 +33,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/projects/{project_id}/skills", tags=["skills"])
 
 # 谁能写：项目管理员/开发/测试都行 —— skill 是干活的工具，不该只有管理员能推。
-WRITE_ROLES = ("project_admin", "developer", "tester")
+WRITE_ROLES = perms.TIER_WRITE
 # 谁能读：加上 guest，取用是只读行为
-READ_ROLES = (*WRITE_ROLES, "guest")
+READ_ROLES = perms.TIER_READ
 # 谁能删：只有项目管理员。删除不可逆且影响其它取用方。
-DELETE_ROLES = ("project_admin",)
+DELETE_ROLES = perms.TIER_ADMIN
 
 
 class UpsertSkillRequest(BaseSchema):

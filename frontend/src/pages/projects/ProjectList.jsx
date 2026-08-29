@@ -6,19 +6,21 @@ import { api } from '../../utils/request'
 import { PERM, mePermissionsPath } from '../../utils/permissions'
 import { usePermissions } from '../../utils/PermissionContext'
 
+// 项目角色只有两档（2026-08-29 收敛，迁移 zzx0role3）。
+// 「只读」不再是项目角色，它上移成了账号属性：把人的**系统角色**设成游客，
+// 他在任何项目里都只能看 —— 见 backend/app/core/readonly_gate.py。
+//
+// 这份下拉此前列的是 project_admin/developer/tester/guest 四个旧名，
+// 而后端 schema 现在只收 manager/member：不改的话「添加成员」整个功能会 422，
+// 且报错文案是 Pydantic 的英文校验串，看不出是前端在传废弃的角色名。
 const PROJECT_ROLES = [
-  { value: 'project_admin', label: '项目管理员' },
-  { value: 'developer', label: '开发' },
-  { value: 'tester', label: '测试' },
-  { value: 'guest', label: '访客' },
+  { value: 'manager', label: '项目管理员' },
+  { value: 'member', label: '成员' },
 ]
 
-const ROLE_TAG = {
-  project_admin: { color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
-  developer: { color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
-  tester: { color: '#0ea5a0', bg: 'rgba(14,165,160,0.1)' },
-  guest: { color: '#86909c', bg: 'rgba(0,0,0,0.02)' },
-}
+// 库里可能还留着旧名（存量数据、或从旧版本回退过来的行）。Select 拿到一个不在
+// options 里的 value 会显示成空白 —— 看起来像「这个人没有角色」，而不是「有个旧角色」。
+const roleLabel = (v) => PROJECT_ROLES.find(r => r.value === v)?.label ?? `${v}（旧角色，请重设）`
 
 // ---- 成员管理弹窗 ----
 function MemberModal({ project, open, onClose }) {
@@ -113,7 +115,11 @@ function MemberModal({ project, open, onClose }) {
           value={v}
           size="small"
           style={{ width: 130 }}
-          options={PROJECT_ROLES}
+          options={
+            PROJECT_ROLES.find(r => r.value === v)
+              ? PROJECT_ROLES
+              : [...PROJECT_ROLES, { value: v, label: roleLabel(v), disabled: true }]
+          }
           disabled={!canManage}
           onChange={(newRole) => handleRoleChange(record, newRole)}
         />
@@ -180,7 +186,7 @@ function MemberModal({ project, open, onClose }) {
               options={addableUsers.map(u => ({ value: u.id, label: u.username }))}
             />
           </Form.Item>
-          <Form.Item name="role" label="项目角色" rules={[{ required: true, message: '请选择角色' }]} initialValue="tester">
+          <Form.Item name="role" label="项目角色" rules={[{ required: true, message: '请选择角色' }]} initialValue="member">
             <Select options={PROJECT_ROLES} />
           </Form.Item>
         </Form>

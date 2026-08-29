@@ -3,6 +3,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.exceptions import NotFoundError, ValidationError
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
@@ -23,7 +24,7 @@ async def create_task(
     body: CreateTaskRequest,
     request: Request,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """创建 TestForge 生成任务，返回 task JSON 供 Claude Code 使用"""
     api_url = str(request.base_url).rstrip("/")
@@ -46,7 +47,7 @@ async def list_tasks(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """列出所有 TestForge 任务"""
     tasks = testforge_service.list_tasks()
@@ -59,7 +60,7 @@ async def get_task(
     branch_id: uuid.UUID,
     task_id: str,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """获取单个任务详情"""
     task = testforge_service.get_task(task_id)
@@ -75,7 +76,7 @@ async def update_task_status(
     task_id: str,
     status: str = Query(...),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """更新任务状态（pending / processing / completed / failed）"""
     if status not in ("pending", "processing", "completed", "failed"):

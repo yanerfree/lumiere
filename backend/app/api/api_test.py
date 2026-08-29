@@ -21,6 +21,7 @@ from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.audit import write_audit_log
 from app.schemas.common import BaseSchema
 from app.core.exceptions import NotFoundError
@@ -157,7 +158,7 @@ async def run_batch_scenarios(
     branch_id: uuid.UUID,
     body: RunBatchRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     from app.services.api_test_runner import run_batch
 
@@ -240,7 +241,7 @@ async def create_scenario(
     branch_id: uuid.UUID,
     body: CreateScenarioRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     # 编号 = 用例编号。原来这里发 AT-#### max+1，那是已下线的「接口测试」模块的号段；
     # 而用例详情看到 AT- 开头会标「未绑定用例」，于是从这个按钮建出来的场景
@@ -306,7 +307,7 @@ async def reorder_steps(
     scenario_id: uuid.UUID,
     body: ReorderStepsRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     from app.core.exceptions import AppError
 
@@ -332,7 +333,7 @@ async def update_step(
     step_id: uuid.UUID,
     payload: UpdateStepRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     from app.core.exceptions import AppError
 
@@ -371,7 +372,7 @@ async def create_step(
     scenario_id: uuid.UUID,
     body: CreateStepRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     from app.core.exceptions import AppError
 
@@ -405,7 +406,7 @@ async def delete_step(
     scenario_id: uuid.UUID,
     step_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     from app.core.exceptions import AppError
 
@@ -444,7 +445,7 @@ async def generate_api_tests(
     branch_id: uuid.UUID,
     body: GenerateRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     from app.services.ai_config_resolver import resolve_ai_config
     from app.core.exceptions import AppError

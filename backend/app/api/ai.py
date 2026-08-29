@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.config import settings
 from app.core.exceptions import AppError
 from app.deps.auth import require_project_role
@@ -74,7 +75,7 @@ async def generate_cases(
     branch_id: uuid.UUID,
     body: GenerateCasesRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     config = await _get_ai_config(project_id, session, capability="lum-case-generate")
 
@@ -120,7 +121,7 @@ async def generate_script(
     branch_id: uuid.UUID,
     body: GenerateScriptRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     config = await _get_ai_config(project_id, session, capability="pytest-script")
 
@@ -165,7 +166,7 @@ async def apply_cases(
     branch_id: uuid.UUID,
     body: ApplyCasesRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     from app.services.ai.case_gen_service import import_generated_cases
     result = await import_generated_cases(

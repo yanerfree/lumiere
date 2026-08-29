@@ -10,6 +10,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.audit import write_audit_log
 from app.core.exceptions import AppError
 from app.deps.auth import require_project_role
@@ -83,7 +84,7 @@ async def _load(session: AsyncSession, project_id: uuid.UUID, refresh: bool) -> 
 async def get_qa_catalog(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """读取 QA 场景清单（用本地只读缓存，不打远端）。"""
     return await _load(session, project_id, refresh=False)
@@ -93,7 +94,7 @@ async def get_qa_catalog(
 async def refresh_qa_catalog(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """从 QA 仓 fetch 最新 commit 后重新解析。**只 fetch，不写远端。**"""
     return await _load(session, project_id, refresh=True)
@@ -104,7 +105,7 @@ async def save_qa_repo_config(
     project_id: uuid.UUID,
     body: QaRepoConfig,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     """保存 QA 仓配置，并立刻按新配置读一遍。
 
@@ -139,7 +140,7 @@ async def read_qa_file(
     project_id: uuid.UUID,
     path: str = Query(..., description="仓库内相对路径，必须是清单引用到的文件"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """看 QA 仓里某个文件的内容（`git show`，只读）。
 
@@ -185,7 +186,7 @@ async def start_qa_review(
     domain: str = Body(..., embed=True),
     env_id: uuid.UUID | None = Body(default=None, embed=True, alias="envId"),
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """对一个**域**发起 AI 评审。立刻返回，真正的活在后台跑。
 
@@ -235,7 +236,7 @@ async def list_qa_reviews(
     project_id: uuid.UUID,
     domain: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """这个项目的评审记录。不传 domain = 每个域只回**最近一次**（页面上那一列徽标）。"""
     stmt = select(QaCatalogReview).where(QaCatalogReview.project_id == project_id)
@@ -257,7 +258,7 @@ async def export_qa_review(
     review_id: uuid.UUID,
     fmt: str = Query(default="md", alias="format", description="md | json"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """把一次评审导出成能拿走的文本。**QA 那边取结论走这里（拉），不是我们推。**
 
@@ -289,7 +290,7 @@ async def get_qa_review(
     project_id: uuid.UUID,
     review_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """轮询用：一条评审现在怎么样了。"""
     r = await session.get(QaCatalogReview, review_id)

@@ -57,14 +57,24 @@ def test_tool_allowed_semantics():
     assert catalog.tool_allowed(gated, frozenset({gated.permission})) is True
 
 
-def test_visible_tools_is_monotonic_by_role():
-    """能力面随角色单调递增：viewer ⊆ tester ⊆ member ⊆ manager ⊆ admin(全集)。"""
-    def keys(role):
-        return {t.key for t in catalog.visible_tools(perms.resolve_permissions("user", role))}
+def _keys(system_role, project_role):
+    return {
+        t.key
+        for t in catalog.visible_tools(perms.resolve_permissions(system_role, project_role))
+    }
 
-    viewer, tester, member, manager = keys("viewer"), keys("tester"), keys("member"), keys("manager")
+
+def test_visible_tools_is_monotonic_by_role():
+    """能力面随角色单调递增：游客 ⊆ 成员 ⊆ 项目管理员 ⊆ admin(全集)。
+
+    只读那一档现在是**账号属性**（系统角色 guest + 项目里挂 member），
+    不再是项目角色 viewer/tester —— 链因此短了一节。
+    """
+    guest = _keys("guest", "member")
+    member = _keys("user", "member")
+    manager = _keys("user", "manager")
     admin = {t.key for t in catalog.visible_tools(perms.ALL_PERMISSIONS)}
-    assert viewer <= tester <= member <= manager <= admin
+    assert guest <= member <= manager <= admin
 
 
 def test_admin_sees_every_tool():
@@ -73,22 +83,25 @@ def test_admin_sees_every_tool():
     assert visible == {t.key for t in catalog.TOOLS}
 
 
-def test_project_viewer_cannot_mutate_project_data():
-    """项目 viewer 看得见读操作，但**任何项目级写操作都不可见** —— 看得见却改不了才是漏洞。"""
-    held = perms.resolve_permissions("user", "viewer")
+def test_guest_cannot_mutate_anything():
+    """游客看得见读操作，但**任何写操作都不可见** —— 看得见却改不了才是漏洞。
+
+    注意主语是「游客 + 项目 member」：封顶把 member 那一堆写权限削掉之后，
+    能力面必须跟着缩。要是这里还能看见写工具，说明助手读的不是封顶后的集合。
+    """
+    held = perms.resolve_permissions("guest", "member")
     for t in catalog.visible_tools(held):
-        if t.scope == "project":
-            assert not t.mutates, f"viewer 不该看见项目级写操作 {t.key}"
+        assert not t.mutates, f"游客不该看见写操作 {t.key}"
 
 
-def test_tester_gains_case_write_over_viewer():
-    """具体回归点：viewer 看不到 create_case，tester 能 —— 权限差异确实反映到能力面。"""
-    viewer = {t.key for t in catalog.visible_tools(perms.resolve_permissions("user", "viewer"))}
-    tester = {t.key for t in catalog.visible_tools(perms.resolve_permissions("user", "tester"))}
-    assert "create_case" not in viewer
-    assert "create_case" in tester
-    assert "run_plan" not in viewer
-    assert "run_plan" in tester
+def test_member_gains_case_write_over_guest():
+    """具体回归点：游客看不到 create_case，成员能 —— 权限差异确实反映到能力面。"""
+    guest = _keys("guest", "member")
+    member = _keys("user", "member")
+    assert "create_case" not in guest and "create_case" in member
+    assert "run_plan" not in guest and "run_plan" in member
+    # 建项目是系统权限点，游客的系统权限为空 → 也不该出现
+    assert "create_project" not in guest
 
 
 # ── 入参校验 ─────────────────────────────────────────────────────
@@ -152,12 +165,12 @@ def test_parse_proposal_garbage_is_safe():
 
 # ── 系统提示词 ───────────────────────────────────────────────────
 def test_system_prompt_lists_only_given_tools():
-    viewer_tools = catalog.visible_tools(perms.resolve_permissions("user", "viewer"))
-    sp = runner.build_system_prompt(viewer_tools, None)
-    assert "run_plan" not in sp        # viewer 无 run_plan
+    guest_tools = catalog.visible_tools(perms.resolve_permissions("guest", "member"))
+    sp = runner.build_system_prompt(guest_tools, None)
+    assert "run_plan" not in sp        # 游客无 run_plan
     assert "create_case" not in sp
     assert "list_cases" in sp
-    for t in viewer_tools:
+    for t in guest_tools:
         assert t.key in sp
 
 

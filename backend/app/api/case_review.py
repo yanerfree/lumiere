@@ -13,6 +13,7 @@ from fastapi import APIRouter, Body, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.exceptions import AppError
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
@@ -52,7 +53,7 @@ async def review_one(
     env_id: str | None = Query(default=None, alias="envId"),
     persist: bool = Query(default=True),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """评审一条用例。runFirst=true 会先真跑一遍接口场景再评（debug 模式，不进通过率）。"""
     cfg = await _config(project_id, session)
@@ -126,7 +127,7 @@ async def review_in_progress(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """哪些用例正排在审核队列里（§12 ④「审核中」派生状态）。
 
@@ -151,7 +152,7 @@ async def review_scope_preview(
     branch_id: uuid.UUID,
     folder_id: uuid.UUID | None = Query(default=None, alias="folderId"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """发起前的确认框要显示准确条数（§3 那个「全部 16 条 / 只审 7 条」）。
 
@@ -185,7 +186,7 @@ async def review_batch(
     with_checkup: bool = Body(default=True, embed=True, alias="withCheckup"),
     actor_kind: str = Body(default="human", embed=True, alias="actorKind"),
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """发起一次审核。**立刻返回**，真正的活在队列里跑（review-spec §5）。
 
@@ -291,7 +292,7 @@ async def review_batch_progress(
     branch_id: uuid.UUID,
     batch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """这一批审到第几条了。**查库** —— 以前进度只在发起它的那个进程的内存里，
     刷新页面就丢、重启就消失。现在关掉页面回来照样看得到。
@@ -310,7 +311,7 @@ async def list_review_batches(
     mine: bool = Query(default=True),
     limit: int = Query(default=50, le=200),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """审核报告页：**一行一次审核**（§6）。
 
@@ -338,7 +339,7 @@ async def review_batch_detail(
     branch_id: uuid.UUID,
     batch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """模块报告（§7）：结论 + 共性问题 + 覆盖缺口 + 覆盖分布 + 逐条结果。
 
@@ -371,7 +372,7 @@ async def cancel_review_batch(
     branch_id: uuid.UUID,
     batch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """取消。正在跑的那条会做完再停 —— 跑到一半掐断会留半截数据，
     下一批撞上它又是一轮假打回。"""
@@ -388,7 +389,7 @@ async def resume_review_batch(
     branch_id: uuid.UUID,
     batch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """熔断暂停之后，人确认环境好了，接着跑剩下的（不用重新发起、不重跑已审的）。"""
     from app.services.review import queue
@@ -402,7 +403,7 @@ async def review_rounds(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """这条用例的审核历史：每轮 AI 审的结论 / CC 的整改提交 / 人工覆盖。"""
     from app.services.review import rounds
@@ -421,7 +422,7 @@ async def review_override(
     verdict: str = Query(..., pattern="^(approved|rejected)$"),
     reason: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """人工覆盖 AI 的结论。**记成一轮**，不悄悄改状态 ——
     人推翻了机器的判断，这件事本身就是要留痕的信息。"""
@@ -443,7 +444,7 @@ async def list_deprecate_pending(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """这个分支上挂着「待废审」等人拍板的。列表页的徽标和详情页的提示条都读它。
 
@@ -476,7 +477,7 @@ async def deprecate_decide(
     approve: bool = Query(...),
     note: str | None = Query(default=None),
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """人确认或驳回一条废弃请求。批准才落 lifecycle_status=deprecated。
 
@@ -500,7 +501,7 @@ async def deprecate_undo(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """撤销废弃，回草稿。**废弃可逆是 AI 敢直接批准的前提之一**，所以这条必须有。"""
     from app.services import branch_diff_review
@@ -517,7 +518,7 @@ async def branch_diff_summary(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """这个分支对过账没有、分了几堆。分支复制窗口和用例列表的提示条读它。"""
     from app.models.endpoint_diff import EndpointDiffBatch, EndpointDiffHit
@@ -558,7 +559,7 @@ async def review_report(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """**模块审核报告**：按模块聚合 + 覆盖缺口去重合并。
 
@@ -639,7 +640,7 @@ async def list_failure_tickets(
     report_id: uuid.UUID | None = Query(default=None, alias="reportId"),
     only_open: bool = Query(default=True, alias="onlyOpen"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """失败跟进单。传 reportId 只看这次报告里红的那些。
 
@@ -675,7 +676,7 @@ async def close_failure_ticket(
     reason: str = Body(..., embed=True, min_length=2),
     known_issue: bool = Body(default=False, embed=True, alias="knownIssue"),
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """人工关单。**原因必填**（schema 上就卡住，不靠前端自觉）。
 

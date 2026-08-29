@@ -87,7 +87,9 @@ def require_system_permission(*required: str) -> Callable:
     async def _check(current_user: User = Depends(get_current_user)) -> User:
         if current_user.role == "admin":
             return current_user
-        held = perms.system_permissions(current_user.role)
+        # 走 resolve_permissions 而不是 system_permissions —— 后者不过封顶，
+        # 游客会在这里拿到未削减的系统权限（本模型最该避免的「自报一套、强制另一套」）。
+        held = perms.resolve_permissions(current_user.role)
         if not set(required).issubset(held):
             raise ForbiddenError(code="PERMISSION_DENIED", message="无权限执行此操作")
         return current_user

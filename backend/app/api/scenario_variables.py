@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.exceptions import NotFoundError
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
@@ -58,7 +59,7 @@ async def list_data_generators(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """apifox 式「快速插入」数据生成器目录（分类 → 生成器 token）。"""
     from app.services.data_generators import GENERATORS
@@ -71,7 +72,7 @@ async def preview_template(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     body: PreviewBody,
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """把模板展开一次做样例预览（如 svc-{{$string:6}}-{{$city}} → svc-a1b2c3-上海）。"""
     from app.services.data_generators import expand_template
@@ -84,7 +85,7 @@ async def list_scenario_variables(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     rows = await session.execute(
         select(ScenarioVariable).where(ScenarioVariable.case_id == case_id).order_by(ScenarioVariable.name)
@@ -99,7 +100,7 @@ async def create_scenario_variable(
     case_id: uuid.UUID,
     body: SVCreate,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     v = ScenarioVariable(
         case_id=case_id,
@@ -123,7 +124,7 @@ async def update_scenario_variable(
     var_id: uuid.UUID,
     body: SVUpdate,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     v = await session.get(ScenarioVariable, var_id)
     if not v or v.case_id != case_id:
@@ -150,7 +151,7 @@ async def delete_scenario_variable(
     case_id: uuid.UUID,
     var_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     v = await session.get(ScenarioVariable, var_id)
     if not v or v.case_id != case_id:

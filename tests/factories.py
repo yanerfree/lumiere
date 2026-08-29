@@ -33,7 +33,7 @@ def make_project(**overrides) -> dict:
 def make_member(**overrides) -> dict:
     """Generate a project member dict."""
     data = {
-        "role": "tester",
+        "role": "member",
     }
     data.update(overrides)
     return data

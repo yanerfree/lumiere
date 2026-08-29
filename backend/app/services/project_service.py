@@ -67,11 +67,11 @@ async def create_project(
     session.add_all(envs)
     session.add_all(gvars)
 
-    # 创建者自动加入为 project_admin
+    # 创建者自动加入为项目管理员
     member = ProjectMember(
         project_id=project.id,
         user_id=creator.id,
-        role="project_admin",
+        role="manager",
     )
     session.add(member)
     await session.flush()

@@ -1,9 +1,14 @@
 # PRD — 权限体系定型 + AI 助手（对外多用户开放）
 
-> 状态：**规划草案，待团队评审**。配套审计见 `docs/permission-audit-2026-08.md`。
+> 状态：**2026-08-29 重新评审、重定角色模型，已定案**（M1/M3/M4 已交付，角色收敛本轮交付）。
+> 配套审计见 `docs/permission-audit-2026-08.md`，其 §3 能力矩阵是本次重定的证据。
 > 分支：`feat/rbac-and-assistant`（从 github/main = 80b9d5e 拉；注意真上游是 github，不是 origin）。
 > 已定决策：① 权限模型走「渐进三层」；② 漏洞修复 + 角色重构 + 前端收口 + 封样，**单分支一起交付**；
 > ③ **admin = 全权超级用户**，绕过所有权限点校验，什么都能做；④ 其余角色与开放问题按本文「已定决策」。
+>
+> **本次改了什么**：系统角色 `operator` 删除、新增 `guest`（游客，硬封顶只读）；
+> 项目角色从 3 档（manager/member/viewer）收成 2 档（manager/member）。
+> 「只读」从项目层上移到账号层。改动理由、放弃了什么，见下方「2026-08-29 重定」两节。
 
 ## Executive Summary
 
@@ -20,12 +25,16 @@ B 依赖 A —— 助手的能力清单直接复用 A 产出的「权限点 × �
 ## 产品分层：渐进三层权限模型
 
 ```
-第 1 层 系统角色（平台级）  admin(全权) / operator(运营) / user(普通)
-第 2 层 项目角色（项目级）  manager(管理员) / member(成员) / viewer(只读)
-第 3 层 权限点（声明式）    cases.read  cases.write  plan.run  env.read  env.write
-                          ai.config  report.read  knowledge.write  doc.generate ...
+第 1 层 系统角色（平台级）  admin(全权) / user(普通) / guest(游客·硬封顶只读)
+第 2 层 项目角色（项目级）  manager(项目管理员) / member(成员)
+第 3 层 权限点（声明式）    project.read  case.write  plan.run  env.read  env.write
+                          ai.config  report.read  doc.manage  system.tools.use ...
         角色 = 权限点集合（本轮固定映射）
-        ↑ 后端按权限点校验（依赖 / 装饰器）
+
+        有效权限 = ( 系统角色权限 ∪ 项目角色权限 ) ∩ CEILING[系统角色]
+                   CEILING = { guest: {project.read}, 其余: 全集(不封顶) }
+
+        ↑ 后端按权限点校验（依赖 / 装饰器）+ 游客非 GET 闸门（唯一覆盖得全的强制点）
         ↑ 前端按权限点渲染菜单与按钮
         ↑ AI 助手能力面 = 用户权限点 ∩ 页面可操作动作
 将来（本轮不做，留接口）：权限点可脱离角色，直接授予某个用户
@@ -40,21 +49,94 @@ B 依赖 A —— 助手的能力清单直接复用 A 产出的「权限点 × �
 | 层 | 角色 | 职责 | 由现有谁演进 |
 |---|---|---|---|
 | 系统 | `admin` | **全权超级用户**：绕过所有权限点校验，什么都能做（用户管理、全局设施、所有项目、所有环境含密码） | 不变 |
-| 系统 | `operator` | 运营：**跨项目只读** + 平台设施（服务监控、渠道、AI provider）**读**；**看不到环境里的密码类变量**；不改业务数据 | **新增** |
-| 系统 | `user` | 普通：只能进自己是成员的项目 | 由现 `user` 收紧 |
+| 系统 | `user` | 普通：只能进自己是成员的项目；能建项目、能用工具组 | 不变 |
+| 系统 | `guest` | **游客·硬封顶只读**：加进项目也只能看。系统权限为空集，`project.read` 由它的 member 身份给、再被封顶留下 —— 所以「游客且不属于任何项目」= 零权限，而不是凭空能读 | **新增**，取代项目 `viewer` |
 | 项目 | `manager` | 项目管理员：成员管理、项目设置、AI 配置、全部读写 | = `project_admin` |
-| 项目 | `member` | 成员：用例/计划/接口/文档/环境读写；**不含**成员管理与项目设置 | = `developer`+`tester` 合并 |
-| 项目 | `viewer` | 只读：所有页面可看，**零写操作** | = `guest`，修正为真只读 |
+| 项目 | `member` | 成员：用例/计划/接口/文档/环境读写；**不含**成员管理与项目设置 | = `developer`+`tester`+`viewer` 合并 |
+
+系统角色 `operator` **删除**（原因见下节）。项目角色 `viewer` 退役，其语义由系统角色 `guest` 承担。
+
+## 2026-08-29 重定：为什么砍到 2 档
+
+活体验证（admin / operator / viewer / tester / member / manager 六个真账号逐个登录实测）
+把三个问题摊开了，每一条都不是推测：
+
+1. **`operator` 是个空壳。** 它在 `/api/me/permissions` 里自报 `project.read`，
+   但**没有任何强制路径认它**：`project_service.list_projects` 判的是裸字面量 `role == "admin"`，
+   `require_permission` 又在算权限**之前**先查成员关系。实测 operator 登录后看到 **0 个项目**。
+   全仓 `role == "operator"` 的判断一处都没有 —— 它从落地那天起就没生效过。
+2. **`/settings/users` 当天就会白屏。** 前端 `ROLE_CONFIG` 只有 admin/user，角色列直接取
+   `ROLE_CONFIG[v].color` 且无兜底；库里已经有一行 `operator`。一个潜伏的崩溃，
+   被「第一个真实存在的 operator」引爆。
+3. **项目角色 4 档名不副实。** 审计 §3 实测：project_admin 200 端点 / developer 187 / tester 177，
+   而 tester 与 member 在权限点上**只差一个 `doc.manage`**。真正在起作用的只有「能改 / 只读」两档。
+
+### 重新评审的各方立场
+
+| 视角 | 立场 | 结论 |
+|---|---|---|
+| 产品 | 4 档项目角色没人用对：库里 11 条成员记录 6 条是 project_admin，细分档全是探针账号 | **砍到 2 档**，管理员 vs 成员，够用且解释得清 |
+| 架构 | 角色折叠后 195 处守卫元组的三个桶合并成同一个 `("manager","member")`，元组不再携带信息 | 承认这一点：读写区分**不再由项目角色承担**，改由「游客封顶」承担 |
+| 安全 | 封顶若只落在 `resolve_permissions`，就复刻了 operator 的空壳错误 —— 自报一套、强制另一套 | **必须有独立强制路径**：全局非 GET 闸门，见「关键设计」 |
+| QA | 封样 `test_guest_cannot_reach_persisting_writes` 的主语（项目 guest）消失，这条会变成恒真 | 改写成盯**新的**只读主体；恒真的封样比没有封样更坏，它占着"有人看着"的位置 |
+| UX | 游客看得见八个工具页却点什么都 403，违反本 PRD「打不开的入口不再显示」 | 「工具」整组补权限点 `system.tools.use`（本轮新发现） |
+
+### 放弃了什么（明说）
+
+2 档项目角色**表达不了**「同一个人在 A 项目只读、在 B 项目可写」—— 只读现在是**账号属性**。
+
+当前库里没有这种用户（唯二的 viewer 行是探针账号），所以本轮不为它加复杂度。
+将来真需要，落点是本 PRD 早已留好的 `user_permissions` 直授表，不需要把项目角色再拆回去。
+
+迁移脚本对这种情况**直接中止并列出人名**，不猜：降成 guest 会夺走他在 B 的写权限，
+留成 user 又让他在 A 变成可写，两种都是错的、且都会**悄悄**发生。
+
+## 关键设计：封顶怎么做到「真强制」，而不是又一个 operator
+
+`resolve_permissions` 只被 `/api/me/permissions` 和助手能力面消费；真正把门的是
+`require_project_role`，它只看成员关系 + 角色名。角色折叠后守卫元组一律是
+`("manager","member")` —— **游客作为 member 会直接通过写端点的守卫**。所以封顶要两条腿：
+
+- **腿 A（强制·唯一真闸门）**：游客对 `/api` 的任何非安全方法一律 403，
+  收口在 `deps/auth.get_current_user`（`core/readonly_gate` 提供纯函数判据）。
+  白名单 6 条、每条写清「为什么它不是真的写」：`/api/auth/*` 四条（自身身份）、
+  `POST /api/assistant/chat`（只产出提案不落库，`/execute` **故意不在**）、
+  `.../scenario-variables/preview`（纯函数展开）。
+- **腿 B（呈现·顺带得到防御纵深）**：`resolve_permissions` 末尾 `∩ CEILING`。
+  前端 `has()` 对游客全面 false → 按钮菜单自动消失；助手能力面只剩 5 个读工具。
+
+**为什么不能靠 `require_permission` 承担这件事（是能力问题，不是成本问题）**：
+实测 `/api` 下 264 条写方法路由，其中 **129 条一个角色守卫都没有，且都不含 `{project_id}`**
+（protocol-mock 44 / api-mock 14 / llm-mock 13 / mcp-mock 10 / load-test 10 / oauth2-mock 9 / …）。
+`require_permission` 的签名靠路径里的 `{project_id}` 取项目语境，**结构上挂不上去**。
+所以 M2 那条「把守卫逐条换成权限点」即便做完，游客照样能打这 129 条。
+腿 A 不是"先凑合"，它是唯一覆盖得全的形状。
+
+**两条腿都够不着的两个洞，本轮一并补掉**（否则封顶有明确绕过路径）：
+- `GET /api/load-test/runs/{run_id}/stream` 在 SSE 生成器里执行并 commit —— 一个**会落库的 GET**，
+  方法闸门按定义放行。现由整个 load-test 路由挂 `system.tools.use` 挡住（游客拿不到该权限点）。
+- **MCP :18800 从来不读 `users.role`**，鉴权只把 bearer 哈希后比对 `mcp_api_keys` ——
+  用户被降成游客后，**降级前建的 Key 照样能写**。现于 `on_call_tool` 整条拒绝游客的 Key，
+  含只读工具（`lum_*` 谁读谁写没有结构化元数据，靠函数名手工分五十多个工具，
+  分错一个就是静默的「游客能写」）。
 
 ## 已定决策（本轮直接落地，不再等评审）
 
 1. **admin 全权**：`require_permission(...)` 对 `role == "admin"` 直接放行（沿用现有 `require_project_role`
    里「系统 admin 绕过」的模式），拥有全部权限点。
-2. **operator 权能**：跨项目**只读**用例/报告/计划；**不能读**环境里的密码类变量（`is_secret`/敏感 key）；
-   平台设施（服务/渠道/AI provider）只读。
+2. ~~**operator 权能**：跨项目只读用例/报告/计划……~~
+   **2026-08-29 作废：`operator` 角色整个删除。** 它落地后没有任何强制路径认它（实测登录看到 0 个项目），
+   是个自报一套、强制另一套的空壳。它想表达的「跨项目只读」由系统角色 `guest` 承担，
+   且**真的强制得住**（非 GET 闸门）。存量 operator 用户由迁移 `zzx0role3` 一律转 `user`。
 3. **建 MCP Key 收敛**：只能给「自己是成员的项目」建 Key（对齐数据范围），建/改时校验成员关系。
-4. **member 合并**：原 `developer` 与 `tester` 的 13 处差异端点**全部归 `member`**（无「测试不该写」的区分）。
-5. **channels（通知渠道）**：`admin` 可写，`operator` 只读；普通 user 不可见。
+4. **member 合并** —— **2026-08-29 扩大**：合并范围从 `developer`+`tester` 扩到
+   **`developer`/`tester`/`viewer`/`guest` 四个旧名全部归 `member`**，项目角色只剩 `manager` / `member` 两档。
+   原结论「无『测试不该写』的区分」不变，只是同一条理由再往前推了一格：
+   实测 tester 与 member 在权限点上只差一个 `doc.manage`，这个差别不值一个角色档。
+   `viewer` 折进 `member` **单看是提权**，所以迁移必须配套把「处处只读」的人降成系统 `guest`
+   —— 两步一起做才是等价迁移。
+5. **channels（通知渠道）**：`admin` 可写；**普通 user 不可见**（原文里「`operator` 只读」随 operator 一并作废）。
+   通知渠道是**平台级**设施，不随项目走 —— 这是它至今没被项目化的原因（对比：环境/全局变量 2026-08-21 已项目化）。
 6. **助手动作确认**：读类动作免确认；**写 / 删 / 跑计划 / 发通知**类动作必须二次确认。
 7. **助手审计**：助手触发的每个写操作都落 `audit_log`，来源标记 `assistant`。
 
@@ -64,7 +146,10 @@ B 依赖 A —— 助手的能力清单直接复用 A 产出的「权限点 × �
 - P0 未认证任意文件读取**关闭**，新增封样覆盖路径穿越。
 - P1 全部越权关闭：MCP Key / skills 覆写 / knowledge / ai-config / 项目详情 / 探索记录。
 - 新增封样：`带 {project_id} 的写端点必须有项目级守卫`。
-- `viewer` 可达写端点数 = **0**（当前 7）。
+- ~~`viewer` 可达写端点数 = 0（当前 7）~~ → **2026-08-29 换主语**：`viewer` 这个角色已退役，
+  指标改为 **「游客（系统角色 `guest`）可达的落库写端点数 = 0」**，
+  由 `tests/test_authz_seal.py` 对**全部 264 条写路由**取反向差集封样（白名单 6 条，每条带理由且必须指向真实存在的路由）。
+  注意换主语不是放宽：旧指标只盯项目级写端点，新指标盯 `/api` 下全部非安全方法。
 - 角色取值加 DB 约束（Enum/CheckConstraint），非法角色写不进库。
 - `admin` 对全部端点可达（回归测试覆盖）。
 
@@ -85,14 +170,19 @@ P0 → P1 六项 → P2 三项 + 对应封样。**admin 不受影响**（本就�
 ### M2 — 权限点模型 + 角色迁移
 - `app/core/permissions.py`：权限点常量 + `ROLE_PERMISSIONS` 映射 + `require_permission()` 依赖工厂
   （admin 直接放行）。
-- 端点改造：把 `require_project_role(...)` 等价替换为 `require_permission(...)`；裸 `_AUTHED` 补权限点。
-- 角色迁移：`developer/tester → member`、`guest → viewer`、新增 `operator`；Alembic 迁移 + Enum 约束；
-  兼容期旧角色名映射；成员管理 UI 角色下拉更新。
-- 封样：路径穿越、项目级守卫覆盖、viewer 零写、公开白名单不被扩充、admin 全通。
+- ~~端点改造：把 `require_project_role(...)` 等价替换为 `require_permission(...)`~~ →
+  **未做，明确挪到「下一步」**（见下）。
+- 角色迁移：~~`developer/tester → member`、`guest → viewer`、新增 `operator`~~ →
+  **2026-08-29 重做为** `project_admin→manager`，`developer|tester|viewer|guest→member`，
+  `operator→user`，新增系统角色 `guest`；Alembic `zzx0role3` + 两个 CHECK 约束；
+  兼容期旧角色名映射（`canonical_project_role` 保留，未知名原样返回 = 默认拒绝）；成员管理 UI 下拉更新。
+- 封样：路径穿越、项目级守卫覆盖、**游客零写**、公开白名单不被扩充、admin 全通。
 
 ### M3 — 前端收口
 - `GET /api/me/permissions?project_id=`（返回当前用户在某项目的权限点集合）。
-- `usePermissions()` hook + `<Can permission="...">` 包菜单项与操作按钮。
+- `usePermissions()` hook + 菜单项/按钮按权限点收口。
+  （2026-08-29 补：`<Can>` 组件**已删除** —— 落地后零引用，实际用的是 `RequirePerm`（路由级）
+  与菜单的 `gate()`（入口级）。留一个没人用的组件在树上，下一个人会以为它是规范写法。）
 
 ### M4 — AI 助手
 - 能力目录 = 权限点清单子集（页面上真实可操作、非只读入口的动作）。
@@ -101,8 +191,16 @@ P0 → P1 六项 → P2 三项 + 对应封样。**admin 不受影响**（本就�
   （含 429 两层处理，**勿动**）。
 - 助手 UI（对话入口、动作确认、结果回显）。
 
+### 下一步（不在本轮，且**不能**替代游客封顶）
+把 195 处 `require_project_role(...)` 逐条换成 `require_permission(...)`。它管的是
+「非成员 / 低档成员越权」，与游客封顶**正交**：`/api` 下 129 条写路由压根不含 `{project_id}`，
+`require_permission` 的签名靠它取项目语境，**结构上挂不上去** —— 所以这条做完了游客照样能打那 129 条。
+两个工厂（`require_permission` / `require_system_permission`）目前**零端点使用**，代码保留不动。
+
 ### 不做（留接口，本轮明确排除）
 - `user_permissions` 单用户直授表 —— 模型预留，代码不实现。
+  （2026-08-29 补：「同一人在 A 项目只读、在 B 项目可写」也归这里 —— 2 档项目角色表达不了，
+  当前库里没有这种用户，不为它加复杂度。）
 - 助手自主执行破坏性操作（默认二次确认，不做全自动）。
 - 跨项目的助手编排。
 
@@ -126,7 +224,7 @@ P0 → P1 六项 → P2 三项 + 对应封样。**admin 不受影响**（本就�
 
 ### 前端
 - `usePermissions(projectId)` hook（拉 `/api/me/permissions`，缓存）。
-- `<Can permission="...">` 组件包菜单与按钮。
+- 菜单与按钮按权限点收口（`RequirePerm` 路由级 + 菜单 `gate()` 入口级；`<Can>` 已删，见 M3）。
 - 助手对话面板组件。
 
 ### 助手服务
@@ -138,6 +236,10 @@ P0 → P1 六项 → P2 三项 + 对应封样。**admin 不受影响**（本就�
 | 风险 | 缓解 |
 |---|---|
 | 角色重命名破坏存量数据/存量 MCP Key | 迁移脚本 + 兼容期旧角色名映射；封样盯着 |
+| **降级为游客后，他降级前建的 MCP Key 照样能写**（:18800 从不读 `users.role`） | `on_call_tool` 整条拒绝游客的 Key，含只读工具；`tests/test_mcp_guest_key.py` 封样 |
+| **封顶只落在 `resolve_permissions`，成为第二个 operator**（自报一套、强制另一套） | 强制路径独立于呈现路径：非 GET 闸门在 `deps/auth`；封样验「闸门确实被 `get_current_user` 调用」 |
+| **白名单被后人悄悄加一条** = 封顶开个口子 | 白名单是**差集封样**的一半：多一条、少一条都红；每条必须有理由且必须指向真实存在的路由（死条目=打错字或后门） |
+| 前端角色表漏一个取值 → `/settings/users` 整页白屏 | `roleCfg()` 常驻兜底（不是为这一次的补丁）；成员下拉对旧值补一个 disabled 合成项，不渲染成空白 |
 | 端点批量改守卫时漏改/改错 | 先补封样（红），再改到绿；权限点映射集中一处 |
 | 助手被诱导越权（prompt 注入） | 结构性保证（同 token 同端点）+ 写类二次确认 + 不读用户不可见数据 |
 | 前端藏了入口但后端没校验（或反之） | 权限点唯一事实源，CI 校验三处消费同一清单 |

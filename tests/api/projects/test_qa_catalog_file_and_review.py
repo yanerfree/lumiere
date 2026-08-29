@@ -82,9 +82,11 @@ async def _project(client, db_session, name: str, *, with_env=True):
     project_id = r.json()["data"]["id"]
 
     pa = await create_test_user(db_session, username=f"{name}_pa", role="user")
-    guest = await create_test_user(db_session, username=f"{name}_guest", role="user")
-    db_session.add(ProjectMember(project_id=project_id, user_id=pa.id, role="project_admin"))
-    db_session.add(ProjectMember(project_id=project_id, user_id=guest.id, role="guest"))
+    # 只读主体改成**系统游客**（项目角色照样是 member）：发起评审是 TIER_WRITE，
+    # 普通 member 现在是能发起的 —— 拿 member 来测"发起不了"会假绿。
+    guest = await create_test_user(db_session, username=f"{name}_guest", role="guest")
+    db_session.add(ProjectMember(project_id=project_id, user_id=pa.id, role="manager"))
+    db_session.add(ProjectMember(project_id=project_id, user_id=guest.id, role="member"))
     await db_session.flush()
 
     env_id = None
@@ -230,7 +232,8 @@ class TestStartQaReview:
         assert r.status_code == 400, r.text
 
     @pytest.mark.asyncio
-    async def test_guest发起不了评审(self, client, db_session, fake_qa_repo):
+    async def test_游客发起不了评审(self, client, db_session, fake_qa_repo):
+        """评审会落库、会真跑 —— 游客一律拦在账号级闸门上。"""
         project_id, pa, guest, _ = await _project(client, db_session, "qarev6")
         await client.put(f"/api/projects/{project_id}/qa-catalog/config",
                          headers=pa, json={"url": fake_qa_repo})
@@ -239,6 +242,7 @@ class TestStartQaReview:
                               headers=guest, json={"domain": "SMK"})
 
         assert r.status_code == 403, r.text
+        assert r.json()["error"]["code"] == "GUEST_READONLY"
 
     @pytest.mark.asyncio
     async def test_列表每个域只回最近一次(self, client, db_session, fake_qa_repo):

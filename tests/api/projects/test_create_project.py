@@ -51,4 +51,4 @@ class TestCreateProject:
         members = result.scalars().all()
         assert len(members) == 1
         assert members[0].user_id == admin.id
-        assert members[0].role == "project_admin"
+        assert members[0].role == "manager"

@@ -26,7 +26,7 @@ class TestProjectsForbidden:
             "scriptBasePath": "/f",
         })
 
-        # Then: 201 成功（用户自动成为 project_admin）
+        # Then: 201 成功（用户自动成为 manager）
         assert response.status_code == 201
 
     @pytest.mark.asyncio

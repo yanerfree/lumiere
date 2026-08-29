@@ -5,6 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.deps.auth import get_current_user, require_project_role, require_role
 from app.deps.db import get_db
 from app.models.user import User
@@ -55,7 +56,7 @@ async def list_global_logs(
 async def list_project_logs(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
     action: str | None = Query(default=None),
     target_type: str | None = Query(default=None, alias="targetType"),
     actor_type: str | None = Query(default=None, alias="actorType"),

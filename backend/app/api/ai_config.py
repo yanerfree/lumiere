@@ -11,14 +11,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.exceptions import AppError, NotFoundError
 from app.deps.auth import get_current_user, require_project_role, require_role
 
 # 项目级 AI 配置带 {project_id}，此前只校验登录 → 任意登录用户可把**别人项目**的 AI 通道
 # 改到自己的端点，用例/需求随生成请求外泄。补项目级成员校验。
 # （系统级 /api/ai-providers 的读仍是登录即可——那是给所有人挑通道用的。）
-_AIC_READ = ("project_admin", "developer", "tester", "guest")
-_AIC_WRITE = ("project_admin", "developer", "tester")
+_AIC_READ = perms.TIER_READ
+_AIC_WRITE = perms.TIER_WRITE
 from app.deps.db import get_db
 from app.models.ai_provider_config import AIProviderConfig, ProjectAIConfig
 from app.models.user import User

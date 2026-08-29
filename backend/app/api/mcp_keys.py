@@ -11,6 +11,7 @@ from pydantic import Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.schemas.common import BaseSchema
 
 from app.deps.db import get_db
@@ -65,7 +66,7 @@ def _validate_tools(names: list[str] | None) -> list[str] | None:
 # Key 的 project_id 现在同时管工具范围和数据范围）。project_id 走 body 不走 path，
 # 所以 require_project_role 那个按 path 取 {project_id} 的依赖用不上——在这里手写同一套判定。
 # 允许的角色对齐写口径（不含 guest）：一把能写的 Key 不该由只读成员发出去。
-_BIND_ROLES = ("project_admin", "developer", "tester")
+_BIND_ROLES = perms.TIER_WRITE
 
 
 async def _assert_can_bind_project(
@@ -83,7 +84,8 @@ async def _assert_can_bind_project(
     )).scalar_one_or_none()
     if member is None:
         raise ForbiddenError(code="NOT_PROJECT_MEMBER", message="未绑定到该项目，不能把 Key 归到此项目")
-    # 走规范名匹配，新旧名互认（同 require_project_role）：manager/member/tester 都能发，viewer/guest 不能
+    # 走规范名匹配，新旧名互认（同 require_project_role）。游客不在这里挡 —— 挡它的是
+    # deps/auth 的非 GET 闸门（本端点是 POST）；这里只管「项目内档位够不够」。
     allowed = {canonical_project_role(r) for r in _BIND_ROLES}
     if canonical_project_role(member.role) not in allowed:
         raise ForbiddenError(code="PROJECT_ROLE_DENIED", message="当前项目角色无权把 Key 归到此项目")
@@ -290,7 +292,7 @@ def _match_profile(allowed: list[str] | None) -> str:
 async def get_project_scope(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     from app.mcp import TOOL_CATALOG
 
@@ -321,7 +323,7 @@ async def set_project_scope(
     project_id: uuid.UUID,
     body: ProjectScopeRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer")),
+    _: User = Depends(require_project_role(*perms.TIER_DOC_MANAGE)),
 ):
     project = await session.get(Project, project_id)
     if not project:

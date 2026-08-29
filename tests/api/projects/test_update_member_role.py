@@ -23,21 +23,21 @@ class TestUpdateMemberRole:
         })
         project_id = r.json()["data"]["id"]
         await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
-            "userId": str(user.id), "role": "tester",
+            "userId": str(user.id), "role": "member",
         })
 
-        # When: 将 tester 改为 developer
+        # When: 将 member 改为 manager
         response = await client.put(
-            f"/api/projects/{project_id}/members/{user.id}", headers=headers, json={"role": "developer"}
+            f"/api/projects/{project_id}/members/{user.id}", headers=headers, json={"role": "manager"}
         )
 
         # Then: 200，角色已更新
         assert response.status_code == 200
-        assert response.json()["data"]["role"] == "developer"
+        assert response.json()["data"]["role"] == "manager"
 
     @pytest.mark.asyncio
     async def test_cannot_downgrade_last_admin(self, client, db_session):
-        # Given: 项目只有一个 project_admin（创建者）
+        # Given: 项目只有一个 manager（创建者）
         admin = await create_test_user(db_session, username="last_admin", role="admin")
         headers, _ = make_auth_headers(admin)
 
@@ -46,9 +46,9 @@ class TestUpdateMemberRole:
         })
         project_id = r.json()["data"]["id"]
 
-        # When: 尝试将唯一的 project_admin 降级
+        # When: 尝试将唯一的 manager 降级
         response = await client.put(
-            f"/api/projects/{project_id}/members/{admin.id}", headers=headers, json={"role": "tester"}
+            f"/api/projects/{project_id}/members/{admin.id}", headers=headers, json={"role": "member"}
         )
 
         # Then: 422

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_201_CREATED
 
+from app.core import permissions as perms
 from app.core.exceptions import AppError, ValidationError
 from app.core.audit import write_audit_log
 from app.deps.auth import get_current_user, require_project_role
@@ -21,6 +22,11 @@ from app.services import environment_service, execution_service, export_service,
 
 router = APIRouter(prefix="/api/projects/{project_id}/plans", tags=["plans"])
 
+# 「项目管理员」的库内取值（新名 + 兼容期旧名），供下面重开计划的成员查询用。
+_MANAGER_ROLE_NAMES: tuple[str, ...] = tuple(
+    r for r in perms.PROJECT_ROLES_RECOGNIZED if perms.canonical_project_role(r) == "manager"
+)
+
 
 # ---- API ----
 
@@ -29,7 +35,7 @@ async def create_plan(
     project_id: uuid.UUID,
     body: CreatePlanRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """创建测试计划"""
     # environment_id 从 body 来，路径上的两道校验都管不到它 ——
@@ -53,7 +59,7 @@ async def list_plans(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100, alias="pageSize"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """计划列表"""
     items, total = await plan_service.list_plans(session, project_id, status, page, page_size, branch_id)
@@ -77,7 +83,7 @@ async def get_plan(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """计划详情"""
     plan = await plan_service.get_plan(session, plan_id)
@@ -103,7 +109,7 @@ async def update_plan(
     plan_id: uuid.UUID,
     body: UpdatePlanRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """更新测试计划（仅 draft 状态）"""
     plan = await plan_service.update_plan(session, plan_id, body)
@@ -118,7 +124,7 @@ async def archive_plan(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     """归档计划"""
     plan = await plan_service.archive_plan(session, plan_id)
@@ -130,7 +136,7 @@ async def unarchive_plan(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     """取消归档 —— 归档不能是单向门。
 
@@ -147,7 +153,7 @@ async def delete_plan(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     """删除计划（执行中不可删除）"""
     await plan_service.delete_plan(session, plan_id)
@@ -159,22 +165,22 @@ async def reopen_plan(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """重新打开已完成的计划（已有结果保留，可继续补充录入）"""
     plan = await plan_service.get_plan(session, plan_id)
 
-    # 权限：仅 project_admin 或计划创建者
+    # 权限：仅项目管理员或计划创建者
     if current_user.role != "admin" and current_user.id != plan.created_by:
-        from app.deps.auth import require_project_role as _rpr
-        # 非创建者需要 project_admin 权限
+        # 非创建者需要项目管理员角色。角色名走归一（新名 manager / 旧名 project_admin
+        # 兼容期并存），只比一个字面量会在改名当天静默放行/静默拒绝。
         from sqlalchemy import select
         from app.models.project import ProjectMember
         result = await session.execute(
             select(ProjectMember).where(
                 ProjectMember.project_id == project_id,
                 ProjectMember.user_id == current_user.id,
-                ProjectMember.role == "project_admin",
+                ProjectMember.role.in_(_MANAGER_ROLE_NAMES),
             )
         )
         if result.scalar_one_or_none() is None:
@@ -263,7 +269,7 @@ async def execute_plan(
     plan_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """启动计划执行。
 
@@ -297,7 +303,7 @@ async def manual_record(
     plan_id: uuid.UUID,
     body: ManualRecordRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """录入单条手动测试结果"""
     # 先获取报告 ID
@@ -319,7 +325,7 @@ async def complete_plan(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """确认完成执行"""
     plan = await execution_service.complete_execution(session, plan_id)
@@ -332,7 +338,7 @@ async def list_plan_executions(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """计划的执行历史列表"""
     from sqlalchemy import select as sa_select
@@ -367,7 +373,7 @@ async def get_results(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """获取计划执行结果（报告 + 场景列表）"""
     data = await execution_service.get_report_with_scenarios(session, plan_id)
@@ -389,7 +395,7 @@ async def get_report_dashboard(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """报告仪表盘（L1 汇总 + L2 模块分组）"""
     data = await report_service.get_report_dashboard(session, plan_id)
@@ -403,7 +409,7 @@ async def export_excel(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """导出 Excel 报告"""
     from fastapi.responses import StreamingResponse
@@ -424,7 +430,7 @@ async def get_scenario_steps(
     plan_id: uuid.UUID,
     scenario_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """获取场景的步骤列表（L3 下钻）"""
     from sqlalchemy import select
@@ -471,7 +477,7 @@ async def assign_scenarios(
     plan_id: uuid.UUID,
     body: AssignRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """批量分配处理人"""
     from sqlalchemy import select, update
@@ -501,7 +507,7 @@ async def pause_plan(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """手动暂停执行中的计划"""
     plan = await plan_service.get_plan(session, plan_id)
@@ -519,7 +525,7 @@ async def resume_plan(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """恢复已暂停的计划"""
     plan = await plan_service.get_plan(session, plan_id)
@@ -537,7 +543,7 @@ async def abort_plan(
     project_id: uuid.UUID,
     plan_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """终止计划 — 未执行用例标记为 skipped，状态改为 completed"""
     from sqlalchemy import select, update
@@ -716,7 +722,7 @@ async def list_reports(
     report_type: str | None = Query(default=None, alias="reportType"),
     branch_id: uuid.UUID | None = Query(default=None, alias="branchId"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """项目下所有执行报告列表"""
     from app.models.report import TestReport
@@ -803,7 +809,7 @@ async def execute_adhoc(
     body: AdhocExecuteRequest,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db),
-    user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """批量执行选中用例（不走测试计划），直接生成报告。"""
     from sqlalchemy import select
@@ -919,7 +925,7 @@ async def delete_report(
     project_id: uuid.UUID,
     report_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """删除单条测试报告及其关联的场景和步骤"""
     from sqlalchemy import select as sa_select, delete as sa_delete
@@ -955,7 +961,7 @@ async def get_report_dashboard_by_id(
     project_id: uuid.UUID,
     report_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """按报告 ID 获取仪表盘数据"""
     data = await report_service.get_report_dashboard(session, report_id=report_id)
@@ -969,7 +975,7 @@ async def get_results_by_report_id(
     project_id: uuid.UUID,
     report_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """按报告 ID 获取场景列表"""
     data = await execution_service.get_report_with_scenarios(session, report_id=report_id)
@@ -992,7 +998,7 @@ async def export_excel_by_report_id(
     project_id: uuid.UUID,
     report_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """按报告 ID 导出 Excel"""
     from fastapi.responses import StreamingResponse
@@ -1013,7 +1019,7 @@ async def get_scenario_steps_by_report_id(
     report_id: uuid.UUID,
     scenario_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """按报告 ID 获取场景步骤"""
     from sqlalchemy import select as sa_select

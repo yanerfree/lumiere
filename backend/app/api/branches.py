@@ -5,6 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_201_CREATED, HTTP_202_ACCEPTED
 
+from app.core import permissions as perms
 from app.core.exceptions import AppError, NotFoundError, ValidationError
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
@@ -22,7 +23,7 @@ router = APIRouter(prefix="/api/projects/{project_id}/branches", tags=["branches
 async def list_branches(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """分支配置列表（项目成员均可查看）"""
     branches = await branch_service.list_branches(session, project_id)
@@ -39,7 +40,7 @@ async def create_branch(
     project_id: uuid.UUID,
     body: CreateBranchRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin")),
+    current_user: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     """创建分支配置（project_admin 或系统 admin）。
     如果指定 source_branch_id + copy_modules，从源分支深拷贝数据。"""
@@ -73,7 +74,7 @@ async def update_branch(
     branch_id: uuid.UUID,
     body: UpdateBranchRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     """更新分支配置（name 不可改）"""
     branch = await branch_service.update_branch(session, branch_id, body, project_id)
@@ -87,7 +88,7 @@ async def archive_branch(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     """归档分支配置"""
     branch = await branch_service.archive_branch(session, branch_id, project_id)
@@ -101,7 +102,7 @@ async def activate_branch(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     """恢复已归档的分支配置"""
     branch = await branch_service.activate_branch(session, branch_id, project_id)
@@ -116,7 +117,7 @@ async def sync_branch_endpoint(
     branch_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """
     同步分支脚本（更新脚本）— 后台执行，无需额外 Worker 进程。

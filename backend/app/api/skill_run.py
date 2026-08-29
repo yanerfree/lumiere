@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import Field
 
+from app.core import permissions as perms
 from app.schemas.common import BaseSchema
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +40,7 @@ async def run_case_generate(
     branch_id: uuid.UUID,
     body: RunCaseGenerateRequest,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     ai_config = await resolve_ai_config(project_id, session, capability="lum-case-generate")
     if not ai_config:

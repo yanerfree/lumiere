@@ -56,8 +56,8 @@ class ProjectResponse(BaseSchema):
 
 
 # ---- 项目成员 ----
-# 兼容期：新名 manager/member/viewer 与旧名 project_admin/developer/tester/guest 都收，
-# 取值同源于 core/permissions.PROJECT_ROLES_ALL，两处认名一致（见该文件「兼容期」说明）。
+# 只收新名 manager/member（旧名在迁移 zzx0role3 里已折叠，DB CHECK 也只认这两个）。
+# 取值同源于 core/permissions.PROJECT_ROLES_ALL，与 DB CHECK 同一份，避免两处漂移。
 PROJECT_ROLES = PROJECT_ROLES_ALL
 _ROLE_PATTERN = r"^(" + "|".join(PROJECT_ROLES_ALL) + r")$"
 

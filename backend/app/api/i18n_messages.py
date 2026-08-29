@@ -5,6 +5,7 @@ from sqlalchemy import or_, select
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.exceptions import NotFoundError
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
@@ -59,7 +60,7 @@ async def list_messages(
     category: str | None = Query(None),
     untranslated: bool = Query(False),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     stmt = select(ProjectI18nMessage).where(ProjectI18nMessage.project_id == project_id)
     if category:
@@ -81,7 +82,7 @@ async def create_message(
     project_id: uuid.UUID,
     body: I18nCreate,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer")),
+    _: User = Depends(require_project_role(*perms.TIER_DOC_MANAGE)),
 ):
     r = ProjectI18nMessage(
         project_id=project_id,
@@ -104,7 +105,7 @@ async def update_message(
     msg_id: uuid.UUID,
     body: I18nUpdate,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer")),
+    _: User = Depends(require_project_role(*perms.TIER_DOC_MANAGE)),
 ):
     r = await session.get(ProjectI18nMessage, msg_id)
     if not r or r.project_id != project_id:
@@ -131,7 +132,7 @@ async def delete_message(
     project_id: uuid.UUID,
     msg_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer")),
+    _: User = Depends(require_project_role(*perms.TIER_DOC_MANAGE)),
 ):
     r = await session.get(ProjectI18nMessage, msg_id)
     if not r or r.project_id != project_id:
@@ -145,7 +146,7 @@ async def delete_message(
 async def harvest_messages(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer")),
+    _: User = Depends(require_project_role(*perms.TIER_DOC_MANAGE)),
 ):
     """扫该项目所有 UI 脚本，采集含中文的 UI 文案入词典（translations 留空）。"""
     from app.services.i18n_harvest_service import harvest_project

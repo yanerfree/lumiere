@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.core.exceptions import NotFoundError
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
@@ -51,7 +52,7 @@ def _dump(r: AutomationResource) -> dict:
 async def list_resources(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     rows = await session.execute(
         select(AutomationResource).where(AutomationResource.project_id == project_id).order_by(AutomationResource.name)
@@ -65,7 +66,7 @@ async def precheck_resources(
     env_id: uuid.UUID | None = Query(None, alias="envId"),
     role: str = "ADMIN",
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """跑自动化前预检全局资源存在性。缺失项在 missing 里返回，交用户确认/补建，不自动创建。"""
     from app.services import precheck_service
@@ -78,7 +79,7 @@ async def create_resource(
     project_id: uuid.UUID,
     body: ARCreate,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer")),
+    _: User = Depends(require_project_role(*perms.TIER_DOC_MANAGE)),
 ):
     r = AutomationResource(
         project_id=project_id,
@@ -100,7 +101,7 @@ async def update_resource(
     resource_id: uuid.UUID,
     body: ARUpdate,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer")),
+    _: User = Depends(require_project_role(*perms.TIER_DOC_MANAGE)),
 ):
     r = await session.get(AutomationResource, resource_id)
     if not r or r.project_id != project_id:
@@ -125,7 +126,7 @@ async def delete_resource(
     project_id: uuid.UUID,
     resource_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer")),
+    _: User = Depends(require_project_role(*perms.TIER_DOC_MANAGE)),
 ):
     r = await session.get(AutomationResource, resource_id)
     if not r or r.project_id != project_id:

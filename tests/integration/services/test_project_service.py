@@ -37,7 +37,7 @@ class TestProjectServiceCreate:
         )).scalars().all()
         assert len(members) == 1
         assert members[0].user_id == creator.id
-        assert members[0].role == "project_admin"
+        assert members[0].role == "manager"
 
     @pytest.mark.integration
     @pytest.mark.asyncio

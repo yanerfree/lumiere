@@ -98,7 +98,7 @@ class TestPlanReopen:
         # 添加一个 tester 成员
         tester = await create_test_user(db_session, username="reopen_tester", role="user")
         await client.post(f"/api/projects/{pid}/members", headers=h, json={
-            "userId": str(tester.id), "role": "tester",
+            "userId": str(tester.id), "role": "member",
         })
         tester_h, _ = make_auth_headers(tester)
 

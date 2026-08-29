@@ -20,16 +20,16 @@ class TestMemberServiceAdd:
     async def test_add_member(self, db_session):
         project, _ = await self._setup(db_session)
         user = await create_test_user(db_session, username="mem_svc_new", role="user")
-        data = AddMemberRequest(user_id=user.id, role="tester")
+        data = AddMemberRequest(user_id=user.id, role="member")
         result = await member_service.add_member(db_session, project.id, data)
-        assert result["role"] == "tester"
+        assert result["role"] == "member"
 
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_duplicate_member_raises_conflict(self, db_session):
         project, _ = await self._setup(db_session)
         user = await create_test_user(db_session, username="mem_svc_dup", role="user")
-        data = AddMemberRequest(user_id=user.id, role="tester")
+        data = AddMemberRequest(user_id=user.id, role="member")
         await member_service.add_member(db_session, project.id, data)
         with pytest.raises(ConflictError):
             await member_service.add_member(db_session, project.id, data)

@@ -96,3 +96,41 @@ return FileResponse(file_path)
   从 `require_role` / `require_project_role` 的闭包 `__closure__` 取出允许角色元组。
 - 挂载级依赖（`include_router(dependencies=...)`）也在依赖树上，能正确算进去。
 - P0 用 `curl` 对运行中的 `:8756` 实测复现，只读取无害的 `pyproject.toml`，未触碰 `.env` 或系统文件。
+
+## 6. 2026-08-29 决策：这份矩阵推出了什么
+
+**§3 的能力矩阵保留原样 —— 它是本次决策的证据，不是待更新的现状描述。**
+下面这一节说明它怎么导出了「系统 3 档 + 项目 2 档」。
+
+### 矩阵读出来的三件事
+
+1. **项目 4 档里只有 2 档是真的。** 实测可达端点 project_admin 200 / developer 187 / tester 177，
+   而 tester 与 member 在权限点上**只差一个 `doc.manage`**。真正在起作用的边界是「能改 / 只读」，
+   不是四层梯度。→ 折成 `manager` / `member`。
+2. **`operator` 一个强制路径都没有。** 它在 `/api/me/permissions` 里自报 `project.read`，
+   但 `project_service.list_projects` 判的是裸字面量 `role == "admin"`，
+   `require_permission` 又在算权限**之前**先查成员关系 —— 实测 operator 登录后看到 **0 个项目**。
+   全仓 `role == "operator"` 的判断一处都没有。→ 删除，存量转 `user`。
+3. **「只读」放在项目层就管不住平台设施。** viewer 是项目角色，管不到 `/api` 下那 129 条
+   不含 `{project_id}` 的写路由（mock / load-test / toolbox / http-client…）。
+   → 只读上移到**账号层**：系统角色 `guest`，用全局非 GET 闸门强制。
+
+### 落地后这份矩阵哪几列作废
+
+| §3 里的列 | 现状 |
+|---|---|
+| `project_admin` | → `manager`（迁移 `zzx0role3`） |
+| `developer` / `tester` / 项目 `viewer` / 项目 `guest` | → `member`；只读语义由系统角色 `guest` 承担 |
+| 系统 `operator` | 删除 → `user` |
+| `admin` / `member` | 不变 |
+
+### 一条方法上的教训（比结论更值钱）
+
+审计脚本读 `__closure__` 取角色元组，答的是**「守卫写了什么」**；
+它答不了**「这个角色实际能做什么」**。`operator` 在静态守卫上看着挺像回事，
+真相是六个真账号逐个登录才撞出来的。
+
+**所以「自报的权限」和「强制的权限」是两个东西，必须分别验。**
+本轮为此加了两条封样：`test_authz_seal.py` 验闸门的**覆盖面**（对 264 条写路由取反向差集），
+以及验闸门**确实被 `get_current_user` 调用** —— 一个正确但没人调的纯函数，
+就是下一个 operator。

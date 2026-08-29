@@ -23,7 +23,7 @@ class TestRemoveMember:
         })
         project_id = r.json()["data"]["id"]
         await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
-            "userId": str(user.id), "role": "tester",
+            "userId": str(user.id), "role": "member",
         })
 
         # When: 移除成员
@@ -40,7 +40,7 @@ class TestRemoveMember:
 
     @pytest.mark.asyncio
     async def test_cannot_remove_last_admin(self, client, db_session):
-        # Given: 项目只有一个 project_admin
+        # Given: 项目只有一个 manager
         admin = await create_test_user(db_session, username="rm_last_admin", role="admin")
         headers, _ = make_auth_headers(admin)
 
@@ -49,7 +49,7 @@ class TestRemoveMember:
         })
         project_id = r.json()["data"]["id"]
 
-        # When: 尝试移除唯一的 project_admin
+        # When: 尝试移除唯一的 manager
         response = await client.delete(f"/api/projects/{project_id}/members/{admin.id}", headers=headers)
 
         # Then: 422

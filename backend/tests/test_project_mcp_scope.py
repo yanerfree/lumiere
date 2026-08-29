@@ -104,14 +104,51 @@ def test_项目范围路由挂了项目角色校验(method):
     assert "_check" in names, f"{method} 少了 require_project_role"
 
 
-def test_写范围比读范围要求更高的角色():
-    """读可以给到 guest，写不行 —— 改范围会影响别人正在用的连接。"""
-    from app.api import mcp_keys
+def _guard_roles(method: str) -> set[str]:
+    """把 mcp-scope 路由上 require_project_role 实际收的角色元组挖出来。
 
-    read = inspect.getsource(mcp_keys.get_project_scope)
-    write = inspect.getsource(mcp_keys.set_project_scope)
-    assert "guest" in read
-    assert "guest" not in write and "tester" not in write
+    比 grep 源码可靠：读的是依赖闭包里真正参与判定的那个 tuple，
+    改成常量、换个写法、挪到别的行都不影响。
+    """
+    route = next(
+        r for r in app.routes
+        if isinstance(r, APIRoute)
+        and r.path == "/api/projects/{project_id}/mcp-scope"
+        and method in r.methods
+    )
+    found: set[str] = set()
+
+    def walk(dep):
+        for sub in dep.dependencies:
+            call = getattr(sub, "call", None)
+            if getattr(call, "__name__", "") == "_check" and getattr(call, "__closure__", None):
+                for cell in call.__closure__:
+                    v = cell.cell_contents
+                    if isinstance(v, tuple) and v and all(isinstance(x, str) for x in v):
+                        found.update(v)
+            walk(sub)
+
+    walk(route.dependant)
+    return found
+
+
+def test_写范围要求项目内写档_且游客够不着():
+    """改范围会影响别人正在用的连接 —— 必须项目内写档，且游客一律打不进来。
+
+    2026-08-29 之前这条比的是「读守卫里有 guest、写守卫里没有」。项目角色收敛成
+    2 档后读写守卫取值相同，那个比法**变成了恒真的空断言**：两边都不含 "guest"。
+    只读现在是账号属性，由 core/readonly_gate 的非 GET 闸门强制 —— 所以这里改成
+    盯真正在起作用的两件事：档位挂对了没有、游客的 PUT 会不会被闸门拦下。
+    """
+    from app.core import permissions as perms
+    from app.core import readonly_gate
+
+    assert _guard_roles("GET") == set(perms.TIER_READ)
+    assert _guard_roles("PUT") == set(perms.TIER_DOC_MANAGE)
+    # 只读账号：PUT 被闸门拦死；GET 放行（读本来就该给，写不给）
+    path = "/api/projects/{project_id}/mcp-scope"
+    assert readonly_gate.blocks_guest("PUT", path)
+    assert not readonly_gate.blocks_guest("GET", path)
 
 
 def test_只写得进真存在的工具名():

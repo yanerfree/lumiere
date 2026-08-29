@@ -196,7 +196,7 @@ class TestDeleteUserWithProjects:
 
         await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
             "userId": str(user.id),
-            "role": "tester",
+            "role": "member",
         })
 
         # When: 删除该用户

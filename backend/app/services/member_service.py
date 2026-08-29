@@ -5,10 +5,22 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError, ValidationError
+from app.core import permissions as perms
 from app.core.audit import audit_log
 from app.models.project import ProjectMember
 from app.models.user import User
 from app.schemas.project import AddMemberRequest, UpdateMemberRequest
+
+# 「项目管理员」在库里可能是新名 manager，也可能是旧名 project_admin（兼容期并存）。
+# LAST_ADMIN 保护必须两个名都认 —— 只比一个字面量的话，改名当天这个保护会**静默失效**：
+# 计数返回 0，于是「最后一个管理员」变得可删/可降级，而没有任何报错提示这件事发生了。
+_ADMIN_ROLE_NAMES: tuple[str, ...] = tuple(
+    r for r in perms.PROJECT_ROLES_RECOGNIZED if perms.canonical_project_role(r) == "manager"
+)
+
+
+def _is_admin(role: str | None) -> bool:
+    return perms.canonical_project_role(role) == "manager"
 
 
 async def list_members(session: AsyncSession, project_id: uuid.UUID) -> list[dict]:
@@ -82,11 +94,11 @@ async def _get_member(
 
 
 async def _count_project_admins(session: AsyncSession, project_id: uuid.UUID) -> int:
-    """统计项目中 project_admin 角色的数量。"""
+    """统计项目里「项目管理员」的人数（新旧名都算，见 _ADMIN_ROLE_NAMES）。"""
     result = await session.execute(
         select(func.count()).where(
             ProjectMember.project_id == project_id,
-            ProjectMember.role == "project_admin",
+            ProjectMember.role.in_(_ADMIN_ROLE_NAMES),
         )
     )
     return result.scalar_one()
@@ -96,11 +108,11 @@ async def _count_project_admins(session: AsyncSession, project_id: uuid.UUID) ->
 async def update_member_role(
     session: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID, data: UpdateMemberRequest
 ) -> dict:
-    """修改成员角色。若降级最后一个 project_admin 则 422。"""
+    """修改成员角色。若降级最后一个项目管理员则 422。"""
     member = await _get_member(session, project_id, user_id)
 
-    # 如果当前是 project_admin 且要改为其他角色，检查是否是最后一个
-    if member.role == "project_admin" and data.role != "project_admin":
+    # 如果当前是项目管理员且要改为其他角色，检查是否是最后一个
+    if _is_admin(member.role) and not _is_admin(data.role):
         count = await _count_project_admins(session, project_id)
         if count <= 1:
             raise ValidationError(
@@ -125,10 +137,10 @@ async def update_member_role(
 async def remove_member(
     session: AsyncSession, project_id: uuid.UUID, user_id: uuid.UUID
 ) -> None:
-    """移除成员。若是最后一个 project_admin 则 422。"""
+    """移除成员。若是最后一个项目管理员则 422。"""
     member = await _get_member(session, project_id, user_id)
 
-    if member.role == "project_admin":
+    if _is_admin(member.role):
         count = await _count_project_admins(session, project_id)
         if count <= 1:
             raise ValidationError(

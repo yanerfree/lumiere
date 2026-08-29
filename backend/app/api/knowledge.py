@@ -8,6 +8,7 @@ from pydantic import Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.schemas.common import BaseSchema
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
@@ -18,8 +19,8 @@ router = APIRouter(prefix="/api/projects/{project_id}/knowledge", tags=["knowled
 
 # 知识库带 {project_id}，此前只校验登录 → 任意登录用户可越权读写他人项目知识库
 # （会喂 AI，污染别人项目的上下文）。补项目级成员+角色校验，口径同环境/全局变量。
-_KB_READ = ("project_admin", "developer", "tester", "guest")
-_KB_WRITE = ("project_admin", "developer", "tester")
+_KB_READ = perms.TIER_READ
+_KB_WRITE = perms.TIER_WRITE
 
 
 class CreateKnowledgeRequest(BaseSchema):

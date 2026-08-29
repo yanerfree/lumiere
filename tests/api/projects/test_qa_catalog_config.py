@@ -66,7 +66,13 @@ def fake_qa_repo(tmp_path, monkeypatch) -> str:
 
 
 async def _project_with_pa(client, db_session, name: str):
-    """建项目 + 一个项目管理员 + 一个 guest。"""
+    """建项目 + 一个项目管理员 + 一个普通成员 + 一个系统游客。
+
+    2026-08-29：原来这里的"只读主体"是项目角色 `guest`，那一档已退役。
+    现在拆成两个主体，因为它们被**不同的东西**拦住，混成一个就分不清哪条腿断了：
+    - 普通成员：项目角色守卫拦（配置是 TIER_ADMIN，只有 manager 能改）→ PROJECT_ROLE_DENIED
+    - 系统游客：账号级封顶拦（非 GET 闸门）→ GUEST_READONLY，且它在项目里挂的就是 member
+    """
     admin = await create_test_user(db_session, username=f"{name}_admin", role="admin")
     admin_headers, _ = make_auth_headers(admin)
     r = await client.post("/api/projects", headers=admin_headers, json={"name": name})
@@ -74,11 +80,14 @@ async def _project_with_pa(client, db_session, name: str):
     project_id = r.json()["data"]["id"]
 
     pa = await create_test_user(db_session, username=f"{name}_pa", role="user")
-    guest = await create_test_user(db_session, username=f"{name}_guest", role="user")
-    db_session.add(ProjectMember(project_id=project_id, user_id=pa.id, role="project_admin"))
-    db_session.add(ProjectMember(project_id=project_id, user_id=guest.id, role="guest"))
+    member = await create_test_user(db_session, username=f"{name}_member", role="user")
+    guest = await create_test_user(db_session, username=f"{name}_guest", role="guest")
+    db_session.add(ProjectMember(project_id=project_id, user_id=pa.id, role="manager"))
+    db_session.add(ProjectMember(project_id=project_id, user_id=member.id, role="member"))
+    db_session.add(ProjectMember(project_id=project_id, user_id=guest.id, role="member"))
     await db_session.flush()
-    return project_id, make_auth_headers(pa)[0], make_auth_headers(guest)[0]
+    return (project_id, make_auth_headers(pa)[0],
+            make_auth_headers(member)[0], make_auth_headers(guest)[0])
 
 
 class TestQaCatalogConfig:
@@ -86,7 +95,7 @@ class TestQaCatalogConfig:
 
     @pytest.mark.asyncio
     async def test_未配置时只回表头不报错(self, client, db_session):
-        project_id, pa_headers, _ = await _project_with_pa(client, db_session, "qacfg1")
+        project_id, pa_headers, _, _ = await _project_with_pa(client, db_session, "qacfg1")
 
         r = await client.get(f"/api/projects/{project_id}/qa-catalog", headers=pa_headers)
 
@@ -100,7 +109,7 @@ class TestQaCatalogConfig:
 
     @pytest.mark.asyncio
     async def test_只填仓库地址就能读出来(self, client, db_session, fake_qa_repo):
-        project_id, pa_headers, _ = await _project_with_pa(client, db_session, "qacfg2")
+        project_id, pa_headers, _, _ = await _project_with_pa(client, db_session, "qacfg2")
 
         r = await client.put(f"/api/projects/{project_id}/qa-catalog/config",
                              headers=pa_headers, json={"url": fake_qa_repo})
@@ -138,7 +147,7 @@ class TestQaCatalogConfig:
 
     @pytest.mark.asyncio
     async def test_清空url等于取消配置(self, client, db_session, fake_qa_repo):
-        project_id, pa_headers, _ = await _project_with_pa(client, db_session, "qacfg3")
+        project_id, pa_headers, _, _ = await _project_with_pa(client, db_session, "qacfg3")
         await client.put(f"/api/projects/{project_id}/qa-catalog/config",
                          headers=pa_headers, json={"url": fake_qa_repo})
 
@@ -153,7 +162,7 @@ class TestQaCatalogConfig:
 
     @pytest.mark.asyncio
     async def test_配错了报错而不是静默空清单(self, client, db_session, fake_qa_repo):
-        project_id, pa_headers, _ = await _project_with_pa(client, db_session, "qacfg4")
+        project_id, pa_headers, _, _ = await _project_with_pa(client, db_session, "qacfg4")
 
         r = await client.put(f"/api/projects/{project_id}/qa-catalog/config", headers=pa_headers,
                              json={"url": fake_qa_repo, "branch": "no-such-branch"})
@@ -165,10 +174,29 @@ class TestQaCatalogConfig:
         assert data["scenarios"] == []
 
     @pytest.mark.asyncio
-    async def test_guest改不了配置(self, client, db_session, fake_qa_repo):
-        project_id, _, guest_headers = await _project_with_pa(client, db_session, "qacfg5")
+    async def test_普通成员改不了配置(self, client, db_session, fake_qa_repo):
+        """QA 仓地址是项目设置，只有 manager 能改 —— 成员点得到也改不动。"""
+        project_id, _, member_headers, _ = await _project_with_pa(client, db_session, "qacfg5")
+
+        r = await client.put(f"/api/projects/{project_id}/qa-catalog/config",
+                             headers=member_headers, json={"url": fake_qa_repo})
+
+        assert r.status_code == 403, r.text
+        assert r.json()["error"]["code"] == "PROJECT_ROLE_DENIED"
+
+    @pytest.mark.asyncio
+    async def test_游客改不了配置_而且是另一条腿拦的(self, client, db_session, fake_qa_repo):
+        """同样 403，但**原因不同** —— 这条分得清才有意义。
+
+        游客在项目里挂的是 member，可 manager 这一档它本来就到不了；
+        真正先拦下它的是账号级的非 GET 闸门。断言 error.code 就是在钉「哪条腿在起作用」：
+        哪天封顶退化成只在权限响应里自报，这里会变成 PROJECT_ROLE_DENIED —— 状态码还是 403，
+        只看状态码就完全看不出来。
+        """
+        project_id, _, _, guest_headers = await _project_with_pa(client, db_session, "qacfg6")
 
         r = await client.put(f"/api/projects/{project_id}/qa-catalog/config",
                              headers=guest_headers, json={"url": fake_qa_repo})
 
         assert r.status_code == 403, r.text
+        assert r.json()["error"]["code"] == "GUEST_READONLY"

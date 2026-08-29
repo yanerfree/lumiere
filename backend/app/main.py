@@ -50,7 +50,9 @@ from app.api.system_services import router as system_services_router
 from app.api.me import router as me_router
 from app.api.assistant import router as assistant_router
 from app.core.middleware import CamelCaseResponse, TraceIdMiddleware
+from app.core import permissions as perms
 from app.deps.auth import get_current_user, require_project_role
+from app.deps.permissions import require_system_permission
 from app.deps.scope import verify_case_access, verify_path_scope
 
 # --- MCP Server ---
@@ -309,6 +311,18 @@ app.add_exception_handler(Exception, unhandled_exception_handler)
 # 对应的封样在 tests/test_endpoint_auth.py。
 _AUTHED = [Depends(get_current_user)]
 
+# 工具族（Mock / 压测 / http-client / toolbox）再多一道：要 system.tools.use。
+#
+# 2026-08-29 加。游客封顶靠的是「非安全方法一律拒」的闸门（deps/auth.py），
+# 但这一族里有**会落库、会打真流量的 GET** —— `GET /api/load-test/runs/{id}/stream`
+# 在 SSE 生成器里调 execute_run，那函数 update_run + commit 并真跑压测，
+# 而 run_id 从只需登录的列表接口就能枚举。方法闸门按定义放行 GET，抓不到它。
+#
+# 所以不逐个去堵那一条，而是整族要一个权限点：游客没有 system.tools.use，
+# 于是这一族对它整体关闭 —— 和前端把「工具」菜单组整组隐藏是同一个判据，
+# 前端藏、后端也真的挡，不是只藏不挡。user/admin 都持有该点，行为不变。
+_TOOLS = [Depends(require_system_permission(perms.P_SYS_TOOLS_USE))]
+
 # 分支/用例这条链上的路由器：除了"你是不是这个项目的成员"，还得验路径里的
 # branch_id / case_id 确实属于这个项目、这个分支。见 app/deps/scope.py 的说明
 # （实测越权读到过、也改掉过别的项目的用例）。
@@ -340,19 +354,19 @@ app.include_router(scripts_export_router, dependencies=_SCOPED)
 app.include_router(testforge_router, dependencies=_SCOPED)
 app.include_router(debug_router, dependencies=_AUTHED)
 app.include_router(api_collections_router)
-app.include_router(llm_mock_router, dependencies=_AUTHED)
-app.include_router(api_mock_router, dependencies=_AUTHED)
-app.include_router(proxy_probe_router, dependencies=_AUTHED)
+app.include_router(llm_mock_router, dependencies=_TOOLS)
+app.include_router(api_mock_router, dependencies=_TOOLS)
+app.include_router(proxy_probe_router, dependencies=_TOOLS)
 app.include_router(ai_router, dependencies=_SCOPED)
 app.include_router(ai_config_router, dependencies=_AUTHED)
 app.include_router(ai_provider_router)
 app.include_router(project_ai_config_router)
 app.include_router(ai_capabilities_router)
 app.include_router(skill_run_router, dependencies=_SCOPED)
-app.include_router(mcp_mock_router, dependencies=_AUTHED)
-app.include_router(protocol_mock_router, dependencies=_AUTHED)
-app.include_router(oauth2_mock_router, dependencies=_AUTHED)
-app.include_router(load_test_router, dependencies=_AUTHED)
+app.include_router(mcp_mock_router, dependencies=_TOOLS)
+app.include_router(protocol_mock_router, dependencies=_TOOLS)
+app.include_router(oauth2_mock_router, dependencies=_TOOLS)
+app.include_router(load_test_router, dependencies=_TOOLS)
 app.include_router(api_test_router, dependencies=_SCOPED)
 app.include_router(scenario_gen_router, dependencies=_SCOPED)
 app.include_router(case_file_router, dependencies=[Depends(verify_case_access)])
@@ -360,8 +374,8 @@ app.include_router(skill_manage_router, dependencies=_AUTHED)
 app.include_router(project_skills_router)
 app.include_router(knowledge_router)
 app.include_router(screenshots_router)
-app.include_router(toolbox_router, dependencies=_AUTHED)
-app.include_router(http_client_router, dependencies=_AUTHED)
+app.include_router(toolbox_router, dependencies=_TOOLS)
+app.include_router(http_client_router, dependencies=_TOOLS)
 app.include_router(mcp_keys_router)
 # 项目级 MCP 工具范围（角色校验挂在各 handler 上，不在这里加 dependencies）
 app.include_router(mcp_scope_router)

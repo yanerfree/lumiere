@@ -94,7 +94,7 @@ class TestE2EProjectManagement:
 
         # 4. 添加成员
         resp = await client.post(f"/api/projects/{pid}/members", headers=admin_h, json={
-            "userId": str(member.id), "role": "developer",
+            "userId": str(member.id), "role": "member",
         })
         assert resp.status_code in (200, 201)
 
@@ -256,12 +256,17 @@ class TestE2ERBACEnforcement:
     @pytest.mark.e2e
     @pytest.mark.asyncio
     async def test_rbac_full_chain(self, client, db_session):
-        """RBAC 全链路：admin/project_admin/developer/tester/guest 权限验证"""
+        """RBAC 全链路：系统 admin / 项目 manager / 项目 member / 系统 guest / 非成员，逐档验边界。
+
+        2026-08-29 换档：项目角色砍到 manager/member 两档，只读那档上移成**账号级**游客
+        （硬封顶，见 core/readonly_gate.py）。所以第 4/5 步的主语是系统 guest，
+        它在项目里挂的是 member —— 项目角色守卫放它过，拦住它的是非 GET 闸门。
+        """
         # 创建用户
         admin = await create_test_user(db_session, username="e2e_rbac_admin", role="admin")
         pa_user = await create_test_user(db_session, username="e2e_rbac_pa", role="user")
         dev = await create_test_user(db_session, username="e2e_rbac_dev", role="user")
-        guest = await create_test_user(db_session, username="e2e_rbac_guest", role="user")
+        guest = await create_test_user(db_session, username="e2e_rbac_guest", role="guest")
         outsider = await create_test_user(db_session, username="e2e_rbac_out", role="user")
 
         admin_h, _ = make_auth_headers(admin)
@@ -278,7 +283,7 @@ class TestE2ERBACEnforcement:
         pid = resp.json()["data"]["id"]
 
         # 2. 添加各角色成员
-        for user, role in [(pa_user, "project_admin"), (dev, "developer"), (guest, "guest")]:
+        for user, role in [(pa_user, "manager"), (dev, "member"), (guest, "member")]:
             resp = await client.post(f"/api/projects/{pid}/members", headers=admin_h, json={
                 "userId": str(user.id), "role": role,
             })
@@ -292,26 +297,26 @@ class TestE2ERBACEnforcement:
         resp = await client.get(f"/api/projects/{pid}/members", headers=guest_h)
         assert resp.status_code == 200
 
-        # 5. Guest 不能写入（添加成员）
+        # 5. 游客不能写入 —— 注意他在项目里就是 member，拦住他的是账号级封顶
         new_user = await create_test_user(db_session, username="e2e_rbac_new", role="user")
         resp = await client.post(f"/api/projects/{pid}/members", headers=guest_h, json={
-            "userId": str(new_user.id), "role": "tester",
+            "userId": str(new_user.id), "role": "member",
         })
         assert resp.status_code == 403
 
-        # 6. Developer 不能管理成员
+        # 6. 普通成员不能管理成员
         resp = await client.post(f"/api/projects/{pid}/members", headers=dev_h, json={
-            "userId": str(new_user.id), "role": "tester",
+            "userId": str(new_user.id), "role": "member",
         })
         assert resp.status_code == 403
 
-        # 7. Project admin 可以管理成员
+        # 7. 项目管理员可以管理成员
         resp = await client.post(f"/api/projects/{pid}/members", headers=pa_h, json={
-            "userId": str(new_user.id), "role": "tester",
+            "userId": str(new_user.id), "role": "member",
         })
         assert resp.status_code in (200, 201)
 
-        # 8. Developer 不能改项目配置
+        # 8. 普通成员不能改项目配置
         resp = await client.put(f"/api/projects/{pid}", headers=dev_h, json={
             "description": "dev tried",
         })

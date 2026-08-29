@@ -49,7 +49,7 @@ class TestListProjects:
         # 创建普通用户并绑定到第一个项目
         user = await create_test_user(db_session, username="list_user", role="user")
         project_id = r1.json()["data"]["id"]
-        member = ProjectMember(project_id=project_id, user_id=user.id, role="tester")
+        member = ProjectMember(project_id=project_id, user_id=user.id, role="member")
         db_session.add(member)
         await db_session.flush()
 

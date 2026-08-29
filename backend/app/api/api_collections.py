@@ -5,6 +5,7 @@ import uuid
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core import permissions as perms
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
 from app.models.user import User
@@ -24,7 +25,7 @@ async def list_nodes(
     project_id: uuid.UUID,
     branch_id: uuid.UUID | None = None,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     nodes = await svc.list_tree(session, project_id, branch_id)
     return {"data": nodes}
@@ -35,7 +36,7 @@ async def get_node(
     project_id: uuid.UUID,
     node_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     node = await svc.get_node(session, node_id)
     if not node:
@@ -49,7 +50,7 @@ async def create_node(
     body: CreateNodeRequest,
     branch_id: uuid.UUID | None = None,
     session: AsyncSession = Depends(get_db),
-    user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     data = body.model_dump(by_alias=False)
     data["branch_id"] = branch_id
@@ -63,7 +64,7 @@ async def update_node(
     node_id: uuid.UUID,
     body: UpdateNodeRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     data = {k: v for k, v in body.model_dump(by_alias=False).items() if v is not None}
     node = await svc.update_node(session, node_id, data)
@@ -75,7 +76,7 @@ async def delete_node(
     project_id: uuid.UUID,
     node_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     await svc.delete_node(session, node_id)
     return {"message": "删除成功"}
@@ -86,7 +87,7 @@ async def duplicate_node(
     project_id: uuid.UUID,
     node_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     node = await svc.duplicate_node(session, node_id, user.id)
     return {"data": node}
@@ -98,7 +99,7 @@ async def import_postman(
     body: ImportPostmanRequest,
     branch_id: uuid.UUID | None = None,
     session: AsyncSession = Depends(get_db),
-    user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     count = await svc.import_postman(session, project_id, user.id, body.collection, branch_id)
     return {"data": {"imported": count}, "message": f"成功导入 {count} 个接口"}
@@ -109,7 +110,7 @@ async def batch_sort(
     project_id: uuid.UUID,
     body: list[dict],
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     await svc.batch_sort(session, body)
     return {"message": "排序已更新"}

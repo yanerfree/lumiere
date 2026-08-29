@@ -7,7 +7,16 @@ import { api } from '../../utils/request'
 const ROLE_CONFIG = {
   admin: { label: '系统管理员', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
   user: { label: '普通用户', color: '#7c5cbf', bg: 'rgba(124,92,191,0.1)' },
+  guest: { label: '游客', color: '#86909c', bg: 'rgba(134,144,156,0.12)' },
 }
+
+// 未知角色的兜底。**必须常驻，不是为了这一次**：这里此前没有兜底，
+// 角色列直接取 ROLE_CONFIG[v].color —— 库里一旦出现表里没有的角色值，
+// 整个用户管理页白屏（不是那一行坏，是 render 抛错、整张表都渲染不出来）。
+// 2026-08-29 就是这么被引爆的：探针账号在库里留了一行 operator，
+// 而 ROLE_CONFIG 只有 admin/user。角色值会随迁移、随版本回退、随手工改库变化，
+// 前端不该假设自己永远认得全。
+const roleCfg = (v) => ROLE_CONFIG[v] ?? { label: v || '未知', color: '#86909c', bg: 'rgba(134,144,156,0.12)' }
 
 export default function UserManagement() {
   const [users, setUsers] = useState([])
@@ -101,7 +110,7 @@ export default function UserManagement() {
     {
       title: '角色', dataIndex: 'role', width: 130, align: 'center',
       render: (v) => {
-        const cfg = ROLE_CONFIG[v]
+        const cfg = roleCfg(v)
         return <Tag style={{ color: cfg.color, background: cfg.bg, border: 'none' }}>{cfg.label}</Tag>
       },
     },
@@ -123,7 +132,10 @@ export default function UserManagement() {
       render: (_, record) => (
         <Space size={4}>
           <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} style={{ color: '#86909c' }} />
-          {record.username !== 'admin' && (
+          {/* 保护的是「系统管理员」这个角色，不是叫 admin 的那个人 ——
+              按用户名判的话，把 admin 改名、或另建一个管理员账号，保护就失效了，
+              而且失效得静默（按钮照常出现，删完才发现没人能管理系统了）。 */}
+          {record.role !== 'admin' && (
             <Popconfirm
               title={`确定删除用户 ${record.username}？`}
               description={record.isActive ? '该用户当前处于启用状态' : undefined}
@@ -228,6 +240,7 @@ export default function UserManagement() {
             <Select options={[
               { value: 'admin', label: '系统管理员 — 可访问所有项目和系统配置' },
               { value: 'user', label: '普通用户 — 需通过项目成员绑定获得访问权限' },
+              { value: 'guest', label: '游客 — 硬封顶只读，加进项目也只能看，不能改' },
             ]} />
           </Form.Item>
           {editingUser && (

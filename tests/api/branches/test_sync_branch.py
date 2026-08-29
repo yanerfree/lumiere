@@ -166,7 +166,7 @@ class TestSyncBranchAsync:
 
 
 class TestSyncBranchPermissions:
-    """同步权限: project_admin / developer / tester 可同步，guest 不行"""
+    """同步权限: manager / member 可同步，非成员不行"""
 
     @pytest.mark.asyncio
     async def test_guest_cannot_sync(self, client, db_session):

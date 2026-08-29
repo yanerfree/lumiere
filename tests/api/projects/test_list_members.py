@@ -30,4 +30,4 @@ class TestListMembers:
         data = response.json()["data"]
         assert len(data) >= 1
         assert data[0]["username"] == "list_mem_admin"
-        assert data[0]["role"] == "project_admin"
+        assert data[0]["role"] == "manager"

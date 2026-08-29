@@ -7,7 +7,7 @@ TDD Red Phase: 验证项目成员的添加、修改、移除和权限控制
 - 同一用户不可重复绑定 → 409
 - PUT 修改成员角色
 - DELETE 移除成员
-- 移除最后 project_admin → 422
+- 移除最后 manager → 422
 - 非管理员操作 → 403
 """
 import pytest
@@ -43,7 +43,7 @@ class TestAddMember:
 
         response = await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
             "userId": str(user.id),
-            "role": "tester",
+            "role": "member",
         })
 
         assert response.status_code in (200, 201)
@@ -59,7 +59,7 @@ class TestAddMember:
         # Given: 添加用户为成员
         await client.post(f"/api/projects/{project_id}/members", headers=admin_headers, json={
             "userId": str(user.id),
-            "role": "developer",
+            "role": "member",
         })
 
         # When: 用户查看项目列表
@@ -85,13 +85,13 @@ class TestDuplicateMember:
         # Given: 第一次绑定
         await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
             "userId": str(user.id),
-            "role": "tester",
+            "role": "member",
         })
 
         # When: 重复绑定
         response = await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
             "userId": str(user.id),
-            "role": "developer",
+            "role": "member",
         })
 
         assert response.status_code == 409
@@ -112,13 +112,13 @@ class TestUpdateMemberRole:
 
         await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
             "userId": str(user.id),
-            "role": "tester",
+            "role": "member",
         })
 
         response = await client.put(
             f"/api/projects/{project_id}/members/{user.id}",
             headers=headers,
-            json={"role": "developer"},
+            json={"role": "manager"},
         )
 
         assert response.status_code == 200
@@ -141,7 +141,7 @@ class TestRemoveMember:
         # Given: 添加成员
         await client.post(f"/api/projects/{project_id}/members", headers=admin_headers, json={
             "userId": str(user.id),
-            "role": "tester",
+            "role": "member",
         })
 
         # When: 移除成员
@@ -158,18 +158,18 @@ class TestRemoveMember:
 
 
 # ---------------------------------------------------------------------------
-# 1.5-API-005: 移除最后 project_admin → 422
+# 1.5-API-005: 移除最后 manager → 422
 # Priority: P0
 # ---------------------------------------------------------------------------
 class TestLastAdminProtection:
 
     @pytest.mark.api
     @pytest.mark.asyncio
-    async def test_cannot_remove_last_project_admin(self, client, db_session):
+    async def test_cannot_remove_last_manager(self, client, db_session):
         """AC: 移除最后一个项目管理员返回 422"""
         project_id, admin, headers = await _create_project_with_admin(client, db_session, "last_admin")
 
-        # When: 尝试移除唯一的 project_admin (创建者)
+        # When: 尝试移除唯一的 manager (创建者)
         response = await client.delete(
             f"/api/projects/{project_id}/members/{admin.id}",
             headers=headers,
@@ -193,10 +193,10 @@ class TestMemberManagementForbidden:
         tester = await create_test_user(db_session, username="forbid_tester", role="user")
         new_user = await create_test_user(db_session, username="forbid_new", role="user")
 
-        # Given: 添加 tester 为普通成员
+        # Given: 添加一个普通成员
         await client.post(f"/api/projects/{project_id}/members", headers=admin_headers, json={
             "userId": str(tester.id),
-            "role": "tester",
+            "role": "member",
         })
 
         tester_headers, _ = make_auth_headers(tester)
@@ -204,7 +204,7 @@ class TestMemberManagementForbidden:
         # When: tester 尝试添加新成员
         response = await client.post(f"/api/projects/{project_id}/members", headers=tester_headers, json={
             "userId": str(new_user.id),
-            "role": "developer",
+            "role": "member",
         })
 
         assert response.status_code == 403
@@ -219,10 +219,10 @@ class TestMemberManagementForbidden:
 
         # 添加两个成员
         await client.post(f"/api/projects/{project_id}/members", headers=admin_headers, json={
-            "userId": str(tester.id), "role": "tester",
+            "userId": str(tester.id), "role": "member",
         })
         await client.post(f"/api/projects/{project_id}/members", headers=admin_headers, json={
-            "userId": str(target.id), "role": "developer",
+            "userId": str(target.id), "role": "member",
         })
 
         tester_headers, _ = make_auth_headers(tester)
@@ -251,7 +251,7 @@ class TestListMembers:
 
         await client.post(f"/api/projects/{project_id}/members", headers=headers, json={
             "userId": str(user.id),
-            "role": "tester",
+            "role": "member",
         })
 
         response = await client.get(f"/api/projects/{project_id}/members", headers=headers)

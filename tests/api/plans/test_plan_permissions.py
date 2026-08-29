@@ -1,6 +1,9 @@
 """
 test_plan_permissions — 测试计划权限和边界测试
-覆盖: guest 不能创建/归档/删除、非成员 403、计划不存在 404
+覆盖: 游客不能创建/归档/删除、非成员 403、计划不存在 404
+
+2026-08-29：只读主体从项目角色 guest 换成**系统角色 guest**（项目里挂 member）。
+换之前那几条"不能写"是靠项目角色守卫拦的；现在拦它的是账号级非 GET 闸门。
 """
 import pytest
 
@@ -11,7 +14,7 @@ class TestPlanPermissions:
 
     async def _setup(self, client, db_session):
         admin = await create_test_user(db_session, username="perm_plan_admin", role="admin")
-        guest = await create_test_user(db_session, username="perm_plan_guest", role="user")
+        guest = await create_test_user(db_session, username="perm_plan_guest", role="guest")
         admin_headers, _ = make_auth_headers(admin)
         guest_headers, _ = make_auth_headers(guest)
 
@@ -21,7 +24,7 @@ class TestPlanPermissions:
         pid = r.json()["data"]["id"]
 
         await client.post(f"/api/projects/{pid}/members", headers=admin_headers, json={
-            "userId": str(guest.id), "role": "guest",
+            "userId": str(guest.id), "role": "member",
         })
 
         br = await client.get(f"/api/projects/{pid}/branches", headers=admin_headers)

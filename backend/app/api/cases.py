@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.status import HTTP_201_CREATED
 
+from app.core import permissions as perms
 from app.core.exceptions import AppError, NotFoundError
 from app.core.audit import write_audit_log
 from app.deps.auth import require_project_role
@@ -27,7 +28,7 @@ async def import_cases(
     branch_id: uuid.UUID,
     file: UploadFile = File(...),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """导入用例文件。**只新增和更新，不删除任何东西。**
 
@@ -170,7 +171,7 @@ async def create_case(
     branch_id: uuid.UUID,
     body: CreateCaseRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """手动创建用例"""
     case = await case_service.create_case(session, branch_id, body)
@@ -186,7 +187,7 @@ async def list_templates(
     branch_id: uuid.UUID,
     scenario_type: str = Query(default="api", alias="type"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """查询标记为模板的用例场景"""
     cases = await case_service.list_templates(session, branch_id, scenario_type)
@@ -220,7 +221,7 @@ async def list_cases(
     # blocked=关联的 bug 还没验回来 / fixed=抓到过 bug 已验回来（痕迹） / none=从没关联
     bug_state: str | None = Query(default=None, alias="bugState"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """用例列表（分页 + 多条件筛选）"""
     cases, total = await case_service.list_cases(
@@ -258,7 +259,7 @@ async def export_cases_excel(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
     keyword: str | None = Query(default=None),
     automation_status: str | None = Query(default=None, alias="automationStatus"),
     folder_id: uuid.UUID | None = Query(default=None, alias="folderId"),
@@ -429,7 +430,7 @@ async def release_quarantine(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """人工解除 flaky 自动隔离 —— 脚本修好了、环境稳了，不用干等 14 天。
 
@@ -453,7 +454,7 @@ async def quarantine_case(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """人主动隔离 —— 「我知道它不稳，先别让它挡路」。
 
@@ -478,7 +479,7 @@ async def confirm_expected(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    current_user: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    current_user: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """确认「预期结果」这一列 —— P0 两阶段的第二阶段。
 
@@ -516,7 +517,7 @@ async def copy_case(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """复制用例（同分支内）"""
     from sqlalchemy import select
@@ -560,7 +561,7 @@ async def get_case(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """用例详情"""
     case = await case_service.get_case(session, case_id)
@@ -580,7 +581,7 @@ async def update_case(
     case_id: uuid.UUID,
     body: UpdateCaseRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """更新用例"""
     case = await case_service.update_case(session, case_id, body)
@@ -596,7 +597,7 @@ async def batch_cases(
     branch_id: uuid.UUID,
     body: BatchCaseRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """批量操作用例（移动/归档/取消归档/修改优先级/标记Flaky/彻底删除）"""
     if body.action == "hard_delete":
@@ -620,7 +621,7 @@ async def empty_trash(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """清空回收站——彻底删除该分支全部已软删除的用例。
 
@@ -641,7 +642,7 @@ async def delete_case(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """软删除用例（标记 deleted_at）"""
     case = await case_service.get_case(session, case_id)
@@ -656,7 +657,7 @@ async def copy_from_branch(
     branch_id: uuid.UUID,
     body: CopyFromBranchRequest,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """从其他分支复制用例到当前分支（深拷贝）"""
     result = await case_service.copy_cases_from_branch(
@@ -672,7 +673,7 @@ async def get_case_script(
     branch_id: uuid.UUID,
     case_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """获取用例关联的脚本源码（从 git bare repo 读取）"""
     case = await case_service.get_case(session, case_id)
@@ -724,7 +725,7 @@ async def list_folders(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """目录树（含用例计数）"""
     tree = await folder_service.list_folder_tree(session, branch_id)
@@ -736,7 +737,7 @@ async def list_empty_folders(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """列出可以清掉的空目录（没有用例、也没有子目录）。
 
@@ -752,7 +753,7 @@ async def prune_empty_folders(
     branch_id: uuid.UUID,
     folder_ids: list[uuid.UUID] = Body(..., embed=True, alias="folderIds"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer")),
+    _: User = Depends(require_project_role(*perms.TIER_DOC_MANAGE)),
 ):
     """按**明确给出的 id 名单**删空目录。
 
@@ -771,7 +772,7 @@ async def create_folder(
     name: str = Query(..., min_length=1, max_length=100),
     parent_id: uuid.UUID | None = Query(default=None, alias="parentId"),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """创建模块/子模块目录"""
     folder = await folder_service.create_folder(session, branch_id, name, parent_id)
@@ -785,7 +786,7 @@ async def rename_folder(
     folder_id: uuid.UUID,
     name: str = Query(..., min_length=1, max_length=100),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester")),
+    _: User = Depends(require_project_role(*perms.TIER_WRITE)),
 ):
     """给模块/子模块改名，子目录路径和同名的接口场景目录一起改。
 
@@ -806,7 +807,7 @@ async def list_folder_splits(
     project_id: uuid.UUID,
     branch_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer", "tester", "guest")),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
     """同一个模块被摆到两处的（顶层一个、某模块下一个）。页面顶上那条提示读它。"""
     return {"data": await folder_service.list_split_modules(session, branch_id)}
@@ -820,7 +821,7 @@ async def move_folder(
     parent_id: uuid.UUID | None = Query(default=None, alias="parentId"),
     merge: bool = Query(default=False),
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin", "developer")),
+    _: User = Depends(require_project_role(*perms.TIER_DOC_MANAGE)),
 ):
     """挪模块的位置（不传 parentId = 挪回顶层）。目标已有同名模块时要 `merge=true`。
 
@@ -842,7 +843,7 @@ async def delete_folder(
     branch_id: uuid.UUID,
     folder_id: uuid.UUID,
     session: AsyncSession = Depends(get_db),
-    _: User = Depends(require_project_role("project_admin")),
+    _: User = Depends(require_project_role(*perms.TIER_ADMIN)),
 ):
     """删除目录（空目录才可删除）"""
     await folder_service.delete_folder(session, folder_id)
