@@ -30,28 +30,49 @@ function redirectToLogin() {
 // 单飞：并发请求同时 401 时只发一次刷新
 let refreshPromise = null
 
-/** 用 refreshToken 换新令牌。成功存储并返回 true，失败清本地返回 false。 */
+/**
+ * 用 refreshToken 换新令牌。返回三态，**不能只回真假**：
+ *   'ok'          换到了
+ *   'invalid'     服务端明说这张 refresh 不认（401/403）→ 只有这种才该清本地、跳登录
+ *   'unavailable' 后端这会儿够不着（5xx / 502 / 网络断 / 路由不存在）→ 凭证一个字别动
+ *
+ * 分不开这两种的实际后果：本仓后端**故意不带 --reload**，一天要重启很多次，
+ * 重启窗口里 access 刚好过期的话，刷新请求吃一个 502 —— 旧写法把这当成"凭证无效"
+ * 清了 localStorage，于是**一张服务端还认、还剩 6 天有效期的 refresh token 被前端自己扔了**，
+ * 用户被踢回登录页重新输密码。7 天免登录名存实亡，且症状是"偶发、说不清什么时候"。
+ * （2026-08-29 活体复现：把 /api/auth/refresh 挡成 502，前端跳登录并清空 refreshToken，
+ *   而同一张 token 直接 curl 打后端仍然 200。）
+ */
 function doRefresh() {
   if (refreshPromise) return refreshPromise
   refreshPromise = (async () => {
     const refreshToken = localStorage.getItem('refreshToken')
-    if (!refreshToken) return false
+    if (!refreshToken) return 'invalid'
+    let res
     try {
-      const res = await fetch(`${BASE_URL}/auth/refresh`, {
+      res = await fetch(`${BASE_URL}/auth/refresh`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ refreshToken }),
       })
-      if (!res.ok) {
+    } catch {
+      return 'unavailable'   // 连不上：后端在重启、或网断了
+    }
+    if (!res.ok) {
+      // 401/403 才是"这张票据不算数"；其余状态码都不足以判死凭证
+      if (res.status === 401 || res.status === 403) {
         clearAuthStorage()
-        return false
+        return 'invalid'
       }
+      return 'unavailable'
+    }
+    try {
       const data = await res.json()
       localStorage.setItem('token', data.data.token)
       localStorage.setItem('refreshToken', data.data.refreshToken)
-      return true
+      return 'ok'
     } catch {
-      return false
+      return 'unavailable'   // 200 但不是预期结构（多半是被代理换成了 HTML）
     }
   })().finally(() => { refreshPromise = null })
   return refreshPromise
@@ -67,9 +88,11 @@ export async function getValidToken() {
   const exp = parseJwtExp(token)
   const now = Math.floor(Date.now() / 1000)
   if (exp && exp - now < 60) {
-    const ok = await doRefresh()
-    if (!ok) { redirectToLogin(); return null }
-    return localStorage.getItem('token')
+    const r = await doRefresh()
+    if (r === 'ok') return localStorage.getItem('token')
+    // 够不着后端时保留登录态，让调用方自己失败重试；只有凭证真被否了才跳登录
+    if (r === 'invalid') redirectToLogin()
+    return null
   }
   return token
 }
@@ -98,8 +121,14 @@ async function request(url, options = {}, _retried = false) {
     if (!isAuthFlow) {
       // 用 refresh token 静默刷新后重试一次
       if (!_retried) {
-        const ok = await doRefresh()
-        if (ok) return request(url, options, true)
+        const r = await doRefresh()
+        if (r === 'ok') return request(url, options, true)
+        if (r === 'unavailable') {
+          // 别把"后端在重启"当成"登录过期"：跳一次登录页 = 用户重新输密码，
+          // 而他手上的 refresh token 本来还能用好几天
+          if (!options.silent) message.error('服务暂时不可用，请稍后重试')
+          return Promise.reject(new Error('刷新登录状态失败：服务暂时不可用'))
+        }
       }
       redirectToLogin()
       return Promise.reject(new Error('未登录或登录已过期'))

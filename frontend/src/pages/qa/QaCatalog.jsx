@@ -911,7 +911,11 @@ export default function QaCatalog() {
           dataSource={filtered}
           loading={loading}
           size="small"
-          scroll={{ x: 1180 }}
+          // 行高很不齐：带判据说明的场景单行能到 200px+，20 行铺开就是几千像素，
+          // 把下面的「数据来源 / 拉取于」页脚推到十几屏之外，等于那行字不存在。
+          // 表体自己滚（表头跟着固定），整页高度才可预期。写法跟用例管理页保持一致，
+          // 不写死 px：小屏会被撑爆，大屏又白白浪费。
+          scroll={{ x: 1180, y: 'calc(100vh - 300px)' }}
           onChange={(_p, _f, s) => setSorter({ columnKey: s?.columnKey, order: s?.order })}
           pagination={{
             current: page, pageSize, showSizeChanger: true, showTotal: t => `共 ${t} 条`,
