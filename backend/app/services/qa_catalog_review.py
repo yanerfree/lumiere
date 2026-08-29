@@ -160,8 +160,24 @@ _FOR_RE = re.compile(r"^\s*for\s+(?P<name>\w+)\s+in\b", re.M)
 # `read -r A B C` —— 一次能读进好几个。
 # `mapfile`/`readarray` 是同一件事的数组版（`mapfile -t CAND < <(…)`），
 # 不认它就把 CAND 当成"环境缺的变量" —— 2026-08-29 验收实测，MCP 域报了一条。
+#
+# ⚠ **第一个名字必须允许小写**（`[A-Za-z_]`，不是 `[A-Z_]`）。
+#     IFS=$'\t' read -r ca ID_A <<< "$(_create …)"
+# 第一个名字是 `ca`，小写。写成 `[A-Z_]` 时它匹配不上，回溯也无路
+# —— **整条 `read` 一个名字都不认**，`ID_A` 跟着漏。`mapfile -t CAND` 当初能修好，
+# 只因为 CAND 恰好大写又恰好排第一；那不是判据对，是运气。
+# 2026-08-29 补齐脚本后实测：MCP 域 `ID_A`/`ID_B`/`ID_MIN`/`ID_MAX`/`ID_OK` 五条假阳，
+# 全出自这一处，而这两份脚本在旧正则下认出的 read 目标是 **0 个**。
+#
+# ⚠ **分隔符写 `[^\S\n]` 不写 `\s`：名字列表不许跨行。** `\s` 含换行，于是
+#     read -r X
+#     PSQL_DSN="${PSQL_DSN:-}"
+# 会把 `PSQL_DSN` 也当成 read 的目标 —— **把一个真缺口洗掉**，正是 `_family`
+# 那条注释防的方向。今天 QA 仓的写法够不着这个坑（实测两种写法认出的名字一模一样），
+# 但那是它的写法，不是我们的保证 —— 跟 `_CONT_RE` 那条同一个理由。
 _READ_RE = re.compile(
-    r"\b(?:mapfile|readarray|read)\s+(?P<rest>(?:-\w+\s+)*[A-Z_]\w*(?:\s+[A-Za-z_]\w*)*)", re.M)
+    r"\b(?:mapfile|readarray|read)[^\S\n]+"
+    r"(?P<rest>(?:-\w+[^\S\n]+)*[A-Za-z_]\w*(?:[^\S\n]+[A-Za-z_]\w*)*)", re.M)
 # 反斜杠续行：`export A="$x" \` + 下一行 `B="$y"`。
 # 下半截不以 `export` 开头，`_DECL_LINE_RE` 不认；`_ASSIGN_RE` 一条语句只取第一个名字
 # —— 于是续行上除第一个以外的赋值全成了"环境缺的" **（实测 MCPB_SELFOWN）**。

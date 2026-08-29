@@ -2919,6 +2919,39 @@ class TestEnv假阳_20260829验收:
 
         assert qr.env_gaps([{"path": "a.sh", "content": body}], set()) == []
 
+    def test_read的第一个名字是小写时后面的名字也要认出来(self):
+        """`IFS=$'\\t' read -r ca ID_A <<< …` —— 旧正则在这条上**一个名字都不认**。
+
+        `rest` 的第一个名字写成 `[A-Z_]`，而这里第一个是 `ca`（小写），
+        匹配不上、回溯也无路，于是整条 `read` 作废，`ID_A` 被报成"环境缺的"。
+        `mapfile -t CAND` 当初能修好只因为 CAND 恰好大写又恰好排第一 ——
+        **那不是判据对，是运气**，换个脚本就露。
+        2026-08-29 补齐 63 份脚本后实测：MCP 域 `ID_A`/`ID_B`/`ID_MIN`/`ID_MAX`/`ID_OK`
+        五条假阳全出自这一处。下面两行是 QA 仓的原话，不是编的。
+        """
+        body = ('IFS=$\'\\t\' read -r ca ID_A <<< "$(_create "$UNIQ_A" "$U" none 3600)"\n'
+                'IFS=$\'\\t\' read -r c_max ID_MAX _ <<< "$(_create "$N" "$URL" none 3600)"\n'
+                'echo "$ID_A $ID_MAX"\n')
+
+        # 全量钉死，不只断言"ID_* 没出现"：`UNIQ_A`/`URL` 在这个片段里**确实没定义**，
+        # 本来就该报。断言成空列表反而要去片段里补定义，那就把抄来的原话改了。
+        assert sorted(g["name"] for g in
+                      qr.env_gaps([{"path": "a.sh", "content": body}], set())) \
+            == ["UNIQ_A", "URL"]
+
+    def test_read的名字列表不许跨行(self):
+        """**这条是防倒车的，方向跟上一条相反。**
+
+        上一条要放开小写，顺手把分隔符从 `[^\\S\\n]` 改回 `\\s` 会很自然 ——
+        但 `\\s` 含换行，于是 `read -r X` 下一行的 `PSQL_DSN=…` 也被当成 read 的目标，
+        **一个真缺口被洗掉**。今天 QA 仓的写法够不着这个坑（两种写法实测认出的名字
+        一模一样），但那是它的写法，不是我们的保证。
+        """
+        body = 'read -r X\nPSQL_DSN="${PSQL_DSN:-}"\necho "$X$PSQL_DSN"\n'
+
+        assert [g["name"] for g in qr.env_gaps([{"path": "a.sh", "content": body}], set())] \
+            == ["PSQL_DSN"]
+
     def test_反斜杠续行上的第二个赋值也算定义过(self):
         """`export A="$x" \\` + 下一行 `B="$y"` —— 实测漏掉 MCPB_SELFOWN。
 
