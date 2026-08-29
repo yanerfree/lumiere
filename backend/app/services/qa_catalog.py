@@ -315,80 +315,6 @@ def _grep(repo: Path, ref: str, args: list[str], pathspec: list[str] | None = No
     return [line for line in out.splitlines() if line]
 
 
-def _file_mtimes(repo: Path, ref: str) -> dict[str, str]:
-    """每个文件最后一次被改动的提交时间（ISO8601）。
-
-    一次 `git log --name-only` 扫完整段历史，**不是每个文件打一次 git** ——
-    QA 仓 171 个脚本，逐个 `log -1 -- <path>` 就是 171 次进程启动；
-    全量一次实测 16ms（252 个提交）。
-    历史是从新往旧走的，所以**第一次见到某个路径就是它的最后改动**，见过的别再覆盖。
-    """
-    try:
-        out = _run_git(["--git-dir", str(repo), "log", "--format=@@%cI", "--name-only", ref])
-    except GitError:
-        return {}
-    result: dict[str, str] = {}
-    when = ""
-    for line in out.splitlines():
-        if line.startswith("@@"):
-            when = line[2:]
-        elif line and when and line not in result:
-            result[line] = when
-    return result
-
-
-def _catalog_row_mtimes(repo: Path, ref: str, catalog_path: str) -> dict[str, str]:
-    """清单里每条场景行最后一次被改动的提交时间。
-
-    为什么不能只看脚本时间：**待补的场景一个脚本都没有**，只看脚本它们全是空的，
-    而「这条待补项是上周才提的，还是躺了三个月」恰恰是最该看见的。
-    做法是一次 `git log -p -U0` 拉清单文件的逐行 diff（实测 36ms / 757KB），
-    从新往旧扫，`+| ID |` 第一次出现的那次提交就是这行的最后改动。
-
-    只认 `+` 行：`-` 行是被换掉的旧内容，拿它当"更新"会把**删除**记成**修改**。
-    `@@ ` 开头的是 diff 的 hunk 头（`@@ -966 +966 @@`），和我们自己的提交时间行
-    （`@@2026-…`，故意不带空格）靠这个空格区分 —— 认错了整段时间会全串位。
-    """
-    try:
-        out = _run_git([
-            "--git-dir", str(repo), "log", "--format=@@%cI", "-p", "-U0", "--no-color",
-            ref, "--", catalog_path,
-        ])
-    except GitError:
-        return {}
-    result: dict[str, str] = {}
-    when = ""
-    for line in out.splitlines():
-        if line.startswith("@@ "):
-            continue
-        if line.startswith("@@"):
-            when = line[2:]
-            continue
-        # `+++ b/docs/…` 也是 `+` 开头，要求紧跟 `|` 才算表格行
-        if not when or not line.startswith("+|"):
-            continue
-        sid = _first_cell(line[1:])
-        if _ID_RE.fullmatch(sid) and sid not in result:
-            result[sid] = when
-    return result
-
-
-def _latest(*stamps: str | None) -> str | None:
-    """取最晚的一个 ISO8601 时间戳。
-
-    按 datetime 比而不是按字符串比 —— 同一个仓库里混着 `+08:00` 和 `Z` 两种写法时，
-    两种序会给出**相反**的答案：`2026-08-29T01:00:00+08:00`（= 08-28T17:00Z）
-    按字符串排在 `2026-08-28T20:00:00Z` 后面，可它其实早 3 小时。
-    """
-    vals = [s for s in stamps if s]
-    if not vals:
-        return None
-    try:
-        return max(vals, key=datetime.fromisoformat)
-    except ValueError:
-        return max(vals)
-
-
 def detect_catalog_path(repo: Path, ref: str) -> str:
     """没配清单路径时自己找：仓库里场景行最多的那份 markdown。
 
@@ -508,6 +434,113 @@ def _last_fetch_at(repo: Path) -> str | None:
     return None
 
 
+
+# ---- 「这个域最近在动吗」：谁最后改的、什么时候 ----
+
+# 一次 log 走完整个历史，取每个路径**第一次出现**的那个提交 —— 提交按时间倒序出来，
+# 所以第一次出现 = 最后一次改它。**别退化成「一个路径一次 `git log -1`」**：
+# 152 个脚本就是 152 次进程启动，比整趟走一遍慢两个数量级，结果一模一样。
+# 上限是防「仓库十万个提交时把内存和超时一起撑爆」，不是判据；真撞上了如实说
+# （`activityTruncated`），别让「走到一半停了」长得像「这个域从来没人动过」——
+# 那正好是本页最要紧的那句话说反了。
+_ACTIVITY_MAX_COMMITS = 5000
+
+# blame --line-porcelain 的行头：`<40 位 sha> <原行号> <新行号> [同组行数]`
+_BLAME_HEAD_RE = re.compile(r"^([0-9a-f]{40}) \d+ \d+")
+
+
+def _repo_activity(repo: Path, ref: str, catalog_path: str) -> dict:
+    """读出两份时间线，**分开放，不合并**：
+
+      · `paths`  路径 → 最后改它的提交（脚本侧：真有人在写用例）
+      · `rows`   场景 ID → 最后改这一行的提交（清单侧：有人在改计划）
+
+    为什么必须分两份：uag-qa 实测 2026-08-27 20:42 有一次**整体导入**，一个提交
+    把 24 个域的清单行全刷了一遍。两份合成一个 max 之后，24 个域显示同一个时间、
+    「最近更新」标记全亮 —— **一个恒真的标记比没有标记更坏，它看着像信息**。
+    分开之后「脚本侧 8-29 / 清单侧 8-27」一眼分得出「真在写」和「只是被那次导入扫到」。
+    """
+    commits: dict[str, dict] = {}
+    paths: dict[str, str] = {}
+    try:
+        out = _run_git([
+            "--git-dir", str(repo), "log", f"--max-count={_ACTIVITY_MAX_COMMITS}",
+            "--name-only", "--format=%x01%H%x02%cI%x02%s", ref,
+        ])
+    except GitError as e:
+        # 时间读不到不该把整页拖垮（清单和覆盖率跟它无关）：这次不给时间，页面上说明白
+        logger.warning("qa activity: log 走不通(%s)，这次不给时间", e)
+        return {"paths": {}, "rows": {}, "commits": {}, "truncated": False, "unavailable": True}
+
+    sha = ""
+    for line in out.splitlines():
+        if line.startswith("\x01"):
+            sha, _, rest = line[1:].partition("\x02")
+            date, _, subject = rest.partition("\x02")
+            commits[sha] = {"sha": sha[:9], "date": date, "subject": subject}
+            continue
+        # 合并提交默认不列文件：文件真正落地的那个提交照样在历史里，日期取它自己的
+        if line and sha and line not in paths:
+            paths[line] = sha
+
+    rows = _blame_catalog_rows(repo, ref, catalog_path, commits) if catalog_path else {}
+    return {
+        "paths": paths,
+        "rows": rows,
+        "commits": commits,
+        "truncated": len(commits) >= _ACTIVITY_MAX_COMMITS,
+        "unavailable": False,
+    }
+
+
+def _blame_catalog_rows(repo: Path, ref: str, catalog_path: str,
+                        commits: dict[str, dict]) -> dict[str, str]:
+    """清单里每条场景行**最后一次被改**是哪个提交（`git blame`，只读）。
+
+    没有脚本的域（实测 uag-qa 有 6 个是 0 脚本）在脚本侧永远是空的，只有这一份能
+    回答它们「是刚立项还是躺了半年」。一次逐行 blame 拿全，不按域分别 blame ——
+    那是 24 次进程启动换同一份数据。
+    """
+    try:
+        out = _run_git(["--git-dir", str(repo), "blame", "--line-porcelain", ref,
+                        "--", catalog_path])
+    except GitError as e:
+        logger.warning("qa activity: blame 走不通(%s)，清单侧这次没有时间", e)
+        return {}
+
+    rows: dict[str, str] = {}
+    sha = ""
+    ct: int | None = None
+    for line in out.splitlines():
+        m = _BLAME_HEAD_RE.match(line)
+        if m:
+            sha, ct = m.group(1), None
+            continue
+        if line.startswith("committer-time "):
+            try:
+                ct = int(line.split()[1])
+            except (IndexError, ValueError):
+                ct = None
+            continue
+        if not line.startswith("\t"):
+            continue
+        # 正文行：首列是场景 ID 才算数（域码表、统计表、散文都不是）
+        sid = _first_cell(line[1:])
+        if not _ID_RE.fullmatch(sid):
+            continue
+        if sha in commits:
+            rows[sid] = sha
+        elif ct is not None:
+            # 提交落在 max-count 之外：log 那趟没收进来，退回 blame 自己报的时间。
+            # 标题拿不到（blame 不给），留空 —— 空标题比编一个准确
+            commits.setdefault(sha, {
+                "sha": sha[:9],
+                "date": datetime.fromtimestamp(ct, tz=timezone.utc).astimezone().isoformat(timespec="seconds"),
+                "subject": "",
+            })
+            rows[sid] = sha
+    return rows
+
 def _drop_stale_cache(repo: Path, url: str) -> None:
     """缓存目录按项目建，改了仓库地址就得丢掉重来。
 
@@ -568,13 +601,9 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
             continue  # 没声明 ID 的文件不是用例（支持库/夹具）
         cases.append({"path": path, **header})
 
-    # 「更新时间」两个来源：清单行改动 + 覆盖脚本改动。各一次 git log 扫完，不按行/按文件循环。
-    mtimes = {
-        "files": _file_mtimes(repo, ref),
-        "rows": _catalog_row_mtimes(repo, ref, catalog_path),
-    }
+    activity = _repo_activity(repo, ref, catalog_path)
 
-    return _assemble(scenarios, domain_names, cases, catalog_issues, {
+    return _assemble(scenarios, domain_names, cases, catalog_issues, activity=activity, repo_meta={
         "url": url,
         "branch": branch_name,
         "branchAuto": not (cfg.get("branch") or ""),
@@ -587,11 +616,73 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
         "commitSubject": commit_subject,
         "fetchedAt": _last_fetch_at(repo),
         "caseFiles": len(files),
-    }, mtimes=mtimes)
+    })
+
+
+def _parse_iso(value: str):
+    """git 的 `%cI` 在 UTC 提交上给的是 `...Z`，别的时区给 `+08:00`。
+
+    **不能拿字符串直接比大小**：`2026-08-29T09:00:00Z`（= 北京 17:00）比
+    `2026-08-29T10:00:00+08:00` 字典序大，但它其实更早。混着两种写法的仓库
+    （实测两家 QA 仓一家 Z 一家 +08:00）会因此把"谁最近"排反，而排反了不报错。
+    """
+    try:
+        return datetime.fromisoformat((value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _latest(commits: dict[str, dict], shas) -> dict | None:
+    """一堆提交里最新的那个（按真实时刻比，见 `_parse_iso`）。"""
+    best = None
+    best_at = None
+    for sha in shas:
+        c = commits.get(sha)
+        at = _parse_iso((c or {}).get("date", ""))
+        if at is None:
+            continue
+        if best_at is None or at > best_at:
+            best, best_at = c, at
+    return best
+
+
+def _domain_activity(domain_scen: list[dict], activity: dict | None) -> dict:
+    """一个域的「最近有人动」——**脚本侧和清单侧分开给，不取合并的 max**。
+
+    合并的坏处见 `_repo_activity` 的注释（整体导入会把所有域刷成同一天）。
+    显示用哪个由前端决定，这里只负责如实给两个数：
+      · 脚本侧 = 这个域的场景被哪些脚本覆盖，那些文件最后一次被改
+      · 清单侧 = 这个域在清单里的那些行最后一次被改
+    `updatedAt` 是给「一列显示不下两个」的地方用的合成值：**优先脚本侧** ——
+    有人在写用例才叫"在做这个域"，清单被一次批量重排扫到不算。
+    """
+    act = activity or {}
+    commits = act.get("commits") or {}
+    paths = act.get("paths") or {}
+    rows = act.get("rows") or {}
+
+    script_shas = {
+        paths[c["path"]]
+        for s in domain_scen for c in (s.get("scripts") or [])
+        if c["path"] in paths
+    }
+    row_shas = {rows[s["id"]] for s in domain_scen if s["id"] in rows}
+
+    by_script = _latest(commits, script_shas)
+    by_catalog = _latest(commits, row_shas)
+    winner = by_script or by_catalog
+    return {
+        "scriptUpdatedAt": (by_script or {}).get("date"),
+        "scriptCommit": by_script,
+        "catalogUpdatedAt": (by_catalog or {}).get("date"),
+        "catalogCommit": by_catalog,
+        "updatedAt": (winner or {}).get("date"),
+        "updatedFrom": "script" if by_script else ("catalog" if by_catalog else ""),
+    }
 
 
 def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[dict],
-              catalog_issues: dict, repo_meta: dict, mtimes: dict | None = None) -> dict:
+              catalog_issues: dict, repo_meta: dict, activity: dict | None = None) -> dict:
     by_id = {s["id"]: s for s in scenarios}
     for s in scenarios:
         s["scripts"] = []
@@ -622,16 +713,21 @@ def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[d
     for s in scenarios:
         s["claimedButUncovered"] = s["state"] == "covered" and not s["scripts"]
 
-    # 更新时间：清单行和覆盖脚本取更晚的那次改动，两个分量也一起带出去 ——
+    # 逐条场景的更新时间：清单行和覆盖脚本取更晚的那次改动，两个分量也一起带出去 ——
     # 「脚本三个月没动、清单昨天刚改」和「两边一起改的」是两回事，合成一个数就看不出来了。
-    file_mtimes = (mtimes or {}).get("files") or {}
-    row_mtimes = (mtimes or {}).get("rows") or {}
+    # 取数走 `_repo_activity` 那一份（域级那一列也用它）：两个视角、**一份数据**。
+    # 这里曾经有过自己的一套 `_file_mtimes` / `_catalog_row_mtimes`，跟它扫的是同一段
+    # 历史、只是输出格式不同 —— 留着就是每次同步多打两趟 git，且两份数一旦对不上，
+    # 「这一行显示 8-27、它所在的域显示 8-29」没人查得清是哪份错了。
+    commits = (activity or {}).get("commits") or {}
+    paths = (activity or {}).get("paths") or {}
+    rows = (activity or {}).get("rows") or {}
     for s in scenarios:
-        row_at = row_mtimes.get(s["id"])
-        script_at = _latest(*(file_mtimes.get(x["path"]) for x in s["scripts"]))
-        s["rowUpdatedAt"] = row_at
-        s["scriptUpdatedAt"] = script_at
-        s["updatedAt"] = _latest(row_at, script_at)
+        row_shas = [rows[s["id"]]] if s["id"] in rows else []
+        script_shas = [paths[c["path"]] for c in s["scripts"] if c["path"] in paths]
+        s["rowUpdatedAt"] = (_latest(commits, row_shas) or {}).get("date")
+        s["scriptUpdatedAt"] = (_latest(commits, script_shas) or {}).get("date")
+        s["updatedAt"] = (_latest(commits, row_shas + script_shas) or {}).get("date")
 
     total = len([s for s in scenarios if s["state"] != "deprecated"])
     covered = len([s for s in scenarios if s["state"] == "covered"])
@@ -652,6 +748,8 @@ def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[d
         rows = [s for s in scenarios if s["domain"] == code and s["state"] != "deprecated"]
         gaps = [s for s in rows if s["state"] == "gap"]
         meta = domain_meta.get(code) or {}
+        # 「这个域最近有人动吗」—— 已废弃的场景也算：它被废掉本身就是这个域的动静
+        domain_scen = [s for s in scenarios if s["domain"] == code]
         domains.append({
             "code": code,
             "name": meta.get("name", ""),
@@ -662,6 +760,7 @@ def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[d
             # 页面按缺口排序找「黑洞域」，P0 缺口决定先啃哪个
             "gap": len(gaps),
             "p0Gap": len([s for s in gaps if s["priority"] == "P0"]),
+            **_domain_activity(domain_scen, activity),
         })
 
     known_bug_scenarios = [s["id"] for s in scenarios if s["knownBugs"]]
@@ -711,6 +810,9 @@ def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[d
             # 跟「没算过」长得一模一样
             "unparsedRows": len(catalog_issues.get("unparsedRows") or []),
             "duplicateIds": len(catalog_issues.get("duplicateIds") or []),
+            # 「更新时间」那一列这次算没算成 / 有没有走到底。0 也要出现，理由同上两条
+            "activityUnavailable": bool((activity or {}).get("unavailable")),
+            "activityTruncated": bool((activity or {}).get("truncated")),
             "byPriority": by_priority,
         },
         "domains": domains,
