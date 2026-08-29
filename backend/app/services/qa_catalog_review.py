@@ -878,6 +878,75 @@ def _gap_key(g: dict, kind: str = "") -> str:
     return "|".join(str(g.get(f) or "") for f in ("id", "path", "problem", "why"))
 
 
+def repeat_key(g: dict) -> str | None:
+    """**跨两趟**认同一条发现的键。跟上面那个 `_gap_key` 是两件事，别合。
+
+    `_gap_key` 是同一趟内部去重用的，带 `problem`/`why` 全文 —— 跨趟拿它比，
+    Epic 0 实测 **六批全是 0%**：两趟抓的是同几条，只是措辞不一样
+    （`MCP-14` 一轮写「认领的是『internal-token + X-UAG-Agent-Id 两者都要』」，
+    另一轮写「认领的是『需 internal-token **且** X-UAG-Agent-Id』」）。
+    拿措辞当身份，量出来的是**模型的用词有多稳**，不是发现有多稳。
+
+    所以跨趟只认 `id` + `path` 这两个结构字段（Epic 0 副-C 的 AC）。
+    **两个都得有**：缺一个就返回 `None` = 这条没法参与比对，
+    由调用方单独记数 —— 不许拿 `"|path"` 这种半截键去配，
+    那会把同一份脚本里几条不同的发现合成一条，然后两趟都"命中"。
+    """
+    i = str(g.get("id") or "").strip()
+    p = str(g.get("path") or "").strip()
+    return f"{i}|{p}" if i and p else None
+
+
+def repeatability(a: list[dict] | None, b: list[dict] | None) -> dict:
+    """同一个域两趟 `scriptGaps` 的重合度。PRD 的 S6 / §9 的 F 条。
+
+    **报三个数，不报"一个分"。** Jaccard（交集 ÷ 并集）当口径，
+    两个方向的命中率一并给出 —— 只报一个数的话，挑哪个报本身就是结论：
+    两趟一趟 20 条一趟 4 条、4 条全在里面，「第二趟命中 100%」是真的，
+    而它想说的"稳"是假的。三个数摆在一起，这种形状一眼就露。
+
+    **`unmeasurable` 是一个独立的结论，不是 0 也不是 1。** 两边都没有
+    `scriptGaps`（域本来干净，或者两趟都挂了）时，交集÷并集是 0/0：
+    写 1.0 就成了"完全可重复"——从零份数据里读出满分；写 0.0 又成了
+    "完全不稳"。两个都是编的。这条跟本模块其它地方一个规矩：**缺信号不是一个结论。**
+
+    `unkeyed` 是两趟里各有几条**没法比**（模型没给 `id` 或 `path`）。
+    这个数必须露出来：它大的时候，上面那个比值是拿剩下一小撮算的。
+
+    ⚠ **`unkeyed` 不能用「总条数 − 唯一键数」算。** 同一份脚本的同一条场景常常
+    被写成两条发现（一条 `depth` 一条 `expect`），它们键相同、会并成一个 —— 那么
+    减出来的差里就混着「压根没法比」和「并掉了一条」，而这两件事要做的处理完全相反
+    （前者是模型漏填字段，后者是正常的）。2026-08-29 实测 TEM 就撞到：
+    报「5 条没 id/path」，逐条去找**一条都找不出来**，全是同键合并。
+    所以分开数：`unkeyed` 只数 `repeat_key` 返回 `None` 的，`dup` 单独报。
+    """
+    ra, rb = list(a or []), list(b or [])
+    kra = [k for g in ra if (k := repeat_key(g))]
+    krb = [k for g in rb if (k := repeat_key(g))]
+    ka, kb = set(kra), set(krb)
+    out = {
+        "state": "measured", "jaccard": 0.0, "both": 0,
+        "onlyA": sorted(ka - kb), "onlyB": sorted(kb - ka),
+        "totalA": len(ra), "totalB": len(rb),
+        "keyedA": len(ka), "keyedB": len(kb),
+        "unkeyedA": len(ra) - len(kra), "unkeyedB": len(rb) - len(krb),
+        "dupA": len(kra) - len(ka), "dupB": len(krb) - len(kb),
+        "hitRateA": None, "hitRateB": None,
+    }
+    union = ka | kb
+    if not union:
+        out["state"] = "unmeasurable"
+        return out
+    both = ka & kb
+    out["both"] = len(both)
+    out["jaccard"] = round(len(both) / len(union), 4)
+    if ka:
+        out["hitRateA"] = round(len(both) / len(ka), 4)
+    if kb:
+        out["hitRateB"] = round(len(both) / len(kb), 4)
+    return out
+
+
 #: 哪些数组的「同一条」按别的数组那套算。见 `merge_results` 里的注释。
 _MERGE_KIND = {"droppedNoAnchor": "catalogGaps"}
 

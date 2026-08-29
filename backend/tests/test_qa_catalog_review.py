@@ -2794,3 +2794,95 @@ class TestEvidenceOnThePage:
 
         for st in ec.STATES:
             assert st in block, f"前端 EV_CN 里没有 {st} 的中文说法"
+
+
+class Test跨两趟怎么算同一条:
+    """S6 / §9 的 F 条：同一个域评两趟，`scriptGaps` 交集 ≥ 70%。
+
+    Epic 0 副-C 实测：拿同批去重那个 `_gap_key`（带 `problem`/`why` 全文）跨趟比，
+    **六批全是 0%** —— 两趟抓的是同几条，只是措辞不一样。换成 `id+path` 是 71%。
+    所以跨趟必须另有一个键，而且它**只认结构字段**。
+    """
+
+    def test_措辞变了还是同一条(self):
+        a = {"id": "TEM-07", "path": "api/tem/x.sh", "problem": "认领的是 A 且 B"}
+        b = {"id": "TEM-07", "path": "api/tem/x.sh", "problem": "认领的是「需 A 并且 B」"}
+
+        assert qr.repeat_key(a) == qr.repeat_key(b)
+        assert qr.repeatability([a], [b])["jaccard"] == 1.0
+
+    def test_不许拿同批那个键跨趟比(self):
+        """哨兵：谁把 `repeat_key` 换回 `_gap_key`，这条就红。"""
+        a = {"id": "TEM-07", "path": "api/tem/x.sh", "problem": "认领的是 A 且 B"}
+        b = {"id": "TEM-07", "path": "api/tem/x.sh", "problem": "认领的是「需 A 并且 B」"}
+
+        assert qr._gap_key(a) != qr._gap_key(b), "前提变了：两条措辞本该不同"
+        assert qr.repeat_key(a) == qr.repeat_key(b)
+
+    def test_缺id或缺path就不参与比对而且要报数(self):
+        """半截键会把同一份脚本里几条不同的发现合成一条，然后两趟都「命中」。"""
+        assert qr.repeat_key({"path": "api/tem/x.sh"}) is None
+        assert qr.repeat_key({"id": "TEM-07"}) is None
+
+        m = qr.repeatability(
+            [{"id": "TEM-07", "path": "a.sh"}, {"path": "b.sh"}, {"id": "TEM-09"}],
+            [{"id": "TEM-07", "path": "a.sh"}])
+
+        assert m["totalA"] == 3 and m["keyedA"] == 1
+        assert m["unkeyedA"] == 2, "没法比的条数必须露出来，否则比值是拿剩下一小撮算的"
+        assert m["jaccard"] == 1.0
+
+    def test_同键并掉的不许算成没id没path(self):
+        """同一条场景常被写成两条发现（一条 depth 一条 expect），键相同、并成一条。
+
+        拿「总条数 − 唯一键数」当「没 id/path」，这两件事就并进一个数了 ——
+        而它们要做的处理完全相反。2026-08-29 实测 TEM 撞到：报「5 条没 id/path」，
+        逐条去找**一条都找不出来**，全是同键合并。
+        """
+        rows = [{"id": "TEM-07", "path": "a.sh", "dim": "depth"},
+                {"id": "TEM-07", "path": "a.sh", "dim": "expect"}]
+        m = qr.repeatability(rows, rows)
+
+        assert m["totalA"] == 2 and m["keyedA"] == 1
+        assert m["unkeyedA"] == 0, "两条都有 id 和 path，一条都不该算「没法比」"
+        assert m["dupA"] == 1, "并掉了几条要单独报，别混进上面那个数"
+
+    def test_两边都空是unmeasurable不是0也不是1(self):
+        """0/0 写成 1.0 = 从零份数据里读出满分；写成 0.0 = 编一个「完全不稳」。
+
+        **缺信号不是一个结论** —— 跟本模块其它三态一个规矩。
+        """
+        m = qr.repeatability([], [])
+
+        assert m["state"] == "unmeasurable"
+        assert m["jaccard"] != 1.0
+
+    def test_一边有一边空不算unmeasurable(self):
+        """这种是真量出来了，而且量出来是 0 —— 别跟「没得比」混成一档。"""
+        m = qr.repeatability([{"id": "TEM-07", "path": "a.sh"}], [])
+
+        assert m["state"] == "measured"
+        assert m["jaccard"] == 0.0
+
+    def test_两个方向的命中率都要给(self):
+        """只报一个数的话，挑哪个报本身就是结论：
+        一趟 4 条一趟 20 条、4 条全在里面，「B 侧命中 100%」是真的，「稳」是假的。"""
+        a = [{"id": f"T-{i}", "path": "a.sh"} for i in range(20)]
+        b = a[:4]
+        m = qr.repeatability(a, b)
+
+        assert m["hitRateB"] == 1.0
+        assert m["hitRateA"] == 0.2
+        assert m["jaccard"] == 0.2, "Jaccard 才是不会被条数差异蒙住的那个"
+
+    def test_只有一趟的时候脚本不许当成0(self):
+        """实测脚本那边：`--domain X` 只找到一趟 done，得说「比不了」并非零退出。"""
+        src = (pathlib.Path(__file__).resolve().parents[1]
+               / "scripts/qa_review_repeatability.py").read_text(encoding="utf-8")
+
+        assert "比不了" in src
+        assert "return 2" in src, "只有一趟必须非零退出，不能装作量过了"
+        # ⚠ 这里**不能**只断言 `"unmeasurable" in src` —— 那个词在
+        # `if m["state"] == "unmeasurable"` 里也有，断言它等于什么都没守住
+        # （实测：把给人看的那句话整段换掉，那种断言照样绿）。要断的是**说给人的那句**。
+        assert "不是 0%，是没得比" in src, "unmeasurable 那一档得对人说清楚，不是只在代码里判一下"
