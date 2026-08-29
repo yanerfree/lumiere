@@ -930,6 +930,158 @@ class TestDims:
         assert "不等于那一块没问题" in md
 
 
+class TestDimWhitelist:
+    """S8.2：维度按数组分白名单。
+
+    两个数组的差别不是格式，是**收件人**：`scriptGaps` 发给写脚本的人，
+    `catalogGaps` 发给清单主人。`coverage`（清单里就没有这条场景）落进 `scriptGaps`，
+    等于给写脚本的人派一件他一句代码都改不了的活 —— 他合理地不处理，
+    然后这条缺口就在"已提出"的状态里躺着，谁都没错。
+    """
+
+    def _out(self, script=(), catalog=()):
+        import json
+        return qr.parse_result(json.dumps({
+            "verdict": "bad", "summary": "x",
+            "scriptGaps": list(script), "catalogGaps": list(catalog)}))
+
+    # ── #28 ──
+    def test_脚本那一堆不许落coverage(self):
+        out = self._out(script=[{"id": "A-1", "dim": "coverage"}])
+
+        assert out["scriptGaps"][0]["dim"] == "other"
+        assert out["scriptGaps"][0]["dimRaw"] == "coverage"
+        assert qr.dim_coerced(out) == 1
+
+    # ── #29 ──
+    def test_清单那一堆照样能落coverage(self):
+        """**这条是 #28 的另一半，缺了它 #28 就会被"整删 coverage"糊弄过去。**
+
+        对 `scriptGaps` 该拦的理由完全成立，对 `catalogGaps` 完全不成立：
+        那是它唯一的归宿，删了「缺了删除后的越权访问」只能硬塞进 `shape`。
+        """
+        out = self._out(catalog=[{"scenario": "缺删除后越权", "dim": "coverage"}])
+
+        assert out["catalogGaps"][0]["dim"] == "coverage"
+        assert "dimRaw" not in out["catalogGaps"][0]
+        assert qr.dim_coerced(out) == 0
+        # **"没被改判"还不够。** 只断这一条的话，把 `coverage` 从维度表里整删掉
+        # 照样绿：白名单还放行它，只是它不再是一个维度了 —— 页面上那条落进「其它」，
+        # 而 `dimCoerced` 是 0，看起来一切正常。所以还得断它**确实还是覆盖面下面那一格**。
+        assert "coverage" in qr.DIM_KEYS
+        cover = [a for a in qr.dim_rollup(out) if a["axis"] == "cover"][0]
+        assert cover["count"] == 1
+        assert [i["count"] for i in cover["items"] if i["key"] == "coverage"] == [1]
+
+    def test_清单那一堆不许落断言维度(self):
+        """反过来也得拦。断言怎么写是脚本正文的事，清单管不着 ——
+        `assert` 落进 `catalogGaps` 会让人拿着它去找清单主人商量断言写法。"""
+        out = self._out(catalog=[{"scenario": "x", "dim": "assert"}])
+
+        assert out["catalogGaps"][0]["dim"] == "other"
+        assert out["catalogGaps"][0]["dimRaw"] == "assert"
+
+    def test_两边都合法的维度两边都不动(self):
+        """`grain` / `shape` 是真的两边都成立：一条清单说了三件事，
+        既可以说清单粒度粗，也可以说脚本只兑现了其中一件。
+
+        **两个维度都得在两个数组里各试一遍。** 只拿 `grain` 试 `scriptGaps`、
+        拿 `shape` 试 `catalogGaps` 的话，把 `grain` 砍成 script-only 是全绿的 ——
+        白名单窄了一格没人知道，直到清单主人那边的 `grain` 开始成片落进「其它」。
+        """
+        for dim in ("grain", "shape"):
+            out = self._out(script=[{"id": "A-1", "dim": dim}],
+                            catalog=[{"scenario": "x", "dim": dim}])
+
+            assert out["scriptGaps"][0]["dim"] == dim, dim
+            assert out["catalogGaps"][0]["dim"] == dim, dim
+            assert qr.dim_coerced(out) == 0, dim
+
+    def test_越界的原话必须留住(self):
+        """抹掉原话，页面上就只剩一个「其它」—— 没人查得出模型当时说的是什么，
+        也就没人知道该去修提示词还是修白名单。"""
+        out = self._out(script=[{"id": "A-1", "dim": "coverage"}])
+
+        assert out["scriptGaps"][0]["dimRaw"] == "coverage"
+
+    def test_不许往最近的合法维度上靠(self):
+        """`coverage` 越界了不许改判成 `both`/`skip` 这些近的。
+        猜一个近的等于替模型做判断，而猜对和猜错在页面上长得一模一样。"""
+        out = self._out(script=[{"id": "A-1", "dim": "coverage"}])
+
+        assert out["scriptGaps"][0]["dim"] == "other"
+
+    def test_模型压根没给维度的不算越界(self):
+        """没给维度 → rollup 自己会归进「其它」。在这儿也记一笔的话，
+        `dimCoerced` 就同时在数两件事，那个数就没法照着改任何东西了。"""
+        out = self._out(script=[{"id": "A-1"}, {"id": "A-2", "dim": ""}])
+
+        assert qr.dim_coerced(out) == 0
+        assert all("dimRaw" not in g for g in out["scriptGaps"])
+        # **还得直接问 `coerce_dim` 一句。** 上面两条断言隔着调用方：空维度就算被
+        # 判成越界，留档那一格也是空的，`if raw:` 当场把它拦下 —— 于是守卫整条删掉
+        # 照样全绿。信号是**透过参数传导**到断言的，得把参数固定住单独问一次。
+        assert qr.coerce_dim("", "script") == ("", "")
+        assert qr.coerce_dim("   ", "catalog") == ("", "")
+
+    def test_瞎编的维度也算越界(self):
+        out = self._out(script=[{"id": "A-1", "dim": "瞎编的"}])
+
+        assert out["scriptGaps"][0]["dim"] == "other"
+        assert qr.dim_coerced(out) == 1
+
+    def test_这个数是代码数的_不是模型报的(self):
+        """同 `evidence_stats` 的纪律：模型报一份、代码算一份，
+        两条路径哪天分歧了没人看得出来是哪边错。"""
+        import json
+        out = qr.parse_result(json.dumps({
+            "verdict": "bad", "dimCoerced": 99,
+            "scriptGaps": [{"id": "A-1", "dim": "coverage"}], "catalogGaps": []}))
+
+        assert qr.dim_coerced(out) == 1
+
+    def test_两个数组的越界都算进这个数(self):
+        out = self._out(script=[{"id": "A-1", "dim": "coverage"}],
+                        catalog=[{"scenario": "x", "dim": "assert"}])
+
+        assert qr.dim_coerced(out) == 2
+
+    def test_每个维度都得说清自己能落哪个数组(self):
+        """**加维度必须同时登记 `DIM_SIDE`。** 漏登记的维度在两个数组里都非法、
+        整片被改判成「其它」—— 这条测试就是那个漏登记当场红的地方。"""
+        assert set(qr.DIM_SIDE) == set(qr.DIM_KEYS)
+        assert all(set(v) <= {"script", "catalog"} and v for v in qr.DIM_SIDE.values())
+
+    def test_coverage只归清单_断言那几条只归脚本(self):
+        """白名单的具体内容也封样：改动它得有人明确改这条测试。"""
+        assert qr.DIM_SIDE["coverage"] == ("catalog",)
+        for k in ("assert", "claim", "depth", "expect", "both", "skip"):
+            assert qr.DIM_SIDE[k] == ("script",)
+
+    def test_提示词里得写明哪个数组能用哪几个维度(self):
+        """白名单只写在代码里 = 模型天天越界、天天被改判成「其它」，
+        页面上一片「其它」，而模型其实是照着提示词写的。"""
+        p = qr._SYSTEM
+        assert "不许用 `coverage`" in p
+        assert '"dim": "both|skip|grain|shape|assert|claim|depth|expect"' in p
+        assert '"dim": "coverage|grain|shape"' in p
+
+    def test_报告里得说出改判了几条(self):
+        """一个不报数的 coerce 就是新造的静默行为 —— 正是这套表要堵的那种。"""
+        r = TestPartialBatchFailure()._rec({"scriptsRead": 5, "batches": 1})
+        r.result["scriptGaps"] = [{"dim": "other", "dimRaw": "coverage",
+                                   "blame": "script", "id": "MCP-1"}]
+        md = qr.to_markdown(r)
+
+        assert "落错了数组" in md and "dimRaw" in md
+
+    def test_没改判过就不写那一句(self):
+        r = TestPartialBatchFailure()._rec({"scriptsRead": 5, "batches": 1})
+        r.result["scriptGaps"] = [{"dim": "assert", "blame": "script", "id": "MCP-1"}]
+
+        assert "落错了数组" not in qr.to_markdown(r)
+
+
 class TestHowItWorksDisclosure:
     """「你到底怎么评的、靠得住吗、为什么不跑」—— 报告里得答，别等人问。"""
 

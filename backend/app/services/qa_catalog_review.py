@@ -449,9 +449,16 @@ _SYSTEM = """你在评审一个黑盒验收仓里**某一个域**的自动化覆
     （写死的 id、写死的文案），而清单/通用规范要求的是另一个 —— 那是把实现当成了预期。
 
   人看的那页**只按这三个大维度摆**（一个域抓到几十条，没人一条条读；他要知道的是
-  覆盖面、场景设置、断言这三块里哪块塌了）。九个都套不上就挑最接近的，
+  覆盖面、场景设置、断言这三块里哪块塌了）。都套不上就挑最接近的，
   **不许自己造新维度**，也不许留空。
-  `catalogGaps` 的 `dim` 一般落在 `coverage` / `grain` / `shape`。
+
+  **维度分两个数组，别串门**（串了会被改判成「其它」，还会记一笔）：
+  - `scriptGaps` 只许用：`both` / `skip` / `grain` / `shape` / `assert` / `claim` /
+    `depth` / `expect`。**不许用 `coverage`** —— 那说的是"清单里就没有这条场景"，
+    写脚本的人没有任何一句可改，派给他等于派了一件他做不了的活。
+    清单缺场景请写进 `catalogGaps`。
+  - `catalogGaps` 只许用：`coverage` / `grain` / `shape`。断言怎么写是脚本的事，
+    清单管不着。
 - **每条 `scriptGaps` 都要给 `oneLine`：≤20 字，人话，一眼看完。**
   人看的那一页**只显示这一行**，`problem` 那段技术描述根本不出现在他眼前。
   这里有 24 个域，他不是来读你的分析的，是来决定"这个域要不要停下来处理"。
@@ -496,13 +503,13 @@ _SYSTEM = """你在评审一个黑盒验收仓里**某一个域**的自动化覆
   "scriptGaps": [
     {"id": "AGT-11", "path": "scenarios/agt/x.sh", "severity": "blocker|major|minor",
      "blame": "script|env|catalog",
-     "dim": "coverage|both|skip|grain|shape|assert|claim|depth|expect",
+     "dim": "both|skip|grain|shape|assert|claim|depth|expect",
      "oneLine": "挂起的 Agent 还调得动，脚本没查",
      "problem": "脚本只断了 HTTP 200，没有检查被挂起的 Agent 是否真被拒",
      "evidence": "assert_status 200 \"$resp\"",
      "fix": "断言响应体 code == 403 且数据面返回为空"}
   ],
-  "catalogGaps": [{"scenario": "...", "why": "...", "dim": "coverage|grain|shape|…"}]
+  "catalogGaps": [{"scenario": "...", "why": "...", "dim": "coverage|grain|shape"}]
 }
 ```"""
 
@@ -590,6 +597,10 @@ def parse_result(text: str) -> dict:
         raise ValueError("模型回了个不是对象的东西")
 
     def _rows(key: str) -> list[dict]:
+        # 这一堆行属于哪一侧。`catalogGaps` 之外的都按 script 算 —— 这个默认值
+        # 只在有人加了第三个数组、又忘了在这里登记时才生效，那时候它会让
+        # 新数组套用 script 的白名单（宽的那一套），而不是把行整片判非法。
+        side = "catalog" if key == "catalogGaps" else "script"
         # **不封条数。** 上一版这里是 `[:6]`，提示词里也写着「每一项最多 6 条」——
         # 两处一起把结论砍在 6 条。实测（去掉提示词上限量的那一趟）一个批次能出到
         # 104 条，`[:6]` 静默扔掉 31/104 = 30%，而页面上只显示剩下的，
@@ -616,6 +627,12 @@ def parse_result(text: str) -> dict:
                 # 认不出来就落 script：这一栏是「要发给仓库主人的」，
                 # 宁可多审一条，也别把该发的漏进"不是你的事"那一堆里
                 row["blame"] = b if b in ("script", "env", "catalog") else "script"
+                # S8.2：维度按数组分白名单。**校验只能在这一层做** ——
+                # 再往下（merge / rollup）两个数组已经拼成一堆行，谁也说不清
+                # 某一条当初是从哪个数组来的，`coverage` 落错了地方就再也判不出来。
+                d, raw = coerce_dim(row.get("dim", ""), side)
+                if raw:
+                    row["dim"], row["dimRaw"] = d, raw
                 out.append(row)
             elif x:
                 out.append({"problem": str(x)[:600]})
@@ -981,6 +998,10 @@ async def run_review(*, domain: dict, scenarios: list[dict],
     # 这一趟按哪一版维度口径评的。渲染时拿它区分「查了没抓到」和「压根没查」——
     # 不盖这个戳，存量结论会把"模型压根没被问过"渲染成一个漂亮的 0。
     out["dimSpec"] = DIM_SPEC
+    # 越界维度被改掉了几条。**代码数的**（扫 `dimRaw` 那一格），不是模型报的。
+    # 这个数不为 0 说明模型在往错的数组里塞维度 —— 要修的是提示词或白名单，
+    # 而不是"页面上少了几条"。不报出来的话 coerce 自己就成了新的静默行为。
+    out["dimCoerced"] = dim_coerced(out)
     # **上限截了多少，必须报出来。** MCP 域涨到 75 条场景那次实测：60 条进了 prompt、
     # 15 条模型根本没看见，14 份脚本只读进 11 份、其中 7 份正文还被截断 ——
     # 而页面上写的是「场景 75 条」，读的人只会以为这 75 条都评过了。
@@ -1078,6 +1099,62 @@ DIM_SPEC = 2
 DIM_SINCE = {"coverage": 2, "shape": 2, "expect": 2}
 DIM_KEYS = tuple(DIM_META)
 DIM_OTHER = ("other", "其它（这次没归类）", "模型没给它归维度，或是旧结论 —— 归维度是后加的")
+
+# 每个子项**允许落在哪个数组里**。两个数组不是同一件事的两种写法：
+# `scriptGaps` 是「这份脚本没做到」，收件人是写脚本的人；
+# `catalogGaps` 是「清单这条本身有问题」，收件人是清单主人。
+# 落错数组不报错，只会把一条缺口发给一个**改不了它的人** —— 然后合理地没人处理。
+#
+# `coverage`（清单里就没有这条场景）只许落 `catalogGaps`：脚本那边没有任何一句可改，
+# 把它列进 `scriptGaps` 等于给写脚本的人派一件他做不了的活。
+# 反过来 `assert`/`depth` 这些只许落 `scriptGaps`：那是正文写法，清单管不着。
+#
+# ⚠ **加维度必须同时在这里登记**（`test_每个维度都得说清自己能落哪个数组` 钉着）。
+#   漏登记 ⇒ 那个维度在两个数组里都非法 ⇒ 整个被 coerce 成「其它」，测试当场红。
+#   比"没登记就默认放行"好：默认放行的漏登记**查不出来**。
+DIM_SIDE = {
+    "coverage": ("catalog",),
+    "both": ("script",),
+    "skip": ("script",),
+    "grain": ("script", "catalog"),
+    "shape": ("script", "catalog"),
+    "assert": ("script",),
+    "claim": ("script",),
+    "depth": ("script",),
+    "expect": ("script",),
+}
+
+
+def coerce_dim(dim: str, side: str) -> tuple[str, str]:
+    """把越界的 `dim` 落到「其它」。返回 `(要落库的 dim, 原样留档的 dimRaw)`。
+
+    两处刻意：
+
+    1. **不往最近的合法维度上靠。** 「`coverage` 落进了 scriptGaps，那大概是想说
+       `both` 吧」—— 猜一个近的等于替模型做了判断，而猜对和猜错在页面上长得
+       一模一样。落「其它」难看，但难看是对的：它在说"这条我们没归成"。
+    2. **原文留在 `dimRaw` 里。** 抹掉的话，页面上就只剩一个「其它」，
+       没人查得出模型当时说的是什么、也就没人知道该去修提示词还是修白名单。
+       `dimCoerced` 那个数正是从这一格数出来的。
+    """
+    d = (dim or "").strip()
+    if not d:
+        # 模型压根没给维度。这不是"越界"，rollup 自己会把它归进「其它」——
+        # 在这儿也标成 coerce 的话，`dimCoerced` 就同时在数两件事了。
+        return d, ""
+    return (d, "") if side in DIM_SIDE.get(d, ()) else (DIM_OTHER[0], d)
+
+
+def dim_coerced(result: dict | None) -> int:
+    """越界被改掉的条数。**从行本身数**，不让各批各报一份再相加。
+
+    同 `evidence_stats` 的纪律：两条独立路径哪天分歧了没人看得出来是哪边错。
+    而这个数**必须有人看得见** —— 一个不报数的 coerce 就是新造的静默行为，
+    正是这套表要堵的那种。
+    """
+    res = result or {}
+    rows = list(res.get("scriptGaps") or []) + list(res.get("catalogGaps") or [])
+    return sum(1 for g in rows if (g.get("dimRaw") or "").strip())
 
 
 def dim_rollup(result: dict | None) -> list[dict]:
@@ -1311,6 +1388,14 @@ def to_markdown(r: QaCatalogReview) -> str:
         # 「没查」和「查了没抓到」在表里长得一样，不点出来就是拿旧结论冒充全维度覆盖
         L.append(f"⚠ 上表里 {stale} 项标着「这一趟没查」—— 这个域是加这几条判据**之前**评的，"
                  f"模型没被问过它们。**重评一次这个域就补上了**，在那之前别把它们读成没问题。")
+        L.append("")
+    if (n := dim_coerced(res)):
+        # 落进「其它」那一格的条数里，有 n 条**不是没归类，是归错了数组**。
+        # 不写这一句的话，读表的人会以为模型没归维度，然后去改提示词里"要归维度"
+        # 那一段 —— 而真正要改的是"哪个维度能落哪个数组"。
+        L.append(f"⚠ 有 {n} 条的维度**落错了数组**（比如把「清单里就没有这条场景」列进了脚本那一堆），"
+                 f"已改判为「其它」，原话留在每行的 `dimRaw` 里。它们**仍然是抓到的问题**，"
+                 f"只是归不了维度。")
         L.append("")
 
     L.append("## 抓到的问题（按谁动手分）")
