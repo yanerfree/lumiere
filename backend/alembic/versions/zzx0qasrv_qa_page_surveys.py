@@ -18,7 +18,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 revision = "zzx0qasrv"
-down_revision = "zzw0roleck"
+down_revision = "zzx0role3"
 branch_labels = None
 depends_on = None
 
