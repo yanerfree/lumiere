@@ -13,9 +13,35 @@ import { api } from '../../utils/request'
 import { PERM } from '../../utils/permissions'
 import { usePermissions } from '../../utils/PermissionContext'
 
+// 文字色按**能不能读**分档，不按"想让它多淡"分。括号里是白底上量出来的对比度，
+// 不是挑出来的手感 —— WCAG AA 对正文要求 4.5:1，而这一页的说明字是 11–13px，
+// 比"正文"还小，所以只会更难读。
+//
+// 这里原来只有 gray(3.2:1) 和 faint(1.6:1) 两档，**两档都不到线**，
+// 而整句整句的说明文字用的恰恰是 faint —— 1.6:1 基本等于没显示。
+// 后果不是"有点淡"：这一页三个维度旁边那列小字是**唯一**解释"这个数怎么来的"的地方，
+// 它读不到，剩下的就只有三个光秃秃的数字，人又回到自己猜 —— 那正是这一页要消灭的东西。
+//
+// 规则：**faint 只许当装饰**（分隔点、占位破折号、0 值、图标、虚线边框）。
+// 只要渲染的是一句话，就必须用 hint 或更深的，一个例外都不留。
+// 三个语义色本来是给图形挑的（进度条、数字、边框），但页面上它们**同时在渲染句子** ——
+// 徽标那个结论词本身就是 orange 的 2.6:1，而它恰恰是整个抽屉里最该读清的一句。
+// 所以按"文字"的线重挑了一遍，色相不变、压暗到过 AA。这一页的图形跟着变深，认了。
+//
+// ⚠ 定色**不许心算**。第一版 hint 我按公式算出 4.56:1 就定了，真跑起来量到的是
+// **4.48:1** —— 差在页面背景不是纯白（全站有淡渐变），而公式默认它是。差 0.08，
+// 正好压在线下。所以这里全部按"白底 ≥ 4.8"挑，把那点差额当余量留出来，
+// 最后以 scripts/selftest 里那个真量抽屉的脚本为准。
 const C = {
-  red: '#e8453c', orange: '#ff7d00', teal: '#0ea5a0',
-  gray: '#86909c', faint: '#c9cdd4', ink: '#1d2129', line: '#e5e6eb',
+  red: '#cf3128',    //  5.1:1  （原 #e8453c = 3.9:1）
+  orange: '#b35800', //  4.9:1  （原 #ff7d00 = 2.6:1）
+  teal: '#0b807c',   //  4.8:1  （原 #0ea5a0 = 3.0:1）
+  ink: '#1d2129',    // 16.1:1  正文
+  gray: '#5f6b7a',   //  5.4:1  次要文字、标签
+  hint: '#69737f',   //  4.8:1  说明小字（跟 gray 只差一点点，是**故意**的：
+                     //         它常常就嵌在 gray 那段里当下一层，差太多会变成两段并列的正文）
+  faint: '#86909c',  //  3.2:1  **只许装饰**，不许承载句子
+  line: '#e5e6eb',
 }
 
 const STATE_TAG = {
@@ -104,16 +130,27 @@ function Hit({ onClick, active, children, style }) {
 //     同一个抽屉里还写着「一份都没真跑」「第 3 批没读成」，读的人完全有理由把
 //     「部分没验到」读成"你自己只看了一部分"。**结论词除了要不用再解释一遍，
 //     还得让人一眼看出「这句话在说谁」。**
-// 这一栏答的是：*清单说这条场景「已覆盖」，那句认领算不算数？* 主语是认领，不是我。
+//   第四版「认领都算数 / 部分认领不算数 / 多数认领不算数」—— 主语有了，
+//     但「认领」是**我们这边发明的词**，QA 的清单上根本没有它，写的是 ✅「已覆盖」。
+//     读的人得先在脑子里把「认领」翻回「已覆盖」才看得懂，等于把词典塞给了读者。
+//     （2026-08-29 实测：拿这一版问人，第一反应就是"这是什么意思"。）
+// 第五版的规矩：**只许用 QA 清单上原本就有的词**，再加一个能判真假的动词。
+//   「已覆盖」是他们自己写在清单上的，加引号原样引；「成立 / 不成立」谁都不用学。
+//   这一栏答的就是一句话：*清单上那个「已覆盖」，成不成立？*
 const VERDICT = {
-  ok: { text: '认领都算数', color: 'success',
-        why: '清单里认领了的场景，脚本读下来都真在验那件事' },
-  risky: { text: '部分认领不算数', color: 'warning',
-           why: '一部分认领对不上：脚本认领了，但断言太松、或在这个环境里压根没跑' },
-  bad: { text: '多数认领不算数', color: 'error',
-         why: '认领的主要场景多数没真验 —— 清单上那个「已覆盖」当不了数' },
+  ok: { text: '「已覆盖」都成立', color: 'success',
+        why: '清单标了「已覆盖」的场景，脚本读下来都真在验那件事' },
+  risky: { text: '「已覆盖」部分不成立', color: 'warning',
+           why: '有一部分标了「已覆盖」，脚本其实没验到 —— 断言太松，或在这个环境里整条跳过了' },
+  bad: { text: '「已覆盖」多数不成立', color: 'error',
+         why: '标了「已覆盖」的主要场景多数没真验到 —— 这个域的「已覆盖」当不了验收依据' },
 }
 const VERDICT_SUBJECT = '说的是 QA 的清单和脚本，不是说我读了多少 —— 我这趟读了多少、漏没漏，在「怎么看的」里单独写。'
+// 这一句非写不可：**徽标和底下那些数不是一个来源**，而它们并排放着，
+// 不说就会被读成"徽标 = 把下面的数加起来得出的"。实际上徽标是模型对整个域下的一句总评，
+// 底下那些数是从 scriptGaps 一行行数出来的。于是完全可能「多数不成立」配一个很小的数
+// —— 那不是打架，是两件事。多批取最坏也得说：一个域拆 8 批读，**一批判 bad 整个域就是 bad**。
+const VERDICT_SOURCE = '这句总评是模型对整个域下的，不是把下面的数加起来算的；一个域拆几批读，取最坏的那批。'
 
 // 「谁动手」。人第一个要知道的不是严重度，是"这条要不要我处理"。
 // 上一版三类混在一张表里：MCP 那 6 条里有 2 条根子是我们自己的环境记录没铺 apikey，
@@ -229,11 +266,40 @@ export default function QaCatalog() {
     if (!pending.length) return undefined
     const t = setInterval(async () => {
       const map = await fetchReviews()
-      // 抽屉开着的那条也要跟着变，否则人盯着一个「评审中」看到天荒地老
-      setOpenReview(prev => (prev && map[prev.domain]?.id === prev.id ? map[prev.domain] : prev))
+      // 抽屉开着的那条也要跟着变，否则人盯着一个「评审中」看到天荒地老。
+      // ⚠ `dims` 得**留住**：列表接口不发它，直接覆盖就会把刚取回来的详情打回原形，
+      // 于是抽屉每 3 秒在「分好组的表」和「一列裸键」之间闪一次
+      // （同一个域的同一条评审，id 没变，dims 不会过期）。
+      setOpenReview(prev => {
+        const next = prev && map[prev.domain]?.id === prev.id ? map[prev.domain] : prev
+        return next && next !== prev ? { ...next, dims: next.dims ?? prev.dims } : next
+      })
     }, 3000)
     return () => clearInterval(t)
   }, [pending.length, fetchReviews])
+
+  // 抽屉里那张**按维度分组的表**要的是 `dims`，而列表接口**故意不发**它
+  // （一次几十行，每行挂一份同样的口径常量）。抽屉一直是拿列表行直接渲染的，
+  // 于是那张表从来没画出来过 —— 走的全是降级分支：把 9 个原始维度键
+  // （`skip` `assert` `coverage` …）平铺成一列数字，没有中文名、没有分组、没有解释。
+  // 2026-08-29 用户问「你能用人能听得懂的来归类吗」问的就是这堆裸键。
+  // **归类一直是有的（后端 `AXES` 三块中文），只是没送到页面上。**
+  //
+  // 更坏的是降级那段自己给的诊断：它写「最常见的原因是后端还跑着旧代码」。
+  // 这里根本不是旧代码，是这条路径压根没取过详情 —— 一句猜错的诊断会把人
+  // 支去重启后端，重启完照旧，然后开始怀疑别的地方。
+  useEffect(() => {
+    const r = openReview
+    if (!r?.id || r.status !== 'done' || r.dims) return
+    let dead = false
+    api.get(`/projects/${projectId}/qa-catalog/reviews/${r.id}`)
+      .then(res => {
+        // 期间人可能已经切到别的域或关掉了，别把详情盖到另一条上
+        if (!dead && res.data?.id === r.id) setOpenReview(res.data)
+      })
+      .catch(() => { /* 取不到就维持降级渲染，那段已经把话说清楚了 */ })
+    return () => { dead = true }
+  }, [projectId, openReview])
 
   const openFile = async (path) => {
     setFile({ path, content: '' })
@@ -1239,11 +1305,22 @@ function HowIRead({ res, r }) {
 // 第一次改成维度时直接摆了六条查法，结果是「你写的都是什么维度，我咋看不懂」——
 // 那六条是**我怎么查的**，不是他脑子里的维度。现在顶层只有覆盖面 / 场景设置 / 断言，
 // 三个数就够做决定；查法退到子项，想知道"凭什么这么判"的人才往下读。
-// 后端没发 `dims` 时走这里。最可能的原因是**后端还跑着旧代码** —— 本仓的后端
-// 故意不带 --reload，改完不重启就是「新前端 + 旧后端」，而前端有 HMR，症状长得
-// 像功能本身坏了。这时候唯一诚实的做法是把话说出来，再把结论里的原始维度标签
-// **原样**列出来：不猜名字、不摆 0，更**不许显示 `?`** —— 正常路径上 `?` 专指
-// 「这一趟没查」，两个意思撞在一起就是一条假信息，比一片空白坏得多。
+// 手上这条评审没带 `dims` 时走这里。
+//
+// ⚠ 2026-08-29 这段只写了一条原因（「后端还跑着旧代码」），而当时**同时有两个 bug**，
+// 它只说中了其中一个：
+//   ① 后端确实跑着旧代码 —— 那份后端里 `with_dims` 一个字都没有，详情接口不发 `dims`。
+//      **人截图时看到的就是这一条。**
+//   ② 抽屉压根没去取过详情。列表接口**故意不发** `dims`（几十行每行挂一份同样的
+//      口径常量），而抽屉一直拿列表行直接渲染 —— 就算后端是新的，这张表照样画不出来。
+// 只写一条的代价不是"少写一句"：人照着它重启了后端，②还在，页面一模一样，
+// 于是那句唯一的诊断从"帮忙"变成了"排除掉一个正确方向"。
+// **降级文案的规矩：原因不确定就把候选全列上，别挑一个说得最像的当结论** ——
+// 这跟这整个模块要抓的毛病是同一种（断言只验一条就宣布整件事成立）。
+//
+// 拿不到时前端**不自己重算一份**，只把结论里的原始维度标签**原样**列出来：
+// 不猜名字、不摆 0，更**不许显示 `?`** —— 正常路径上 `?` 专指「这一趟没查」，
+// 两个意思撞在一起就是一条假信息，比一片空白坏得多。
 function DimUnavailable({ res }) {
   const n = {}
   ;[...(res.scriptGaps || []), ...(res.catalogGaps || [])].forEach(g => {
@@ -1254,13 +1331,18 @@ function DimUnavailable({ res }) {
   return (
     <div style={{ marginBottom: 16, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
       <div style={{ fontWeight: 600, color: C.orange }}>
-        ⚠ 后端没给出维度口径，这张表画不出来
+        ⚠ 还没拿到维度口径，分好组的那张表画不出来
       </div>
       <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.8, marginBottom: 6 }}>
-        维度的名称、分组和「这一趟没查」都由后端发（详情接口的 <code>dims</code>）。
-        拿不到时前端<b>不自己重算一份</b> —— 重算就得再抄一份口径回来，
-        抄的那份漂了会把「压根没查」渲染成一个漂亮的 0。
-        最常见的原因是<b>后端还跑着旧代码</b>（改完要 <code>bash deploy/restart-backend.sh</code>）。
+        维度的中文名、分成哪三块、哪一项「这一趟没查」，全由后端随详情一起发
+        （<code>GET …/qa-catalog/reviews/&#123;id&#125;</code> 的 <code>dims</code>；列表接口不发，
+        几十行每行挂一份同样的口径太浪费）。拿不到时前端<b>不自己重算一份</b> ——
+        重算就得再抄一份口径回来，抄的那份漂了会把「压根没查」渲染成一个漂亮的 0。
+        <b>刚点开时闪一下是正常的</b>，详情还在路上。一直停在这里就是那一发没拿到，
+        原因<b>不止一种，按这个顺序排掉</b>：① 后端跑着旧代码，那一版还没有
+        <code>dims</code> 这个字段（<code>bash deploy/restart-backend.sh</code>，
+        再对一眼进程启动时间和最新提交时间）；② 详情那一发失败了（刷新一次，看浏览器
+        网络面板里这条是不是非 200）；③ 都不是的话看后端日志。
         下面是结论里的原始维度标签，按条数排：
       </div>
       {keys.length ? keys.map(k => (
@@ -1269,7 +1351,7 @@ function DimUnavailable({ res }) {
                          fontVariantNumeric: 'tabular-nums', color: C.ink }}>{n[k]}</span>
           <code style={{ fontSize: 12.5, color: C.gray }}>{k}</code>
         </div>
-      )) : <div style={{ fontSize: 12.5, color: C.faint }}>这一趟一条都没抓到</div>}
+      )) : <div style={{ fontSize: 12.5, color: C.hint }}>这一趟一条都没抓到</div>}
     </div>
   )
 }
@@ -1306,7 +1388,7 @@ function DimTable({ res, r }) {
               fontVariantNumeric: 'tabular-nums', color: d.count ? C.red : C.teal,
             }}>{d.count || '—'}</span>
             <span style={{ fontWeight: 600, color: d.count ? C.ink : C.gray }}>{d.name}</span>
-            <span style={{ fontSize: 12, color: C.faint }}>{d.why}</span>
+            <span style={{ fontSize: 12, color: C.hint }}>{d.why}</span>
           </div>
           {/* 子项 = 怎么判的。想细看的人才往下读，大维度那三个数已经够做决定 */}
           {d.items.map(it => (
@@ -1320,7 +1402,7 @@ function DimTable({ res, r }) {
               }}>{it.unavailable ? '?' : it.count || '—'}</span>
               <span style={{ width: 178, flexShrink: 0, fontSize: 12.5,
                              color: it.count ? C.ink : C.gray }}>{it.name}</span>
-              <span style={{ fontSize: 12, color: it.unavailable ? C.orange : C.faint,
+              <span style={{ fontSize: 12, color: it.unavailable ? C.orange : C.hint,
                              lineHeight: 1.8 }}>
                 {it.unavailable ? '这一趟没查 —— 这个域是加这条判据之前评的，重评一次就补上' : it.why}
               </span>
@@ -1366,7 +1448,8 @@ function ReviewBrief({ r }) {
               color: res.verdict === 'ok' ? C.teal : res.verdict === 'bad' ? C.red : C.orange,
             }}>{v.text}</b>」= {v.why}
             {/* 结论词的主语必须写出来。省掉主语，读的人会把它读成"评审只做了一半" */}
-            <div style={{ color: C.faint, marginTop: 2 }}>{VERDICT_SUBJECT}</div>
+            <div style={{ color: C.hint, marginTop: 2 }}>{VERDICT_SUBJECT}</div>
+            <div style={{ color: C.hint }}>{VERDICT_SOURCE}</div>
           </div>
         )}
         {/* 人话那段是拼接版时**必须当场说**。退回拼接之后 headline 是概述的前 120 字，
@@ -1385,7 +1468,7 @@ function ReviewBrief({ r }) {
         {/* 存量结论没这个键。**不许当成"收口跑成了"** —— 老记录里同样混着收口挂过的，
             折进去就是把「不知道」渲染成「跑成了」。 */}
         {!res.briefSource && (
-          <div style={{ fontSize: 12, color: C.faint, marginTop: 8, lineHeight: 1.9 }}>
+          <div style={{ fontSize: 12, color: C.hint, marginTop: 8, lineHeight: 1.9 }}>
             这一趟没记「上面这段是怎么来的」（旧口径评的，当时不区分「收口跑成了」和
             「收口挂了退回拼接」）—— 底下的重点要是空的，别读成这个域没有重点。
           </div>
@@ -1407,7 +1490,7 @@ function ReviewBrief({ r }) {
           {/* 变量个数和场景条数是两码事，一屏之内并排出现过 10 和 7，得说清是哪个 */}
           {nEnvVar > 0 && `（环境那几条的根子：我们这条环境记录里缺 ${nEnvVar} 个变量名，
             值要在真正跑套件的地方注入，平台这边补上也不会让 QA 的脚本真跑起来。）`}
-          <div style={{ color: C.faint }}>
+          <div style={{ color: C.hint }}>
             要逐条看（哪个文件、哪一句、改成什么）—— 切到隔壁「给 AI / 整改」那一页。
           </div>
         </div>
@@ -1547,7 +1630,7 @@ function ReviewBody({ r, onOpenFile, projectId }) {
             {/* 分母。「缺 2 个」既可能是 2/3 也可能是 2/40 —— 没分母读的人判不了
                 这一列有多严重，而判不了的结果通常是整列被当噪音略过。 */}
             {res.envSatisfied?.length > 0 && (
-              <div style={{ fontSize: 12, color: C.faint }}>
+              <div style={{ fontSize: 12, color: C.hint }}>
                 这个域要从外面拿 {res.envMissing.length + res.envSatisfied.length} 个变量，
                 其中 {res.envSatisfied.length} 个这个环境里有。
               </div>
@@ -1566,7 +1649,7 @@ function ReviewBody({ r, onOpenFile, projectId }) {
                 </Tooltip>
                 {v.state === 'ambiguous' && (
                   /* 降级要连**凭什么降**一起写出来，否则它就是一句无从复核的断言 */
-                  <div style={{ fontSize: 12, color: C.faint, marginLeft: 2 }}>
+                  <div style={{ fontSize: 12, color: C.hint, marginLeft: 2 }}>
                     名字对不上，<b>不是真缺</b>：环境里有{' '}
                     <span style={{ fontFamily: 'var(--font-mono)' }}>
                       {(v.family || []).join('、')}
@@ -1575,7 +1658,7 @@ function ReviewBody({ r, onOpenFile, projectId }) {
                 )}
               </div>
             ))}
-            <div style={{ fontSize: 12, color: C.faint }}>
+            <div style={{ fontSize: 12, color: C.hint }}>
               公共库里真赋过值的、自带兜底值的、shell 自带的、夹具运行时拼出来的都已经排掉。
               写成 <code>{'export X="${X:-}"'}</code> 的算缺 ——
               那是仓库在明说这个值得从环境来，没配就整条静默跳过。
@@ -1724,4 +1807,4 @@ function Section({ title, hint, children }) {
   )
 }
 
-const Nothing = ({ text }) => <div style={{ fontSize: 12, color: C.faint }}>{text}</div>
+const Nothing = ({ text }) => <div style={{ fontSize: 12, color: C.hint }}>{text}</div>

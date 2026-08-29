@@ -694,7 +694,7 @@ class TestBlame:
         assert "QA 的脚本要改（1 条）" in md
         assert "不是脚本的问题：环境没铺东西（1 条）" in md
         # 结论词后面必须跟释义，光一个词读的人各猜各的
-        assert "部分认领不算数" in md and "断言太松" in md
+        assert "「已覆盖」部分不成立" in md and "断言太松" in md
         # 凭什么这么说 —— 别人第一个念头
         assert "这条断言能不能失败" in md and "为什么一份都没跑" in md
         # 撑得住的部分要说出来，整页只有坏消息读的人会当成全域不能用
@@ -793,7 +793,7 @@ class TestBatching:
             {"verdict": "bad", "scriptGaps": [], "catalogGaps": []},
             {"verdict": "risky", "scriptGaps": [], "catalogGaps": []},
         ])
-        # 平均一下会把最要命的那批稀释掉：5 批里 1 批「多数认领不算数」，整个域就不能当数
+        # 平均一下会把最要命的那批稀释掉：5 批里 1 批「多数不成立」，整个域就不能当「都成立」
         assert merged["verdict"] == "bad"
 
     def test_合批去重且按严重度排(self):
@@ -1955,12 +1955,35 @@ class TestFrontendKeepsNoCopy:
 
         降级时也画个 `?`，读的人会以为"后端查过、这几条没抓到"——
         两个意思撞在一起就是一条假信息，比一片空白坏得多。
+
+        ⚠ 这里原来还钉着一句**原文**（"后端没给出维度口径"）。那是在钉措辞，不是钉意思：
+        改一个字就红，而红的时候它说不出到底哪条规矩被破了。现在钉两件能说清的事 ——
+        提到 `dims` 这个字段名（让人知道去哪儿看），以及**不许只给一条原因**（见下）。
         """
         src = self.FE.read_text(encoding="utf-8")
         body = src.split("function DimUnavailable")[1].split("function DimTable")[0]
 
         assert "'?'" not in body and '"?"' not in body
-        assert "后端没给出维度口径" in body
+        assert "dims" in body, "降级文案得点名 dims 这个字段，不然人不知道去哪儿看"
+
+    def test_降级文案不许只给一条原因(self):
+        """**原因不确定就把候选全列上，别挑一个说得最像的当结论。**
+
+        2026-08-29 实测：这段当时只写了「后端还跑着旧代码」一条。它确实是原因之一
+        （那份后端里 `with_dims` 一个字都没有），但**同时还有第二个 bug** ——
+        抽屉压根没去取过详情，一直拿列表行渲染，而列表接口故意不发 `dims`。
+        于是人照着那句唯一的诊断重启了后端，页面一模一样，
+        那句话就从"帮忙"变成了"把一个正确方向排除掉了"。
+
+        这跟本模块要抓的毛病是同一种：只验一条就宣布整件事成立。
+        自己身上不能有。
+        """
+        src = self.FE.read_text(encoding="utf-8")
+        body = src.split("function DimUnavailable")[1].split("function DimTable")[0]
+
+        assert "①" in body and "②" in body, (
+            "降级文案只给了一条原因。拿不到 dims 至少有两种可能"
+            "（后端旧代码没这个字段 / 详情那一发没成），列全了人才排得动")
 
 
 class TestEnvTiers:

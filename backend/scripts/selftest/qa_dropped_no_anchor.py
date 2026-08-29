@@ -10,8 +10,11 @@
 
 项目得有至少一条 `done` 的域评审（页面上那一列点得开的徽标）。
 """
-import json, os, sys, tempfile
+import json, os, pathlib, sys, tempfile
 from playwright.sync_api import sync_playwright
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2]))
+from app.services.qa_catalog_review import VERDICT_CN  # noqa: E402
 
 BASE = os.environ.get("LUMIERE_WEB", "http://127.0.0.1:5173")
 PROJ = os.environ.get("LUMIERE_PROJ", "1a1fb724-e252-4fd2-a7f1-3bc6bfdc5cbe")
@@ -77,10 +80,16 @@ with sync_playwright() as p:
         state["patched"] = 0
         pg.goto(f"{BASE}/projects/{PROJ}/qa-catalog", wait_until="domcontentloaded")
         pg.wait_for_timeout(3500)
-        # 评审结论标签只有三种文案（VERDICT 表），按文案定位 ——
+        # 评审结论标签只有三种文案，按文案定位 ——
         # antd v6 的 Tag 不把内联 style 透给 span，按 cursor:pointer 选不着。
+        # **文案从 `VERDICT_CN` 现生成，不许抄一份进来。** 2026-08-29 换第五版措辞时，
+        # 这里抄的那份是全仓唯一一处会**静默失效**的：三个词一个都匹配不上，
+        # 脚本照常跑完、打一行「没找到标签」、退出码 0 —— 三张图一张没截，
+        # 而它是「改完必须截图自测」那条规矩的执行者。**自测工具自己坏了不出声，
+        # 等于把自测这件事悄悄取消了。**（前端那份 VERDICT 仍是各写一份，
+        # 没有共同出处；两边不一致时以这条 py 为准 —— 导出的 Markdown 用的是它。）
         tag = pg.locator(
-            "span.ant-tag:text-matches('认领都算数|部分认领不算数|多数认领不算数')").first
+            "span.ant-tag:text-matches('%s')" % "|".join(VERDICT_CN.values())).first
         if not tag.count():
             print(f"!! {name}: 没找到可点开的评审标签")
             results.append((name, None, None))
