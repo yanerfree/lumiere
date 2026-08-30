@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { timeColumn } from '../../utils/timeCol'
-import { Table, Button, Tag, Modal, Form, Input, Select, Switch, message, Popconfirm, Space, Avatar, Spin } from 'antd'
+import { Table, Button, Tag, Modal, Form, Input, Select, Switch, message, Popconfirm, Space, Avatar, Tooltip } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, UserOutlined, ReloadOutlined } from '@ant-design/icons'
 import { api } from '../../utils/request'
+import { nameColor, avatarText } from '../../utils/nameColor'
 
 const ROLE_CONFIG = {
   admin: { label: '系统管理员', color: '#e8453c', bg: 'rgba(232,69,60,0.1)' },
@@ -17,6 +18,74 @@ const ROLE_CONFIG = {
 // 而 ROLE_CONFIG 只有 admin/user。角色值会随迁移、随版本回退、随手工改库变化，
 // 前端不该假设自己永远认得全。
 const roleCfg = (v) => ROLE_CONFIG[v] ?? { label: v || '未知', color: '#86909c', bg: 'rgba(134,144,156,0.12)' }
+
+// 项目角色的中文名，跟「项目列表 → 成员管理」那份下拉同源（pages/projects/ProjectList.jsx）。
+// 库里可能还留着旧名（project_admin/developer/tester），后端出门前已归一成
+// manager/member（user_service.list_user_project_map），这里的兜底是防"归一表又漏了一个"。
+const PROJECT_ROLE_LABEL = { manager: '项目管理员', member: '成员' }
+const projectRoleLabel = (v) => PROJECT_ROLE_LABEL[v] ?? `${v || '未知'}（旧角色）`
+
+// 一行最多平铺几个项目，多的收进 +N。3 个之后再往右排就开始挤「角色」列了。
+const MAX_PROJECT_TAGS = 3
+
+function ProjectChip({ project }) {
+  const c = nameColor(project.name)
+  return (
+    <Tooltip title={`项目角色：${projectRoleLabel(project.role)}`} mouseEnterDelay={0.3}>
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        padding: '1px 8px 1px 6px', borderRadius: 6, fontSize: 12, lineHeight: '18px',
+        background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)',
+        color: '#4e5969', maxWidth: 168,
+      }}>
+        <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.color, flexShrink: 0 }} />
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
+      </span>
+    </Tooltip>
+  )
+}
+
+/**
+ * 「归属项目」列。
+ *
+ * 这里显示的是**成员表里真有的那几行**，不是「他能进哪些项目」——
+ * 系统管理员绕过项目成员绑定（backend/app/deps/auth.py 的 require_project_role），
+ * 所以 admin 哪怕一行成员记录都没有，照样能进全部项目。那种情况下把这一格
+ * 留空或者画成「—」是**说反了**：看着像"这个管理员什么都看不到"。
+ * 所以 admin 单独先给一枚「全部项目」，成员记录（如果有）再跟在后面。
+ */
+function ProjectCell({ user }) {
+  const projects = user.projects || []
+  const isAdmin = user.role === 'admin'
+  const shown = projects.slice(0, MAX_PROJECT_TAGS)
+  const rest = projects.slice(MAX_PROJECT_TAGS)
+
+  if (!isAdmin && projects.length === 0) {
+    // 不写「—」：普通用户没有任何项目绑定 = 他登进来什么也看不见，
+    // 这是个需要有人处理的状态，不是"这格没数据"。
+    return <span style={{ color: '#c9cdd4', fontSize: 12 }}>未加入项目</span>
+  }
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+      {isAdmin && (
+        <Tooltip title="系统管理员绕过项目成员绑定，无需加入即可访问全部项目" mouseEnterDelay={0.3}>
+          <span style={{
+            padding: '1px 8px', borderRadius: 6, fontSize: 12, lineHeight: '18px',
+            color: '#0ea5a0', background: 'rgba(14,165,160,0.1)',
+            border: '1px solid rgba(14,165,160,0.2)',
+          }}>全部项目</span>
+        </Tooltip>
+      )}
+      {shown.map(p => <ProjectChip key={p.id} project={p} />)}
+      {rest.length > 0 && (
+        <Tooltip title={rest.map(p => `${p.name}（${projectRoleLabel(p.role)}）`).join('、')}>
+          <span style={{ fontSize: 12, color: '#86909c', cursor: 'default' }}>+{rest.length}</span>
+        </Tooltip>
+      )}
+    </div>
+  )
+}
 
 export default function UserManagement() {
   const [users, setUsers] = useState([])
@@ -96,26 +165,39 @@ export default function UserManagement() {
 
   const columns = [
     {
-      // 「用户」这一列不写宽度：其余列都写死时 antd 会把富余宽度按比例摊给每一列，
-      // 结果「创建时间」被撑到 231px 装 112px 的内容，整张表全是空白。
-      // 留一列不定宽来吸收余量，其他列就能保持声明的宽度。
-      title: '用户', dataIndex: 'username',
-      render: (v) => (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Avatar size={28} style={{ background: 'rgba(124,92,191,0.12)', color: '#7c5cbf', fontSize: 12, border: '1.5px solid rgba(124,92,191,0.25)' }}>{v[0].toUpperCase()}</Avatar>
-          <span style={{ fontWeight: 500 }}>{v}</span>
-        </div>
-      ),
+      title: '用户', dataIndex: 'username', width: 240,
+      render: (v) => {
+        const c = nameColor(v)
+        return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <Avatar size={28} style={{ background: c.bg, color: c.color, fontSize: 12, fontWeight: 600, border: `1.5px solid ${c.border}`, flexShrink: 0 }}>{avatarText(v)}</Avatar>
+            {/* 用户名最长 50 字符（schemas/user.py），220px 装不下 ——
+                不截断的话这一格会撑成两三行，把整行的高度顶起来。 */}
+            <Tooltip title={v} mouseEnterDelay={0.5}>
+              <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span>
+            </Tooltip>
+          </div>
+        )
+      },
     },
     {
-      title: '角色', dataIndex: 'role', width: 130, align: 'center',
+      // 「归属项目」这一列不写宽度：其余列都写死时 antd 会把富余宽度按比例摊给每一列，
+      // 结果「创建时间」被撑到 231px 装 112px 的内容，整张表全是空白。
+      // 留一列不定宽来吸收余量，其他列就能保持声明的宽度 —— 而这一列本来就是变长内容，
+      // 它来吃这份余量最合适（此前吃余量的是「用户」，那一列内容短，撑出来全是空白）。
+      title: '归属项目',
+      key: 'projects',
+      render: (_, record) => <ProjectCell user={record} />,
+    },
+    {
+      title: '角色', dataIndex: 'role', width: 120, align: 'center',
       render: (v) => {
         const cfg = roleCfg(v)
         return <Tag style={{ color: cfg.color, background: cfg.bg, border: 'none' }}>{cfg.label}</Tag>
       },
     },
     {
-      title: '状态', dataIndex: 'isActive', width: 100, align: 'center',
+      title: '状态', dataIndex: 'isActive', width: 88, align: 'center',
       render: (v, record) => (
         <Switch
           size="small"
@@ -128,7 +210,7 @@ export default function UserManagement() {
     },
     timeColumn({ key: 'createdAt', title: '创建时间', align: 'center' }),
     {
-      title: '操作', width: 120, align: 'center',
+      title: '操作', width: 96, align: 'center',
       render: (_, record) => (
         <Space size={4}>
           <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} style={{ color: '#86909c' }} />

@@ -22,6 +22,25 @@ class UserResponse(BaseSchema):
     updated_at: datetime
 
 
+class UserProjectRef(BaseSchema):
+    """用户在某个项目里的成员身份（用户列表的「归属项目」列）"""
+    id: uuid.UUID
+    name: str
+    # 项目角色的**规范名**（manager/member），不是库里那份可能还带旧名的原值 ——
+    # 归一在 user_service 里做，见 canonical_project_role。
+    role: str
+
+
+class UserWithProjectsResponse(UserResponse):
+    """用户列表专用：额外带上该用户加入了哪些项目。
+
+    没有把 projects 直接并进 UserResponse —— 创建/更新那两条路不查成员表，
+    并进去就会稳定地返回 `projects: []`，而"这个人没有归属项目"和
+    "这条响应没查成员表"在前端长得一模一样。宁可分成两个 schema。
+    """
+    projects: list[UserProjectRef] = []
+
+
 class CreateUserRequest(BaseSchema):
     """创建用户请求"""
     username: str = Field(min_length=2, max_length=50, pattern=r"^[a-zA-Z0-9_]+$")

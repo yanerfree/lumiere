@@ -5,8 +5,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.permissions import canonical_project_role
 from app.core.security import hash_password
 from app.core.audit import audit_log
+from app.models.project import Project, ProjectMember
 from app.models.user import User
 from app.schemas.user import CreateUserRequest, UpdateUserRequest
 
@@ -16,6 +18,30 @@ async def list_users(session: AsyncSession) -> list[User]:
     stmt = select(User).order_by(User.created_at.desc())
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def list_user_project_map(session: AsyncSession) -> dict[uuid.UUID, list[dict]]:
+    """user_id -> 该用户加入的项目列表 [{id, name, role}]，按项目名排序。
+
+    一条 JOIN 查全部人的成员关系，在内存里分组 —— **别改成按用户逐个查**：
+    用户列表默认一页 20 行、最大 500 行，逐个查就是 500 次往返。
+    没有成员关系的用户在返回的 dict 里**没有键**（不是空列表），调用方自己 `.get(id, [])`。
+    """
+    stmt = (
+        select(ProjectMember.user_id, Project.id, Project.name, ProjectMember.role)
+        .join(Project, Project.id == ProjectMember.project_id)
+        .order_by(Project.name)
+    )
+    result = await session.execute(stmt)
+    mapping: dict[uuid.UUID, list[dict]] = {}
+    for user_id, project_id, project_name, role in result.all():
+        mapping.setdefault(user_id, []).append({
+            # 归一成规范名再出门：库里存量行可能还是旧名（project_admin/developer），
+            # 前端拿旧名去查标签表会查不到，静默显示成空白。
+            "id": project_id, "name": project_name,
+            "role": canonical_project_role(role) or role,
+        })
+    return mapping
 
 
 @audit_log(action="create", target_type="user")
