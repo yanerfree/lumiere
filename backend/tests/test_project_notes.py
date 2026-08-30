@@ -106,3 +106,59 @@ def test_工具描述里的字数和代码里的上限对得上():
     desc = next(t["description"] for t in TOOL_CATALOG if t["name"] == "lum_add_project_note")
     assert f"{MAX_CONTENT} 字以内" in desc
     assert "lum_push_skill" in desc, "工具描述这一层也得指路 —— 有人是先读描述才决定往哪写的"
+
+
+# ── HTTP 那半边 ──────────────────────────────────────────────────────────
+# 上面钉的是 MCP 通道。**同一条规矩还有另一条入口**：`POST /api/projects/{id}/knowledge`。
+# 它此前一个字都不校验 —— 页面靠 `maxLength={200}` 拦着，看起来规矩是生效的，
+# 但 curl / 脚本 / 别的 agent 拿 token 直接打就能写进去。
+# 一半真的规矩比没规矩坏：它让「我这条超了怎么进去了」看着像上限失灵。
+
+
+def test_两条写入通道认的是同一个数字():
+    """各写各的 200，改一边漏一边 —— 而漏的那边是安静的。"""
+    from app.api.knowledge import MAX_CONTENT as api_max
+    from app.models.knowledge import MAX_CONTENT as table_max
+
+    assert api_max is table_max is MAX_CONTENT
+
+
+def test_HTTP_超限也拒并且一样指路():
+    from app.api.knowledge import _reject_if_too_long
+    from app.core.exceptions import AppError
+
+    _reject_if_too_long("字" * MAX_CONTENT)  # 正好卡线：放行
+    with pytest.raises(AppError) as ei:
+        _reject_if_too_long("字" * (MAX_CONTENT + 1))
+    err = ei.value
+    assert err.status_code == 400 and err.code == "NOTE_TOO_LONG"
+    # 前端只把 error.message 弹成 toast，detail 不显示 —— 出路必须在 message 里，
+    # 只报一个数字的话，写的人照样把后半句删掉，那正是这次要修的坑。
+    assert "拆成两条" in err.message
+    assert "Skill" in err.message
+
+
+def test_建须知的路由真的调了那道校验():
+    """校验写了没接上 = 白写。这条按封样惯例直接读源码，不起服务不连库。"""
+    import inspect
+
+    from app.api import knowledge
+
+    src = inspect.getsource(knowledge.create_knowledge)
+    assert "_reject_if_too_long" in src
+
+
+def test_前端那份上限和后端对得上():
+    """前端有自己的一份 NOTE_MAX（textarea 的 maxLength 要它）。
+
+    两份数字漂开的后果不对称：后端调大、前端没跟 → 用户被输入框拦住，会问；
+    后端调小、前端没跟 → 输入框放行、提交才报错，看着像"平台又抽风了"。
+    """
+    import re
+    from pathlib import Path
+
+    page = (Path(__file__).resolve().parents[2] / "frontend" / "src"
+            / "pages" / "settings" / "AutomationData.jsx").read_text(encoding="utf-8")
+    m = re.search(r"const\s+NOTE_MAX\s*=\s*(\d+)", page)
+    assert m, "前端的 NOTE_MAX 没了或改了名 —— 那这条封样就成了恒真的，得跟着改"
+    assert int(m.group(1)) == MAX_CONTENT

@@ -32,10 +32,16 @@ from __future__ import annotations
 
 # 每条链都要先定位到项目/分支，单列出来避免各档位重复抄
 _LOCATE = ["lum_list_projects", "lum_list_branches"]
-# 项目须知：动手前该读的那些「被测系统就是这样」。读放进 _LOCATE 之外
-# 单列，是因为归因档也要读（判断"这是缺陷还是系统本来如此"全靠它），
-# 但归因档刻意不给任何写库工具。
-_NOTES_READ = ["lum_list_project_notes"]
+# 项目须知：动手前该读的那些「被测系统就是这样」。**读和写必须同档发** ——
+# 原来只发读的那档（UI 脚本、归因）撞出来的新坑没有地方写回去，下一轮从零再踩一遍，
+# 而这正是这张表当初要解决的问题。归因档尤其明显：判「这是缺陷还是系统本来如此」
+# 的那一刻，判出来的结论就是一条须知的形状（「这个 404 有两种」就是这么来的），
+# 读得到写不回 = 每一轮重判一遍。
+#
+# 这不违反归因档那条纪律 —— 纪律是**不改用例/脚本/执行状态**（`lum_submit_analysis`
+# 一样写库），写一条「被测系统就是这样」不碰任何用例。`test_归因档位不含任何写用例
+# 或脚本的工具` 钉的就是那个集合，不是"一个字都不许写"。
+_NOTES = ["lum_list_project_notes", "lum_add_project_note"]
 
 # 档位名单列出来：全链路那一档的说明要**逐字引用**这四个名字拼出来。
 # 手写一句"写用例 → 回填接口场景和 UI 脚本 → 组计划跑一轮 → 读报告 → 提归因"
@@ -52,7 +58,7 @@ _LABELS = {
 # 又得回头猜哪个才算数。test_四段的排列顺序和说明一致 钉住了这条。
 _CHAIN = ["live", "uiscript", "regression", "triage"]
 
-_LIVE = _LOCATE + _NOTES_READ + ["lum_add_project_note"] + [
+_LIVE = _LOCATE + _NOTES + [
     "lum_list_cases", "lum_get_case", "lum_get_folder_tree", "lum_create_case", "lum_update_case",
     "lum_list_api_tree", "lum_get_api_node",
     "lum_list_environments", "lum_get_merged_variables",
@@ -96,7 +102,7 @@ _MOCKS = [
     "lum_llm_mock_requests", "lum_llm_mock_reset", "lum_proxy_capture",
 ]
 
-_UISCRIPT = _LOCATE + _NOTES_READ + [
+_UISCRIPT = _LOCATE + _NOTES + [
     "lum_list_cases", "lum_get_case",
     "lum_get_sync_spec", "lum_list_global_data",
     "lum_list_scenario_variables", "lum_upsert_scenario_variables",
@@ -113,7 +119,7 @@ _UISCRIPT = _LOCATE + _NOTES_READ + [
     "lum_review_batch", "lum_review_batch_status", "lum_module_checkup",
 ]
 
-_TRIAGE = _LOCATE + _NOTES_READ + [
+_TRIAGE = _LOCATE + _NOTES + [
     "lum_list_plans", "lum_list_reports", "lum_get_report_summary",
     "lum_get_failed_scenarios", "lum_get_ui_script_result", "lum_get_case",
     "lum_submit_analysis", "lum_list_pending_confirm",
@@ -177,7 +183,8 @@ PROFILES: list[dict] = [
         "key": "triage",
         "label": _LABELS["triage"],
         "task": "拿失败用例的证据包（截图/流量/现象）判断为什么挂，把归因提交到待确认队列",
-        "hint": "刻意不含任何写用例/脚本的工具 —— CC 的归因不改任何状态，人拍板才算数",
+        "hint": "刻意不含任何写用例/脚本的工具 —— CC 的归因不改任何用例状态，人拍板才算数；"
+                "判归因时撞出来的「被测系统本来如此」写回项目须知，那不是状态，别攒在自己脑子里",
         "tools": _TRIAGE,
     },
     {

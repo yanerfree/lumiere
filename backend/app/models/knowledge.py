@@ -8,6 +8,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.user import Base
 
+# 正文硬上限。**属于这张表，不属于某一个写入方** ——
+# 原来它只写在 MCP 那条通道里（app/mcp/tools/project_notes.py），HTTP 这条一个字不校验，
+# 于是「200 字上限」只有一半是真的：CC 写被拒，同一条内容打接口就进去了。
+# 一半真的规矩比没规矩坏 —— 它让「我这条超了怎么进去了」看起来像上限没生效，
+# 而实际是两条路各说各的。数字在这儿定，两边都 import。
+MAX_CONTENT = 200
+
 
 class KnowledgeEntry(Base):
     __tablename__ = "knowledge_entries"

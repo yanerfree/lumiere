@@ -9,11 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core import permissions as perms
+from app.core.exceptions import AppError
 from app.schemas.common import BaseSchema
 from app.deps.auth import require_project_role
 from app.deps.db import get_db
 from app.models.user import User
-from app.models.knowledge import KnowledgeEntry
+from app.models.knowledge import MAX_CONTENT, KnowledgeEntry
 
 router = APIRouter(prefix="/api/projects/{project_id}/knowledge", tags=["knowledge"])
 
@@ -26,8 +27,35 @@ _KB_WRITE = perms.TIER_WRITE
 class CreateKnowledgeRequest(BaseSchema):
     category: str = Field(..., pattern="^(review_feedback|bug_pattern|api_note|custom)$")
     title: str = Field(..., min_length=1, max_length=200)
+    # content 上**故意不挂 max_length**：pydantic 的 422 只会说「至多 200 个字符」，
+    # 而这条上限最要紧的不是数字，是「超了该往哪儿去」（拆成两条 / 换去 Skill）。
+    # 只报数字，写的人只会把后半句删掉 —— 那正是这次要修的那个坑。见 _reject_if_too_long。
     content: str = Field(..., min_length=1)
     reference_id: str | None = None
+
+
+def _reject_if_too_long(content: str) -> None:
+    """正文超限 → 400，并且**把出路一起说出来**。
+
+    页面那边早就 `maxLength={200}` 拦住了，所以走到这儿的一定不是页面：
+    curl、脚本、别的 agent 拿 token 直接打。此前这条路**一个字都不校验** ——
+    同一条内容 CC 写被拒、打接口就进去了，「200 字上限」只有一半是真的。
+
+    message 要短（前端只把 error.message 弹成 toast，detail 不显示），
+    真正的理由塞 detail，给直接打接口的人看。
+    """
+    if len(content) <= MAX_CONTENT:
+        return
+    raise AppError(
+        code="NOTE_TOO_LONG",
+        message=f"正文 {len(content)} 字，超过 {MAX_CONTENT} 字上限。"
+                "一条只说一件事，说不完拆成两条 —— 拆，不是把后半句删掉；"
+                "整份规范/流程别塞这儿，它的家是「项目 Skill」（不限长度）。",
+        detail="这些条目每次生成都会整个喂给下一轮 CC，长了直接挤占它的 context；"
+               "平台侧原有的消费代码本来就只取前 100 字，写长了也没人看。"
+               f"长文走 POST /api/projects/{{project_id}}/skills，须知这边只留一条指路的事实。",
+        status_code=400,
+    )
 
 
 @router.get("")
@@ -64,6 +92,9 @@ async def create_knowledge(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(require_project_role(*_KB_WRITE)),
 ):
+    # 评审自动写的那批（add_knowledge_from_review）不经过这条路由，所以不受这条限制 ——
+    # 那是有意的：它写的是既有事实的搬运，砍掉后半句只会让结论变得看不懂。
+    _reject_if_too_long(body.content)
     entry = KnowledgeEntry(
         project_id=project_id,
         category=body.category,

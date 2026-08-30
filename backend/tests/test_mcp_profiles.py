@@ -346,3 +346,18 @@ def test_这些纪律在instructions里也有一份():
         "没跑过",                                          # 回推带证据
     ):
         assert key in ins, f"instructions 里缺「{key}」"
+
+
+def test_能读项目须知的档位也必须能写回去():
+    """读得到写不回 = 这一轮撞出来的坑跟着会话一起没了，下一轮从零再踩。
+
+    原来 UI 脚本档和归因档就是这样：`lum_list_project_notes` 发了，
+    `lum_add_project_note` 没发。这张表当初要解决的就是"知识只活在某次会话里"，
+    只发读的那一半等于把它又还回去了。
+
+    钉成"读⟹写"而不是点名那两档：以后新增档位照样受这条管。
+    """
+    for p in PROFILES:
+        tools = p["tools"]
+        if tools and "lum_list_project_notes" in tools:
+            assert "lum_add_project_note" in tools, p["key"]

@@ -47,10 +47,9 @@ import uuid
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.knowledge import KnowledgeEntry
-
-# 一条只说一件事。超了不是截断而是拒 —— 截断会把最关键的后半句悄悄吃掉。
-MAX_CONTENT = 200
+# 一条只说一件事，超了不是截断而是拒 —— 截断会把最关键的后半句悄悄吃掉。
+# MAX_CONTENT 定义在模型那边：HTTP 那条写入通道认的是同一个，别在这儿各写各的。
+from app.models.knowledge import MAX_CONTENT, KnowledgeEntry
 
 # CC 能写的分类。review_feedback 不给 —— 那是 AI 评审自己写的，
 # 混进来就分不清"被测系统的事实"和"评审对用例的意见"了。
