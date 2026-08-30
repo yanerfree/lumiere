@@ -1,13 +1,21 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { timeColumn } from '../../utils/timeCol'
 import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox, Dropdown, Alert, Progress } from 'antd'
-import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons'
+import { BugOutlined, SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, getValidToken } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
 import { useEnv, buildEnvOptions } from '../../utils/env'
 import { PERM } from '../../utils/permissions'
+import { repoOfBugUrl, isOpenBug } from '../../utils/bugRef'
 import { usePermissions } from '../../utils/PermissionContext'
+
+// 悬浮框里的长文本一律先截断再显示。**截断点要留出"还有更多"的信号**（省略号），
+// 否则读到一半戛然而止的句子会被当成原文就这样。全文在详情页，这里只做取舍。
+const clip = (t, n) => {
+  const str = String(t || '')
+  return str.length > n ? str.slice(0, n) + '…' : str
+}
 
 // 和 scenario-gen/Stage5Review 用同一套分类，两处对不上的话质量统计会分裂
 const REJECT_CATEGORIES = [
@@ -1002,37 +1010,60 @@ export default function CaseManagement() {
     // 关联 bug 一列两态。**留痕是这一列存在的主要理由** ——
     // 「这条用例曾经抓到过 bug」以前只存在于当时那次对话里，会话一结束就没了，
     // 而"哪些用例真抓到过问题"是评估用例价值的唯一依据。
-    { key: 'bugRefs', title: '关联bug', dataIndex: 'bugRefs', width: 96, defaultVisible: false,
-      render: (v, row) => {
+    // 列名挂解释：用户问过「有的显示 admin#xx，有的 #xxx，有什么区别」——
+    // 单号是原样存的自由文本，前缀就是仓库，平台不解析（见 utils/bugRef.js）。
+    // 光看那一列看不出来的事，就得在列名上说，不能指望人记住口头约定。
+    { key: 'bugRefs', dataIndex: 'bugRefs', width: 118, defaultVisible: true,
+      title: (
+        <Tooltip title={<div style={{ fontSize: 12, maxWidth: 300, lineHeight: 1.8 }}>
+          这条用例关联的缺陷单。<b>单号是原样记的</b>，前缀是<b>哪个仓库</b>：
+          <code>admin#464</code> 在 admin 仓、<code>#572</code> 在不带前缀的那个主仓 ——
+          平台不解析格式，悬浮里按链接反推仓库给你看。<br />
+          红 = 还没验回来（批量回归跳过这条、不计通过率）；
+          灰 = 抓到过、已验回来（<b>记录永久保留</b>，这是用例价值的证明）。
+        </div>}>
+          <span style={{ borderBottom: '1px dotted #c9cdd4' }}>关联bug</span>
+        </Tooltip>
+      ),
+      render: (v) => {
         const refs = v || []
         if (!refs.length) return <span style={{ fontSize: 11, color: '#c9cdd4' }}>—</span>
-        const openRefs = refs.filter(r => (r.status || 'open') === 'open')
-        const label = openRefs.length
-          ? openRefs.map(r => r.ref).join('、')
-          : `已修 ${refs.length}`
+        const openRefs = refs.filter(isOpenBug)
+        // 一格只铺得下一个单号。**铺谁有讲究**：优先铺还卡着的那个 ——
+        // 「已修 3」和「#558 还卡着」摆在同一格里，后者才是今天要动的那件事。
+        const head = (openRefs[0] || refs[0]).ref
+        const rest = refs.length - 1
         const tip = (
-          <div style={{ fontSize: 12 }}>
-            {refs.map((r, i) => (
-              <div key={i} style={{ marginBottom: 2 }}>
-                {r.status === 'fixed' ? '✓ 已验回来' : '● 还没验回来'}：{r.ref}
-                {r.note ? `（${r.note}）` : ''}
-                {r.fixedAt ? ` · ${String(r.fixedAt).slice(0, 10)}` : ''}
-              </div>
-            ))}
-            <div style={{ marginTop: 4, color: '#86909c' }}>
-              {openRefs.length
-                ? 'bug 关闭后回来调通，把它标成「已修复」；批量回归当前会跳过这条'
-                : '这条用例抓到过 bug，记录永久保留'}
-            </div>
+          <div style={{ fontSize: 12, maxHeight: 260, overflowY: 'auto', overscrollBehavior: 'contain' }}>
+            {refs.map((r, i) => {
+              const repo = repoOfBugUrl(r.url)
+              return (
+                <div key={i} style={{ marginBottom: 6 }}>
+                  <span style={{ color: isOpenBug(r) ? '#ff7875' : '#95de64' }}>
+                    {isOpenBug(r) ? '● 还没验回来' : '✓ 已验回来'}
+                  </span>
+                  {' '}<b>{r.ref}</b>
+                  {r.fixedAt ? <span style={{ opacity: 0.65 }}> · {String(r.fixedAt).slice(0, 10)}</span> : null}
+                  {repo && <div style={{ opacity: 0.7 }}>仓库 {repo}</div>}
+                  {r.note && <div style={{ opacity: 0.85, lineHeight: 1.6 }}>{r.note}</div>}
+                </div>
+              )
+            })}
+            <div style={{ marginTop: 4, color: '#c9cdd4' }}>明细和链接看详情页「关联 bug」</div>
           </div>
         )
         return (
-          <Tooltip title={tip} placement="topLeft">
-            <Tag color={openRefs.length ? 'error' : undefined}
-              style={{ fontSize: 11, margin: 0, maxWidth: 124, overflow: 'hidden',
-                       textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                       ...(openRefs.length ? {} : { background: 'rgba(0,0,0,0.04)', color: '#86909c', border: 'none' }) }}
-              onClick={e => e.stopPropagation()}>{label}</Tag>
+          <Tooltip title={tip} placement="topLeft" mouseEnterDelay={0.25} styles={{ body: { maxWidth: 360 } }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, maxWidth: 112 }}
+              onClick={e => e.stopPropagation()}>
+              <Tag icon={<BugOutlined />} color={openRefs.length ? 'error' : undefined}
+                style={{ fontSize: 11, margin: 0, maxWidth: rest > 0 ? 78 : 108, overflow: 'hidden',
+                         textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                         ...(openRefs.length ? {} : { background: 'rgba(0,0,0,0.04)', color: '#86909c', border: 'none' }) }}>
+                {head}
+              </Tag>
+              {rest > 0 && <span style={{ fontSize: 11, color: '#c9cdd4' }}>+{rest}</span>}
+            </span>
           </Tooltip>
         )
       } },
@@ -1077,7 +1108,7 @@ export default function CaseManagement() {
       ),
       render: (v, row) => {
       if (row.lifecycleStatus === 'deprecated') return (
-        <Tooltip title={<div style={{ fontSize: 12, maxWidth: 340 }}>
+        <Tooltip styles={{ body: { maxWidth: 360 } }} title={<div style={{ fontSize: 12, maxHeight: 260, overflowY: 'auto', overscrollBehavior: 'contain' }}>
           <div>已废弃 · {(row.deprecateReason?.decidedBy === 'ai' ? 'AI 批准' : '人工批准')}</div>
           {row.deprecateReason?.reason && <div style={{ marginTop: 2 }}>理由：{row.deprecateReason.reason}</div>}
           <div style={{ marginTop: 4, color: '#c9cdd4' }}>不进待办、不进回归、不算通过率分母。详情页可撤销</div>
@@ -1088,7 +1119,7 @@ export default function CaseManagement() {
       if (v !== 'requested') return <span style={{ fontSize: 11, color: '#c9cdd4' }}>—</span>
       const ev = row.deprecateReason?.evidence || {}
       return (
-        <Tooltip title={<div style={{ fontSize: 12, maxWidth: 380 }}>
+        <Tooltip styles={{ body: { maxWidth: 380 } }} title={<div style={{ fontSize: 12, maxHeight: 260, overflowY: 'auto', overscrollBehavior: 'contain' }}>
           <div><b>申请废弃</b>：{row.deprecateReason?.reason || '（没写理由）'}</div>
           {(ev.apiProbe || []).slice(0, 3).map((p, i) => (
             <div key={'a' + i} style={{ marginTop: 2 }}>· 打 {p.method} {p.url} → {p.status}</div>
@@ -1152,16 +1183,28 @@ export default function CaseManagement() {
             <span style={{ fontSize: 10, color: '#d48806', lineHeight: 1 }}>⚠</span>{tag}
           </span>
         ) : tag
+        // **必须限高**：审核结论的 summary 动辄上千字、findings 每条又是一整段，
+        // 不限高的浮层能顶天立地铺满整屏（用户直接截图指出来了）—— 那时候
+        // 鼠标往下走一点就落在浮层上，既看不见列表也点不着东西，浮层还压着滚动。
+        // 三件事一起做，缺一个都还是那个症状：
+        //   ① maxHeight + 内滚 —— 浮层自己有边界，不再吃掉整屏；
+        //   ② overscrollBehavior: contain —— 内容滚到头之后**不把滚动传给表体**，
+        //      否则页面在浮层底下往下滚、浮层贴在原地不动，看着就是"滚串了"；
+        //   ③ mouseEnterDelay —— 滚动时鼠标扫过一串标签不会一路弹浮层。
+        // 明细本来就在详情页「审核」里，这里只负责让人一眼判断要不要点进去。
         return (why || stale || row.qualityScore?.total != null) ? (
-          <Tooltip title={<div style={{ fontSize: 12, maxWidth: 320 }}>
+          <Tooltip
+            mouseEnterDelay={0.25}
+            styles={{ body: { maxWidth: 360 } }}
+            title={<div style={{ fontSize: 12, maxHeight: 260, overflowY: 'auto', overscrollBehavior: 'contain' }}>
             {stale && <div style={{ color: '#ffc53d', marginBottom: 4 }}>
               这个结论已经过期：出具之后这条的接口场景 / UI 脚本又被改过，
               下面这些问题说的可能是已经不存在的内容。去详情页「审核」看它对的是哪一版，或者重新审一次。
             </div>}
             {row.qualityScore?.total != null && <div>体检分 {row.qualityScore.total}</div>}
-            {why && <div style={{ marginTop: 2 }}>{why}</div>}
+            {why && <div style={{ marginTop: 2 }}>{clip(why, 240)}</div>}
             {(row.reviewReason?.findings || []).filter(f => f.severity !== 'minor').slice(0, 4).map((f, i) => (
-              <div key={i} style={{ marginTop: 4 }}>· [{f.severity === 'blocker' ? '致命' : '重要'}] {f.where}：{f.problem}</div>
+              <div key={i} style={{ marginTop: 4 }}>· [{f.severity === 'blocker' ? '致命' : '重要'}] {f.where}：{clip(f.problem, 160)}</div>
             ))}
             <div style={{ marginTop: 4, color: '#c9cdd4' }}>明细和历史看详情页「审核」</div>
           </div>}>{body}</Tooltip>
@@ -1191,7 +1234,7 @@ export default function CaseManagement() {
         <Tag style={{ fontSize: 11, background: 'rgba(78,138,240,0.08)', color: '#4e8af0', border: 'none', margin: 0 }}>待审</Tag>
       )
     }},
-    { key: 'qualityScore', title: '评分', dataIndex: 'qualityScore', width: 48, align: 'center', defaultVisible: false, render: v => {
+    { key: 'qualityScore', title: '评分', dataIndex: 'qualityScore', width: 48, align: 'center', defaultVisible: true, render: v => {
       if (!v || v.total == null) return <span style={{ color: '#c9cdd4' }}>—</span>
       const color = v.total >= 85 ? '#0ea5a0' : v.total >= 70 ? '#4e8af0' : '#faad14'
       return <span style={{ color, fontWeight: 600, fontSize: 12 }}>{v.total}</span>

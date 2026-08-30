@@ -8,6 +8,7 @@ import {
   FlagOutlined, WarningOutlined, CodeOutlined, CopyOutlined, FileTextOutlined,
   DesktopOutlined, CheckCircleOutlined, StarOutlined, StarFilled, ImportOutlined,
   DatabaseOutlined, CaretRightOutlined, BugOutlined, TagsOutlined, SearchOutlined,
+  LinkOutlined,
 } from '@ant-design/icons'
 import { api, getValidToken } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -21,6 +22,7 @@ import FailureTriagePanel from '../../components/FailureTriagePanel'
 import { createSseParser } from '../../utils/sseParser'
 import mdBold from '../../utils/mdBold'
 import { formatTime } from '../../utils/timeCol'
+import { repoOfBugUrl, isOpenBug, bugRefState } from '../../utils/bugRef'
 
 const priorityColors = { P0: '#fff', P1: '#fff', P2: '#fff', P3: '#fff' }
 const priorityBg = { P0: '#e8453c', P1: '#ff7d00', P2: '#4e8af0', P3: 'rgba(0,0,0,0.08)' }
@@ -3147,6 +3149,116 @@ export default function CaseDetail() {
                     </div>
                   </div>
                 ))}
+              </Card>
+            )},
+            // 关联 bug 单独一个 tab。侧边那个 InlineProp 只放得下「单号 + 状态」，
+            // 而 url 和 note 一直是**存了但看不见**的（CC 通过 MCP 写进去，页面上
+            // 从来没有一处能读到）—— 一个存得进、读不出的字段，等于没有：
+            // 人要么以为没记，要么去库里翻。这一页把四样都摆出来并可编辑。
+            { key: 'bugs', label: (
+              <span>
+                <BugOutlined style={{ marginRight: 4, color: bugRefState(bugRefs) === 'blocked' ? '#e8453c' : bugRefs.length ? '#86909c' : undefined }} />
+                关联 bug
+                {bugRefs.length > 0 && (
+                  <span style={{ fontSize: 11, marginLeft: 4, color: bugRefState(bugRefs) === 'blocked' ? '#e8453c' : '#86909c' }}>
+                    ({bugRefs.length})
+                  </span>
+                )}
+              </span>
+            ), children: (
+              <Card styles={{ body: { padding: '16px 24px' } }}>
+                <Alert type={bugRefState(bugRefs) === 'blocked' ? 'error' : 'info'} showIcon
+                  style={{ marginBottom: 12 }}
+                  message={bugRefState(bugRefs) === 'blocked'
+                    ? `这条用例卡在 ${bugRefs.filter(isOpenBug).length} 个还没验回来的缺陷上`
+                    : bugRefs.length ? `这条用例抓到过 ${bugRefs.length} 个缺陷，都已验回来` : '这条用例没有关联缺陷'}
+                  description={<span style={{ fontSize: 12, lineHeight: 1.9 }}>
+                    <b>还没验回来</b> = 批量回归跳过这条、不计通过率。bug 关闭后<b>回来调通了</b>才改成「已修复」——
+                    「据说修好了」还不算。<br />
+                    <b>记录永久保留</b>：删除只用于关联错了，不是正常的收尾方式 ——
+                    「这条用例曾经抓到过 bug」是它的价值证明，清掉就再也看不出来了。<br />
+                    单号<b>原样记</b>，前缀就是仓库（<code>admin#464</code> 在 admin 仓、
+                    <code>#572</code> 在不带前缀的主仓）—— 平台不解析格式，「仓库」那一列是按链接反推的。
+                  </span>} />
+                <Table
+                  size="small" rowKey={(_, i) => i} pagination={false}
+                  dataSource={bugRefs}
+                  locale={{ emptyText: '还没关联任何缺陷单' }}
+                  columns={[
+                    {
+                      title: 'bug 号', dataIndex: 'ref', width: 190,
+                      render: (v, _r, i) => (
+                        <Input size="small" value={v} placeholder="如 #572 / admin#464"
+                          onChange={e => setBugRefs(prev => prev.map((x, j) => j === i ? { ...x, ref: e.target.value } : x))} />
+                      ),
+                    },
+                    {
+                      title: '状态', dataIndex: 'status', width: 128,
+                      render: (v, _r, i) => (
+                        <Select size="small" value={v || 'open'} style={{ width: '100%' }}
+                          onChange={val => setBugRefs(prev => prev.map((x, j) => j === i ? { ...x, status: val } : x))}
+                          options={[{ value: 'open', label: '还没验回来' }, { value: 'fixed', label: '已修复' }]} />
+                      ),
+                    },
+                    {
+                      title: '描述', dataIndex: 'note',
+                      render: (v, _r, i) => (
+                        <Input.TextArea size="small" value={v} autoSize={{ minRows: 1, maxRows: 6 }}
+                          placeholder="这条用例的哪几步因此必红、修好后应该怎么变绿"
+                          onChange={e => setBugRefs(prev => prev.map((x, j) => j === i ? { ...x, note: e.target.value } : x))} />
+                      ),
+                    },
+                    {
+                      title: '链接', dataIndex: 'url', width: 250,
+                      render: (v, _r, i) => (
+                        <Space.Compact style={{ width: '100%' }}>
+                          <Input size="small" value={v} placeholder="http(s):// 开头，否则保存会 400"
+                            onChange={e => setBugRefs(prev => prev.map((x, j) => j === i ? { ...x, url: e.target.value } : x))} />
+                          <Button size="small" icon={<LinkOutlined />} disabled={!v}
+                            onClick={() => v && window.open(v, '_blank', 'noopener')} />
+                        </Space.Compact>
+                      ),
+                    },
+                    {
+                      // 「哪个仓的单子」——只读，从链接反推。反推不出来就留空，不瞎猜
+                      title: '仓库', dataIndex: 'url', key: 'repo', width: 168,
+                      render: (v) => {
+                        const repo = repoOfBugUrl(v)
+                        return repo
+                          ? <span style={{ fontSize: 11, color: '#86909c', fontFamily: 'var(--font-mono)' }}>{repo}</span>
+                          : <span style={{ color: '#c9cdd4' }}>—</span>
+                      },
+                    },
+                    {
+                      title: '标记时间', dataIndex: 'fixedAt', width: 116,
+                      render: (v, r) => {
+                        const t = v || r.updatedAt
+                        if (!t) return <span style={{ color: '#c9cdd4' }}>—</span>
+                        return (
+                          <Tooltip title={`${v ? '标成「已修复」' : '最后一次状态变化'}：${formatTime(t)}`}>
+                            <span style={{ fontSize: 11, color: '#86909c', cursor: 'help' }}>{String(t).slice(0, 10)}</span>
+                          </Tooltip>
+                        )
+                      },
+                    },
+                    {
+                      title: '', width: 40, key: 'del',
+                      render: (_v, _r, i) => (
+                        <Tooltip title="删除只用于「关联错了」。修好了请改状态，别删">
+                          <Button size="small" type="text" danger icon={<DeleteOutlined />}
+                            onClick={() => setBugRefs(prev => prev.filter((_, j) => j !== i))} />
+                        </Tooltip>
+                      ),
+                    },
+                  ]}
+                />
+                <Button size="small" type="dashed" block style={{ marginTop: 12 }} icon={<PlusOutlined />}
+                  onClick={() => setBugRefs(prev => [...prev, { ref: '', status: 'open' }])}>
+                  关联一个 bug
+                </Button>
+                <div style={{ fontSize: 11, color: '#c9cdd4', marginTop: 8 }}>
+                  改完记得点右上角「保存」——这一页和别处的编辑走同一次保存。
+                </div>
               </Card>
             )},
             { key: 'history', label: '执行历史', children: (

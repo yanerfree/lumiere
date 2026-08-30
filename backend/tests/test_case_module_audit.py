@@ -1563,6 +1563,9 @@ def test_审核和模块列默认显示_来源和Flaky默认收起():
     （见 test_有待废审时那一列自动显示）—— 否则这个功能等于不存在。
     原来的裁定是"审核默认收起"（review_status 只对已下线的 AI 流水线有意义）——
     现在审核/评分要接重做后的 AI 评审，所以摆到默认里。
+    2026-08-30 追加 **关联bug / 评分** 两列进默认：这两列勾上了却没标「默认」，
+    于是**新账号一进来就看不见** —— 而「这条卡在没验回来的缺陷上」正是
+    要在列表上一眼看出来的东西（看不见就会被当成普通的红，白查一遍）。
     """
     from pathlib import Path
 
@@ -1581,6 +1584,8 @@ def test_审核和模块列默认显示_来源和Flaky默认收起():
     assert default_of("isFlaky") == "false", "Flaky 列该默认收起"
     assert default_of("type") == "false", "类型列该默认收起（几乎全是「场景」）"
     assert default_of("deprecateStatus") == "false", "废弃审核列该默认收起"
+    assert default_of("bugRefs") == "true", "关联bug 列该默认显示（卡在缺陷上要一眼看见）"
+    assert default_of("qualityScore") == "true", "评分列该默认显示"
     # 列设置弹窗要和表格一一对齐：固定列（标题）也列出来，只是勾选框锁死
     assert "allColumns.map(col => (" in jsx, "列设置漏了固定列，对不上表格"
     assert "始终显示" in jsx

@@ -319,7 +319,11 @@ export default function QaCatalog() {
   const [state, setState] = useState()
   const [quick, setQuick] = useState()          // 看板点出来的那一类：urgent/bugs/lying/mismatch
   const [showDeprecated, setShowDeprecated] = useState(false)
-  const [sorter, setSorter] = useState({})
+  // 默认按**更新时间倒序**。清单里 300+ 条，按 ID 排等于按域码字母序 ——
+  // 一进来看到的永远是 A 开头那个域的老场景，而人来这一页多半是想知道
+  // 「最近在动的是哪几条」。这一列的排序函数按 Date.parse 比，不是字符串比
+  // （`%cI` 带时区，字典序会把先后排反），所以默认排序也走它。
+  const [sorter, setSorter] = useState({ columnKey: 'updatedAt', order: 'descend' })
   const [page, setPage] = useState(1)
   const [pageSize, setPageSize] = useState(20)
   const [cfgOpen, setCfgOpen] = useState(false)
@@ -563,6 +567,10 @@ export default function QaCatalog() {
       // 眼睛要跨行横着对「状态」和「更新时间」时，每行错开 20px 就得重新找一次。
       // 所以这里给死 CELL_H（正好两行），有备注就让备注占掉其中一行。
       // 全文走悬浮 —— 不是把信息删掉，是把它挪到需要时再看。
+      // 整张表唯一「要读」的内容，其余都是标签和时间 —— 它得最宽。
+      // **不给它写 width**：fixed 布局下没写宽度的列吃掉剩余宽度，所以加宽它
+      // 的办法是把旁边几列调窄（下面那几列各瘦了一点，一共让出 ~132px），
+      // 而不是给它写个数字（写死了就不跟着窗口伸缩了）。
       title: '场景（这条要证明什么）', dataIndex: 'title',
       render: (v, r) => {
         // 「已废弃」「@known-bug GL#530」这类备注在别的列已经写着了，别重复占地方
@@ -609,7 +617,7 @@ export default function QaCatalog() {
     },
     {
       title: <Tooltip title="先做哪个。P0 最高">优先级</Tooltip>,
-      dataIndex: 'priority', width: 88, align: 'center',
+      dataIndex: 'priority', width: 74, align: 'center',
       sorter: (a, b) => (a.priority || 'P9').localeCompare(b.priority || 'P9'),
       sortOrder: sortOrderOf('priority'), key: 'priority',
       render: v => v
@@ -620,7 +628,7 @@ export default function QaCatalog() {
       title: <Tooltip title="风险分 = 概率(1–3) × 影响(1–3)，取值 1–9。决定要不要缓解，和优先级是两条独立的轴">
         <span>风险 <InfoCircleOutlined style={{ fontSize: 11, color: C.faint }} /></span>
       </Tooltip>,
-      dataIndex: 'risk', width: 86, align: 'center',
+      dataIndex: 'risk', width: 74, align: 'center',
       sorter: (a, b) => (a.risk || 0) - (b.risk || 0),
       sortOrder: sortOrderOf('risk'), key: 'risk',
       render: v => v == null ? '—' : (
@@ -633,7 +641,7 @@ export default function QaCatalog() {
     },
     {
       title: <Tooltip title={Object.entries(TIER).map(([k, t]) => `${k}=${t.text}`).join(' · ')}>执行层</Tooltip>,
-      dataIndex: 'tier', width: 100,
+      dataIndex: 'tier', width: 92,
       render: v => v ? <Tooltip title={`${v} — ${TIER[v]?.desc || ''}`}><Tag style={{ margin: 0 }}>{tierText(v)}</Tag></Tooltip> : '—',
     },
     {
@@ -653,7 +661,7 @@ export default function QaCatalog() {
       },
     },
     {
-      title: '覆盖脚本', dataIndex: 'scripts', width: 240,
+      title: '覆盖脚本', dataIndex: 'scripts', width: 212,
       // 平铺最多 2 条 —— 再多就把这一行撑得比场景列还高，行高又不齐了。
       // 现网最多的一条有 3 个脚本，第 3 条收进「+N」的悬浮里，不是丢掉。
       render: (list) => {
@@ -732,12 +740,14 @@ export default function QaCatalog() {
       },
     },
     {
-      title: '已知缺陷', dataIndex: 'knownBugs', width: 210,
+      // 210 → 132：这一列只显示单号（`b.split(/\s+/)[0]`），全文本来就在悬浮里 ——
+      // 一个 `GL#530` 用不了 210px，多出来的宽度直接压着旁边的「场景」列。
+      title: '已知缺陷', dataIndex: 'knownBugs', width: 132,
       render: (list) => !list?.length ? <span style={{ color: C.faint }}>—</span> : (
         <Space direction="vertical" size={2}>
           {list.map((b, i) => (
             <Tooltip key={i} title={b}>
-              <Tag icon={<BugOutlined />} color="error" style={{ maxWidth: 190, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <Tag icon={<BugOutlined />} color="error" style={{ maxWidth: 112, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {b.split(/\s+/)[0]}
               </Tag>
             </Tooltip>
