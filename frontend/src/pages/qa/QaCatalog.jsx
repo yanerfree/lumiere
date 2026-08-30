@@ -231,12 +231,23 @@ function Hit({ onClick, active, children, style }) {
 // 第五版的规矩：**只许用 QA 清单上原本就有的词**，再加一个能判真假的动词。
 //   「已覆盖」是他们自己写在清单上的，加引号原样引；「成立 / 不成立」谁都不用学。
 //   这一栏答的就是一句话：*清单上那个「已覆盖」，成不成立？*
+// 一个结论配两种长度，**不是嫌长随手砍的**：
+//   text  给抽屉标题和「这次判…」那句用 —— 那儿有整行的地方，主语「已覆盖」写全。
+//   short 给「按域看缺口」那张表的徽标用 —— 那一格一百来 px，11 个字的 text 横着
+//         压到右边一列的域码上去了（2026-08-29 截图为证：SYS 那行盖住了 TEM）。
+// 为什么这回敢砍到两个字（前四版砍不动，见上面那段）：**以前徽标是唯一的出口**，
+//   一个词没说清就真没地方说了；现在悬停补全句、点开是整屉细节，这一格只用回答
+//   「要不要点进去」。于是留下的只有判真假那两个字，程度交给颜色（绿 / 橙 / 红）——
+//   「部分 / 多数」还留着，那是橙红两档唯一的区别，省了两档就并成一档。
+//   主语（「已覆盖」）不写进徽标，但**必须在悬停第一行**，别让人猜这栏在说谁。
+// 不用「9 处不实」这种数字：徽标是模型对整个域下的一句总评，跟底下 scriptGaps 数出来
+//   的条数不是一个来源（见 VERDICT_SOURCE），并排放数字会被读成同一个数，然后打架。
 const VERDICT = {
-  ok: { text: '「已覆盖」都成立', color: 'success',
+  ok: { short: '属实', text: '「已覆盖」都成立', color: 'success',
         why: '清单标了「已覆盖」的场景，脚本读下来都真在验那件事' },
-  risky: { text: '「已覆盖」部分不成立', color: 'warning',
+  risky: { short: '部分不实', text: '「已覆盖」部分不成立', color: 'warning',
            why: '有一部分标了「已覆盖」，脚本其实没验到 —— 断言太松，或在这个环境里整条跳过了' },
-  bad: { text: '「已覆盖」多数不成立', color: 'error',
+  bad: { short: '多数不实', text: '「已覆盖」多数不成立', color: 'error',
          why: '标了「已覆盖」的主要场景多数没真验到 —— 这个域的「已覆盖」当不了验收依据' },
 }
 const VERDICT_SUBJECT = '说的是 QA 的清单和脚本，不是说我读了多少 —— 我这趟读了多少、漏没漏，在「怎么看的」里单独写。'
@@ -1042,10 +1053,11 @@ export default function QaCatalog() {
                 </Tooltip>
               ) : null}
             </span>,
-            // 592 = 这一行的 min-content（在浏览器里量的，不是估的）。多了「最近更新」
-            // 那一格之后它从 498 涨到 592 —— min 还留在 490 的话进度条会被挤成 0 宽
+            // 584 = 这一行的 min-content（在浏览器里量的，不是估的）。多了「最近更新」
+            // 那一格之后它从 498 涨到 592，评审那格 88→80 之后又降 8 —— min 跟不上就是
+            // 进度条被挤成 0 宽（min 给大了则是白留一条空档，两边都得跟着改）
             children: (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(592px, 1fr))', gap: '2px 24px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(584px, 1fr))', gap: '2px 24px' }}>
                 {domainRows.map(d => {
                   const rv = reviews[d.code]
                   return (
@@ -1061,16 +1073,24 @@ export default function QaCatalog() {
                         缺 {d.gap}{d.p0Gap ? <b style={{ color: C.red }}> · P0 {d.p0Gap}</b> : null}
                       </span>
                       <DomainWhen d={d} now={renderedAt} freshCut={freshCut} />
-                      <span style={{ width: 88, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                      {/* 80 = 这一格里最宽的那个东西是「AI 评审」按钮（实测 62px），不是徽标
+                          （最长「多数不实」实测 69px）。比原来的 88 窄，省下的归进度条 */}
+                      <span style={{ width: 80, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                         {REVIEW_RUNNING(rv?.status) ? (
                           <Tag icon={<LoadingOutlined />} color="processing" style={{ margin: 0, cursor: 'pointer' }}
                                onClick={() => setOpenReview(rv)}>评审中</Tag>
                         ) : rv?.status === 'done' ? (
-                          <Tooltip title={`${rv.environmentName || '—'} · ${rv.commitSha} · 点开看结论`}>
+                          <Tooltip title={<>
+                            {/* 徽标是缩写版，长句在这儿补齐 —— 缩了字不等于可以不说全 */}
+                            <div>{VERDICT[rv.result?.verdict]?.text || '已评'}</div>
+                            <div style={{ opacity: 0.75 }}>
+                              {rv.environmentName || '—'} · {rv.commitSha} · 点开看结论
+                            </div>
+                          </>}>
                             <Tag color={VERDICT[rv.result?.verdict]?.color || 'default'}
                                  style={{ margin: 0, cursor: 'pointer' }}
                                  onClick={() => setOpenReview(rv)}>
-                              {VERDICT[rv.result?.verdict]?.text || '已评'}
+                              {VERDICT[rv.result?.verdict]?.short || '已评'}
                             </Tag>
                           </Tooltip>
                         ) : rv?.status === 'failed' ? (
