@@ -362,16 +362,257 @@ function parseExecutionLog(log) {
   return { testName, result, duration, errorLines, outputLines }
 }
 
-function ScenarioExpanded({ scenario, projectId, onConfirmed }) {
+// 这一行跑的到底是什么。scriptType 是执行痕迹（最准），报告级 execKind 兜底；
+// 两个都推不出来就不写 —— 宁可空着，也别在行上编一个类型出来。
+const rowKind = (s, execKind) => {
+  if (s.executionType !== 'automated') return 'manual'
+  return s.scriptType || (execKind && execKind !== 'mixed' ? execKind : null)
+}
+const KIND_LABELS = { ...EXEC_LABELS, manual: '手工' }
+const KIND_STYLE = { ...EXEC_STYLE, manual: { background: 'rgba(250,173,20,0.08)', color: '#faad14' } }
+const KIND_HINT = {
+  api: '编排接口场景 —— 逐条请求/响应在「步骤明细」里',
+  ui: 'Playwright UI 脚本 —— 有没有逐步明细，取决于脚本自己用没用步骤日志',
+  mixed: '这条的执行痕迹里两种都有',
+  manual: '手工执行，没有脚本痕迹',
+}
+
+// 一条执行步骤（接口场景的一次请求 / UI 脚本的一个动作）。
+// 从展开区里拆出来单独放，是因为它现在被「步骤明细」页签用 ——
+// 原来它内联在列表里，和 ScenarioExpanded 二选一，于是有步骤的场景
+// 就看不到失败原因和归因面板了。
+function StepRow({ step, onClick }) {
+  return (
+    <div
+      onClick={(e) => { e.stopPropagation(); onClick?.(step) }}
+      style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '7px 12px', borderBottom: '1px solid rgba(0,0,0,0.04)',
+        cursor: 'pointer', fontSize: 13, transition: 'background .12s',
+      }}
+      onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,0,0,0.02)'}
+      onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+        <StatusDot status={step.status} />
+        {step.stepPhase && (
+          <span style={{
+            fontSize: 11, fontWeight: 600, padding: '0px 6px', borderRadius: 8, flexShrink: 0,
+            background: `${phaseColor[step.stepPhase] || '#86909c'}15`,
+            color: phaseColor[step.stepPhase] || '#86909c',
+          }}>{phaseLabel[step.stepPhase] || step.stepPhase}</span>
+        )}
+        {step.stepLabel ? (
+          <>
+            <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {step.stepLabel}
+            </span>
+            {step.httpMethod && (
+              <span style={{
+                fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-mono)', flexShrink: 0,
+                padding: '0px 5px', borderRadius: 8,
+                background: `${methodColor[step.httpMethod] || '#86909c'}18`,
+                color: methodColor[step.httpMethod] || '#86909c',
+              }}>{step.httpMethod}</span>
+            )}
+            {stepRealUrl(step) && (
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#c9cdd4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {stepRealUrl(step).replace(/^https?:\/\/[^/]+/, '')}
+              </span>
+            )}
+          </>
+        ) : (
+          <>
+            {step.httpMethod && (
+              <span style={{
+                fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-mono)', flexShrink: 0,
+                padding: '1px 6px', borderRadius: 8,
+                background: `${methodColor[step.httpMethod] || '#86909c'}18`,
+                color: methodColor[step.httpMethod] || '#86909c',
+              }}>{step.httpMethod}</span>
+            )}
+            {stepRealUrl(step) && (
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {stepRealUrl(step).replace(/^https?:\/\/[^/]+/, '')}
+              </span>
+            )}
+            {!stepRealUrl(step) && <span style={{ fontWeight: 500 }}>{step.stepName}</span>}
+          </>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+        {step.statusCode && (
+          <span style={{
+            fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
+            padding: '1px 6px', borderRadius: 8,
+            background: step.statusCode >= 400 ? '#fff2f0' : '#e0f7f6',
+            color: step.statusCode >= 400 ? '#e8453c' : '#0ea5a0',
+          }}>{step.statusCode}</span>
+        )}
+        <span style={{ fontSize: 12, color: '#c9cdd4', fontFamily: 'var(--font-mono)', minWidth: 48, textAlign: 'right' }}>
+          {fmt(step.durationMs)}
+        </span>
+        <RightOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />
+      </div>
+    </div>
+  )
+}
+
+// 展开一条场景看到的全部东西。
+//
+// 这里**只有一种形状**，别再按"有没有步骤"分岔。
+// 之前是 `steps.length > 0 ? 步骤列表 : <ScenarioExpanded/>` 二选一，
+// 结果是：跑出了步骤的场景，失败原因、归因面板、执行日志全部看不见 ——
+// 恰恰是失败时最该看的三样。
+//
+// 常驻的只留两块（执行结论 + 失败原因），其余一律进页签：
+// 一条 26 步的接口场景摊开来要滚三四屏，而人一次只看其中一类。
+function ScenarioExpanded({ scenario, projectId, steps, kind, loading, onConfirmed, onSelectStep }) {
   const { caseSteps, preconditions, expectedResult, errorSummary, executionLog, status, scriptRefFile, scriptRefFunc, durationMs, remark, startedAt, completedAt, runId, branchId, caseId } = scenario
   const isFailed = status === 'failed' || status === 'error'
   const isPassed = status === 'passed'
   const parsed = parseExecutionLog(executionLog)
   const hasRetry = remark && remark.includes('重试')
 
+  const hasSteps = Array.isArray(steps) && steps.length > 0
+  const hasCaseDef = (caseSteps && caseSteps.length > 0) || expectedResult || preconditions
+  const canTriage = isFailed && runId && branchId && caseId
+
+  // 受控、但默认跟着数据走：steps 是异步拿的，用 useState(初值) 会把
+  // "还没到货时算出来的那个默认页签"钉死，步骤到了人还停在执行日志上。
+  const [picked, setPicked] = useState(null)
+
+  const items = []
+
+  items.push({
+    key: 'steps',
+    label: `步骤明细${hasSteps ? ` (${steps.length})` : ''}`,
+    children: loading ? (
+      <div style={{ textAlign: 'center', padding: 16 }}><Spin size="small" /></div>
+    ) : hasSteps ? (
+      <div style={{ border: '1px solid rgba(0,0,0,0.06)', borderRadius: 12, overflow: 'hidden', background: '#fff' }}>
+        {steps.map(step => <StepRow key={step.id} step={step} onClick={onSelectStep} />)}
+      </div>
+    ) : (
+      // 空着不解释，看起来就像"这次没跑"。说清楚是哪一种没有。
+      <div style={{ padding: '12px 14px', background: 'rgba(78,138,240,0.06)', border: '1px solid rgba(78,138,240,0.2)', borderRadius: 12, fontSize: 12, color: '#4e5969', lineHeight: 1.8 }}>
+        <div style={{ fontWeight: 600, marginBottom: 4 }}>这条没有逐步明细</div>
+        {kind === 'api' ? (
+          <>2026-08-28 之前，走<b>计划 / 批量回归</b>跑的接口场景只回了一段文字轨迹，没往报告里写步骤（已修）。这份报告生成得更早，<b>重跑一次就能看到逐条请求和响应</b>；在那之前，轨迹在「执行日志」页签里。</>
+        ) : kind === 'ui' ? (
+          <>UI 脚本只有<b>自己用了步骤日志</b>才会产出逐步明细，否则整段 pytest 输出都在「执行日志」页签里。</>
+        ) : (
+          <>这条没有结构化的执行步骤，能看的都在「执行日志」页签里。</>
+        )}
+        {executionLog && (
+          <div style={{ marginTop: 8 }}>
+            <Button size="small" onClick={() => setPicked('log')}>去看执行日志</Button>
+          </div>
+        )}
+      </div>
+    ),
+  })
+
+  if (executionLog) {
+    items.push({
+      key: 'log',
+      label: '执行日志',
+      children: (
+        <pre style={{
+          margin: 0, padding: '12px 14px', background: 'rgba(0,0,0,0.02)', color: '#4e5969',
+          borderRadius: 12, fontSize: 12, lineHeight: 1.6, overflow: 'auto', maxHeight: 420,
+          whiteSpace: 'pre-wrap', wordBreak: 'break-all', border: '1px solid rgba(0,0,0,0.04)',
+          fontFamily: 'var(--font-mono)',
+        }}>{executionLog}</pre>
+      ),
+    })
+  }
+
+  if (hasCaseDef) {
+    items.push({
+      key: 'case',
+      label: '用例定义',
+      children: (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+          {caseSteps && caseSteps.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6, fontWeight: 600 }}>测试步骤</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {caseSteps.map((step, i) => (
+                  <div key={i} style={{
+                    display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 12px',
+                    background: 'transparent', borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)',
+                  }}>
+                    <span style={{
+                      width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: 11, fontWeight: 600, color: '#fff',
+                      background: isPassed ? '#0ea5a0' : '#c9cdd4',
+                    }}>{step.seq || i + 1}</span>
+                    {step.phase && (
+                      <span style={{
+                        fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 8, flexShrink: 0, marginTop: 2,
+                        background: `${phaseColor[step.phase] || '#86909c'}15`,
+                        color: phaseColor[step.phase] || '#86909c',
+                      }}>{phaseLabel[step.phase] || step.phase}</span>
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: 13, color: '#4e5969', lineHeight: 1.5 }}>{step.action}</span>
+                      {step.expected && (
+                        <div style={{ fontSize: 12, color: '#86909c', marginTop: 2 }}>预期: {step.expected}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {expectedResult && (
+            <div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4, fontWeight: 600 }}>预期结果</div>
+              <div style={{ fontSize: 13, color: '#4e5969', padding: '8px 14px', background: 'var(--green-bg)', borderRadius: 12, border: '1px solid rgba(14,165,160,0.2)', lineHeight: 1.5 }}>
+                {expectedResult}
+              </div>
+            </div>
+          )}
+          {preconditions && (
+            <div>
+              <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4, fontWeight: 600 }}>前置条件</div>
+              <div style={{ fontSize: 13, color: '#86909c', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{preconditions}</div>
+            </div>
+          )}
+        </div>
+      ),
+    })
+  }
+
+  if (isFailed) {
+    items.push({
+      key: 'triage',
+      // 三层失败判断：平台现象 / CC 归因 / 人工确认。QA 看失败就在这一页，
+      // 页签名后面带个红点，是因为它常常是这次展开唯一要办的事。
+      label: <span>失败归因 <span style={{ color: '#e8453c' }}>•</span></span>,
+      children: canTriage ? (
+        <FailureTriagePanel
+          projectId={projectId} branchId={branchId} caseId={caseId}
+          run={{ id: runId }} onConfirmed={onConfirmed}
+        />
+      ) : (
+        <div style={{ padding: '8px 12px', background: 'rgba(78,138,240,0.06)', borderRadius: 12, border: '1px solid rgba(78,138,240,0.2)' }}>
+          <span style={{ fontSize: 12, color: '#4e8af0' }}>
+            这条没有脚本执行记录（手工录入，或这份报告没留下 run 痕迹），归因看上面的失败原因和「步骤明细」。
+          </span>
+        </div>
+      ),
+    })
+  }
+
+  const fallbackKey = hasSteps ? 'steps' : executionLog ? 'log' : hasCaseDef ? 'case' : 'steps'
+  const activeKey = items.some(i => i.key === picked) ? picked : fallbackKey
+
   return (
     <div style={{ padding: '16px 20px 16px 48px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {/* 执行信息卡片 */}
+      {/* 执行信息卡片 —— 常驻，不进页签：切到哪一页都得知道这条是红是绿 */}
       <div style={{ padding: '12px 16px', background: isPassed ? '#e0f7f6' : isFailed ? '#fff2f0' : 'rgba(0,0,0,0.02)', borderRadius: 12, border: `1px solid ${isPassed ? 'rgba(14,165,160,0.2)' : isFailed ? 'rgba(232,69,60,0.15)' : 'rgba(0,0,0,0.04)'}` }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -379,6 +620,13 @@ function ScenarioExpanded({ scenario, projectId, onConfirmed }) {
             <span style={{ fontWeight: 600, fontSize: 14, color: isPassed ? '#0ea5a0' : isFailed ? '#e8453c' : '#86909c' }}>
               {isPassed ? '执行通过' : isFailed ? '执行失败' : status === 'skipped' ? '已跳过' : status === 'running' ? '执行中' : '待执行'}
             </span>
+            {kind && (
+              <Tooltip title={KIND_HINT[kind]}>
+                <span style={{ fontSize: 11, padding: '1px 6px', borderRadius: 6, ...(KIND_STYLE[kind] || {}) }}>
+                  {KIND_LABELS[kind] || kind}
+                </span>
+              </Tooltip>
+            )}
             {hasRetry && (
               <Tag style={{ color: '#faad14', border: 'none', background: 'transparent', fontSize: 11 }}>{remark}</Tag>
             )}
@@ -400,7 +648,7 @@ function ScenarioExpanded({ scenario, projectId, onConfirmed }) {
         )}
       </div>
 
-      {/* 失败原因。
+      {/* 失败原因也常驻。
           skipped 也要走这儿：一条用例"为什么没跑"和"为什么挂了"同样需要交代，
           而列表里那句被截成 200px 宽的省略号，用户根本读不到后半句
           （沙箱失败那条恰恰把"去哪儿改"写在后半句）。 */}
@@ -424,91 +672,7 @@ function ScenarioExpanded({ scenario, projectId, onConfirmed }) {
         </div>
       )}
 
-      {/* 三层失败判断：平台现象 / CC 归因 / 人工确认。
-          QA 看失败就在这一页，原来这里只有一句指向别处的提示，等于把人踢走。 */}
-      {isFailed && runId && branchId && caseId && (
-        <FailureTriagePanel
-          projectId={projectId} branchId={branchId} caseId={caseId}
-          run={{ id: runId }} onConfirmed={onConfirmed}
-        />
-      )}
-      {isFailed && !runId && (
-        <div style={{ padding: '8px 12px', background: 'rgba(78,138,240,0.06)', borderRadius: 12, border: '1px solid rgba(78,138,240,0.2)' }}>
-          <span style={{ fontSize: 12, color: '#4e8af0' }}>
-            这条没有脚本执行记录（手工录入或接口测试场景），失败归因看上面的错误信息和步骤明细。
-          </span>
-        </div>
-      )}
-
-      {/* 用例步骤（如果有定义） */}
-      {caseSteps && caseSteps.length > 0 && (
-        <div>
-          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6, fontWeight: 600 }}>测试步骤</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-            {caseSteps.map((step, i) => (
-              <div key={i} style={{
-                display: 'flex', alignItems: 'flex-start', gap: 10, padding: '7px 12px',
-                background: 'transparent', borderRadius: 12, border: '1px solid rgba(0,0,0,0.04)',
-              }}>
-                <span style={{
-                  width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  fontSize: 11, fontWeight: 600, color: '#fff',
-                  background: isPassed ? '#0ea5a0' : '#c9cdd4',
-                }}>{step.seq || i + 1}</span>
-                {step.phase && (
-                  <span style={{
-                    fontSize: 11, fontWeight: 600, padding: '1px 6px', borderRadius: 8, flexShrink: 0, marginTop: 2,
-                    background: `${phaseColor[step.phase] || '#86909c'}15`,
-                    color: phaseColor[step.phase] || '#86909c',
-                  }}>{phaseLabel[step.phase] || step.phase}</span>
-                )}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ fontSize: 13, color: '#4e5969', lineHeight: 1.5 }}>{step.action}</span>
-                  {step.expected && (
-                    <div style={{ fontSize: 12, color: '#86909c', marginTop: 2 }}>预期: {step.expected}</div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* 执行日志（始终展示） */}
-      {executionLog && (
-        <div>
-          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6, fontWeight: 600 }}>执行日志</div>
-          <pre style={{
-            margin: 0, padding: '12px 14px', background: 'rgba(0,0,0,0.02)', color: '#4e5969',
-            borderRadius: 12, fontSize: 12, lineHeight: 1.6, overflow: 'auto', maxHeight: 300,
-            whiteSpace: 'pre-wrap', wordBreak: 'break-all', border: '1px solid rgba(0,0,0,0.04)',
-            fontFamily: 'var(--font-mono)',
-          }}>{executionLog}</pre>
-        </div>
-      )}
-
-      {/* 预期结果 */}
-      {expectedResult && (
-        <div>
-          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4, fontWeight: 600 }}>预期结果</div>
-          <div style={{ fontSize: 13, color: '#4e5969', padding: '8px 14px', background: 'var(--green-bg)', borderRadius: 12, border: '1px solid rgba(14,165,160,0.2)', lineHeight: 1.5 }}>
-            {expectedResult}
-          </div>
-        </div>
-      )}
-
-      {/* 前置条件 */}
-      {preconditions && (
-        <div>
-          <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4, fontWeight: 600 }}>前置条件</div>
-          <div style={{ fontSize: 13, color: '#86909c', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{preconditions}</div>
-        </div>
-      )}
-
-      {!executionLog && !(caseSteps && caseSteps.length > 0) && (
-        <div style={{ color: '#c9cdd4', fontSize: 13 }}>暂无执行详情</div>
-      )}
+      <Tabs size="small" items={items} activeKey={activeKey} onChange={setPicked} />
     </div>
   )
 }
@@ -673,7 +837,7 @@ export default function ReportDetail() {
     const isExpanded = expandedIds.has(s.id)
     const steps = stepsCache[s.id]
     const isAutomatic = s.executionType === 'automated'
-    const hasDetail = isAutomatic && (s.executionLog || (steps && steps.length > 0))
+    const kind = rowKind(s, execKind)
 
     return (
       <div key={s.id}>
@@ -702,13 +866,20 @@ export default function ReportDetail() {
                 它不会跟着变（报告是历史，本来就不该变）—— 但行上只有这个名字时，
                 拿它去用例列表搜是搜不到的，看起来像"这条用例被删了"。
                 编号 case_code 不随改名变化，是这一行唯一能对回用例的把手。 */}
-            {execKind === 'mixed' && s.scriptType && (
-              <span style={{
-                fontSize: 11, padding: '0 5px', borderRadius: 5, flexShrink: 0,
-                ...(EXEC_STYLE[s.scriptType] || {}),
-              }}>
-                {EXEC_LABELS[s.scriptType] || s.scriptType}
-              </span>
+            {/* 类型标**每行都露**，不再只给混合报告。
+                原来是「报告级 execKind === 'mixed' 才显示」——单一类型的报告
+                标只挂在页头，人滚到第 20 行早看不见它了，于是"这条到底跑的是
+                接口还是 UI"就得靠猜（而这正是要命的那件事：接口该有请求明细，
+                UI 大多没有，猜错就以为是坏了）。 */}
+            {kind && (
+              <Tooltip title={KIND_HINT[kind]}>
+                <span style={{
+                  fontSize: 11, padding: '0 5px', borderRadius: 5, flexShrink: 0,
+                  ...(KIND_STYLE[kind] || {}),
+                }}>
+                  {KIND_LABELS[kind] || kind}
+                </span>
+              </Tooltip>
             )}
             {s.caseCode && (
               <span style={{ fontSize: 11, color: '#86909c', fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
@@ -752,9 +923,14 @@ export default function ReportDetail() {
                 </Tag>
               </Tooltip>
             ) : null}
-            <Tag style={{ background: 'transparent', color: isAutomatic ? '#0ea5a0' : '#faad14', border: 'none', fontSize: 11 }}>
-              {isAutomatic ? '自动' : '手动'}
-            </Tag>
+            {/* 左边已经写了「接口 / UI / 手工」时，这里就不用再说一遍「自动/手动」
+                ——「手工」和「手动」并排挂着，看起来像两个维度，其实是同一件事。
+                只有类型推不出来时才退回这个粗口径。 */}
+            {!kind && (
+              <Tag style={{ background: 'transparent', color: isAutomatic ? '#0ea5a0' : '#faad14', border: 'none', fontSize: 11 }}>
+                {isAutomatic ? '自动' : '手动'}
+              </Tag>
+            )}
             {s.startedAt && (
               <span style={{ fontSize: 11, color: '#c9cdd4' }}>
                 {new Date(s.startedAt).toLocaleTimeString('zh-CN')}
@@ -769,86 +945,12 @@ export default function ReportDetail() {
 
         {isExpanded && (
           <div style={{ background: 'rgba(0,0,0,0.02)', borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
-            {loadingSteps[s.id] ? (
-              <div style={{ textAlign: 'center', padding: 16 }}><Spin size="small" /></div>
-            ) : steps && steps.length > 0 ? (
-              steps.map(step => (
-                <div key={step.id}
-                  onClick={(e) => { e.stopPropagation(); setSelectedStep(step) }}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    padding: '7px 20px 7px 48px', borderBottom: '1px solid rgba(0,0,0,0.04)',
-                    cursor: 'pointer', fontSize: 13, transition: 'background .12s',
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,0,0,0.02)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
-                    <StatusDot status={step.status} />
-                    {step.stepPhase && (
-                      <span style={{
-                        fontSize: 11, fontWeight: 600, padding: '0px 6px', borderRadius: 8, flexShrink: 0,
-                        background: `${phaseColor[step.stepPhase] || '#86909c'}15`,
-                        color: phaseColor[step.stepPhase] || '#86909c',
-                      }}>{phaseLabel[step.stepPhase] || step.stepPhase}</span>
-                    )}
-                    {step.stepLabel ? (
-                      <>
-                        <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {step.stepLabel}
-                        </span>
-                        {step.httpMethod && (
-                          <span style={{
-                            fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-mono)', flexShrink: 0,
-                            padding: '0px 5px', borderRadius: 8,
-                            background: `${methodColor[step.httpMethod] || '#86909c'}18`,
-                            color: methodColor[step.httpMethod] || '#86909c',
-                          }}>{step.httpMethod}</span>
-                        )}
-                        {stepRealUrl(step) && (
-                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: '#c9cdd4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {stepRealUrl(step).replace(/^https?:\/\/[^/]+/, '')}
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        {step.httpMethod && (
-                          <span style={{
-                            fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-mono)', flexShrink: 0,
-                            padding: '1px 6px', borderRadius: 8,
-                            background: `${methodColor[step.httpMethod] || '#86909c'}18`,
-                            color: methodColor[step.httpMethod] || '#86909c',
-                          }}>{step.httpMethod}</span>
-                        )}
-                        {stepRealUrl(step) && (
-                          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                            {stepRealUrl(step).replace(/^https?:\/\/[^/]+/, '')}
-                          </span>
-                        )}
-                        {!stepRealUrl(step) && <span style={{ fontWeight: 500 }}>{step.stepName}</span>}
-                      </>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-                    {step.statusCode && (
-                      <span style={{
-                        fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600,
-                        padding: '1px 6px', borderRadius: 8,
-                        background: step.statusCode >= 400 ? '#fff2f0' : '#e0f7f6',
-                        color: step.statusCode >= 400 ? '#e8453c' : '#0ea5a0',
-                      }}>{step.statusCode}</span>
-                    )}
-                    <span style={{ fontSize: 12, color: '#c9cdd4', fontFamily: 'var(--font-mono)', minWidth: 48, textAlign: 'right' }}>
-                      {fmt(step.durationMs)}
-                    </span>
-                    <RightOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />
-                  </div>
-                </div>
-              ))
-            ) : (
-              <ScenarioExpanded scenario={s} projectId={projectId} onConfirmed={() => fetchData(true)} />
-            )}
+            <ScenarioExpanded
+              scenario={s} projectId={projectId}
+              steps={steps} kind={kind} loading={loadingSteps[s.id]}
+              onSelectStep={setSelectedStep}
+              onConfirmed={() => fetchData(true)}
+            />
           </div>
         )}
       </div>
