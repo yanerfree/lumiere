@@ -147,19 +147,55 @@ const absWhen = iso => (iso ? new Date(iso).toLocaleString('zh-CN', { hour12: fa
 // 等于没标。反过来，锚在"最新那次动静"上：仓库搁置半年，最后动过的那几个域照样
 // 标得出来（那本来就是「最近在做的」的正确答案），而它们旁边写着「6 个月前」，
 // 不会有人误以为是今天干的。
-const FRESH_WINDOW_MS = 24 * 3600 * 1000
+//
+// 分四档，不是两档 —— 两档只能回答"是不是最新那一批"，回答不了
+// "上周还有人碰、还是一直没人管"，而后者才是"这个域要不要补人"的判据。
+//
+// 四档**不是靠多调两个颜色**堆出来的。浅底上既要互相分得开、又要都够 4.5:1 的
+// 颜色一只手数得过来（teal #0b807c 实测 4.8、gray #5f6b7a 5.4，硬往中间插一支
+// 只会落进"看着跟旁边一样"或"根本看不清"二选一），何况纯靠色相分档，色弱的人和
+// 黑白截图直接读不出来。所以四档摊在**三条通道**上 —— 圆点(●/○/无) + 字重 + 色系，
+// 颜色只做粗分：青 = 还在动，灰 = 凉了。任意单通道失效都还剩两条能读。
+//
+// ⚠ 档位边界是**照着这份数据实测出来的**，不是"24小时/一周/一月"这么顺口排下来的。
+// 顺口的那套在这份数据上会退化回两档 —— 2026-08-30 实测 24 个域：
+//   15 个挤在 0~15.1 小时（都是"今天"），9 个**全部**卡在 66.2 小时（2.8 天）同一个点。
+// 那 9 个的时间根本不是"谁动了它"，是 b39fb2831「一次性恢复被移出 git 索引的 186 个
+// 文件」那一笔把没脚本的域整整齐齐盖了同一个戳（它们 covered=0、scriptUpdatedAt=null，
+// 只能退回清单时间）。所以 24h/7d/30d 切下去 = 15 + 9 + 0 + 0，
+// **多调的那两档一个都落不到，屏幕上还是两级。**
+// 真正有分辨力的切口在前 24 小时里面：0~5.4h 是同一轮干活，14~15h 是上一轮。
+// 于是第一刀落在 6 小时（≈一个工作时段），当前落成 10 + 5 + 9 + 0，三档同时可见。
+// 改档位之前先把分布拉出来看一眼，别照着"合理的时间单位"拍。
+const H = 3600 * 1000
+const D = 24 * H
+const ACTIVITY_TIERS = [
+  { key: 'live',  within: 6 * H,    label: '刚动过', note: '离本仓最后一次动静 6 小时内（同一轮）', dot: '●', color: C.teal,  weight: 600 },
+  { key: 'today', within: D,        label: '今天',   note: '24 小时内',        dot: '●', color: C.teal,  weight: 400 },
+  { key: 'week',  within: 7 * D,    label: '本周',   note: '一周内 —— 别人今天动了，它没有', dot: '○', color: C.gray,  weight: 400 },
+  { key: 'cold',  within: Infinity, label: '搁置',   note: '一周以上没动过',   dot: '',  color: C.faint, weight: 400 },
+]
 
-function freshCutOf(domains) {
+// 锚点 = 本仓最后一次动静。四档量的都是"离它多远"，不是"离今天多远"。
+function activityAnchorOf(domains) {
   const times = (domains || [])
     .map(d => (d.updatedAt ? new Date(d.updatedAt).getTime() : NaN))
     .filter(Number.isFinite)
-  return times.length ? Math.max(...times) - FRESH_WINDOW_MS : null
+  return times.length ? Math.max(...times) : null
+}
+
+function activityTierOf(iso, anchor) {
+  if (!iso || anchor == null) return null
+  const t = new Date(iso).getTime()
+  if (!Number.isFinite(t)) return null
+  const age = anchor - t
+  return ACTIVITY_TIERS.find(x => age <= x.within) || ACTIVITY_TIERS[ACTIVITY_TIERS.length - 1]
 }
 
 // 域行右侧那格「最近更新」。两侧时间都塞进 tooltip，格子里只显示一个 ——
 // 24 行 × 两个时间平铺出来没人看得完，而"谁在动"这件事一眼就得能扫出来。
-function DomainWhen({ d, now, freshCut }) {
-  const fresh = d.updatedAt && freshCut != null && new Date(d.updatedAt).getTime() >= freshCut
+function DomainWhen({ d, now, anchor }) {
+  const act = activityTierOf(d.updatedAt, anchor)
   const onlyCatalog = d.updatedFrom === 'catalog'
   const line = (label, at, commit, empty) => (
     <div style={{ marginBottom: 4 }}>
@@ -183,7 +219,18 @@ function DomainWhen({ d, now, freshCut }) {
             {/* 这句是这一列最容易被误读的地方：整仓批量提交（重命名、一次性恢复）
                 会把所有域的清单侧刷成同一时间，那不是"这个域在推进" */}
             清单侧常常是一次批量提交扫的（看提交标题就知道），所以有脚本时以脚本侧为准。
-            <div>「在动」= 落在本仓最后一次动静往前 24 小时内。</div>
+            <div style={{ marginTop: 6, marginBottom: 2 }}>
+              冷热四档量的是<b>离本仓最后一次动静多远</b>，不是离今天多远
+              {/* 为什么不用自然日：整仓批量提交会把所有域刷成同一天，"近 7 天"于是
+                  全标亮 = 恒真；反过来锚在最后一次动静上，仓库搁半年也还能指出
+                  "最后在做的是这几个域" */}
+            </div>
+            {ACTIVITY_TIERS.map(t => (
+              <div key={t.key} style={{ paddingLeft: 6 }}>
+                <span style={{ display: 'inline-block', width: 14 }}>{t.dot}</span>
+                <b>{t.label}</b> · {t.note}
+              </div>
+            ))}
           </div>
         </div>
       }
@@ -191,12 +238,12 @@ function DomainWhen({ d, now, freshCut }) {
       <span
         style={{
           width: 86, textAlign: 'right', whiteSpace: 'nowrap',
-          color: !d.updatedAt ? C.faint : fresh ? C.teal : C.gray,
-          fontWeight: fresh ? 600 : 400,
+          color: act ? act.color : C.faint,
+          fontWeight: act ? act.weight : 400,
         }}
         onClick={e => e.stopPropagation()}
       >
-        {fresh && <span style={{ marginRight: 3 }}>●</span>}
+        {act?.dot && <span style={{ marginRight: 3 }}>{act.dot}</span>}
         {onlyCatalog && d.updatedAt && <span style={{ color: C.hint, marginRight: 3 }}>清单</span>}
         {relWhen(d.updatedAt, now)}
       </span>
@@ -545,10 +592,10 @@ export default function QaCatalog() {
     () => [...(data?.domains || [])].sort((a, b) => a.code.localeCompare(b.code)),
     [data],
   )
-  // 判"最近"用的那条线，和算相对时间用的"现在"。两个都跟着 data 走：
+  // 冷热四档的锚点，和算相对时间用的"现在"。两个都跟着 data 走：
   // 同一次渲染里所有域必须用同一个 now，否则 24 行会各自取一次时间，
   // 边界上偶发地这行标亮、那行不标
-  const freshCut = useMemo(() => freshCutOf(domainRows), [domainRows])
+  const activityAnchor = useMemo(() => activityAnchorOf(domainRows), [domainRows])
   // data 就是这里唯一想依赖的：每拉一次数据重新取一次「现在」，而不是每次重渲染都跳一下
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const renderedAt = useMemo(() => Date.now(), [data])
@@ -1157,7 +1204,7 @@ export default function QaCatalog() {
                       <span style={{ width: 96, textAlign: 'right', color: d.gap ? C.orange : C.faint }}>
                         缺 {d.gap}{d.p0Gap ? <b style={{ color: C.red }}> · P0 {d.p0Gap}</b> : null}
                       </span>
-                      <DomainWhen d={d} now={renderedAt} freshCut={freshCut} />
+                      <DomainWhen d={d} now={renderedAt} anchor={activityAnchor} />
                       {/* 80 = 这一格里最宽的那个东西是「AI 评审」按钮（实测 62px），不是徽标
                           （最长「多数不实」实测 69px）。比原来的 88 窄，省下的归进度条 */}
                       <span style={{ width: 80, textAlign: 'right' }} onClick={e => e.stopPropagation()}>

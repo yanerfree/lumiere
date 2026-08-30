@@ -889,11 +889,39 @@ export default function CaseManagement() {
 
   // ---- 列表列（可配置） ----
   const allColumns = [
-    { key: 'caseCode', title: '用例ID', dataIndex: 'caseCode', width: 104, defaultVisible: true,
-      render: v => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: '#86909c', whiteSpace: 'nowrap' }}>{v}</span> },
-    // 标题吃掉「类型」腾出来的宽度：176 → 240。这一列是唯一"读内容"的列，
+    // 两件事一起改，缺一个都还会叠字：
+    //   ① **不许再压到隔壁**。原来只有 `whiteSpace: nowrap`、没有任何裁剪，而表格是
+    //      `table-layout: fixed` —— 超出的字撑不开单元格，直接画到「标题」列上面
+    //      （用户截图：`TC-JKQQRZ-0000` 和标题头一个字叠在一起）。加了 ellipsis 之后
+    //      再长的编号最多是个省略号 + 悬浮看全，**结构上不可能再叠**。
+    //   ② 装得下常见长度。编号是 `TC-{模块段}-{5 位序号}`，模块段是拼音首字母、
+    //      最长 8 位（`import_service._module_tag` 截的），所以最长 17 字符。
+    //      12px 等宽 + 104px 只够 13 字符 —— 「服务管理」(FWGL) 正好卡在边界上，
+    //      换成六字母的模块段（JKQQRZ）就溢出，这就是那张截图的成因。
+    //      改成 11px + letterSpacing 0（body 那 0.3px 会让等宽不再等宽），浏览器里
+    //      实测：13 字符 86px、17 字符 113px。118px 减去左右 padding 16 还剩 102，
+    //      **15 字符（截图里那个 JKQQRZ）完整显示**；只有 8 位模块段那种极端值会
+    //      收个省略号，悬浮看全 —— 为它再吃 12px 不划算，那 12px 给标题更值。
+    { key: 'caseCode', title: '用例ID', dataIndex: 'caseCode', width: 118, defaultVisible: true,
+      ellipsis: { showTitle: false },
+      render: v => (
+        <Tooltip title={v} placement="topLeft" mouseEnterDelay={0.3}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: 0,
+                         color: '#86909c', whiteSpace: 'nowrap' }}>{v}</span>
+        </Tooltip>
+      ) },
+    // 标题吃掉「类型」腾出来的宽度：176 → 240 → 288。这一列是唯一"读内容"的列，
     // 之前 14 个字就截断，一屏用例基本靠 hover 才知道在测什么。
-    { key: 'title', title: '标题', dataIndex: 'title', width: 240, ellipsis: { showTitle: false }, defaultVisible: true, alwaysOn: true, render: (v, row) => (
+    // 288 是从旁边几列各匀几个像素凑出来的（优先级/模块/关联bug/评分/时间各收一档，
+    // 见各列的 width），列宽之和 1208 → 1220，**整表总宽基本没变** —— 不是靠把
+    // 横向滚动条推得更长换来的。
+    // ⚠ 匀宽度只能匀**量过的余量**。第一版把「覆盖」200→186、「状态」62→54 砍了，
+    //   看着还行，实际是三个状态标签换了行 —— 行高 42px 变 55px，隔几行高一次，
+    //   整列像坏掉的。浏览器里量过：覆盖那格内容真占 197px、状态 59px，本来就没余量。
+    //   **别照着截图估宽度**，把内容 clone 出来 white-space:nowrap 量一遍再定。
+    // 标题按「对象+动作-预期」两段写（回推规范），240px 到不了破折号，
+    // 一列看下来全是"服务删除被订阅阻断-关联数据不得…"，预期那半段整列都被截掉。
+    { key: 'title', title: '标题', dataIndex: 'title', width: 288, ellipsis: { showTitle: false }, defaultVisible: true, alwaysOn: true, render: (v, row) => (
       <Tooltip title={v} placement="topLeft" mouseEnterDelay={0.3}><span
         // 必须 stopPropagation：行上 onRow 也挂了同一个 navigate，而它的放行判断只认
         // .ant-btn/.ant-checkbox-wrapper/a —— 这里是裸 span，两个 handler 都会跑，
@@ -930,11 +958,11 @@ export default function CaseManagement() {
     // 「场景」列已并入下面的「三件套」列 —— 「有没有」是「什么状态」的子集：
     // 状态只要不是「无」就说明有。两列并排是把同一件事说两遍，而且它们
     // 各自读不同字段，实测出现过一列说有、另一列说未开始。
-    { key: 'priority', title: '优先级', dataIndex: 'priority', width: 64, align: 'center', defaultVisible: true, render: v => <Tag style={{ background: priorityBg[v], color: priorityColors[v], border: 'none', margin: 0 }}>{v}</Tag> },
+    { key: 'priority', title: '优先级', dataIndex: 'priority', width: 60, align: 'center', defaultVisible: true, render: v => <Tag style={{ background: priorityBg[v], color: priorityColors[v], border: 'none', margin: 0 }}>{v}</Tag> },
     // 模块/子模块**没有对应字段**：cases.module / submodule 早在迁移 zza0dead1 里删了，
     // 接口也不返回，于是这两列一直渲染 '-'（用户截图指出来的就是这个）。
     // 模块信息真实存在于目录树上，这里按 folderId 现推：顶层目录=模块，叶子目录=子模块。
-    { key: 'module', title: '模块', dataIndex: 'folderId', width: 90, defaultVisible: true,
+    { key: 'module', title: '模块', dataIndex: 'folderId', width: 80, defaultVisible: true,
       ellipsis: { showTitle: false },
       render: v => { const m = folderPathOf(v)[0] || '-'
         return <Tooltip title={m} placement="topLeft"><span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{m}</span></Tooltip> } },
@@ -1013,7 +1041,7 @@ export default function CaseManagement() {
     // 列名挂解释：用户问过「有的显示 admin#xx，有的 #xxx，有什么区别」——
     // 单号是原样存的自由文本，前缀就是仓库，平台不解析（见 utils/bugRef.js）。
     // 光看那一列看不出来的事，就得在列名上说，不能指望人记住口头约定。
-    { key: 'bugRefs', dataIndex: 'bugRefs', width: 118, defaultVisible: true,
+    { key: 'bugRefs', dataIndex: 'bugRefs', width: 98, defaultVisible: true,
       title: (
         <Tooltip title={<div style={{ fontSize: 12, maxWidth: 300, lineHeight: 1.8 }}>
           这条用例关联的缺陷单。<b>单号是原样记的</b>，前缀是<b>哪个仓库</b>：
@@ -1054,10 +1082,10 @@ export default function CaseManagement() {
         )
         return (
           <Tooltip title={tip} placement="topLeft" mouseEnterDelay={0.25} styles={{ body: { maxWidth: 360 } }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, maxWidth: 112 }}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, maxWidth: 82 }}
               onClick={e => e.stopPropagation()}>
               <Tag icon={<BugOutlined />} color={openRefs.length ? 'error' : undefined}
-                style={{ fontSize: 11, margin: 0, maxWidth: rest > 0 ? 78 : 108, overflow: 'hidden',
+                style={{ fontSize: 11, margin: 0, maxWidth: rest > 0 ? 56 : 80, overflow: 'hidden',
                          textOverflow: 'ellipsis', whiteSpace: 'nowrap',
                          ...(openRefs.length ? {} : { background: 'rgba(0,0,0,0.04)', color: '#86909c', border: 'none' }) }}>
                 {head}
@@ -1234,14 +1262,47 @@ export default function CaseManagement() {
         <Tag style={{ fontSize: 11, background: 'rgba(78,138,240,0.08)', color: '#4e8af0', border: 'none', margin: 0 }}>待审</Tag>
       )
     }},
-    { key: 'qualityScore', title: '评分', dataIndex: 'qualityScore', width: 48, align: 'center', defaultVisible: true, render: v => {
-      if (!v || v.total == null) return <span style={{ color: '#c9cdd4' }}>—</span>
-      const color = v.total >= 85 ? '#0ea5a0' : v.total >= 70 ? '#4e8af0' : '#faad14'
-      return <span style={{ color, fontWeight: 600, fontSize: 12 }}>{v.total}</span>
-    }},
+    // 评分列。**这一列没有及格线** —— 用户直接问了「多少分算合格」，
+    // 说明光摆一个数字 + 三档颜色，读的人只会当成分数线。
+    // 真判据在 `services/review/reviewer.py`：1 个致命 → 打回；≥2 处重要 → 打回；
+    // 没真跑成功 → 无法审核；**分数一个字都不参与**（同一条用例两次评审拿到
+    // 86 和 78 是常事，拿抖动的数当闸门没人照着改得动）。
+    // 所以这里要说清两件事：① 它不是门槛；② 那它有什么用 —— 同样是「通过」的一批，
+    // 先看分低的那几条。表头和格子都给悬浮：会问这个问题的人，鼠标停在数字上，
+    // 不会去停表头。
+    { key: 'qualityScore', dataIndex: 'qualityScore', width: 44, align: 'center', defaultVisible: true,
+      title: (
+        <Tooltip title={<div style={{ fontSize: 12, maxWidth: 320, lineHeight: 1.8 }}>
+          <b>体检分，不是及格线</b> —— 没有「多少分算合格」这回事。<br />
+          <b>过不过看「审核」那一列</b>，判据是有没有实质问题：<br />
+          · 1 个致命问题（放进回归就是假绿或跑不了）→ 打回<br />
+          · ≥2 处重要问题（验不出该验的东西）→ 打回<br />
+          · 这次没真跑成功 → 无法审核（既不算通过也不算打回）<br />
+          分数是六维加权、由模型给，同一条两次评审拿到 86 和 78 是常事 ——
+          拿抖动的数当闸门，人没法照着改。<br />
+          它只用来<b>体检和排序</b>：同样是「通过」的一批，先看分低的那几条。
+          颜色同理，只是粗分三档（≥85 / ≥70 / 更低），<b>没有一档叫"不合格"</b>。
+        </div>}>
+          <span style={{ borderBottom: '1px dotted #c9cdd4' }}>评分</span>
+        </Tooltip>
+      ),
+      render: v => {
+        if (!v || v.total == null) return <span style={{ color: '#c9cdd4' }}>—</span>
+        const color = v.total >= 85 ? '#0ea5a0' : v.total >= 70 ? '#4e8af0' : '#faad14'
+        return (
+          <Tooltip title={<span style={{ fontSize: 12 }}>
+            体检分 {v.total}，<b>不是及格线</b> —— 过不过看「审核」那一列（致命 1 个、
+            或重要 ≥2 处才打回，分数不参与）。这个数只用来排先后：先看分低的。
+          </span>}>
+            <span style={{ color, fontWeight: 600, fontSize: 12, cursor: 'help' }}>{v.total}</span>
+          </Tooltip>
+        )
+      }},
 
-    { ...timeColumn({ key: 'createdAt', title: '创建时间' }), defaultVisible: false },
-    { ...timeColumn({ key: 'updatedAt', title: '更新时间' }), defaultVisible: true },
+    // 时间列全站默认 112，这一页收到 96：`08-30 22:37` 在 12px 等宽下约 76px，
+    // 加单元格 padding 16 还余 4 —— 省下的 16px 给标题。
+    { ...timeColumn({ key: 'createdAt', title: '创建时间', width: 100 }), defaultVisible: false },
+    { ...timeColumn({ key: 'updatedAt', title: '更新时间', width: 100 }), defaultVisible: true },
     // 操作列。原来两个图标各带一块**实心色底**（青底 + 红底）——
     // 一行里最扎眼的东西成了"复制/删除"，而它们是这一行最不常点的两个按钮，
     // 还各占 30px。改成默认无底色的灰图标，hover 才上色：常态安静、要用时找得到。
@@ -1729,7 +1790,11 @@ export default function CaseManagement() {
               pagination={false}
               size="small"
               loading={loading}
-              scroll={{ x: 1142, y: 'calc(100vh - 330px)' }}
+              // x 跟默认显示的那几列**加起来**对齐（118+288+60+80+62+200+98+66+44+100+64+40
+              // = 1220）。原来写死 1142、而列宽之和是 1208 —— 对不上时 antd 仍按列宽之和
+              // 排版，但"要不要画固定列阴影"是拿这个数判的，于是会出现"没滚动也画阴影"
+              // 或反过来。改列宽记得回来改这里。
+              scroll={{ x: 1220, y: 'calc(100vh - 330px)' }}
               rowSelection={{ selectedRowKeys: selectedRowKeys, onChange: setSelectedRowKeys }}
               style={{ flex: 1 }}
               locale={{ emptyText: <Empty description="暂无用例" /> }}

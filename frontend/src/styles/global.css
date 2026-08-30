@@ -676,22 +676,47 @@ textarea.ant-input-disabled {
 .ant-table-thead > tr > th.ant-table-cell-fix-right {
   background: rgba(255, 255, 255, 0.42) !important;
 }
+/* 4) 变实的时候用**渐变自己的那支淡紫**，不要白。
+      以前是 rgba(252,253,253,0.97)，等于纯白：邻座的行是半透的、底下透着
+      薰衣草色，横向一滚就在右边立起一条白带 —— 越滚越明显，因为它是全表
+      唯一一块不透光的地方。取色从页面本身推：面板是 0.3 白叠在渐变上，
+      表格那一段渐变约 (230,227,243)~(240,228,236)，叠出来 ≈ rgb(238,235,247)。
+      所以底色就用 #f1eef8 那一档 —— 亮度跟面板齐平、色相同源，看着像
+      "这块面板本来就厚一点"，而不是贴了张白纸盖住后面。
+      alpha 还是得 0.96 以上：它压着横向滚动的内容，再透一点底下的字就浮上来
+      （0.75 那版实测糊成一团，别往回调）。
+   5) hover / 选中**必须单独写**。之前 `tr:hover` 是跟常态折在同一条规则里的，
+      写法上就等于"划过整行、只有固定列不响应"，选中行的青色底同理照不进去 ——
+      而固定列偏偏是放操作按钮的那一列，正是需要"我现在在这一行"的地方。
+      三条规则按 常态 → hover → 选中 排，特异性一样，靠顺序决定谁赢，
+      所以**选中那条必须留在最后**（选中且 hover 时以选中为准）。 */
 .ant-table-fix-end-shadow-show .ant-table-tbody > tr > td.ant-table-cell-fix-end,
-.ant-table-fix-end-shadow-show .ant-table-tbody > tr:hover > td.ant-table-cell-fix-end,
 .ant-table-fix-start-shadow-show .ant-table-tbody > tr > td.ant-table-cell-fix-start,
-.ant-table-fix-start-shadow-show .ant-table-tbody > tr:hover > td.ant-table-cell-fix-start,
 .ant-table-ping-right .ant-table-tbody > tr > td.ant-table-cell-fix-right,
-.ant-table-ping-right .ant-table-tbody > tr:hover > td.ant-table-cell-fix-right,
-.ant-table-ping-left .ant-table-tbody > tr > td.ant-table-cell-fix-left,
-.ant-table-ping-left .ant-table-tbody > tr:hover > td.ant-table-cell-fix-left {
-  background: rgba(252, 253, 253, 0.97) !important;
-  backdrop-filter: blur(10px) !important;
+.ant-table-ping-left .ant-table-tbody > tr > td.ant-table-cell-fix-left {
+  background: rgba(241, 238, 248, 0.965) !important;
+  backdrop-filter: blur(12px) saturate(1.2) !important;
+  transition: background 0.18s ease !important;
 }
+.ant-table-fix-end-shadow-show .ant-table-tbody > tr:hover > td.ant-table-cell-fix-end,
+.ant-table-fix-start-shadow-show .ant-table-tbody > tr:hover > td.ant-table-cell-fix-start,
+.ant-table-ping-right .ant-table-tbody > tr:hover > td.ant-table-cell-fix-right,
+.ant-table-ping-left .ant-table-tbody > tr:hover > td.ant-table-cell-fix-left {
+  background: rgba(247, 245, 252, 0.975) !important;
+}
+.ant-table-fix-end-shadow-show .ant-table-tbody > tr.ant-table-row-selected > td.ant-table-cell-fix-end,
+.ant-table-fix-start-shadow-show .ant-table-tbody > tr.ant-table-row-selected > td.ant-table-cell-fix-start,
+.ant-table-ping-right .ant-table-tbody > tr.ant-table-row-selected > td.ant-table-cell-fix-right,
+.ant-table-ping-left .ant-table-tbody > tr.ant-table-row-selected > td.ant-table-cell-fix-left {
+  background: rgba(219, 236, 243, 0.972) !important;
+}
+/* 表头同色系再压深一点点，跟半透表头(0.42 白)接得上 */
 .ant-table-fix-end-shadow-show .ant-table-thead > tr > th.ant-table-cell-fix-end,
 .ant-table-fix-start-shadow-show .ant-table-thead > tr > th.ant-table-cell-fix-start,
 .ant-table-ping-right .ant-table-thead > tr > th.ant-table-cell-fix-right,
 .ant-table-ping-left .ant-table-thead > tr > th.ant-table-cell-fix-left {
-  background: rgba(250, 252, 252, 0.98) !important;
+  background: rgba(237, 233, 246, 0.975) !important;
+  backdrop-filter: blur(12px) saturate(1.2) !important;
 }
 /* 固定列边缘那道细阴影同理：盖住东西了才画，否则就是一条没来由的竖线 */
 .ant-table-cell-fix-end::after,
@@ -700,13 +725,15 @@ textarea.ant-input-disabled {
 .ant-table-cell-fix-left::after {
   box-shadow: none !important;
 }
+/* 阴影也跟着换：黑色的投影压在淡紫上会发灰，用带紫的深色，摊得更宽一点，
+   让"固定列"看起来是浮起来的一层，而不是被一条硬边切开的 */
 .ant-table-fix-end-shadow-show .ant-table-cell-fix-end::after,
 .ant-table-ping-right .ant-table-cell-fix-right::after {
-  box-shadow: inset -10px 0 8px -8px rgba(0, 0, 0, 0.08) !important;
+  box-shadow: inset -16px 0 14px -12px rgba(86, 72, 130, 0.16) !important;
 }
 .ant-table-fix-start-shadow-show .ant-table-cell-fix-start::after,
 .ant-table-ping-left .ant-table-cell-fix-left::after {
-  box-shadow: inset 10px 0 8px -8px rgba(0, 0, 0, 0.08) !important;
+  box-shadow: inset 16px 0 14px -12px rgba(86, 72, 130, 0.16) !important;
 }
 .ant-table-placeholder .ant-table-cell {
   background: transparent !important;
