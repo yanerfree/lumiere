@@ -25,9 +25,23 @@ AI 评审自动写的 review_feedback，没有一条是人或 CC 写的项目知
 这些条目**每次生成都要整个喂给 CC**，长了直接挤占 context。而且平台侧原有的
 消费代码就是 `content[:100]` 截断的 —— 写长了本来也没人看，只是没人告诉写的人。
 所以这里明着拒，并说清该怎么写。
+
+## 上限管的是「这张表里该放什么」，不是「你要写的东西该压多短」
+
+撞上限时有两条出路，走错哪条都在丢东西：
+
+  · 多件事挤在一条里 → **拆**成两条，一条说一件事。
+  · 本来就是一份**规范/流程/写法约定** → 它压根不属于这张表，走 skill 通道
+    （`lum_push_skill`，不限长度），须知这边只留一条**指路的事实**。
+
+2026-08-30 撞到过反面：外部 CC 想把一份 skill 正文推上来，撞了 200 字，
+于是把它压成两条「去看某某」的指路条目 —— 指针留下了，正文没有任何地方收着它，
+下一轮顺着指针过去是空的。**光说"请你自己压"，等于在教它丢东西**，
+所以拒绝信息里必须同时指路：长文的家在哪、这把 Key 够不着那个工具时该怎么办。
 """
 from __future__ import annotations
 
+import re
 import uuid
 
 from sqlalchemy import select
@@ -41,6 +55,22 @@ MAX_CONTENT = 200
 # CC 能写的分类。review_feedback 不给 —— 那是 AI 评审自己写的，
 # 混进来就分不清"被测系统的事实"和"评审对用例的意见"了。
 _CC_CATEGORIES = ("api_note", "bug_pattern", "custom")
+
+# 「一份规范」而不是「一条须知」的形状：成条、分段、带标题或代码块。
+_BULLET = re.compile(r"^\s*(?:[-*·+]\s|\d+[.、)]\s?|#{1,6}\s)")
+
+
+def _looks_like_a_spec(content: str) -> bool:
+    """像不像一份规范正文 —— **只用来决定给哪条出路，不参与拒不拒**（超了一律拒）。
+
+    判宽一点没关系：误判成规范，无非多给一句"长文走 skill 通道"；
+    漏判才是坏的 —— 那就只剩"自己压"，而压的结果是正文丢了。
+    """
+    if content.lstrip().startswith("---") or "```" in content:
+        return True  # SKILL.md 的 frontmatter / 代码块，本来就不该往这张表里塞
+    lines = [ln for ln in content.splitlines() if ln.strip()]
+    return len(lines) >= 3 and sum(1 for ln in lines if _BULLET.match(ln)) >= 2
+
 
 _CATEGORY_LABEL = {
     "api_note": "接口/系统行为",
@@ -107,12 +137,35 @@ async def add_project_note(
     if len(title) > 200:
         return {"error": f"标题太长（{len(title)} 字），200 字以内"}
     if len(content) > MAX_CONTENT:
-        return {
-            "error": f"正文 {len(content)} 字，超过 {MAX_CONTENT} 字上限 —— 这里不截断，请你自己压。",
+        err = {
+            "error": f"正文 {len(content)} 字，超过 {MAX_CONTENT} 字上限 —— 这里不截断。",
             "why": "这些条目每次生成都会整个喂给下一轮 CC，长了直接挤占它的 context；"
                    "而且平台侧原有的消费代码就是取前 100 字，写长了本来也没人看。",
-            "howTo": "一条只说一件事，写成「现象 + 别踩的坑」。说不完就拆成两条。",
+            "howTo": "一条只说一件事，写成「现象 + 别踩的坑」。说不完就**拆成两条** —— "
+                     "拆，不是把后半句删掉。",
         }
+        if _looks_like_a_spec(content):
+            err["thisIsNotANote"] = (
+                "这段的形状是**一份规范/流程**，不是一条须知 —— 它压不进 200 字，"
+                "硬压就只剩一句「去看某某」，正文当场丢了。别压，换个地方放。"
+            )
+        # 上限不是"把正文压掉"的理由 —— 长文有它自己的家，这里必须说出来。
+        # 只说"请你自己压"的后果实测过一次（2026-08-30，见模块文档）。
+        err["whereLongFormGoes"] = (
+            "规范 / 流程 / 写法约定的家是 **skill 通道**："
+            "lum_push_skill(project_id, content=SKILL.md 全文) 不限长度，"
+            "下一轮用 lum_pull_skill 取回全文。须知这边只留一条**指路的事实**"
+            "（例：「提 issue 走 /issue，不是 write-issue」）—— 指针和正文各就各位，"
+            "而不是只剩一个指向空处的指针。"
+        )
+        err["ifPushSkillNotInScope"] = (
+            "这把 Key 里看不到 lum_push_skill（工具按档位分过范围）时，"
+            "**别退而求其次把正文压进须知**，那等于把它丢了。正文先留在本地 "
+            ".claude/skills/<name>/，然后把这件事报给用户：在平台「MCP 工具中心 → 工具范围」"
+            "里把「Skill 取用与共享」那一档**一起勾上**（档位是多选，勾它不会顶掉"
+            "现在这一档），重连后再推。"
+        )
+        return err
 
     # 同项目同标题就覆盖 —— 同一件事被记两遍，读的人不知道信哪条
     existing = (await session.execute(

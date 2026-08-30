@@ -296,6 +296,13 @@ case_type 默认就是 e2e。
 
 当用户要求把本项目的 skill 传到平台 / 从平台取 skill 时：
 
+**不等人开口也该走这条通道的，只有一种情形**：这一轮攒下的可复用**写法/流程/规范**
+（就是超过项目须知 200 字上限的那种）—— 它的家在这儿，不在须知。撞了上限就把正文
+压成一条「去看某某」的指路条目推进须知，等于只留了指针，而指针指向的东西没人推上来过，
+下一轮顺着它过去是空的。须知只放**一条指路的事实**，正文走 lum_push_skill。
+这把 Key 里没有 lum_push_skill 时也别压 —— 正文留在本地，把「要加 Skill 那一档」
+报给用户（档位是多选，加它不会顶掉现在这一档）。
+
 【推上去】
 - 读本地 .claude/skills/<name>/SKILL.md（有 references/ 等附属文件一起读）
 - 调 lum_push_skill(project_id, content=SKILL.md全文, files={相对路径:文本})
@@ -501,7 +508,7 @@ _register(
 _register(
     project_notes.add_project_note,
     name="lum_add_project_note",
-    description="把这一轮撞出来的坑写回项目须知，别让下一轮再踩一遍。**一条只说一件事，正文 200 字以内**（超了直接拒，不截断），写成「现象 + 别踩的坑」。只记你亲手撞到的**事实**（「这个接口 404 有两种：上游的 404 和网关无路由的 404，只断状态码会误判」），不记判断结论（结论会过期，事实不会）。同标题覆盖。参数: project_id, title, content, category(api_note/bug_pattern/custom，默认 api_note)",
+    description="把这一轮撞出来的坑写回项目须知，别让下一轮再踩一遍。**一条只说一件事，正文 200 字以内**（超了直接拒，不截断），写成「现象 + 别踩的坑」。只记你亲手撞到的**事实**（「这个接口 404 有两种：上游的 404 和网关无路由的 404，只断状态码会误判」），不记判断结论（结论会过期，事实不会）。同标题覆盖。**规范/流程/写法约定别往这儿塞**：那种正文的家是 lum_push_skill（不限长度），这儿只留一条指路的事实 —— 撞了上限把正文压成「去看某某」，等于只剩一个指向空处的指针。参数: project_id, title, content, category(api_note/bug_pattern/custom，默认 api_note)",
 )
 
 
