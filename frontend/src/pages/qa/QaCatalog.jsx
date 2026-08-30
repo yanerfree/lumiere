@@ -52,6 +52,12 @@ const STATE_TAG = {
 
 const PRIORITY_COLOR = { P0: C.red, P1: C.orange, P2: C.teal, P3: C.gray }
 
+// 解析器认出来的列角色 → 页面上的说法。用的是这一页表头本来就用的词，
+// 别让人在"认列结果"和"表格列名"之间再翻译一次。
+const COLUMN_ROLE_CN = {
+  title: '场景描述', priority: '优先级', risk: '风险分', tier: '层', state: '状态',
+}
+
 // 口径全部抄自 QA 清单自己的「列的含义」一节 —— 平台不另立一套说法，
 // 否则同一个词在两边意思不一样，比不解释更坏。
 const TIER = {
@@ -769,10 +775,13 @@ export default function QaCatalog() {
     if (hours < 24) return { stale: hours >= 6, text: `${hours} 小时前` }
     return { stale: true, text: `${Math.round(hours / 24)} 天前` }
   }, [repo?.fetchedAt])
-  // 「读不进来的行」也算不可信：那不是"对不上"，是我们根本没读到，比对不上更该先看
+  // 「读不进来的行」也算不可信：那不是"对不上"，是我们根本没读到，比对不上更该先看。
+  // 「读串了」比「读掉了」还该先看：行一条不少、值全是错的，所有指标照样算得出来。
   const healthy = summary && !summary.claimedButUncovered && !summary.orphanScripts
     && !summary.unparsedRows && !summary.duplicateIds
+    && !summary.unresolvedColumns && !summary.unknownStateTokens
   const parseLoss = (summary?.unparsedRows || 0) + (summary?.duplicateIds || 0)
+  const parseConfusion = (summary?.unresolvedColumns || 0) + (summary?.unknownStateTokens || 0)
 
   const sourceDetail = repo && (
     <div style={{ maxWidth: 480, fontSize: 12, lineHeight: 2 }}>
@@ -1038,9 +1047,75 @@ export default function QaCatalog() {
                 </Hit>
               </div>
             </Popover>
+            {/* 这一行是 2026-08-30 补的。网关那份清单列序跟 uag 不一样，老解析器按列位
+                硬读，把「类型」当优先级、真正的状态列根本没读到 —— 268 行整份判成缺口，
+                而上面每一盏灯都是绿的（行一条没少、ID 没重复、error 也是 null）。
+                所以「读串了」必须自己有一盏灯，而且**认列结果要能展开看**：
+                「状态 = 第几列」是唯一能让人一眼对出来的东西。 */}
+            <Popover
+              placement="bottomLeft"
+              title={<span style={{ fontSize: 12 }}>这份清单的列是怎么认出来的</span>}
+              content={
+                <div style={{ maxWidth: 480, fontSize: 12, lineHeight: 1.8 }}>
+                  <div style={{ color: C.gray, marginBottom: 6 }}>
+                    列是按<b>每列的值长什么样</b>认的，不按列位 —— 换个项目的清单
+                    （列少几个、顺序不同、状态写中文词）不用改代码。
+                  </div>
+                  {(catalogIssues?.columnRoles || []).map(c => (
+                    <div key={c.index}>
+                      第 {c.index + 1} 列
+                      {c.header ? <code style={{ margin: '0 4px' }}>{c.header}</code> : ' '}
+                      → <b style={{ color: C.teal }}>{COLUMN_ROLE_CN[c.role] || c.role}</b>
+                      <span style={{ color: C.gray }}>（{c.basis}）</span>
+                    </div>
+                  ))}
+                  {catalogIssues?.unresolvedColumns?.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <b style={{ color: C.orange }}>没认出角色的列（一个字都没往里填）：</b>
+                      {catalogIssues.unresolvedColumns.map(c => (
+                        <div key={c.index}>
+                          第 {c.index + 1} 列
+                          {c.header ? <code style={{ margin: '0 4px' }}>{c.header}</code> : ' '}
+                          <span style={{ color: C.gray }}>
+                            {c.count} 行有值，例如 {c.samples.slice(0, 3).join(' / ')}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {catalogIssues?.unknownStateTokens?.length > 0 && (
+                    <div style={{ marginTop: 8 }}>
+                      <b style={{ color: C.orange }}>词表里没有的状态写法（平台自己反推的）：</b>
+                      {catalogIssues.unknownStateTokens.map(t => (
+                        <div key={t.token}>
+                          <code>{t.token}</code> × {t.count} → <b>{STATE_TAG[t.resolvedAs]?.text || t.resolvedAs}</b>
+                          <span style={{ color: C.gray }}>（{t.basis}）</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ color: C.gray, marginTop: 8, lineHeight: 1.6 }}>
+                    认不出来的列<b>一律空着</b>，绝不猜着往某个字段里塞；没见过的状态词
+                    拿「有没有脚本声明过这条场景」反推，也绝不默认判缺口 ——
+                    把「没读懂」写成一个确定的结论，之后就再也看不出这里发生过什么。
+                  </div>
+                </div>
+              }
+            >
+              <div>
+                <Hit style={{ cursor: 'help' }}>
+                  {parseConfusion
+                    ? <WarningFilled style={{ color: C.red }} />
+                    : <CheckCircleFilled style={{ color: C.teal }} />}
+                  <span style={{ flex: 1 }}>清单里读不懂的列 / 状态写法</span>
+                  <b style={{ color: parseConfusion ? C.red : C.gray }}>{parseConfusion}</b>
+                </Hit>
+              </div>
+            </Popover>
             <div style={{ fontSize: 11, color: C.gray, marginTop: 8, lineHeight: 1.6 }}>
               前两项是 QA 自己门禁（<code>check-coverage.sh</code>）会直接 BLOCK 的；
-              第三项是「回去重新审优先级」的信号，不阻断；最后一项是我们自己的解析漏没漏。
+              第三项是「回去重新审优先级」的信号，不阻断；后两项是我们自己的解析靠不靠谱 ——
+              分别是「行读掉了没」和「列读串了没」，鼠标停上去能看到认列结果。
             </div>
           </Panel>
         </div>

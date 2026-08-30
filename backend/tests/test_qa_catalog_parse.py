@@ -66,9 +66,17 @@ def test_parse_catalog_rows():
     assert {c: m["name"] for c, m in domains.items()} == {"SMK": "冒烟", "MCP": "MCP 能力"}
     # 域码表第三列 = 「API 组 → 域码」映射的唯一出处，丢了它对账就只能猜
     assert domains["SMK"]["groups"] == ["Health", "Docs", "System"]
-    # 这份夹具是干净的：一行都没漏读，页面上那两个"少读了多少"必须是 0
-    assert issues == {"unparsedRows": [], "duplicateIds": [],
-                      "domainGroupsUnreadable": []}
+    # 这份夹具是干净的：一行都没漏读、每一列都认出了角色，页面上那几个
+    # "少读了多少 / 没读懂什么"必须全是空
+    assert issues["unparsedRows"] == []
+    assert issues["duplicateIds"] == []
+    assert issues["domainGroupsUnreadable"] == []
+    assert issues["unresolvedColumns"] == []
+    assert issues["unknownStateTokens"] == []
+    # 认列结果本身也要摆出来：读串列的时候所有健康灯都是绿的，
+    # 「状态 = 第几列」是唯一能让人一眼对出来的东西
+    assert {n["role"]: n["index"] for n in issues["columnRoles"]} == {
+        "title": 0, "priority": 1, "risk": 2, "tier": 3, "state": 4}
 
     first = scen[0]
     assert first["domain"] == "SMK"
@@ -557,6 +565,188 @@ def test_parse_catalog_treats_dash_tier_as_no_tier():
     assert by_id["SMK-01"]["tier"] == "smoke"
     assert by_id["SMK-02"]["tier"] == ""
     assert by_id["SMK-03"]["tier"] == ""
+
+
+# ---- 列位不写死：换个项目的清单也要读得对 ----
+
+# 网关项目的清单：**少一列、顺序也不一样**（没有风险分，类型排在优先级前面，
+# 状态写的是中文词不是 ✅/⬜）。按列位写死的老解析器在这份上会把「类型」当优先级、
+# 「状态」当层，真正的状态列根本读不到 —— 268 行整份判成缺口，而 unparsedRows=0、
+# duplicateIds=0、error=null，页面上每一盏健康灯都是绿的。（2026-08-30 实测）
+_OTHER_LAYOUT_CATALOG = """\
+## 场景清单
+
+| ID | 场景 | 类型 | 优先 | 状态 |
+|---|---|---|---|---|
+| SMK-01 | 控制面 `/health` 返回 200 | API | P0 | 已建 |
+| SMK-02 | 数据面监听端口可连通 | API | P0 | 已建 |
+| SMK-03 | 版本下限校验 | E2E | P1 | 未建 |
+| SMK-04 | 老脚本待迁过来 | E2E | P2 | 待迁 |
+| SMK-05 | 这条不做了 | UI | P1 | 作废 |
+| SMK-06 | 这条也不做 | NFR | P1 | 不适用（见下） |
+"""
+
+
+def test_parse_catalog_reads_a_different_column_layout():
+    scen, _domains, issues = parse_catalog(_OTHER_LAYOUT_CATALOG)
+    by_id = {s["id"]: s for s in scen}
+
+    # 列是按值的形状认出来的，不是按位置：类型在第 1 列、优先级在第 2 列
+    assert {n["role"]: n["index"] for n in issues["columnRoles"]} == {
+        "title": 0, "tier": 1, "priority": 2, "state": 3}
+    assert issues["unresolvedColumns"] == []
+
+    assert by_id["SMK-01"]["title"] == "控制面 `/health` 返回 200"
+    assert by_id["SMK-01"]["priority"] == "P0"
+    assert by_id["SMK-01"]["tier"] == "API"
+    # 这份清单没有风险分那一列 —— 没有就是 None，不能拿别的列凑数
+    assert by_id["SMK-01"]["risk"] is None
+
+
+def test_parse_catalog_reads_chinese_state_words():
+    """状态列写中文词而不是 ✅/⬜ 的清单，一样要判对。"""
+    scen, _domains, issues = parse_catalog(_OTHER_LAYOUT_CATALOG)
+    by_id = {s["id"]: s for s in scen}
+    assert by_id["SMK-01"]["state"] == "covered"
+    assert by_id["SMK-03"]["state"] == "gap"
+    assert by_id["SMK-04"]["state"] == "gap"
+    assert by_id["SMK-05"]["state"] == "deprecated"
+    assert by_id["SMK-06"]["state"] == "deprecated"
+    # 状态词后面挂的话要留着
+    assert by_id["SMK-06"]["stateNote"] == "（见下）"
+    assert issues["unknownStateTokens"] == []
+
+
+def test_parse_catalog_does_not_let_a_note_hijack_the_state():
+    """状态格里的备注提到「作废」，不代表这条场景作废了。
+
+    实测 uag-qa 的 MCP-79：状态是 ✅，备注写的是"该单**未被作废**"。按词表顺序
+    硬匹配就会被备注拐走 —— 一条已覆盖的场景凭空变成已废弃，覆盖率还跟着降。
+    判据是**位置最靠前的那个词**：状态标记写在格子开头，后面那截是备注。
+    """
+    md = '''
+| ID | 场景 | P | R | 层 | 状 |
+|---|---|---|---|---|---|
+| SMK-01 | 变更档位后该单未被作废 | P0 | 9 | api | ✅ `@known-bug GL#580` 实测该单**未被作废** |
+| SMK-02 | 这条是真废了 | P2 | 1 | api | 已废弃 |
+'''
+    by_id = {s["id"]: s for s in parse_catalog(md)[0]}
+    assert by_id["SMK-01"]["state"] == "covered"
+    assert by_id["SMK-02"]["state"] == "deprecated"
+
+
+def test_parse_catalog_reports_columns_it_could_not_name():
+    """认不出角色的列要报出来，绝不猜着往某个字段里塞。"""
+    md = '''
+| ID | 场景 | P | 负责人 | 状 |
+|---|---|---|---|---|
+| SMK-01 | 甲的活 | P0 | 张三 | ✅ |
+| SMK-02 | 乙的活 | P1 | 李四 | ⬜ |
+| SMK-03 | 丙的活 | P1 | 张三 | ⬜ |
+'''
+    scen, _domains, issues = parse_catalog(md)
+    assert {n["role"]: n["index"] for n in issues["columnRoles"]} == {
+        "title": 0, "priority": 1, "state": 3}
+    unresolved = issues["unresolvedColumns"]
+    assert [c["index"] for c in unresolved] == [2]
+    assert unresolved[0]["header"] == "负责人"
+    # 值要一起带出来，否则页面上只说"第 2 列没认出来"，没人知道那列是什么
+    assert set(unresolved[0]["samples"]) == {"张三", "李四"}
+    # 没认出来 ≠ 塞进 tier
+    assert all(s["tier"] == "" for s in scen)
+
+
+def test_parse_catalog_infers_unknown_state_words_from_scripts():
+    """没见过的状态词，拿「有没有脚本声明过这条场景」反推，而不是默认判缺口。
+
+    默认判缺口正是网关那份整份变成缺口的原因 —— 一个"没读懂"被写成了一个确定的
+    结论，之后页面上再也看不出这里发生过什么。
+    """
+    md = '''
+| ID | 场景 | P | R | 层 | 状 |
+|---|---|---|---|---|---|
+| SMK-01 | 甲 | P0 | 9 | api | 妥了 |
+| SMK-02 | 乙 | P0 | 9 | api | 妥了 |
+| SMK-03 | 丙 | P1 | 4 | api | 回头再说 |
+| SMK-04 | 丁 | P1 | 4 | api | 回头再说 |
+'''
+    scen, _domains, issues = parse_catalog(md, claimed_ids={"SMK-01", "SMK-02"})
+    by_id = {s["id"]: s for s in scen}
+    assert by_id["SMK-01"]["state"] == "covered"
+    assert by_id["SMK-03"]["state"] == "gap"
+
+    # 反推了什么必须报出来 —— 这是"平台替清单做了个判断"，不能悄悄做
+    learned = {t["token"]: t["resolvedAs"] for t in issues["unknownStateTokens"]}
+    assert learned == {"妥了": "covered", "回头再说": "gap"}
+
+
+def test_unknown_state_words_without_scripts_fall_back_to_gap():
+    """没有脚本可反推时只能判缺口 —— 但同样要记账，不能静默。"""
+    md = '''
+| ID | 场景 | P | R | 层 | 状 |
+|---|---|---|---|---|---|
+| SMK-01 | 甲 | P0 | 9 | api | 妥了 |
+'''
+    scen, _domains, issues = parse_catalog(md)
+    assert scen[0]["state"] == "gap"
+    assert issues["unknownStateTokens"][0]["token"] == "妥了"
+    assert "没有脚本" in issues["unknownStateTokens"][0]["basis"]
+
+
+def test_parse_catalog_without_a_state_column_falls_back_to_scripts():
+    """整份清单没有状态列时，逐行看脚本认领 —— 并且把这件事亮出来。"""
+    md = '''
+| ID | 场景 | P |
+|---|---|---|
+| SMK-01 | 甲 | P0 |
+| SMK-02 | 乙 | P1 |
+'''
+    scen, _domains, issues = parse_catalog(md, claimed_ids={"SMK-01"})
+    by_id = {s["id"]: s for s in scen}
+    assert by_id["SMK-01"]["state"] == "covered"
+    assert by_id["SMK-02"]["state"] == "gap"
+    assert issues["unknownStateTokens"][0]["token"] == "(没有状态列)"
+
+
+def test_parse_catalog_keeps_the_whole_note_when_a_cell_has_a_bare_pipe():
+    """单元格里混了个没转义的 `|` 时，多切出来的格子归给最右那一列。
+
+    实测 uag-qa 有 2 行这样的（备注里写了 `groups[model | personal | claimed]`）。
+    不管的话要么整行错位，要么造出只有两行数据的幽灵列。
+    """
+    md = '''
+| ID | 场景 | P | R | 层 | 状 |
+|---|---|---|---|---|---|
+| SMK-01 | 甲 | P0 | 9 | api | ⬜ 形状是 `{a | b | c}`，等数据 |
+| SMK-02 | 乙 | P0 | 9 | api | ✅ |
+'''
+    scen, _domains, issues = parse_catalog(md)
+    by_id = {s["id"]: s for s in scen}
+    assert by_id["SMK-01"]["state"] == "gap"
+    assert by_id["SMK-01"]["tier"] == "api"
+    assert by_id["SMK-01"]["stateNote"].endswith("，等数据")
+    assert "b | c" in by_id["SMK-01"]["stateNote"]
+    # 多出来的格子不许变成新列
+    assert issues["unresolvedColumns"] == []
+
+
+def test_parse_catalog_survives_header_spelling_changes():
+    """表头改个写法不影响解析 —— 认的是值的形状，表头只是补充判据。
+
+    光 uag-qa 一份里就有三种表头写法（`P`/`优先级`、`R`/`判据强度`、
+    `场景`/`场景(这条要证明什么)`），它一直没出事纯粹是列序恰好一致。
+    """
+    md = '''
+| ID | 场景(这条要证明什么) | 优先级 | 判据强度 | 层 | 状态 |
+|---|---|---|---|---|---|
+| SMK-01 | 甲 | P0 | 9 | api | ✅ |
+| SMK-02 | 乙 | P1 | 4 | ui | ⬜ |
+'''
+    scen, _domains, issues = parse_catalog(md)
+    assert {n["role"]: n["index"] for n in issues["columnRoles"]} == {
+        "title": 0, "priority": 1, "risk": 2, "tier": 3, "state": 4}
+    assert scen[0]["risk"] == 9
+    assert scen[1]["tier"] == "ui"
 
 
 # ---- S7.1 域码表第三列：API 组 → 域码 ----

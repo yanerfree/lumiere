@@ -31,7 +31,8 @@ _EMPTY = {
         "total": 0, "covered": 0, "gap": 0, "deprecated": 0, "scripts": 0,
         "knownBugScenarios": 0, "knownBugRefs": 0, "coveredWithBugs": 0,
         "claimedButUncovered": 0, "orphanScripts": 0, "riskMismatch": 0,
-        "unparsedRows": 0, "duplicateIds": 0, "byPriority": {},
+        "unparsedRows": 0, "duplicateIds": 0,
+        "unresolvedColumns": 0, "unknownStateTokens": 0, "byPriority": {},
     },
     "domains": [],
     "scenarios": [],
@@ -40,7 +41,8 @@ _EMPTY = {
     # 键要跟 parse_catalog 的真返回**一字不差**：空态少一个键，前端就得写
     # `?.` 兜底，而兜底之后"这个仓根本没配"和"读到了但一条都没漏"渲染成同一个样子。
     "catalogIssues": {"unparsedRows": [], "duplicateIds": [],
-                      "domainGroupsUnreadable": []},
+                      "domainGroupsUnreadable": [], "columnRoles": [],
+                      "unresolvedColumns": [], "unknownStateTokens": []},
 }
 
 

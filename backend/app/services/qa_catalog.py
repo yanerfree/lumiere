@@ -120,16 +120,259 @@ def _group_cell(raw: str) -> tuple[list[str], str]:
     return groups, " ".join(leftover).strip()
 
 
-def parse_catalog(text: str) -> tuple[list[dict], dict[str, dict], dict]:
-    """解析清单 markdown。返回 (场景行, 域码->{name,groups,groupsRaw}, 读不进来的行)。
+# ── 列怎么认：看**列里的值长什么样**，不看列位 ────────────────────────
+# 清单的列顺序是每个项目自己定的，手上两份就已经对不上：
+#   uag-qa | ID | 场景 | P    | R    | 层   | 状   |
+#   网关   | ID | 场景 | 类型 | 优先 | 状态 |          ← 少一列、顺序也不一样
+# 写死列位的代价不是报错，是**读串了还一路绿**：网关那份把「类型」当成优先级、
+# 把「状态」当成层，真正的状态列压根没被读到 → 268 行全判 gap，而 unparsedRows=0、
+# duplicateIds=0、error=null，页面上每一盏健康灯都是绿的。（2026-08-30 实测）
+# 现有的防线只防「行掉了」，不防「行读串了」—— 后者更常见也更难发现。
+# 所以改成按值的形状认列：形状是清单自己带的，换个项目不用再兼容一次。
+# **认不出来的列一律进 catalogIssues，绝不猜着填。**
+_PLACEHOLDER_CELL = {"—", "–", "——", "-", "－", "/", "N/A", "n/a", "无", "TBD", "tbd", "?"}
+# `P?` 也算优先级形状：那是**我们自己**生成清单行时写的"还没定"标记
+# （`qa_coverage_reconcile._UNSET_PRIORITY`，故意不猜一个 P2 上去）。
+# 不认它的话，提案行粘回清单后这一列认不出角色，「层」还会被它顶掉 ——
+# 自己产出的东西自己读不回来，是最不该有的那种不兼容。
+_PRIORITY_RE = re.compile(r"[Pp][0-3?]")
+_RISK_RE = re.compile(r"\d{1,2}")
+
+# 状态词表。匹配用**子串**不用全等 —— 状态格里常挂着一句话
+# （`✅ @known-bug GL#531`、`不适用（见下）`），要求全等的话这些一个都认不出来。
+# 命中多个词时取**位置最靠前**的那个，不是列表顺序：状态标记写在格子开头，
+# 后面那截是备注。实测 uag-qa 的 MCP-79 状态格是
+# 「✅ **@known-bug GL#580** … 该单**未被作废**…」—— 按列表顺序判就会被备注里的
+# 「作废」拐去 deprecated，一条已覆盖的场景凭空变成已废弃（覆盖率还会跟着降）。
+# 位置相同才按列表顺序，所以「已废弃」仍然是 deprecated 而不是被「已」系词捞走。
+_STATE_TOKENS: tuple[tuple[str, str], ...] = (
+    ("deprecated", "❌"), ("deprecated", "作废"), ("deprecated", "废弃"),
+    ("deprecated", "不适用"), ("deprecated", "deprecated"),
+    ("covered", "✅"), ("covered", "☑"), ("covered", "已建"), ("covered", "已覆盖"),
+    ("covered", "已实现"), ("covered", "已写"), ("covered", "covered"), ("covered", "done"),
+    ("gap", "⬜"), ("gap", "🔲"), ("gap", "☐"), ("gap", "未建"), ("gap", "待建"),
+    ("gap", "待迁"), ("gap", "待补"), ("gap", "缺口"), ("gap", "todo"), ("gap", "gap"),
+)
+_STATE_SYMBOLS = ("✅", "⬜", "❌", "🔲", "☐", "☑")
+
+# 表头名 → 角色。**只当补充判据**：值的形状认得出来就不看表头，因为表头本身也在变
+# （光 uag-qa 一份里「场景/优先级/判据强度」就有三种写法，它没出事纯粹是列序恰好一致）。
+_HEADER_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("state", ("状", "state", "status", "覆盖", "进度")),
+    ("priority", ("优先", "priority", "prio", "级别", "p")),
+    ("risk", ("判据", "风险", "risk", "强度", "r")),
+    ("tier", ("层", "tier", "类型", "type", "位置", "kind")),
+    ("title", ("场景", "描述", "说明", "名称", "标题", "title", "scenario", "name")),
+)
+# 表头行的首列长什么样（`| ID | 场景 | ... |` 里的那个 ID）
+_HEADER_FIRST_CELL = {"id", "编号", "场景id", "用例id", "case", "caseid", "case id"}
+
+
+def _bare_cell(value: str) -> str:
+    """剥掉 markdown 装饰后的裸值；占位破折号一律归成空。
+
+    占位符不归成空的话，「—」会被算进值域里 —— 筛选下拉多一个「—」选项事小，
+    统计口径把「没填」当成一个真值事大。
+    """
+    v = value.strip().strip("`").strip()
+    if v.startswith("**") and v.endswith("**") and len(v) > 4:
+        v = v[2:-2].strip()
+    v = v.strip("`").strip()
+    return "" if v in _PLACEHOLDER_CELL else v
+
+
+def _state_token(value: str) -> tuple[str, str] | None:
+    """值里认出状态词 → (状态, 命中的词)。认不出来返回 None（**不是** gap）。"""
+    low = value.lower()
+    best = None
+    for order, (state, token) in enumerate(_STATE_TOKENS):
+        pos = value.find(token)
+        if pos < 0:
+            pos = low.find(token)
+        if pos < 0:
+            continue
+        if best is None or (pos, order) < best[0]:
+            best = ((pos, order), state, token)
+    return (best[1], best[2]) if best else None
+
+
+def _header_role(header: str) -> str:
+    """表头名 → 角色。单字母表头（P/R）要求全等，否则「P」会在任何含 p 的表头上命中。"""
+    h = header.strip().strip("`*").strip().lower()
+    if not h:
+        return ""
+    for role, tokens in _HEADER_HINTS:
+        for t in tokens:
+            if h == t or (len(t) >= 2 and t in h):
+                return role
+    return ""
+
+
+def _is_header_line(line: str) -> bool:
+    return (line.lstrip().startswith("|")
+            and _first_cell(line).lower().replace(" ", "") in _HEADER_FIRST_CELL)
+
+
+def _row_cells(line_rest: str) -> list[str]:
+    return [c.strip() for c in line_rest.split("|")]
+
+
+def _cell_at(cells: list[str], idx, width: int) -> str:
+    """取第 idx 格。**最后一格吸收溢出**。
+
+    单元格里出现没转义的 `|` 时这一行会多切出几格（实测 uag-qa 有 2 行，多出来的
+    都在状态列那句长备注里）。多出来的格子如果不管，要么被当成新列（造出两个只有
+    2 行数据的幽灵列），要么整行错位。归给最右那一格是唯一不丢字的处理。
+    """
+    if idx is None or idx >= len(cells):
+        return ""
+    if idx == width - 1 and len(cells) > width:
+        return " | ".join(cells[idx:])
+    return cells[idx]
+
+
+def _classify_columns(rows: list[dict], headers: list[str], width: int):
+    """认列。返回 (角色 -> 列号, 每列是怎么认出来的, 没认出来的列)。"""
+    stats: list[dict] = []
+    for i in range(width):
+        vals = [_bare_cell(_cell_at(r["cells"], i, width)) for r in rows]
+        ne = [v for v in vals if v]
+        n = len(ne)
+        uniq = sorted(set(ne), key=lambda x: (-ne.count(x), x))
+        stats.append({
+            "index": i,
+            "header": headers[i] if i < len(headers) else "",
+            "n": n,
+            "samples": uniq[:6],
+            "fill": n / len(rows) if rows else 0.0,
+            "distinct": len(uniq) / n if n else 0.0,
+            "avgLen": sum(len(v) for v in ne) / n if n else 0.0,
+            "p": sum(1 for v in ne if _PRIORITY_RE.fullmatch(v)) / n if n else 0.0,
+            "d": sum(1 for v in ne if _RISK_RE.fullmatch(v)) / n if n else 0.0,
+            "s": sum(1 for v in ne if _state_token(v)) / n if n else 0.0,
+        })
+
+    roles: dict[str, int] = {}
+    notes: list[dict] = []
+    taken: set[int] = set()
+
+    def claim(role: str, st: dict, basis: str) -> None:
+        # 一个角色只认第一次。重复 claim 会**静默改掉**已认定的列 —— 页面上
+        # columnRoles 里会并排躺着两条同 role 的记录，不盯着看根本发现不了。
+        if role in roles:
+            return
+        roles[role] = st["index"]
+        taken.add(st["index"])
+        notes.append({"index": st["index"], "header": st["header"],
+                      "role": role, "basis": basis})
+
+    def best_by(key: str, thr: float):
+        pool = [s for s in stats if s["index"] not in taken and s["n"] and s[key] >= thr]
+        return max(pool, key=lambda s: s[key], default=None)
+
+    # 判别力从强到弱。三个都是"要么整列中要么整列不中"的形状 —— 实测两份真清单上
+    # 命中列 1.00、其余列 ≤0.05，0.6 这条线中间是空的，不是拍脑袋定的。
+    for role, key, thr, desc in (("state", "s", 0.6, "%d%% 的值是状态词"),
+                                 ("priority", "p", 0.6, "%d%% 的值形如 P0-P3"),
+                                 ("risk", "d", 0.6, "%d%% 的值是一两位数字")):
+        st = best_by(key, thr)
+        if st is not None:
+            claim(role, st, desc % round(st[key] * 100))
+
+    # **有名字、但名字不是我们任何一个角色**的列（`负责人`、`备注`）：这不是
+    # "没信息"，是一条正面证据 —— 清单自己说了它是什么，而那不是我们要的东西。
+    # 所以它不参加下面任何一轮"猜"，直接进 unresolvedColumns 由页面报出来。
+    named_other = {s["index"] for s in stats
+                   if s["header"].strip() and not _header_role(s["header"])}
+
+    # 标题和层用**表头名**先分一次。这两个角色的"形状"是分不开的（都是自由文本），
+    # 而 P/R/状态那三列的形状是决定性的，所以只有这里需要借表头。实测：`| ID | 场景 |
+    # 优先级 | 判据强度 | 层 | 状态 |` 这种小表上，`层` 列（api/ui）唯一值率同样是
+    # 1.00、还比一两个字的场景名更长 —— 光比形状会把「层」当成场景描述。
+    for role in ("title", "tier"):
+        if role in roles:
+            continue
+        st = next((s for s in stats
+                   if s["index"] not in taken and s["n"] and _header_role(s["header"]) == role),
+                  None)
+        if st is not None:
+            claim(role, st, "表头写的是「%s」" % st["header"])
+
+    # 场景描述：唯一值最多、**而且每行都填了**的那列（实测命中列 1.00，其余 ≤0.22）。
+    # 「每行都填了」这条不能省：只剩三五行的小表上，一个只填了一格的枚举列
+    # （比如整表只有一行写了 `smoke`、其余是占位破折号）唯一值率同样是 1.00，
+    # 光比唯一值率就会把「层」当成场景描述 —— 然后标题列整列消失。
+    pool = [] if "title" in roles else [
+        s for s in stats
+        if s["index"] not in taken and s["index"] not in named_other
+        and s["distinct"] >= 0.5 and s["fill"] >= 0.5]
+    st = max(pool, key=lambda s: (s["distinct"] * s["fill"], s["avgLen"], -s["index"]),
+             default=None)
+    if st is not None:
+        claim("title", st, "%d%% 是唯一值、%d%% 的行都填了、平均 %d 字"
+              % (round(st["distinct"] * 100), round(st["fill"] * 100), round(st["avgLen"])))
+
+    # 形状认不出来的，再看表头名
+    for s in stats:
+        if s["index"] in taken or not s["n"]:
+            continue
+        role = _header_role(s["header"])
+        if role and role not in roles:
+            claim(role, s, "表头写的是「%s」" % s["header"])
+
+    # 「层」是个枚举（api/ui/smoke）：**值域小、值还短**，两条一起才是它的特征。
+    # 值域用**绝对个数**不用比率：比率在小表上必然失效 —— 只有一两行时每列的唯一值率
+    # 都是 1.00，`≤0.3` 那条线一行都框不住（实测 S7.6 把生成的行喂回来验收时就是
+    # 单行无表头，层列整个读不到）。「值还短」是防它去捞备注那种自由文本列。
+    if "tier" not in roles:
+        pool = [s for s in stats
+                if s["index"] not in taken and s["index"] not in named_other and s["n"]
+                and len(set(s["samples"])) <= max(3, round(s["n"] * 0.3))
+                and s["avgLen"] <= 12]
+        st = min(pool, key=lambda s: (len(set(s["samples"])), s["avgLen"]), default=None)
+        if st is not None:
+            claim("tier", st, "值域只有 %d 种、平均 %d 字，按枚举列当「层」"
+                  % (len(set(st["samples"])), round(st["avgLen"])))
+
+    # 标题一个都没认出来时的兜底：剩下最长的那列。**宁可认错也不能整份没标题** ——
+    # 标题空掉的页面看着像"清单是空的"，而那是最容易被当成"QA 仓没东西"的假象。
+    if "title" not in roles:
+        st = max([s for s in stats if s["index"] not in taken and s["n"]],
+                 key=lambda s: s["avgLen"], default=None)
+        if st is not None:
+            claim("title", st, "兜底：剩下的列里最长的那列")
+
+    unresolved = [{"index": s["index"], "header": s["header"],
+                   "count": s["n"], "samples": s["samples"]}
+                  for s in stats if s["index"] not in taken and s["n"]]
+    return roles, notes, unresolved
+
+
+def _state_note(raw: str, token: str | None) -> str:
+    """状态格里除了状态本身还常挂一句话（`@known-bug GL#531`、`（见下）`），留着。"""
+    note = raw
+    for sym in _STATE_SYMBOLS:
+        note = note.replace(sym, "")
+    note = note.strip().strip("`").strip()
+    if token and len(token) > 1 and note.lower().startswith(token.lower()):
+        note = note[len(token):].strip()
+    return note.strip("`").strip()
+
+
+def parse_catalog(text: str, claimed_ids: set[str] | None = None) -> tuple[list[dict], dict[str, dict], dict]:
+    """解析清单 markdown。返回 (场景行, 域码->{name,groups,groupsRaw}, 读不进来的东西)。
 
     只认「场景清单」正文里的行；统计段里那张"已实现清单"表首列是层级不是 ID，
     天然不会命中 _ROW_RE，所以不需要额外切段。
 
-    ⚠ 第三个返回值是**这次悄悄少读了什么**，必须一路带到页面上。少一行的后果是
+    `claimed_ids` 是**脚本头声明过的场景 ID**，只用来给状态词表兜底（见下面的
+    「反推」一节）。不传也能跑，只是遇到没见过的状态词时只能判缺口。
+
+    ⚠ 第三个返回值是**这次没读懂什么**，必须一路带到页面上。少一行的后果是
     「那条场景不存在」—— 覆盖率不会掉、缺口不会涨、门禁不会红，谁都发现不了。
-    两类：首列像 ID 但整行没解析成（漏了尾部的 `|`、破折号打成 `–`、大小写写错），
-    以及同一个 ID 出现两次（保留第一条，第二条的内容整行丢掉）。
+    读串一列更狠：数字全在、全是错的。四类：首列像 ID 但整行没解析成（漏了尾部的
+    `|`、破折号打成 `–`、大小写写错）、同一个 ID 出现两次（保留第一条）、
+    有列认不出角色、有状态词不在词表里。
     """
     scenarios: list[dict] = []
     domains: dict[str, dict] = {}
@@ -137,6 +380,12 @@ def parse_catalog(text: str) -> tuple[list[dict], dict[str, dict], dict]:
     seen: set[str] = set()
     unparsed: list[dict] = []
     duplicates: list[str] = []
+
+    # 第一趟：只把行原样收下来，不碰列的含义 —— 认列要看整列的分布，
+    # 边读边判就只能看单行，那正是"写死列位"的老路。
+    raw_rows: list[dict] = []
+    headers: list[str] = []
+    header_votes: dict[int, dict[str, int]] = {}
 
     for lineno, line in enumerate(text.splitlines(), 1):
         dm = _DOMAIN_RE.match(line)
@@ -151,6 +400,13 @@ def parse_catalog(text: str) -> tuple[list[dict], dict[str, dict], dict]:
                     groups_unreadable.append({"code": code, "raw": leftover[:160]})
             continue
 
+        if _is_header_line(line):
+            cells = _row_cells(line.strip().strip("|"))
+            for i, cell in enumerate(cells[1:]):  # 跳过首列 ID
+                header_votes.setdefault(i, {}).setdefault(cell.strip(), 0)
+                header_votes[i][cell.strip()] += 1
+            continue
+
         m = _ROW_RE.match(line)
         if not m:
             if line.lstrip().startswith("|") and _LOOSE_ID_RE.match(_first_cell(line)):
@@ -163,41 +419,99 @@ def parse_catalog(text: str) -> tuple[list[dict], dict[str, dict], dict]:
                 duplicates.append(sid)
             continue
         seen.add(sid)
-        cols = [c.strip() for c in m.group("rest").split("|")]
-        # cols = [场景, P, R, 层, 状]，列数不足就按缺省补空，别因为格式差一列整份读不出来
-        title = cols[0] if len(cols) > 0 else ""
-        priority = cols[1] if len(cols) > 1 else ""
-        risk_raw = cols[2] if len(cols) > 2 else ""
-        tier = cols[3] if len(cols) > 3 else ""
-        # 已废弃的行「执行层」填的是占位破折号（实测 8 条，全是 ❌）。原样留着，
-        # 筛选下拉里就会多出一个「— （—）」的选项 —— 看着像脏数据，其实是"没有层"。
-        if tier.strip("`").strip() in {"—", "–", "-", "/", "N/A", "n/a", "无"}:
-            tier = ""
-        state_raw = cols[4] if len(cols) > 4 else ""
+        raw_rows.append({"id": sid, "cells": _row_cells(m.group("rest"))})
 
-        if "❌" in state_raw:
-            state = "deprecated"
-        elif "✅" in state_raw:
-            state = "covered"
-        else:
-            state = "gap"
-        # 状态列里除了符号还常挂一句话（`@known-bug GL#531`、"待补 testid"），留着
-        state_note = state_raw.replace("✅", "").replace("⬜", "").replace("❌", "").strip()
-        state_note = state_note.strip("`").strip()
+    for i in sorted(header_votes):
+        best = max(header_votes[i].items(), key=lambda kv: kv[1])
+        headers.append(best[0])
 
-        scenarios.append({
-            "id": sid,
-            "domain": sid.rsplit("-", 1)[0],
+    # 列宽以**表头声明的列数**为准；没有表头行才退回数据行的众数。
+    # 两处都不能取最大值：单元格里混了个没转义的 `|` 的那几行会把宽度顶大，
+    # 造出只有两三行数据的幽灵列（实测 uag-qa 有 2 行这样的备注）。
+    # 众数在真清单上够用（526 : 2），但小表上会平票 —— 平票时取**小**的那个，
+    # 因为溢出只会让格子变多、不会变少。
+    if headers:
+        width = len(headers)
+    else:
+        width_votes: dict[int, int] = {}
+        for r in raw_rows:
+            width_votes[len(r["cells"])] = width_votes.get(len(r["cells"]), 0) + 1
+        width = max(width_votes.items(), key=lambda kv: (kv[1], -kv[0]))[0] if width_votes else 0
+
+    roles, column_notes, unresolved_columns = _classify_columns(raw_rows, headers, width)
+
+    # 第二趟：按认出来的角色取值
+    pending: list[tuple[dict, str]] = []
+    for r in raw_rows:
+        cells = r["cells"]
+        title = _cell_at(cells, roles.get("title"), width).strip()
+        priority = _bare_cell(_cell_at(cells, roles.get("priority"), width))
+        risk_raw = _bare_cell(_cell_at(cells, roles.get("risk"), width))
+        tier = _bare_cell(_cell_at(cells, roles.get("tier"), width))
+        state_raw = _cell_at(cells, roles.get("state"), width).strip()
+
+        hit = _state_token(state_raw) if state_raw else None
+        item = {
+            "id": r["id"],
+            "domain": r["id"].rsplit("-", 1)[0],
             "title": title,
-            "priority": priority.upper() if re.fullmatch(r"[Pp][0-3]", priority) else priority,
+            "priority": priority.upper() if _PRIORITY_RE.fullmatch(priority) else priority,
             "risk": int(risk_raw) if risk_raw.isdigit() else None,
-            "tier": tier.strip("`"),
-            "state": state,
-            "stateNote": state_note,
-        })
+            "tier": tier,
+            "state": hit[0] if hit else "",
+            "stateNote": _state_note(state_raw, hit[1] if hit else None),
+        }
+        scenarios.append(item)
+        if not hit:
+            pending.append((item, _bare_cell(state_raw)))
 
-    return scenarios, domains, {"unparsedRows": unparsed, "duplicateIds": duplicates,
-                                "domainGroupsUnreadable": groups_unreadable}
+    # ── 状态没认出来时怎么办：**别默认判 gap** ──────────────────────────
+    # 默认 gap 正是网关那 268 行整份变成缺口的原因 —— 一个"没读懂"被写成了一个
+    # 确定的结论，之后页面上再也看不出这里发生过什么。改成拿「有没有脚本声明过
+    # 这条场景」反推。反推是**按词整体投票**，不是逐行照抄脚本：某个没见过的词
+    # 多数行都有脚本 → 这个词的意思是"已覆盖"；个别行的"清单说有、脚本没有"
+    # 照样会被 claimedButUncovered 抓出来，说谎检测这条线不会被反推抹平。
+    claimed = claimed_ids or set()
+    unknown_tokens: list[dict] = []
+    if "state" not in roles:
+        # 整份清单认不出状态列。逐行看脚本认领 —— 并且把这件事亮到页面上。
+        for item in scenarios:
+            item["state"] = "covered" if item["id"] in claimed else "gap"
+        if scenarios:
+            unknown_tokens.append({
+                "token": "(没有状态列)", "count": len(scenarios),
+                "resolvedAs": "按脚本认领逐行反推",
+                "basis": "这份清单里认不出状态列，覆盖与否只能看脚本有没有声明它",
+            })
+    elif pending:
+        buckets: dict[str, list[dict]] = {}
+        for item, token in pending:
+            buckets.setdefault(token[:32] or "(空)", []).append(item)
+        for token, group in sorted(buckets.items()):
+            hits = len([s for s in group if s["id"] in claimed])
+            if claimed and hits * 10 >= len(group) * 6:
+                resolved = "covered"
+            else:
+                resolved = "gap"
+            for item in group:
+                item["state"] = resolved
+            unknown_tokens.append({
+                "token": token, "count": len(group), "resolvedAs": resolved,
+                "basis": ("%d/%d 行有脚本认领" % (hits, len(group))) if claimed
+                         else "没有脚本可反推，只能当缺口",
+            })
+
+    return scenarios, domains, {
+        "unparsedRows": unparsed,
+        "duplicateIds": duplicates,
+        "domainGroupsUnreadable": groups_unreadable,
+        # 这两条不是"错误"，是**这份清单是怎么被读的**。读串了的时候，健康灯全绿
+        # 是最要命的 —— 所以把认列结果本身也摆出来，让人一眼能对：
+        # 「状态 = 第 4 列（表头『状态』）」对不上就是对不上。
+        "columnRoles": column_notes,
+        "unresolvedColumns": unresolved_columns,
+        "unknownStateTokens": unknown_tokens,
+    }
 
 
 def domain_index(domains: dict[str, dict]) -> dict[str, set[str]]:
@@ -583,8 +897,10 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
     if catalog_text is None:
         raise GitError(f"QA 仓的 {branch_name} 分支上没有 {catalog_path}")
 
-    scenarios, domain_names, catalog_issues = parse_catalog(catalog_text)
-
+    # 先捞脚本、再解析清单。顺序是**故意**的：清单里出现没见过的状态词时，
+    # parse_catalog 要拿「有没有脚本声明过这条场景」来反推它是什么意思。
+    # 反过来放（先解析清单）就只能把没读懂的词一律判成缺口 —— 那正是要修的 bug。
+    # 脚本发现只依赖 repo/ref/catalog_path，不依赖解析结果，所以提前没有代价。
     globs = cfg.get("caseGlobs") or []
     if globs:
         files = [p for p in _ls_tree(repo, ref) if _match_globs(p, globs)]
@@ -600,6 +916,9 @@ def sync_and_read(project_id: str, cfg: dict, do_fetch: bool = True) -> dict:
         if not header["ids"]:
             continue  # 没声明 ID 的文件不是用例（支持库/夹具）
         cases.append({"path": path, **header})
+
+    claimed_ids = {sid for c in cases for sid in c["ids"]}
+    scenarios, domain_names, catalog_issues = parse_catalog(catalog_text, claimed_ids)
 
     activity = _repo_activity(repo, ref, catalog_path)
 
@@ -810,6 +1129,10 @@ def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[d
             # 跟「没算过」长得一模一样
             "unparsedRows": len(catalog_issues.get("unparsedRows") or []),
             "duplicateIds": len(catalog_issues.get("duplicateIds") or []),
+            # 「这次有没有读串」。上面两条防的是"行掉了"，这两条防的是"行读串了" ——
+            # 后者更常见也更毒：数字全在、全是错的。0 同样要出现在页面上。
+            "unresolvedColumns": len(catalog_issues.get("unresolvedColumns") or []),
+            "unknownStateTokens": len(catalog_issues.get("unknownStateTokens") or []),
             # 「更新时间」那一列这次算没算成 / 有没有走到底。0 也要出现，理由同上两条
             "activityUnavailable": bool((activity or {}).get("unavailable")),
             "activityTruncated": bool((activity or {}).get("truncated")),
