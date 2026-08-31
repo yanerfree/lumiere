@@ -10,7 +10,7 @@ import {
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
   DeploymentUnitOutlined,
 } from '@ant-design/icons'
-import { api } from './utils/request'
+import { api, reviveSession } from './utils/request'
 import { useLang } from './utils/i18n.jsx'
 import { PermissionProvider, usePermissions } from './utils/PermissionContext'
 import { PERM } from './utils/permissions'
@@ -60,9 +60,28 @@ function RedirectToCases() {
   return <Navigate to={`/projects/${projectId}/cases`} replace />
 }
 
+// 登录态的判据是「refresh token 还在不在」，不是「access token 在不在」。
+// access 只活 30 分钟、refresh 活 7 天 —— 拿前者当门禁，等于把「7 天免登录」的承诺
+// 挂在一个半小时就作废的东西上。
+// access 不在而 refresh 还在是**可恢复**状态：这时直接跳登录页，等于手里攥着还剩
+// 好几天有效期的票据、却一个请求都不发就让用户重新输密码。
+// （其余入口都是「先发请求、吃 401 再刷新」，那条路需要一张哪怕已过期的 access 去把
+//   401 换回来；access 整个不在时请求发不出去，反应式刷新永远不会被触发。）
 function RequireAuth({ children }) {
-  const token = localStorage.getItem('token')
-  if (!token) return <Navigate to="/login" replace />
+  const [reviving, setReviving] = useState(
+    () => !localStorage.getItem('token') && !!localStorage.getItem('refreshToken')
+  )
+
+  useEffect(() => {
+    if (!reviving) return
+    let alive = true
+    reviveSession().finally(() => { if (alive) setReviving(false) })
+    return () => { alive = false }
+  }, [reviving])
+
+  // 刷新还没回来就先不判定，否则会先闪一下登录页再跳回来
+  if (reviving) return null
+  if (!localStorage.getItem('token')) return <Navigate to="/login" replace />
   return children
 }
 

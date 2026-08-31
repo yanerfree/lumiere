@@ -97,6 +97,20 @@ export async function getValidToken() {
   return token
 }
 
+/**
+ * access token 不在、但 refresh 还在时，主动换一张回来；返回是否换到。
+ *
+ * 为什么要单独有这个：其余入口都是**先发请求、吃到 401 再刷新**，那条路要求手里
+ * 至少有一张（哪怕已过期的）access token 去把 401 换回来。access 整个不在时，
+ * 一个请求都发不出去，反应式刷新就永远不会被触发 —— 而此时 refresh 可能还剩好几天。
+ * 这里补上那半张脸：**没有请求可搭车，就自己发一次刷新。**
+ */
+export async function reviveSession() {
+  if (localStorage.getItem('token')) return true
+  if (!localStorage.getItem('refreshToken')) return false
+  return (await doRefresh()) === 'ok'
+}
+
 async function request(url, options = {}, _retried = false) {
   const token = localStorage.getItem('token')
 
