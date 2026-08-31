@@ -7,7 +7,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import case_service
 from app.services.folder_service import list_folder_tree
-from app.services.script_run_service import sync_after_plan_change
 
 
 def _case_to_dict(c) -> dict:
@@ -535,7 +534,8 @@ async def update_case(
                               ("preconditions", preconditions), ("steps", steps),
                               ("expectedResult", expected_result),
                               ("bugRefs", bug_refs), ("tags", tags),
-                              ("module", module_arg), ("submodule", submodule)) if v is not None]
+                              ("module", module_arg), ("submodule", submodule),
+                              ("targetLevel", target_level)) if v is not None]
     data = UpdateCaseRequest(
         title=title, priority=priority, preconditions=preconditions,
         steps=steps, expected_result=expected_result,
@@ -547,15 +547,16 @@ async def update_case(
         module=(module_arg if module_arg is not None else cur_top)
         if (module_arg is not None or submodule is not None) else None,
         submodule=submodule,
+        # **计划必须走请求对象**，不能在 update_case 之后单独赋值。
+        # 单独赋值有两处坏：① 绕开 `@audit_log` —— 它只认传进去的那个请求对象
+        # （`core/audit.py:_extract_changes`），于是改计划这件事**一个字都不记**，
+        # 实测问「谁把计划提到 full 的」查不出来，而 CC 是唯一在改它的人；
+        # ② 重算得自己记着调，等于两套流程并存。走这条路两件事都归 update_case。
+        target_level=target_level,
     )
     case = await case_service.update_case(session, cid, data)
     if target_level_reason is not None:
         case.target_level_reason = (target_level_reason or "").strip()[:1000] or None
-    if target_level is not None and target_level != case.target_level:
-        case.target_level = target_level
-        # 计划变了，「状态」列必须跟着变 —— 见 sync_after_plan_change 的注释。
-        # 这一行是 2026-08-31 那批「UI·草稿 + 状态·完成 + 审核·通过」的正解。
-        sync_after_plan_change(case)
     # 「卡在外部条件上」：写一句等什么，写空字符串＝解除标注（条件到位了自己撤）
     if blocked_external is not None:
         case.blocked_external = blocked_external.strip()[:500] or None

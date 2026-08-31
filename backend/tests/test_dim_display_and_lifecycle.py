@@ -104,14 +104,23 @@ def test_改计划也不许碰废弃():
     assert c.lifecycle_status == "deprecated"
 
 
-def test_改计划的两条写入路径都要重算():
-    """MCP 的 lum_update_case 和详情页保存走的是两个函数，**两条都得调**。
+def test_改计划要走请求对象而不是事后赋值():
+    """MCP 改计划**必须**把 target_level 传进 UpdateCaseRequest。
 
-    只修一条的话，另一条继续产同样的脏数据 —— 而它们产出的行长得一模一样，
-    根本分不出是哪条路进来的。
+    事后单独赋 `case.target_level = ...` 有两处坏，而且都不报错：
+      ① `@audit_log` 只认传进去的请求对象（`core/audit.py:_extract_changes`），
+         绕开它 = 改计划这件事一个字都不记账。实测问「谁把计划提到 full 的」
+         查不出来 —— 而 CC 是唯一在改它的人。项目规则：新加写操作必须记账。
+      ② 重算得自己记着调，两套流程并存，漏一条就继续产矛盾行。
+    走请求对象则记账和重算都归 update_case 一处管。
     """
     mcp = (ROOT / "backend/app/mcp/tools/test_cases.py").read_text(encoding="utf-8")
-    assert "sync_after_plan_change" in mcp, "lum_update_case 改完 target_level 没重算"
+    i = mcp.index("UpdateCaseRequest(")
+    j = mcp.index("update_case(session", i)
+    assert "target_level=target_level" in mcp[i:j], \
+        "lum_update_case 没把 target_level 传进请求对象 —— 改计划不记账"
+    assert "case.target_level = " not in mcp, \
+        "又在 update_case 之后单独赋计划了，绕开了记账"
     svc = (ROOT / "backend/app/services/case_service.py").read_text(encoding="utf-8")
     assert "sync_after_plan_change" in svc, "update_case 改完 target_level 没重算"
 
