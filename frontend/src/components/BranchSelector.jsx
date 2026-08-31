@@ -4,6 +4,7 @@ import { Select, Modal, Form, Input, Checkbox, Select as AntSelect, message, Tag
 import { BranchesOutlined, PlusOutlined } from '@ant-design/icons'
 import { api } from '../utils/request'
 import { useBranch, setBranchId } from '../utils/branch'
+import { copyToClipboard } from '../utils/clipboard'
 
 // 复制窗口那句「然后呢」的答案。分支名自动填，**两个 git 版本号留占位**——
 // 平台不知道 v1.0/v2.0 对应哪两个 tag，这是整条链上唯一需要人给的信息。
@@ -43,6 +44,41 @@ function buildDiffPrompt(branchName, stats) {
   「接口签名没变、底层行为变了」只有这一跑抓得到。`
 }
 
+// 第一次进这个项目该落在哪条分支上。**不要再用 list[0]**：
+// 接口按 (status, created_at) 排，建项目时自动铺的 default 永远排第一，
+// 而版本升级的活儿是在后来开的分支上干的 —— 于是新人进来落在一条空分支上，
+// 页面只会说「暂无目录 / 暂无用例 / 共 0 条」，看着就是「这个项目没数据」。
+// （2026-08-31 真被当成数据丢了报过来：UAG 的 41 条用例全在 v2.2.0，default 是 0。）
+//
+// 规则：有用例的分支优先，多条就取最新建的；全空才回到 list[0]（新项目就是这种）。
+// 只在**没存过选择**时生效 —— 人手动切过就一直听人的，见 utils/branch.js。
+// caseCount 是旧后端没有的字段，取不到时 (undefined > 0) 为 false，整个函数
+// 自动退回 list[0] 的老行为 —— 不会因为字段缺失就选出一条"假的空分支"。
+function pickInitialBranch(list) {
+  if (list.length === 0) return null
+  const withCases = list.filter(b => b.caseCount > 0)
+  if (withCases.length === 0) return list[0]
+  return withCases.reduce((a, b) => (
+    Date.parse(b.createdAt || 0) > Date.parse(a.createdAt || 0) ? b : a
+  ))
+}
+
+// 下拉里每条分支后面挂一个量。**空分支要在这里就看得见**，别等人盯着空列表猜。
+// caseCount 缺失（旧后端）时两个分支都不成立 —— 什么都不显示，绝不显示成假的 0。
+function branchLabel(b) {
+  return (
+    <span>
+      {b.name}
+      {b.caseCount === 0 && (
+        <span style={{ color: '#c9cdd4', marginLeft: 6, fontSize: 11 }}>空</span>
+      )}
+      {b.caseCount > 0 && (
+        <span style={{ color: '#86909c', marginLeft: 6, fontSize: 11 }}>{b.caseCount}</span>
+      )}
+    </span>
+  )
+}
+
 export default function BranchSelector({ projectId }) {
   const [branches, setBranches] = useState([])
   const [branchId, switchBranch] = useBranch(projectId)
@@ -61,10 +97,11 @@ export default function BranchSelector({ projectId }) {
       const res = await api.get(`/projects/${projectId}/branches`)
       const list = (res.data || []).filter(b => b.status === 'active')
       setBranches(list)
-      // 如果当前没有选中分支或选中的分支不存在，自动选第一个
+      // 当前没选过、或选中的分支已经不存在了 —— 自动挑一条（挑法见 pickInitialBranch）
       const current = localStorage.getItem(`branch_${projectId}`)
       if (!current || !list.some(b => b.id === current)) {
-        if (list.length > 0) setBranchId(projectId, list[0].id)
+        const pick = pickInitialBranch(list)
+        if (pick) setBranchId(projectId, pick.id)
       }
     } catch { /* */ }
   }, [projectId])
@@ -122,7 +159,7 @@ export default function BranchSelector({ projectId }) {
         variant="borderless"
         prefix={<BranchesOutlined style={{ color: '#7cacf8' }} />}
         options={[
-          ...branches.map(b => ({ value: b.id, label: b.name })),
+          ...branches.map(b => ({ value: b.id, label: branchLabel(b) })),
           { value: '__create__', label: <span style={{ color: '#0ea5a0' }}><PlusOutlined /> 新建分支</span> },
         ]}
       />
@@ -180,10 +217,11 @@ export default function BranchSelector({ projectId }) {
         footer={[
           <Button key="copy" type="primary" onClick={async () => {
             try {
-              await navigator.clipboard.writeText(diffPrompt)
+              // http + 局域网 IP 下 navigator.clipboard 不存在，走 utils/clipboard.js
+              await copyToClipboard(diffPrompt)
               message.success('已复制，粘到 Claude Code 终端里')
-            } catch {
-              message.warning('浏览器不给剪贴板权限，手动全选复制下面那段')
+            } catch (e) {
+              if (!e?.reported) message.warning('复制不了，手动全选复制下面那段')
             }
           }}>复制提示语</Button>,
           <Button key="close" onClick={() => setDiffPrompt(null)}>知道了</Button>,

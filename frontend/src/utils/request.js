@@ -114,8 +114,26 @@ export async function reviveSession() {
 async function request(url, options = {}, _retried = false) {
   const token = localStorage.getItem('token')
 
+  // axios 那套 `{ params: {...} }` 现在**真的会发出去**。
+  // 以前不支持，而 fetch 对不认识的配置项一声不响 —— 于是写成 axios 风格的调用
+  // 参数全部静默丢失，请求照样 200，后端用默认值回一份「看起来对」的数据。
+  // 这种错法自己不会暴露：QA 评审导出写着 format=md 其实没发（默认恰好也是 md），
+  // 审核报告的「包含 CC 自审」开关拨了从来没生效过（实测 8 条只回 3 条，
+  // 见 pages/cases/ReviewReport.jsx 里那段注释）。所以这里补上支持，
+  // 让「按 axios 的直觉写」不再是一个静默错误。
+  // undefined / null 的值跳过（不发 `?x=undefined`）；已经手拼在 url 里的查询串照旧。
+  const { params, ...rest } = options
+  if (params && typeof params === 'object') {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(params)) {
+      if (v !== undefined && v !== null) qs.set(k, String(v))
+    }
+    const q = qs.toString()
+    if (q) url += (url.includes('?') ? '&' : '?') + q
+  }
+
   const config = {
-    ...options,
+    ...rest,
     headers: {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),

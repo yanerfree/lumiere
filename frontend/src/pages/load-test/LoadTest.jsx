@@ -9,6 +9,7 @@ import {
   CaretRightOutlined, CloseOutlined, ExportOutlined, CopyOutlined, DownloadOutlined,
 } from '@ant-design/icons'
 import { api, getValidToken } from '../../utils/request'
+import { copyToClipboard } from '../../utils/clipboard'
 
 const MONO = 'var(--font-mono)'
 const ACCENT = '#e8453c'
@@ -539,9 +540,10 @@ export default function LoadTest() {
     }
   }
 
+  // http + 局域网 IP 下 navigator.clipboard 不存在，走 utils/clipboard.js
   const copyText = async (text) => {
-    try { await navigator.clipboard.writeText(text); message.success('已复制') }
-    catch { message.error('复制失败，请手动选择') }
+    try { await copyToClipboard(text); message.success('已复制') }
+    catch (e) { if (!e?.reported) message.error('复制失败，请手动选择') }
   }
 
   const downloadText = (name, text) => {

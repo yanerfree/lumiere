@@ -5,6 +5,7 @@ import {
   RightOutlined, DownOutlined, FileTextOutlined, CopyOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
+import { copyToClipboard } from '../utils/clipboard'
 
 const METHOD_COLORS = { GET: '#0ea5a0', POST: '#0ea5a0', PUT: '#faad14', DELETE: '#e8453c', PATCH: '#7c5cbf' }
 const MONO = 'var(--font-mono)'
@@ -77,10 +78,14 @@ function consoleCount(d) {
          (d.request?.preScript ? 1 : 0) + (d.request?.postScript ? 1 : 0)
 }
 
+// 原来是 `navigator.clipboard?.writeText(...).then(...)`。那个 `?.` 看着是在防守，
+// 实际更坏：http + 局域网 IP 下 navigator.clipboard 不存在，`?.` 短路成 undefined，
+// 紧接着 `.then` 又抛一次 TypeError —— 而这是 onClick 里的未处理拒绝，
+// 页面上**连报错都不显示**，点了就跟没点一样。走 utils/clipboard.js 的降级路。
 function copy(text, label) {
-  navigator.clipboard?.writeText(String(text ?? ''))
+  copyToClipboard(String(text ?? ''))
     .then(() => message.success(`${label || '内容'}已复制`))
-    .catch(() => message.warning('复制失败，请手动选中'))
+    .catch((e) => { if (!e?.reported) message.warning('复制失败，请手动选中') })
 }
 
 function CopyBtn({ text, label }) {

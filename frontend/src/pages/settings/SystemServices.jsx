@@ -109,7 +109,8 @@ function SystemServicesInner() {
   }, [auto, load])
 
   const copy = (text) => {
-    copyToClipboard(text).then(() => message.success('已复制：' + text)).catch(() => message.error('复制失败'))
+    copyToClipboard(text).then(() => message.success('已复制：' + text))
+      .catch((e) => { if (!e?.reported) message.error('复制失败') })
   }
 
   // 「前端 Web」后端看不到，在这里本地补进「平台核心」组（与顶栏胶囊共用同一份逻辑，保证两处数字一致）

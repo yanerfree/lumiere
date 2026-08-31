@@ -285,8 +285,13 @@ async def export_qa_review(
                        status_code=400)
     if fmt == "json":
         return {"data": qa_catalog_review.to_dict(r, with_dims=True)}
+    # 文件名要**自己说清是什么**：域 + 评审日期 + 被评的 commit。
+    # 原来只有域和 sha7，存到下载目录里跟一堆别的文件混在一起认不出来
+    # （2026-08-31 报过来「下载了一堆东西，不知道是什么」的一半原因，
+    #  另一半是前端存完没有任何反馈，见 QaCatalog.jsx 的 download）。
+    day = r.created_at.strftime("%Y%m%d") if r.created_at else "unknown"
     return {"data": {
-        "filename": f"qa-review-{r.domain}-{(r.commit_sha or '')[:7]}.md",
+        "filename": f"qa-review-{r.domain}-{day}-{(r.commit_sha or '')[:7]}.md",
         "markdown": qa_catalog_review.to_markdown(r),
     }}
 

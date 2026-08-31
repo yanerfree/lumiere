@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import NotFoundError, ValidationError
 from app.core.audit import audit_log
 from app.core.db_errors import reraise_integrity_error
+from app.models.case import Case
 from app.models.project import Branch
 from app.schemas.branch import CreateBranchRequest, UpdateBranchRequest
 
@@ -20,6 +21,30 @@ async def list_branches(session: AsyncSession, project_id: uuid.UUID) -> list[Br
     )
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def count_cases_by_branch(
+    session: AsyncSession, project_id: uuid.UUID
+) -> dict[uuid.UUID, int]:
+    """项目下各分支的存活用例数（不含回收站）。没有用例的分支不出现在返回里。
+
+    为什么这个数要跟分支列表一起给出去：**分支选错了，和「这个项目一条数据都没有」
+    在页面上长得一模一样** —— 都是「暂无目录」+「暂无用例」+「共 0 条」，
+    页面上没有任何一处告诉你别的分支有货。而分支列表是按 (status, created_at) 排的，
+    建项目时自动铺的 default 永远排第一，版本升级的活儿却是在后来开的分支上干的，
+    所以「第一次进项目就落在空分支上」是默认结局，不是巧合。
+    2026-08-31 就这么报过来一次：UAG 的 41 条用例全在 v2.2.0，站在 default 上看是 0。
+
+    一次 group by 查完，不按分支逐条打。用例数只是个提示量，不参与任何判定。
+    """
+    stmt = (
+        select(Case.branch_id, func.count(Case.id))
+        .join(Branch, Branch.id == Case.branch_id)
+        .where(Branch.project_id == project_id, Case.deleted_at.is_(None))
+        .group_by(Case.branch_id)
+    )
+    result = await session.execute(stmt)
+    return {row[0]: row[1] for row in result.all()}
 
 
 @audit_log(action="create", target_type="branch")

@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
+import { copyToClipboard } from '../../utils/clipboard'
 import { PERM } from '../../utils/permissions'
 import { usePermissions } from '../../utils/PermissionContext'
 
@@ -2209,14 +2210,20 @@ function TakeAway({ r, projectId }) {
     return res.data
   }
 
+  // **别用 navigator.clipboard.writeText**：平台平时是用局域网 IP 走 http 访问的，
+  // 那是非安全上下文，`navigator.clipboard` 整个对象都不存在 —— 于是这个按钮
+  // 必抛 `Cannot read properties of undefined (reading 'writeText')`，
+  // 一次都没成功过（2026-08-31 报过来的就是这条）。utils/clipboard.js 里
+  // 那个 copyToClipboard 备了 textarea + execCommand 的老路，http 下能用。
   const copy = async () => {
     setBusy(true)
     try {
       const d = await fetchMd()
-      await navigator.clipboard.writeText(d.markdown)
+      await copyToClipboard(d.markdown)
       message.success('已复制 Markdown 全文，可直接贴到 issue 或交给 AI')
     } catch (e) {
-      message.error(e.message || '复制失败')
+      // 复制失败 copyToClipboard 自己已经弹过了；这里只管取全文那一步的失败
+      if (!e?.reported) message.error(e.message || '复制失败')
     } finally { setBusy(false) }
   }
 
@@ -2227,7 +2234,13 @@ function TakeAway({ r, projectId }) {
       const url = URL.createObjectURL(new Blob([d.markdown], { type: 'text/markdown' }))
       const a = document.createElement('a')
       a.href = url; a.download = d.filename; a.click()
-      URL.revokeObjectURL(url)
+      // 晚一拍再 revoke：紧接着 click 同步撤销会跟下载线程抢，Chrome 偶发存成
+      // 一个没扩展名的 blob id 文件。别处（LoadTest 的 downloadText）就是这么写的。
+      setTimeout(() => URL.revokeObjectURL(url), 1000)
+      // **必须说一句**：这个按钮原来存完一声不响 —— 人不知道成没成、存的是哪个文件，
+      // 于是反复点，Chrome 攒出 xxx.md、xxx (1).md、xxx (2).md 一堆，
+      // 就成了「下载了一堆东西，不知道是什么」（2026-08-31 报过来的第二条）。
+      message.success(`已存成 ${d.filename}`)
     } catch (e) {
       message.error(e.message || '导出失败')
     } finally { setBusy(false) }

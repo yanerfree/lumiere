@@ -25,14 +25,17 @@ async def list_branches(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_project_role(*perms.TIER_READ)),
 ):
-    """分支配置列表（项目成员均可查看）"""
+    """分支配置列表（项目成员均可查看）。每条带 caseCount —— 理由见
+    branch_service.count_cases_by_branch 的 docstring（一句话：分支选错和项目没数据
+    在页面上长得一样，得让「这条分支是空的」在选分支的时候就看得见）。"""
     branches = await branch_service.list_branches(session, project_id)
-    return {
-        "data": [
-            BranchResponse.model_validate(b, from_attributes=True).model_dump(by_alias=True)
-            for b in branches
-        ]
-    }
+    counts = await branch_service.count_cases_by_branch(session, project_id)
+    data = []
+    for b in branches:
+        item = BranchResponse.model_validate(b, from_attributes=True).model_dump(by_alias=True)
+        item["caseCount"] = counts.get(b.id, 0)
+        data.append(item)
+    return {"data": data}
 
 
 @router.post("", status_code=HTTP_201_CREATED)

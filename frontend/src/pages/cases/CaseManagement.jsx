@@ -78,6 +78,34 @@ const dimBadge = (targetLevel, dim, status) =>
 // 注释里写一遍就会被匹配到，读出来的 defaultVisible 是隔壁列的。
 
 // ---- 主页面 ----
+// 用例列表空的时候，这一块负责回答「那数据在哪」。
+// 为什么值得单独做：分支选错和「这个项目没数据」在页面上长得一模一样，
+// 而站在空分支上是默认结局（见 BranchSelector.jsx 的 pickInitialBranch）。
+// 一旦人手动切过分支，选择就存进 localStorage 一直生效 —— 光改自动挑分支的规则
+// 治不了已经落在空分支上的人，所以空态这一路必须自己把话说清楚。
+function CaseEmpty({ filtersActive, hint, onSwitch }) {
+  const others = hint?.others || []
+  // 筛选造成的空跟分支造成的空是两件事，别混着说：筛选下别的分支有多少条毫无意义。
+  if (filtersActive) return <Empty description="没有符合筛选条件的用例" />
+  if (others.length === 0) return <Empty description="暂无用例" />
+  return (
+    <Empty description={(
+      <div style={{ lineHeight: 1.9 }}>
+        <div>当前分支{hint.current ? `「${hint.current}」` : ''}没有用例</div>
+        <div style={{ fontSize: 12, color: '#86909c' }}>
+          本项目另有
+          {others.map(b => (
+            <a key={b.id} onClick={() => onSwitch(b.id)} style={{ margin: '0 4px' }}>
+              {b.name}（{b.caseCount} 条）
+            </a>
+          ))}
+          —— 点一下切过去
+        </div>
+      </div>
+    )} />
+  )
+}
+
 export default function CaseManagement() {
   const navigate = useNavigate()
   const { projectId } = useParams()
@@ -90,7 +118,7 @@ export default function CaseManagement() {
   const canRun = has(PERM.PLAN_RUN)
 
   // 分支
-  const [globalBranchId] = useBranch(projectId)
+  const [globalBranchId, switchBranch] = useBranch(projectId)
 
   // 项目环境
   const [runEnvId, setRunEnvId] = useEnv(projectId)
@@ -245,6 +273,30 @@ export default function CaseManagement() {
   useEffect(() => { fetchFolders() }, [fetchFolders])
   useEffect(() => { fetchCases() }, [fetchCases])
   useEffect(() => { fetchDeprecatePending() }, [fetchDeprecatePending])
+
+  // 列表空了才去拉一次分支表，看是不是本项目别的分支有货 —— 非空时不拉，
+  // 不给常态多一个请求。loading 期间也不拉：那会儿 total 还是上一轮的 0。
+  const [branchHint, setBranchHint] = useState(null)
+  useEffect(() => {
+    if (loading || total > 0 || !projectId || !globalBranchId) return
+    let dead = false
+    ;(async () => {
+      try {
+        const res = await api.get(`/projects/${projectId}/branches`)
+        const active = (res.data || []).filter(b => b.status === 'active')
+        if (dead) return
+        setBranchHint({
+          current: active.find(b => b.id === globalBranchId)?.name || null,
+          others: active.filter(b => b.id !== globalBranchId && b.caseCount > 0),
+        })
+      } catch { /* 拉不到就退回原来那句「暂无用例」，不猜 */ }
+    })()
+    return () => { dead = true }
+  }, [loading, total, projectId, globalBranchId])
+
+  // 筛选着的空 ≠ 分支空。这个判断只用来决定空态说哪句话。
+  const filtersActive = !!(keyword || statusFilter || readyFilter || pushedWithin
+    || bugFilter || selectedFolderId)
 
   // 「审核中」是派生的，从队列里查（§12 ④）。**队列空了就不轮询** ——
   // 没有活跃批次时每 5 秒打一次接口纯属白烧，而列表页是常驻页面。
@@ -1819,7 +1871,9 @@ export default function CaseManagement() {
               scroll={{ x: 1230, y: 'calc(100vh - 330px)' }}
               rowSelection={{ selectedRowKeys: selectedRowKeys, onChange: setSelectedRowKeys }}
               style={{ flex: 1 }}
-              locale={{ emptyText: <Empty description="暂无用例" /> }}
+              locale={{ emptyText: (
+                <CaseEmpty filtersActive={filtersActive} hint={branchHint} onSwitch={switchBranch} />
+              ) }}
               onRow={(record) => ({ style: { cursor: 'pointer' }, onClick: (e) => { if (e.target.closest('.ant-checkbox-wrapper, .ant-btn, .ant-popconfirm, a')) return; navigate(`/projects/${projectId}/cases/${record.id}?branchId=${globalBranchId}`) } })}
             />
             <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(0,0,0,0.04)', display: 'flex', justifyContent: 'flex-end' }}>

@@ -80,11 +80,12 @@ export default function ReviewReport() {
     if (!branchId) return
     setLoading(true)
     try {
-      // 查询串**必须自己拼**：`api.get` 是 fetch 包的（utils/request.js），
-      // 第二个参数直接摊进 fetch config —— axios 那套 `{ params: {...} }`
-      // 会被 fetch 静默丢掉。这页原来就是这么写的，于是 mine 永远不发，
+      // 这页原来把参数写成 axios 那套 `{ params: {...} }`，而 `api.get` 是 fetch 包的，
+      // 第二个参数直接摊进 fetch config —— 参数被静默丢掉，于是 mine 永远不发，
       // 后端默认 mine=True，「包含 CC 自审」这个开关**从来没生效过**
       // （实测：开关拨到 on，请求还是不带参数，8 条里只回 3 条）。
+      // 2026-08-31 起 utils/request.js 已经支持 `{ params }` 了，两种写法都行；
+      // 这里保留手拼是因为它在跑、没必要动。
       const q = new URLSearchParams({ mine: String(!includeCC), limit: String(LIMIT) })
       const r = await api.get(`${base}/ai-review/batches?${q}`)
       setRows(r.data?.batches || [])
