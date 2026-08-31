@@ -286,7 +286,18 @@ export default function AutomationData() {
           loading={loading}
           columns={resourceCols}
           dataSource={resources}
-          pagination={false}
+          // 这两张表原来都是 pagination={false} 全摊开。共享资源和项目须知
+          // 都是**只增不减**的东西（CC 每跑一轮都可能往里登记），摊开就是越用越长。
+          // 用 defaultPageSize 而不是 pageSize —— 传 pageSize 就成了受控，
+          // 没有 onShowSizeChange 时「每页几条」点了不动（国际化词典就是这么坏的）。
+          pagination={{
+            defaultPageSize: 10,
+            size: 'small',
+            hideOnSinglePage: true,
+            showSizeChanger: true,
+            pageSizeOptions: [10, 20, 50],
+            showTotal: t => `共 ${t} 条`,
+          }}
           locale={{ emptyText: <Empty description="暂无共享资源。主入口不是人手填 —— Claude Code 活体验证时遇到多条用例共用、重建代价大的底座（上游/负载、隔离上下文），会自己调 lum_upsert_automation_resource 登记到这里。也可点「新增资源」手工补。" /> }}
         />
       </Card>
@@ -311,7 +322,15 @@ export default function AutomationData() {
             长了直接挤占它的上下文。
           </span>} />
         <Table rowKey="id" size="small" loading={noteLoading} columns={noteCols}
-          dataSource={notes} pagination={false}
+          dataSource={notes}
+          pagination={{
+            defaultPageSize: 10,
+            size: 'small',
+            hideOnSinglePage: true,
+            showSizeChanger: true,
+            pageSizeOptions: [10, 20, 50],
+            showTotal: t => `共 ${t} 条`,
+          }}
           locale={{ emptyText: <Empty description="还没有项目须知。跑一轮下来「原来这个接口是这样」的那些发现，写进来，下一轮就不用再踩一遍。" /> }} />
       </Card>
 

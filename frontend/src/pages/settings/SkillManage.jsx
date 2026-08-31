@@ -114,6 +114,16 @@ const SKILLS = [
   },
 ]
 
+// 这一页只列**还能用的**平台 Skill。已下线的那几条不再画卡片 ——
+// 六张卡里五张是划掉的、灰的、「输入 —」「输出 —」，真正能点能编辑的只有一张，
+// 得往下翻好几屏才找到。
+//
+// 下线理由一条都没删，就在上面 SKILLS 里（status: 'retired' 那几条的 description /
+// where / 注释），要看有哪些、为什么，跑：
+//   grep -n "status: 'retired'" -A3 frontend/src/pages/settings/SkillManage.jsx
+// 数组整条留着还有一个用处：别人想把某条加回来时，先撞见的是当初为什么下线。
+const LIVE_SKILLS = SKILLS.filter(s => s.status !== 'retired')
+
 export default function SkillManage() {
   const [editSkill, setEditSkill] = useState(null)
   const [editContent, setEditContent] = useState('')
@@ -145,11 +155,15 @@ export default function SkillManage() {
           Skill 管理
         </h2>
         <span style={{ fontSize: 13, color: '#86909c' }}>
-          Skill 定义 AI 的行为 — 做什么、怎么做、调用哪些工具、输出什么。本页管两类：
-          上半是<b>平台 Skill</b>（后端执行、绑模型档位），下半是<b>项目 Skill</b>（Claude Code 侧执行，可上传共享给其它项目）。
+          Skill 定义 AI 做什么、怎么做、调哪些工具。本页管两类：
+          <b>平台 Skill</b>（下面这些，后端执行、绑模型档位）和
+          <b>项目 Skill</b>（再往下，Claude Code 侧执行，可上传共享给其它项目）。
         </span>
       </div>
 
+      {/* 五行压到两行。原文一条一行讲「步骤 / 工具 / 质量红线」，可是这三样
+          下面每张卡上都摆着（执行步骤折叠区、MCP 工具那一格），说明条重复了一遍。
+          留下的是卡片上看不出来的那部分：它是文件、能改、谁来跑。 */}
       <Alert
         type="info"
         showIcon
@@ -157,18 +171,16 @@ export default function SkillManage() {
         message="Skill 是什么？"
         description={
           <div style={{ fontSize: 12, lineHeight: 2 }}>
-            <b>Skill</b> 是 Lumiere 平台的 AI 工作流定义（YAML + Markdown 文件），包含：<br/>
-            <b>步骤</b> — AI 按步骤执行（收集上下文 → 生成 → 入库），每步有明确的输入输出<br/>
-            <b>工具</b> — Skill 执行时调用的 MCP 工具（读取接口定义、创建用例等）<br/>
-            <b>质量红线</b> — 约束 AI 输出的质量规则（如 P0 不超过 15%、每条用例一个验证点）<br/>
-            Web 引擎在后端自动执行 Skill；Claude Code 用户可在终端手动调用。
+            一份 <b>SKILL.md</b> 文件：写清 AI 分几步做、每步调哪个 MCP 工具、输出要守哪些质量红线。
+            点「编辑」改的就是这个文件，<b>存完下一次执行立即生效</b>。<br/>
+            后端的 Web 引擎会自动执行它；在 Claude Code 里也能手动调同一份。
           </div>
         }
         style={{ marginBottom: 16 }}
       />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-        {SKILLS.map(skill => (
+        {LIVE_SKILLS.map(skill => (
           <Card
             key={skill.name}
             size="small"

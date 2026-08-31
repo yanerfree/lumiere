@@ -156,23 +156,25 @@ export default function ReportList() {
           <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px', height: 36, background: 'var(--table-header-bg)', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
             {/* 名称列原来 flex:4 + maxWidth 520，右边九列被挤成一坨，而报告名
                 长的那几条本来就靠 tooltip 看全 —— 宽度给了它也读不完整。
-                收到 340 之后右侧每一列都松了一截。 */}
-            <div style={{ flex: 3, maxWidth: 440, ...th }}>报告名称</div>
+                现在封顶 400，跟「测试计划」页的名称列同宽（那页也是 400）：
+                两页的右侧属性区因此落在同一批位置，切页面时不用重新找列。
+                **表头和表体是成对的**（手写 flex 表，不是 antd Table），只改一边会整列错位。 */}
+            <div style={{ flex: 3, maxWidth: 400, ...th }}>报告名称</div>
             <div style={{ flex: 1 }} />
             {/* 「入口」和「跑的什么」是两件事，此前挤在一列叫「类型」——
                 于是报告页清一色「接口测试」，用例页清一色 UI，看着像互相打架。 */}
-            <div style={{ width: 72, textAlign: 'center', flexShrink: 0, ...th }}>入口</div>
-            <div style={{ width: 56, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
-            <div style={{ width: 84, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
-            <div style={{ width: 88, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
+            <div style={{ width: 92, textAlign: 'center', flexShrink: 0, ...th }}>入口</div>
+            <div style={{ width: 84, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
+            <div style={{ width: 124, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
+            <div style={{ width: 116, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
             {/* 图例放表头 —— 原来每一行都印一遍「通过/失败/总计」，10px 还折成两行 */}
-            <div style={{ width: 112, textAlign: 'center', flexShrink: 0, ...th }}>
+            <div style={{ width: 144, textAlign: 'center', flexShrink: 0, ...th }}>
               结果 <span style={{ color: '#c9cdd4', fontWeight: 400 }}>通过/失败/总</span>
             </div>
-            <div style={{ width: 64, textAlign: 'center', flexShrink: 0, ...th }}>通过率</div>
-            <div style={{ width: 56, textAlign: 'right', flexShrink: 0, ...th }}>耗时</div>
-            <div style={{ width: 104, textAlign: 'center', flexShrink: 0, ...th }}>执行时间</div>
-            <div style={{ width: 84, textAlign: 'center', flexShrink: 0, ...th }}>操作</div>
+            <div style={{ width: 92, textAlign: 'center', flexShrink: 0, ...th }}>通过率</div>
+            <div style={{ width: 84, textAlign: 'right', flexShrink: 0, ...th }}>耗时</div>
+            <div style={{ width: 148, textAlign: 'center', flexShrink: 0, ...th }}>执行时间</div>
+            <div style={{ width: 112, textAlign: 'center', flexShrink: 0, ...th }}>操作</div>
           </div>
           {/* Body */}
           <div style={{ flex: 1, overflow: 'auto' }}>
@@ -189,7 +191,7 @@ export default function ReportList() {
                   onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                 >
                   {/* Report name */}
-                  <div style={{ flex: 3, maxWidth: 440, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 3, maxWidth: 400, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <Tooltip title={r.reportName || r.planName} placement="topLeft" mouseEnterDelay={0.3}>
                       <span style={{ fontWeight: 500, fontSize: 13, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {r.reportName || r.planName}
@@ -200,7 +202,7 @@ export default function ReportList() {
                   <div style={{ flex: 1 }} />
 
                   {/* 入口：从哪儿发起的 */}
-                  <div style={{ width: 72, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 92, textAlign: 'center', flexShrink: 0 }}>
                     <Tooltip title="从哪个入口发起的这次执行">
                       <span style={{
                         fontSize: 11, padding: '1px 6px', borderRadius: 6,
@@ -213,7 +215,7 @@ export default function ReportList() {
                   </div>
 
                   {/* 执行方式：跑的是 UI 脚本还是接口场景 */}
-                  <div style={{ width: 56, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 84, textAlign: 'center', flexShrink: 0 }}>
                     {r.execKind ? (
                       <span style={{
                         fontSize: 11, padding: '1px 6px', borderRadius: 6,
@@ -233,7 +235,7 @@ export default function ReportList() {
                       接口执行那条通道以前压根没把选中的环境写进报告（库里 24/24 条
                       都是 NULL），于是这一列半张表是「-」，看着像功能坏了。
                       现在新报告会记；老报告补不出来 —— 编一个"默认环境"比留白更坏。 */}
-                  <div style={{ width: 84, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 124, textAlign: 'center', flexShrink: 0 }}>
                     {r.environmentName ? (
                       <span style={{ fontSize: 12, color: '#86909c' }}>
                         {r.environmentName}
@@ -246,7 +248,7 @@ export default function ReportList() {
                   </div>
 
                   {/* Status */}
-                  <div style={{ width: 88, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 116, textAlign: 'center', flexShrink: 0 }}>
                     {(() => {
                       const st = STATUS_META[r.status] || STATUS_META[isCompleted ? 'completed' : 'running']
                       const tip = typeof st.tip === 'function' ? st.tip(r) : st.tip
@@ -265,7 +267,7 @@ export default function ReportList() {
                   </div>
 
                   {/* Results */}
-                  <div style={{ width: 112, textAlign: 'center', fontSize: 12, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
+                  <div style={{ width: 144, textAlign: 'center', fontSize: 12, fontFamily: 'var(--font-mono)', flexShrink: 0 }}>
                     <span style={{ color: '#0ea5a0' }}>{r.passed}</span>
                     <span style={{ color: '#c9cdd4' }}> / </span>
                     <span style={{ color: '#e8453c' }}>{r.failed + r.error}</span>
@@ -274,7 +276,7 @@ export default function ReportList() {
                   </div>
 
                   {/* Pass rate */}
-                  <div style={{ width: 64, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 92, textAlign: 'center', flexShrink: 0 }}>
                     {r.passRate != null ? (
                       <span style={{ fontSize: 13, fontWeight: 600, fontFamily: 'var(--font-mono)', color: rateColor(r.passRate) }}>
                         {r.passRate}%
@@ -283,17 +285,17 @@ export default function ReportList() {
                   </div>
 
                   {/* Duration */}
-                  <div style={{ width: 56, textAlign: 'right', fontSize: 12, fontFamily: 'var(--font-mono)', color: '#86909c', flexShrink: 0 }}>
+                  <div style={{ width: 84, textAlign: 'right', fontSize: 12, fontFamily: 'var(--font-mono)', color: '#86909c', flexShrink: 0 }}>
                     {fmt(r.totalDurationMs)}
                   </div>
 
                   {/* 执行时间：独立一列，紧挨操作列 */}
-                  <div style={{ width: 104, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 148, textAlign: 'center', flexShrink: 0 }}>
                     <TimeCell value={r.executedAt} />
                   </div>
 
                   {/* Actions */}
-                  <div style={{ width: 84, display: 'flex', justifyContent: 'center', gap: 0, flexShrink: 0 }}>
+                  <div style={{ width: 112, display: 'flex', justifyContent: 'center', gap: 0, flexShrink: 0 }}>
                     <Button type="text" size="small" style={{ fontSize: 12, color: '#0ea5a0' }}
                       onClick={e => handleExport(e, r.id)}>导出</Button>
                     {canWrite && (

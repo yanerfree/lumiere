@@ -3268,7 +3268,19 @@ export default function CaseDetail() {
                   loading={scriptRunsLoading}
                   dataSource={scriptRuns}
                   rowKey="id"
-                  pagination={false}
+                  // 执行历史是**只增不减**的：这条用例每跑一次（回归、夜跑、调试）
+                  // 就多一行，接口那头也没给 limit。摊开的话跑过几十轮的用例
+                  // 一开这个页签就是一屏滚不完的表，而人要看的通常是最近几次。
+                  // defaultPageSize 不能写成 pageSize —— 受控又没有 onShowSizeChange 时
+                  // 「每页几条」点了不动。
+                  pagination={{
+                    defaultPageSize: 10,
+                    size: 'small',
+                    hideOnSinglePage: true,
+                    showSizeChanger: true,
+                    pageSizeOptions: [10, 20, 50],
+                    showTotal: t => `共 ${t} 次执行`,
+                  }}
                   locale={{ emptyText: '暂无执行记录' }}
                   expandable={{
                     expandedRowRender: r => (

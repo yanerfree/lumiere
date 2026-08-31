@@ -121,32 +121,39 @@ export default function ReviewReport() {
   }
 
   const columns = [
-    { title: '类型', dataIndex: 'kind', width: 92,
+    { title: '类型', dataIndex: 'kind', width: 100,
       // hint 里带 `**…**`（「**只有这种能代表模块情况**」）—— 直接塞 Tooltip
       // 会把星号原样显示出来，正好显示在最该被看见的那句上
       render: v => <Tooltip title={mdBold(KIND[v]?.hint)}><Tag color={KIND[v]?.color} style={{ margin: 0 }}>{KIND[v]?.label || v}</Tag></Tooltip> },
-    // 这一列**故意不给宽度**：所有列都钉宽时，antd 的表格是 auto 布局，
-    // 富余宽度按比例摊到每一列上 —— 1920 屏上声明的 906px 被拉成 1642px，
-    // 92px 的类型格变成 167px，一个 60px 的 Tag 中间飘着，整张表看着是空的。
-    // 留一列不钉宽，富余全落在它身上（AuditLogs 的「对象名称」也是这么留的）。
-    { title: '范围', dataIndex: 'scopeLabel',
+    // 这一列以前**故意不给宽度**，让它一个人吃掉所有富余宽度。那是在
+    // 「声明总宽 906px、实际容器 1642px」的前提下唯一能看的办法 —— 否则 antd
+    // 把 736px 的余量按比例摊给每一列，92px 的类型格被拉成 167px，
+    // 一个 60px 的 Tag 在中间飘着。
+    //
+    // 但代价是这一列自己被撑到七八百像素，一个模块名后面拖一片空白。
+    // 现在换成**所有列都钉宽、且总宽贴近真实容器**（下面各列加起来 ~1528px，
+    // 1920 屏的内容区约 1690px）—— 余量只剩一成，按比例摊下去每列各长几个像素，
+    // 谁都不会被拉变形。这也是「整体协调」的做法：余量要小到看不出来，
+    // 而不是找一列去背。窄屏（<1528px）时表格自己出横向滚动，各列保持声明宽度。
+    { title: '范围', dataIndex: 'scopeLabel', width: 480, ellipsis: true,
       render: (v, r) => <a onClick={() => openDetail(r.batchId)}>{v || '—'}</a> },
-    { title: '环境', dataIndex: 'environment', width: 100,
+    { title: '环境', dataIndex: 'environment', width: 128, ellipsis: true,
       render: v => v || <span style={{ color: '#c9cdd4' }}>—</span> },
-    // 116 不是随手写的：`admin` + 「CC」标签在 90px 里正好折成两行，
+    // 下限不是随手写的：`admin` + 「CC」标签在 90px 里正好折成两行，
     // 整行跟着长到 60px（实测 UAG 那 5 行都是），一张表凭空高出三成。
-    { title: '发起人', dataIndex: 'actor', width: 116,
+    // 所以这一列**不能低于 116**，往上加宽随意。
+    { title: '发起人', dataIndex: 'actor', width: 136,
       render: (v, r) => <span style={{ fontSize: 12, whiteSpace: 'nowrap' }}>{v || '—'}
         {r.actorKind !== 'human' && <Tag style={{ marginLeft: 4, fontSize: 11 }}>CC</Tag>}</span> },
     // 状态和结果**分两列**：合成一列时「已完成」和「打回 2」挤在同一格，
     // 而这两件事是分开看的 —— 状态答"跑完了没"，结果答"这批得出了什么"。
-    { title: '状态', dataIndex: 'status', width: 100,
+    { title: '状态', dataIndex: 'status', width: 116,
       render: (v, r) => {
         const st = STATUS[v] || {}
         return <Tag color={st.color} style={{ margin: 0 }}>{st.label || v}
           {(v === 'running' || v === 'queued') && r.total ? ` ${r.done}/${r.total}` : ''}</Tag>
       } },
-    { title: '结果', width: 240,
+    { title: '结果', width: 260,
       render: (_, r) => {
         if (r.status === 'running' || r.status === 'queued') {
           return (
@@ -178,13 +185,13 @@ export default function ReviewReport() {
           </div>
         )
       } },
-    { title: '时间', dataIndex: 'createdAt', width: 96,
+    { title: '时间', dataIndex: 'createdAt', width: 116,
       render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{fmt(v)}</span> },
     // 操作列原来是个没标题的空列：只有排队中/在跑/暂停的行才长出按钮，
     // 而报告页上绝大多数行都是跑完的 —— 于是整列常年空着，连表头都没有。
     // 「查看」补进来：之前打开右侧抽屉的唯一办法是点「范围」那个链接，
     // 链接看着像跳转，没人知道点它会出报告。
-    { title: '操作', width: 132,
+    { title: '操作', width: 140,
       render: (_, r) => (
         <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
           <Button size="small" type="link" style={{ padding: 0 }}
@@ -246,7 +253,21 @@ export default function ReviewReport() {
       <Card styles={{ body: { padding: visible.length ? 0 : 24 } }}>
         {loading && !rows ? <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div> : (
           <Table size="small" rowKey="batchId" columns={columns} dataSource={visible}
-            pagination={false} loading={loading}
+            loading={loading}
+            // 这页一次最多取 LIMIT(50) 条，以前 pagination={false} 全摊开 ——
+            // 50 行连着 8 列，往下滚三屏才到底，而表头不跟着滚。
+            // 分页是在**已加载的这 50 条**里翻（跟上面两个筛选器同一个前提），
+            // 上限那句提示留在页头，别让人以为翻到最后一页就是全部历史。
+            pagination={{
+              defaultPageSize: 20,
+              size: 'small',
+              showSizeChanger: true,
+              pageSizeOptions: [10, 20, 50],
+              showTotal: t => `共 ${t} 条`,
+              // Card body 在有数据时 padding 是 0（为了让表格贴边），
+              // 分页条得自己把内缩补回来，否则它贴在卡片右边线上。
+              style: { margin: '12px 16px' },
+            }}
             locale={{ emptyText: filtered
               ? '这个筛选条件下没有审核记录'
               : '还没审过 —— 去用例管理选中模块点「AI 审核」' }} />

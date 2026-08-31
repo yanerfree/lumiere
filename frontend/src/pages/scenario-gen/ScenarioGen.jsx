@@ -48,6 +48,10 @@ function TaskCenter({ projectId }) {
   const [tasks, setTasks] = useState([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
+  // 页大小是**状态**，不是常量：以前它写死在 URL 里、pagination 又传了受控的
+  // pageSize，antd 在总数超阈值时照样把「每页几条」画出来，点了却什么也不动
+  // （受控 + 没有 onShowSizeChange = 事件全落空）。
+  const [pageSize, setPageSize] = useState(20)
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
@@ -57,12 +61,12 @@ function TaskCenter({ projectId }) {
     if (!branchId) return
     setLoading(true)
     try {
-      const res = await api.get(`/projects/${projectId}/branches/${branchId}/scenario-gen/tasks?page=${page}&pageSize=20`)
+      const res = await api.get(`/projects/${projectId}/branches/${branchId}/scenario-gen/tasks?page=${page}&pageSize=${pageSize}`)
       setTasks(res.data.items || [])
       setTotal(res.data.total || 0)
     } catch { /* request.js handles */ }
     finally { setLoading(false) }
-  }, [projectId, branchId, page])
+  }, [projectId, branchId, page, pageSize])
 
   useEffect(() => { fetchTasks() }, [fetchTasks])
 
@@ -114,7 +118,20 @@ function TaskCenter({ projectId }) {
           columns={columns}
           rowKey="id"
           loading={loading}
-          pagination={{ current: page, total, pageSize: 20, onChange: setPage, showTotal: t => `共 ${t} 条` }}
+          pagination={{
+            current: page,
+            total,
+            pageSize,
+            size: 'small',
+            showSizeChanger: true,
+            pageSizeOptions: [10, 20, 50, 100],
+            showQuickJumper: true,
+            showTotal: t => `共 ${t} 条`,
+            // 改页大小时回到第 1 页 —— 不然停在第 5 页却只有 2 页数据，列表一片空白
+            onChange: (p, ps) => {
+              if (ps !== pageSize) { setPageSize(ps); setPage(1) } else { setPage(p) }
+            },
+          }}
           onRow={(record) => ({
             onClick: () => navigate(`/projects/${projectId}/scenario-gen?taskId=${record.id}`),
             style: { cursor: 'pointer' },

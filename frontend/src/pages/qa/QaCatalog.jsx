@@ -36,6 +36,8 @@ const C = {
   red: '#cf3128',    //  5.1:1  （原 #e8453c = 3.9:1）
   orange: '#b35800', //  4.9:1  （原 #ff7d00 = 2.6:1）
   teal: '#0b807c',   //  4.8:1  （原 #0ea5a0 = 3.0:1）
+  blue: '#1868c7',   //  5.5:1  冷热档里的「今天」。跟 teal 只差色相（亮度差 1.14:1），
+                     //         所以它**不能单独承担分档** —— 见 ACTIVITY_TIERS 上面那段
   ink: '#1d2129',    // 16.1:1  正文
   gray: '#5f6b7a',   //  5.4:1  次要文字、标签
   hint: '#69737f',   //  4.8:1  说明小字（跟 gray 只差一点点，是**故意**的：
@@ -151,11 +153,16 @@ const absWhen = iso => (iso ? new Date(iso).toLocaleString('zh-CN', { hour12: fa
 // 分四档，不是两档 —— 两档只能回答"是不是最新那一批"，回答不了
 // "上周还有人碰、还是一直没人管"，而后者才是"这个域要不要补人"的判据。
 //
-// 四档**不是靠多调两个颜色**堆出来的。浅底上既要互相分得开、又要都够 4.5:1 的
-// 颜色一只手数得过来（teal #0b807c 实测 4.8、gray #5f6b7a 5.4，硬往中间插一支
-// 只会落进"看着跟旁边一样"或"根本看不清"二选一），何况纯靠色相分档，色弱的人和
-// 黑白截图直接读不出来。所以四档摊在**三条通道**上 —— 圆点(●/○/无) + 字重 + 色系，
-// 颜色只做粗分：青 = 还在动，灰 = 凉了。任意单通道失效都还剩两条能读。
+// 四档现在**一档一个颜色**（青 → 蓝 → 灰 → 浅灰）。原来 live 和 today 共用一支
+// teal、只靠字重分，屏幕上就是"两档看着一样"，所以按要求把颜色摊开到四支。
+//
+// 但颜色只是**第三条**通道，不是唯一那条 —— 圆点(●/○/无) 和字重 (600/400) 都得留着。
+// 原因是量出来的，不是保守：teal #0b807c 4.78:1、blue #1868c7 5.46:1、
+// gray #5f6b7a 5.43:1、faint #86909c 3.24:1，四支对白底都够看；可是
+// **blue 和 gray 两两之间的亮度比只有 1.01:1** —— 转成灰度图、或者红绿色弱的人看，
+// 这两档是同一个颜色。真按"颜色标识出来"一条腿走，这两档在那些场景下直接归并。
+// 所以：颜色负责一眼扫（谁都能看出四种），圆点+字重负责扛住颜色失效的那些场景。
+// 想再加档先量亮度差，别照着色板挑手感。
 //
 // ⚠ 档位边界是**照着这份数据实测出来的**，不是"24小时/一周/一月"这么顺口排下来的。
 // 顺口的那套在这份数据上会退化回两档 —— 2026-08-30 实测 24 个域：
@@ -171,7 +178,7 @@ const H = 3600 * 1000
 const D = 24 * H
 const ACTIVITY_TIERS = [
   { key: 'live',  within: 6 * H,    label: '刚动过', note: '离本仓最后一次动静 6 小时内（同一轮）', dot: '●', color: C.teal,  weight: 600 },
-  { key: 'today', within: D,        label: '今天',   note: '24 小时内',        dot: '●', color: C.teal,  weight: 400 },
+  { key: 'today', within: D,        label: '今天',   note: '24 小时内',        dot: '●', color: C.blue,  weight: 400 },
   { key: 'week',  within: 7 * D,    label: '本周',   note: '一周内 —— 别人今天动了，它没有', dot: '○', color: C.gray,  weight: 400 },
   { key: 'cold',  within: Infinity, label: '搁置',   note: '一周以上没动过',   dot: '',  color: C.faint, weight: 400 },
 ]
@@ -225,8 +232,10 @@ function DomainWhen({ d, now, anchor }) {
                   全标亮 = 恒真；反过来锚在最后一次动静上，仓库搁半年也还能指出
                   "最后在做的是这几个域" */}
             </div>
+            {/* 悬浮层是深底，档位色是照白底调的，直接拿来标会糊掉 ——
+                所以这儿只用圆点+字重复述结构，颜色留给格子本身 */}
             {ACTIVITY_TIERS.map(t => (
-              <div key={t.key} style={{ paddingLeft: 6 }}>
+              <div key={t.key} style={{ paddingLeft: 6, fontWeight: t.weight }}>
                 <span style={{ display: 'inline-block', width: 14 }}>{t.dot}</span>
                 <b>{t.label}</b> · {t.note}
               </div>
@@ -246,6 +255,81 @@ function DomainWhen({ d, now, anchor }) {
         {act?.dot && <span style={{ marginRight: 3 }}>{act.dot}</span>}
         {onlyCatalog && d.updatedAt && <span style={{ color: C.hint, marginRight: 3 }}>清单</span>}
         {relWhen(d.updatedAt, now)}
+      </span>
+    </Tooltip>
+  )
+}
+
+// 域行那条覆盖率进度条的颜色。原来 24 个域全是一支 C.teal —— 长短已经把覆盖率
+// 说过一遍了，颜色再说同一件事等于白占一条通道，而这一页真正要先跳出来的是
+// **哪几个域卡着门禁**。所以颜色改成「缺的是什么」，跟条长各说一件事。
+// 红/橙/青跟 PRIORITY_COLOR 同源（P0 红、P1 橙），整页颜色语义是一套。
+const COVER_STROKE = [
+  { key: 'p0', color: C.red, label: '缺 P0', note: 'P0 有缺口 —— check-coverage.sh 直接 BLOCK' },
+  { key: 'gap', color: C.orange, label: '有缺口', note: '缺的都不是 P0，不阻断门禁' },
+  { key: 'full', color: C.teal, label: '全认领', note: '清单里每条都有脚本认领 —— 认领不等于跑绿' },
+  { key: 'none', color: C.line, label: '清单没行', note: '清单里读不到这个域的行，条是空的' },
+]
+const coverStrokeOf = (d) => {
+  if (!d.total) return COVER_STROKE[3]
+  if (d.p0Gap) return COVER_STROKE[0]
+  if (d.gap) return COVER_STROKE[1]
+  return COVER_STROKE[2]
+}
+
+// 评审徽标。三件事：
+//   1. 把**评审时间**摆进悬浮 —— 原来这儿一个时间都没有（只有环境和 commit），
+//      而"这结论是什么时候下的"恰恰是要不要信它的前提；
+//   2. 评审时间早于这个域最后一次改动 = 过期，格子里直接挂个橙色警告。
+//      不能只写在悬浮里：24 行里哪几行的结论已经不作数，得不悬浮就看得见；
+//   3. 说清是哪一侧动的 —— 清单侧常是整仓批量提交扫到的，那种"过期"轻一些。
+// 过期时**不动徽标本身的颜色**：结论当时是什么结论，它还是什么结论，
+// 过期是另一件事，交给旁边那个警告标去说。
+function ReviewBadge({ d, rv, now, onOpen }) {
+  const v = VERDICT[rv.result?.verdict]
+  // finishedAt 优先：createdAt 是排队时刻，一个域拆几批读能差出十几分钟
+  const at = rv.finishedAt || rv.createdAt
+  const rt = at ? Date.parse(at) : NaN
+  const dt = d.updatedAt ? Date.parse(d.updatedAt) : NaN
+  const stale = Number.isFinite(rt) && Number.isFinite(dt) && rt < dt
+  const onlyCatalog = d.updatedFrom === 'catalog'
+  return (
+    <Tooltip title={
+      <div style={{ fontSize: 12, lineHeight: 1.8, maxWidth: 360 }}>
+        <div><b>{v?.text || '已评'}</b></div>
+        <div style={{ marginTop: 4 }}>
+          评审于 <b>{relWhen(at, now)}</b>
+          <div style={{ opacity: 0.75 }}>{absWhen(at)}</div>
+        </div>
+        {stale && (
+          <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.25)' }}>
+            <div><b>⚠ 这次评审已经过期</b></div>
+            <div>
+              评审跑完之后，这个域的{onlyCatalog ? '清单侧' : '脚本侧'}在
+              {' '}{absWhen(d.updatedAt)}{' '}又动过。
+            </div>
+            <div style={{ opacity: 0.85 }}>
+              上面那句结论是改动<b>之前</b>得出的，现在不一定还成立 ——
+              要拿它当验收依据，得重评一次。
+            </div>
+            {onlyCatalog && (
+              <div style={{ opacity: 0.75, marginTop: 4 }}>
+                不过清单侧常常是整仓批量提交扫到的（重命名、一次性恢复），
+                那种情况下这个域的内容未必真变了 —— 点开看 commit 标题就知道。
+              </div>
+            )}
+          </div>
+        )}
+        <div style={{ opacity: 0.75, marginTop: 6 }}>
+          {rv.environmentName || '—'} · {rv.commitSha} · 点开看结论
+        </div>
+      </div>
+    }>
+      <span style={{ cursor: 'pointer' }} onClick={() => onOpen(rv)}>
+        {stale && <WarningFilled style={{ color: C.orange, marginRight: 4, fontSize: 12 }} />}
+        <Tag color={v?.color || 'default'} style={{ margin: 0, cursor: 'pointer' }}>
+          {v?.short || '已评'}
+        </Tag>
       </span>
     </Tooltip>
   )
@@ -776,6 +860,9 @@ export default function QaCatalog() {
           ['清单行', r.rowUpdatedAt],
           ['覆盖脚本', r.scriptUpdatedAt],
         ].filter(([, t]) => t)
+        // 别叫 tier：这个组件里已经有个 tier state（「执行层」筛选），
+        // 在 render 里同名遮蔽早晚读错。跟 DomainWhen 里保持一致，叫 act。
+        const act = activityTierOf(v, activityAnchor)
         return (
           <Tooltip title={
             <div style={{ fontSize: 12 }}>
@@ -783,9 +870,23 @@ export default function QaCatalog() {
                 <div key={k}>{k}：{absWhen(t)}</div>
               ))}
               {!r.scriptUpdatedAt && <div style={{ opacity: 0.75, marginTop: 4 }}>还没有脚本</div>}
+              {act && (
+                <div style={{ opacity: 0.75, marginTop: 4 }}>
+                  {act.dot} <b>{act.label}</b> —— {act.note}
+                </div>
+              )}
             </div>
           }>
-            <span style={{ fontSize: 12, color: C.gray, whiteSpace: 'nowrap', cursor: 'help' }}>
+            {/* 跟上面「按域看缺口」用同一套冷热档：同一个页面里"时间的颜色"
+                只能有一个意思。锚点也是同一个（本仓最后一次动静），所以
+                场景行和域行的同一个颜色代表同一件事。
+                原来整列一支 C.gray —— 一屏几十行，哪条是刚改的看不出来。 */}
+            <span style={{
+              fontSize: 12, whiteSpace: 'nowrap', cursor: 'help',
+              color: act ? act.color : C.faint,
+              fontWeight: act ? act.weight : 400,
+            }}>
+              {act?.dot && <span style={{ marginRight: 3 }}>{act.dot}</span>}
               {relWhen(v, renderedAt)}
             </span>
           </Tooltip>
@@ -1188,8 +1289,23 @@ export default function QaCatalog() {
             // 584 = 这一行的 min-content（在浏览器里量的，不是估的）。多了「最近更新」
             // 那一格之后它从 498 涨到 592，评审那格 88→80 之后又降 8 —— min 跟不上就是
             // 进度条被挤成 0 宽（min 给大了则是白留一条空档，两边都得跟着改）
-            children: (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(584px, 1fr))', gap: '2px 24px' }}>
+            children: (<>
+              <div style={{ fontSize: 11, color: C.gray, margin: '0 0 8px', display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+                <span>进度条<b>长短</b> = 覆盖率，<b>颜色</b> = 缺的是什么：</span>
+                {COVER_STROKE.map(cs => (
+                  <Tooltip key={cs.key} title={cs.note}>
+                    <span style={{ cursor: 'help', whiteSpace: 'nowrap' }}>
+                      <span style={{ display: 'inline-block', width: 18, height: 5, borderRadius: 3, background: cs.color, marginRight: 5, verticalAlign: 'middle' }} />
+                      {cs.label}
+                    </span>
+                  </Tooltip>
+                ))}
+                <span style={{ color: C.faint }}>
+                  <WarningFilled style={{ color: C.orange, marginRight: 4 }} />
+                  评审徽标前有这个 = 评完之后这个域又动过，结论已过期
+                </span>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(600px, 1fr))', gap: '2px 24px' }}>
                 {domainRows.map(d => {
                   const rv = reviews[d.code]
                   return (
@@ -1198,33 +1314,27 @@ export default function QaCatalog() {
                       <span style={{ width: 110, color: C.gray, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
                       <Progress
                         percent={d.total ? Math.round((d.covered / d.total) * 100) : 0}
-                        size="small" showInfo={false} strokeColor={C.teal} style={{ flex: 1, margin: 0, minWidth: 60 }}
+                        size="small" showInfo={false} strokeColor={coverStrokeOf(d).color}
+                        style={{ flex: 1, margin: 0, minWidth: 60 }}
                       />
                       <span style={{ width: 52, textAlign: 'right', color: C.gray }}>{d.covered}/{d.total}</span>
                       <span style={{ width: 96, textAlign: 'right', color: d.gap ? C.orange : C.faint }}>
                         缺 {d.gap}{d.p0Gap ? <b style={{ color: C.red }}> · P0 {d.p0Gap}</b> : null}
                       </span>
                       <DomainWhen d={d} now={renderedAt} anchor={activityAnchor} />
-                      {/* 80 = 这一格里最宽的那个东西是「AI 评审」按钮（实测 62px），不是徽标
-                          （最长「多数不实」实测 69px）。比原来的 88 窄，省下的归进度条 */}
-                      <span style={{ width: 80, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                      {/* 80 → 96。原来这一格里最宽的是「AI 评审」按钮（实测 62px），
+                          徽标最长「多数不实」实测 69px；过期时徽标前面多一个警告标
+                          （12px 图标 + 4px 间距 = 16），69 + 16 = 85 就顶破 80 了。
+                          留 96 是给它一点余量。上面 grid 的 minmax 跟着 +16（584 → 600）——
+                          那个 584 是量出来的 min-content，这一格宽了它就得跟着涨，
+                          不涨就是进度条被挤掉宽度。 */}
+                      <span style={{ width: 96, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                         {REVIEW_RUNNING(rv?.status) ? (
                           <Tag icon={<LoadingOutlined />} color="processing" style={{ margin: 0, cursor: 'pointer' }}
                                onClick={() => setOpenReview(rv)}>评审中</Tag>
                         ) : rv?.status === 'done' ? (
-                          <Tooltip title={<>
-                            {/* 徽标是缩写版，长句在这儿补齐 —— 缩了字不等于可以不说全 */}
-                            <div>{VERDICT[rv.result?.verdict]?.text || '已评'}</div>
-                            <div style={{ opacity: 0.75 }}>
-                              {rv.environmentName || '—'} · {rv.commitSha} · 点开看结论
-                            </div>
-                          </>}>
-                            <Tag color={VERDICT[rv.result?.verdict]?.color || 'default'}
-                                 style={{ margin: 0, cursor: 'pointer' }}
-                                 onClick={() => setOpenReview(rv)}>
-                              {VERDICT[rv.result?.verdict]?.short || '已评'}
-                            </Tag>
-                          </Tooltip>
+                          // 徽标是缩写版，长句和时间都在悬浮里补齐 —— 缩了字不等于可以不说全
+                          <ReviewBadge d={d} rv={rv} now={renderedAt} onOpen={setOpenReview} />
                         ) : rv?.status === 'failed' ? (
                           <Tag color="error" style={{ margin: 0, cursor: 'pointer' }}
                                onClick={() => setOpenReview(rv)}>没评上</Tag>
@@ -1240,7 +1350,7 @@ export default function QaCatalog() {
                   )
                 })}
               </div>
-            ),
+            </>),
           }]}
         />
       )}

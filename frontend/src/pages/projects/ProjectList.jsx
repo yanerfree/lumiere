@@ -403,6 +403,10 @@ export default function ProjectList() {
               pageSize={pageSize}
               onChange={setPage}
               size="small"
+              // 每页 8 张是卡片栅格排出来的（4×2），不是可调的参数 ——
+              // 而 rc-pagination 在 total > 50 时会自己长出「每页几条」，
+              // pageSize 是常量、又没有 onShowSizeChange，那个下拉点了不动。
+              showSizeChanger={false}
               showTotal={t => `共 ${t} 个项目`}
             />
           </div>

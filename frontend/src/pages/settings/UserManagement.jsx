@@ -25,7 +25,8 @@ const roleCfg = (v) => ROLE_CONFIG[v] ?? { label: v || '未知', color: '#86909c
 const PROJECT_ROLE_LABEL = { manager: '项目管理员', member: '成员' }
 const projectRoleLabel = (v) => PROJECT_ROLE_LABEL[v] ?? `${v || '未知'}（旧角色）`
 
-// 一行最多平铺几个项目，多的收进 +N。3 个之后再往右排就开始挤「角色」列了。
+// 一行最多平铺几个项目，多的收进 +N。3 枚 chip（各最宽 168px）加上 admin 那枚
+// 「全部项目」正好占满「归属项目」列的 560px，再多一个就折行、把整行的高度顶起来。
 const MAX_PROJECT_TAGS = 3
 
 function ProjectChip({ project }) {
@@ -165,14 +166,17 @@ export default function UserManagement() {
 
   const columns = [
     {
-      title: '用户', dataIndex: 'username', width: 240,
+      // 列宽整体思路：**所有列都钉宽，且加起来贴近真实内容区**（下面六列 1500px，
+      // 1920 屏内容区约 1688px）。余量只剩一成，antd 按比例摊下去每列各长十几像素，
+      // 谁都不会被拉变形 —— 这比"留一列不钉宽去背余量"协调得多（见下面「归属项目」）。
+      title: '用户', dataIndex: 'username', width: 300,
       render: (v) => {
         const c = nameColor(v)
         return (
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
             <Avatar size={28} style={{ background: c.bg, color: c.color, fontSize: 12, fontWeight: 600, border: `1.5px solid ${c.border}`, flexShrink: 0 }}>{avatarText(v)}</Avatar>
-            {/* 用户名最长 50 字符（schemas/user.py），220px 装不下 ——
-                不截断的话这一格会撑成两三行，把整行的高度顶起来。 */}
+            {/* 用户名最长 50 字符（schemas/user.py），这一格再宽也装不下 ——
+                不截断的话它会撑成两三行，把整行的高度顶起来。 */}
             <Tooltip title={v} mouseEnterDelay={0.5}>
               <span style={{ fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span>
             </Tooltip>
@@ -181,23 +185,29 @@ export default function UserManagement() {
       },
     },
     {
-      // 「归属项目」这一列不写宽度：其余列都写死时 antd 会把富余宽度按比例摊给每一列，
-      // 结果「创建时间」被撑到 231px 装 112px 的内容，整张表全是空白。
-      // 留一列不定宽来吸收余量，其他列就能保持声明的宽度 —— 而这一列本来就是变长内容，
-      // 它来吃这份余量最合适（此前吃余量的是「用户」，那一列内容短，撑出来全是空白）。
-      title: '归属项目',
-      key: 'projects',
-      render: (_, record) => <ProjectCell user={record} />,
-    },
-    {
-      title: '角色', dataIndex: 'role', width: 120, align: 'center',
+      title: '角色', dataIndex: 'role', width: 180, align: 'center',
       render: (v) => {
         const cfg = roleCfg(v)
         return <Tag style={{ color: cfg.color, background: cfg.bg, border: 'none' }}>{cfg.label}</Tag>
       },
     },
     {
-      title: '状态', dataIndex: 'isActive', width: 88, align: 'center',
+      // 「归属项目」排在「角色」**后面**：这一格的含义要先知道系统角色才读得懂 ——
+      // admin 那枚「全部项目」是因为管理员绕过成员绑定，普通用户的「未加入项目」
+      // 才是个待处理状态。角色在左边，这一列就是它的展开说明。
+      //
+      // 这一列以前不写宽度，专门用来吸收富余宽度（其余列都钉宽时 antd 会把余量按
+      // 比例摊给每一列，「创建时间」被撑到 231px 装 112px 的内容）。代价是它自己在
+      // 1920 屏上被摊到一千像素出头，两三枚项目标签后面拖着大半格空白。
+      // 现在改成钉宽 —— 余量提前分给其余各列，这一列拿到的还是最大的一份
+      // （六列里占 37%，够放 admin 那枚标签 + 3 个项目 chip 不折行），但不再独吞。
+      title: '归属项目',
+      key: 'projects',
+      width: 560,
+      render: (_, record) => <ProjectCell user={record} />,
+    },
+    {
+      title: '状态', dataIndex: 'isActive', width: 150, align: 'center',
       render: (v, record) => (
         <Switch
           size="small"
@@ -208,9 +218,9 @@ export default function UserManagement() {
         />
       ),
     },
-    timeColumn({ key: 'createdAt', title: '创建时间', align: 'center' }),
+    timeColumn({ key: 'createdAt', title: '创建时间', align: 'center', width: 170 }),
     {
-      title: '操作', width: 96, align: 'center',
+      title: '操作', width: 140, align: 'center',
       render: (_, record) => (
         <Space size={4}>
           <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} style={{ color: '#86909c' }} />

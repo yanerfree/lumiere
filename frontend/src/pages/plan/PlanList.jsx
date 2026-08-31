@@ -222,15 +222,19 @@ export default function PlanList() {
         <div style={{ background: 'var(--panel-bg)', border: 'none', borderRadius: 16, backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           {/* Header */}
           <div style={{ display: 'flex', alignItems: 'center', padding: '0 16px', height: 36, background: 'var(--table-header-bg)', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0 }}>
-            <div style={{ flex: 4, maxWidth: 460, ...th }}>计划名称</div>
+            {/* 列宽是**表头和表体成对**的（这是手写 flex 表，不是 antd Table，
+                只改一边就整列错位）。整体节奏：名称列封顶 400（原来 460），右边七列各加宽
+                一点，中间那个 flex:1 的空档吸收剩下的余量 —— 名称列和「测试报告」页
+                同宽，右侧属性区在两页上落在同一批位置，切页面时不用重新找列。 */}
+            <div style={{ flex: 4, maxWidth: 400, ...th }}>计划名称</div>
             <div style={{ flex: 1 }} />
-            <div style={{ width: 76, textAlign: 'center', flexShrink: 0, ...th }}>类型</div>
-            <div style={{ width: 64, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
-            <div style={{ width: 104, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
-            <div style={{ width: 60, textAlign: 'center', flexShrink: 0, ...th }}>用例</div>
-            <div style={{ width: 88, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
-            <div style={{ width: 112, textAlign: 'center', flexShrink: 0, ...th }}>创建时间</div>
-            <div style={{ width: 240, textAlign: 'center', flexShrink: 0, ...th }}>操作</div>
+            <div style={{ width: 96, textAlign: 'center', flexShrink: 0, ...th }}>类型</div>
+            <div style={{ width: 88, textAlign: 'center', flexShrink: 0, ...th }}>执行</div>
+            <div style={{ width: 150, textAlign: 'center', flexShrink: 0, ...th }}>环境</div>
+            <div style={{ width: 80, textAlign: 'center', flexShrink: 0, ...th }}>用例</div>
+            <div style={{ width: 116, textAlign: 'center', flexShrink: 0, ...th }}>状态</div>
+            <div style={{ width: 148, textAlign: 'center', flexShrink: 0, ...th }}>创建时间</div>
+            <div style={{ width: 264, textAlign: 'center', flexShrink: 0, ...th }}>操作</div>
           </div>
           {/* Body */}
           <div style={{ flex: 1, overflow: 'auto' }}>
@@ -247,7 +251,7 @@ export default function PlanList() {
                   onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
                 >
                   {/* Name + meta */}
-                  <div style={{ flex: 4, maxWidth: 460, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 4, maxWidth: 400, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontWeight: 500, fontSize: 13, color: '#1d2129', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {plan.name}
                     </span>
@@ -255,7 +259,7 @@ export default function PlanList() {
                   <div style={{ flex: 1 }} />
 
                   {/* Type：自动化/手动 —— 这一列回答的不是"跑的什么" */}
-                  <div style={{ width: 76, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 96, textAlign: 'center', flexShrink: 0 }}>
                     <span style={{ fontSize: 12, color: '#86909c' }}>
                       {plan.planType === 'automated' ? '自动化' : '手动'}
                     </span>
@@ -263,7 +267,7 @@ export default function PlanList() {
 
                   {/* 执行方式：UI 脚本还是接口场景。库里一直有 test_type，
                       只是从没显示过 —— 12 条计划全是接口，页面上完全看不出来 */}
-                  <div style={{ width: 64, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 88, textAlign: 'center', flexShrink: 0 }}>
                     {plan.testType ? (
                       <span style={{
                         fontSize: 11, padding: '1px 6px', borderRadius: 6,
@@ -274,7 +278,7 @@ export default function PlanList() {
                   </div>
 
                   {/* Environment */}
-                  <div style={{ width: 104, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 150, textAlign: 'center', flexShrink: 0 }}>
                     {plan.environmentName ? (
                       <span style={{ fontSize: 12, color: '#86909c' }}>
                         {plan.environmentName}
@@ -283,12 +287,12 @@ export default function PlanList() {
                   </div>
 
                   {/* Case count */}
-                  <div style={{ width: 60, textAlign: 'center', flexShrink: 0, fontSize: 13, color: '#4e5969', fontFamily: 'var(--font-mono)' }}>
+                  <div style={{ width: 80, textAlign: 'center', flexShrink: 0, fontSize: 13, color: '#4e5969', fontFamily: 'var(--font-mono)' }}>
                     {plan.caseCount}
                   </div>
 
                   {/* Status */}
-                  <div style={{ width: 88, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 116, textAlign: 'center', flexShrink: 0 }}>
                     <span style={{
                       display: 'inline-flex', alignItems: 'center', gap: 4,
                       fontSize: 11, padding: '2px 8px', borderRadius: 12,
@@ -300,12 +304,12 @@ export default function PlanList() {
                   </div>
 
                   {/* 创建时间：独立一列，紧挨操作列 */}
-                  <div style={{ width: 112, textAlign: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 148, textAlign: 'center', flexShrink: 0 }}>
                     <TimeCell value={plan.createdAt} />
                   </div>
 
                   {/* Actions */}
-                  <div style={{ width: 240, flexShrink: 0, display: 'flex', justifyContent: 'flex-end', gap: 4 }}>
+                  <div style={{ width: 264, flexShrink: 0, display: 'flex', justifyContent: 'flex-end', gap: 4 }}>
                     {canRun && ['draft', 'completed', 'paused'].includes(plan.status) && (
                       <Button type="text" size="small" style={{ fontSize: 12, color: '#86909c' }}
                         onClick={async e => {

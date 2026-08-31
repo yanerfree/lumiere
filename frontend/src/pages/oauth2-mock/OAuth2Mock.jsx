@@ -399,7 +399,13 @@ export default function OAuth2Mock() {
                     ))}
                     {logsTotal > 50 && (
                       <div style={{ textAlign: 'center', marginTop: 12 }}>
+                        {/* showSizeChanger 必须显式关掉：rc-pagination 的默认值是
+                            `total > 50`，而这里 total 一定 > 50（外面就是这么判的才渲染）。
+                            页大小在接口那头写死 50、pageSize 又是受控的，
+                            默认长出来的那个「每页几条」点了只会翻页、改不了条数 ——
+                            一个装着不动的控件比没有更糟。其余 Mock 面板都关着。 */}
                         <Pagination current={logPage} total={logsTotal} pageSize={50} size="small"
+                          showSizeChanger={false}
                           onChange={p => { setLogPage(p); fetchLogs(p) }} />
                       </div>
                     )}

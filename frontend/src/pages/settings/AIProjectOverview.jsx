@@ -93,7 +93,18 @@ export default function AIProjectOverview({ overview, loading, onReload }) {
         columns={columns}
         dataSource={rows}
         loading={loading}
-        pagination={false}
+        // 一行一个项目，平台上建多少项目这里就有多少行 —— 摊开的话这张卡片
+        // 会越用越长，把它下面的东西一直往下推。
+        // defaultPageSize 而不是 pageSize：受控又没有 onShowSizeChange 时，
+        // 「每页几条」是个点了不动的控件。
+        pagination={{
+          defaultPageSize: 10,
+          size: 'small',
+          hideOnSinglePage: true,
+          showSizeChanger: true,
+          pageSizeOptions: [10, 20, 50],
+          showTotal: t => `共 ${t} 个项目`,
+        }}
       />
     </Card>
   )

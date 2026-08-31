@@ -21,6 +21,18 @@ const RUNNER = {
   cc: { label: 'Claude Code 执行', color: 'blue' },
 }
 
+// 页头统计带里的一格：大数 + 单位 + 灰字标签。
+// 这么摊开而不是用 antd Statistic —— 全站 48 个页面没有一处用 Statistic，
+// 一张 109px 高的卡片只为了放一个个位数（国际化词典那页也是这么换掉的）。
+function Stat({ n, unit, label, muted }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'baseline', gap: 5 }}>
+      <b style={{ fontSize: 22, fontWeight: 700, color: muted ? '#4e5969' : '#0ea5a0' }}>{n}</b>
+      <span style={{ fontSize: 13, color: '#8c919e' }}>{unit} {label}</span>
+    </span>
+  )
+}
+
 export default function AICapabilities() {
   const { projectId } = useParams()
   const [data, setData] = useState(null)
@@ -70,12 +82,22 @@ export default function AICapabilities() {
   const modelOf = (category) => bindings.find(b => b.key === category)?.model || '—'
   const labelOf = (category) => bindings.find(b => b.key === category)?.label || category
 
+  // 这一页只渲染**还点得到的入口**。已下线/已封存的那些不再列出来 ——
+  // 它们不是这页要回答的问题（「平台哪些地方会调 AI，各用哪个模型」），
+  // 混在同一页上就是十几行划掉的字，把八行真数据顶下去。
+  //
+  // 下线理由没有丢，也不该丢：它是 backend/app/services/ai_capabilities.py 里
+  // CAPABILITY_REGISTRY 每条的 deprecated / deprecatedNote 字段（那个文件顶上
+  // 也写了「不要删 key」的原因）。要看有哪些、为什么，跑：
+  //   grep -n 'deprecatedNote' backend/app/services/ai_capabilities.py
   const live = registry.filter(c => !c.deprecated)
-  const gone = registry.filter(c => c.deprecated)
 
   const usageOf = (key) => (usage?.items || []).find(i => i.key === key)
-  const usedCount = (usage?.items || []).filter(i => i.calls > 0).length
-  const totalCalls = (usage?.items || []).reduce((a, i) => a + i.calls, 0)
+  const items = usage?.items || []
+  const usedCount = items.filter(i => i.calls > 0).length
+  const totalCalls = items.reduce((a, i) => a + i.calls, 0)
+  // 「这一行自己指定了模型」的个数 —— 表里每行都能改，但改过几行只有逐行看才知道
+  const pinnedCount = items.filter(i => i.ownModel).length
   const fmtDay = (iso) => (iso ? String(iso).slice(5, 10) : '')
 
   const columns = [
@@ -157,39 +179,47 @@ export default function AICapabilities() {
 
   return (
     <div>
-      <div style={{ marginBottom: 16 }}>
+      {/* 页头按全站一套：h2 18px + 一行 13px 灰字。原来这儿是一段五行的散文
+          （「这 N 处入口现在都点得到…其中真的被调用过的有 M 处…另有 K 处已下线…
+          已下线的那几处历史上跑过…」），四个数混在从句里，得读完整段才知道
+          哪个数是哪个。数字挪进下面那条统计带，一眼一个。 */}
+      <div style={{ marginBottom: 12 }}>
         <h2 style={{ fontSize: 18, fontWeight: 600, margin: 0, color: '#1d2129' }}>
           <RobotOutlined style={{ marginRight: 8 }} />
           AI 能力总览
         </h2>
         <span style={{ fontSize: 13, color: '#86909c' }}>
-          平台上会调 AI 的地方，一共 {live.length} 处，全在下面。改模型去
+          平台上会调 AI 的地方全在下面 —— 走哪个入口、用哪个模型、真跑过几次。
+          每一行的模型都能单独改；档位本身去
           {' '}<Link to="/settings/ai-providers">AI 服务配置 → AI 能力→模型</Link>。
         </span>
-        {usage && (
-          <div style={{ fontSize: 13, color: '#4e5969', marginTop: 6, lineHeight: 1.9 }}>
-            这 {live.length} 处入口<b>现在都点得到</b>（路径见「在哪用」那一列），
-            其中<b>真的被调用过</b>的有 <b>{usedCount}</b> 处、累计 <b>{totalCalls}</b> 次。
-            每一行的模型都可以单独改。
-            <br />
-            {gone.length > 0 && (
-              <span style={{ color: '#86909c' }}>
-                另有 {gone.length} 处<b>入口已下线</b>（下面单列，说明为什么不做了）。
-              </span>
-            )}
-            {(usage.orphans || []).length > 0 && (
-              <span style={{ color: '#86909c', marginLeft: 6 }}>
-                已下线的那几处历史上跑过：
-                {usage.orphans.slice(0, 3).map(o => `${o.key} ${o.calls} 次`).join('、')}
-                —— 记录留着，但现在没有任何页面/工具能发起它。
-              </span>
-            )}
-          </div>
-        )}
       </div>
 
-      {/* 边界：哪些活是平台干的，哪些活平台不干 */}
-      <Card size="small" style={{ marginBottom: 16, background: 'rgba(14,165,160,0.04)', border: '1px solid rgba(14,165,160,0.18)' }}>
+      {/* 统计带跟「国际化词典」那张卡同一个写法（大数 + 灰字，一行摊开）——
+          全站只有那儿和这儿有这种"页头几个读数"，样式对齐了才不像两套系统。 */}
+      <Card size="small" style={{ marginBottom: 16, background: 'rgba(14,165,160,0.035)' }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 26, flexWrap: 'wrap' }}>
+          <Stat n={live.length} unit="处" label="入口（都点得到）" />
+          {usage ? (
+            <>
+              {/* 「配了什么」回答不了「用了什么」。这两个数是这页最该被先看到的 ——
+                  少了它们，人只能凭印象猜哪个功能没人用，然后照着猜的结论砍。 */}
+              <Stat n={usedCount} unit="处" label="真的被调用过" />
+              <Stat n={totalCalls} unit="次" label="累计调用" />
+              {pinnedCount > 0 && <Stat n={pinnedCount} unit="处" label="单独指定了模型" muted />}
+            </>
+          ) : (
+            <span style={{ fontSize: 13, color: '#d48806' }}>
+              用量取不到（/ai-capabilities/usage 没返回）—— 下面「真实用量」那列会是空的
+            </span>
+          )}
+        </div>
+      </Card>
+
+      {/* 边界：哪些活是平台干的，哪些活平台不干。
+          这张和最底下那张 MCP 卡都是**说明**，所以都走灰底；青底只留给上面那条读数带 ——
+          原来它俩都是青底，前后一叠像同一块内容被切成了两半。 */}
+      <Card size="small" style={{ marginBottom: 16, background: 'rgba(0,0,0,0.02)' }}>
         <div style={{ fontSize: 13, lineHeight: 2 }}>
           <Tag color={RUNNER.platform.color}>{RUNNER.platform.label}</Tag>
           从文档、用例这类<b>文本</b>产出文本：生成用例、生成接口场景、写文档、评审。
@@ -209,32 +239,6 @@ export default function AICapabilities() {
         pagination={false}
         style={{ marginBottom: 20 }}
       />
-
-      {gone.length > 0 && (
-        <>
-          <div style={{ fontSize: 13, color: '#86909c', margin: '0 0 8px' }}>
-            已下线 / 已封存（留在这里是为了说清楚为什么不做了，免得过阵子又被加回来）
-          </div>
-          <Table
-            rowKey="key"
-            size="small"
-            showHeader={false}
-            pagination={false}
-            style={{ marginBottom: 20, opacity: 0.75 }}
-            columns={[
-              // key 是不能断的标识符，和标题挤在一行会被拦腰折断，所以分两行放
-              { dataIndex: 'label', width: 230, render: (v, r) => (
-                <div>
-                  <div><s>{v}</s></div>
-                  <Text code style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{r.key}</Text>
-                </div>
-              ) },
-              { dataIndex: 'deprecatedNote', render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{v || '已下线'}</span> },
-            ]}
-            dataSource={gone}
-          />
-        </>
-      )}
 
       <Card size="small" style={{ background: 'rgba(0,0,0,0.02)' }}>
         <div style={{ fontSize: 13, lineHeight: 2 }}>

@@ -4,9 +4,11 @@ import {
   PlusOutlined, DeleteOutlined, CopyOutlined, EditOutlined,
   GlobalOutlined, CloudServerOutlined,
   UnorderedListOutlined, CheckOutlined, CloseOutlined, HolderOutlined,
+  SearchOutlined,
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
+import { copyToClipboard } from '../../utils/clipboard'
 import { PERM } from '../../utils/permissions'
 import { usePermissions } from '../../utils/PermissionContext'
 
@@ -334,16 +336,34 @@ function GlobalVariablePanel({ canWrite }) {
 }
 
 // ============ 变量表格（复用组件） ============
+// 环境变量和全局变量共用这一张表。改动集中在四件事上（原来那版是一排 3px 行距、
+// 分隔线 rgba(0,0,0,0.03) 几乎看不见的无边框输入框，一眼看过去是一片小字）：
+//   1. 行距和分隔线加出来、悬浮有底色 —— 才看得清自己在改哪一行；
+//   2. 密码/密钥类的值默认打码（Input.Password，点眼睛看），
+//      不然 ADMIN_PASSWORD、DATABASE_URL 就明文摊在设置页上给旁边的人看；
+//   3. 变量多了给个搜索框 —— 只过滤**显示**，保存永远提交全量（见 handleSave）；
+//   4. 只填了一半的行不再静默丢弃。
+const SECRET_HINTS = ['PASSWORD', 'PASSWD', 'PWD', 'SECRET', 'TOKEN', 'APIKEY', 'API_KEY',
+  'PRIVATE_KEY', 'CREDENTIAL', 'DATABASE_URL', 'DSN']
+// 按变量名猜的，猜不准也不影响用：打码只是默认折起来，眼睛点一下就展开。
+const isSecret = (key) => {
+  const k = String(key || '').toUpperCase()
+  return SECRET_HINTS.some(h => k.includes(h))
+}
+
 function VariableTable({ variables, onSave, canWrite = true }) {
   const [editVars, setEditVars] = useState([])
   const [dirty, setDirty] = useState(false)
   const [bulkOpen, setBulkOpen] = useState(false)
   const [bulkText, setBulkText] = useState('')
+  const [filter, setFilter] = useState('')
+  const [hoverUid, setHoverUid] = useState(null)
   const idCounter = useRef(0)
 
   useEffect(() => {
     setEditVars(variables.map(v => ({ _uid: ++idCounter.current, key: v.key, value: v.value, description: v.description || '' })))
     setDirty(false)
+    setFilter('')
   }, [variables])
 
   const updateVar = (uid, field, value) => {
@@ -352,6 +372,8 @@ function VariableTable({ variables, onSave, canWrite = true }) {
   }
 
   const addVar = () => {
+    // 先清筛选：带着筛选词加空行，那行不匹配任何词，加完就是「点了没反应」
+    setFilter('')
     setEditVars(prev => [...prev, { _uid: ++idCounter.current, key: '', value: '', description: '' }])
     setDirty(true)
   }
@@ -362,11 +384,23 @@ function VariableTable({ variables, onSave, canWrite = true }) {
   }
 
   const handleSave = () => {
-    const valid = editVars.filter(v => v.key && v.value)
-    onSave?.(valid)
+    // 之前这里直接 editVars.filter(v => v.key && v.value) 就交出去了 ——
+    // 填了变量名忘了填值的那一行，点完保存**一声不响就消失**，像被系统吃掉。
+    // 半填的行先拦下来说清是哪几行；整行全空的（点了「添加变量」还没写）静默丢掉没有歧义。
+    const half = editVars.filter(v => {
+      const k = (v.key || '').trim(); const val = (v.value || '').trim()
+      return (k && !val) || (!k && val)
+    })
+    if (half.length > 0) {
+      message.warning(`有 ${half.length} 行只填了一半：${half.map(v => (v.key || '').trim() || '(变量名为空)').join('、')} —— 补齐或删掉再保存`)
+      return
+    }
+    onSave?.(editVars.filter(v => (v.key || '').trim() && (v.value || '').trim()))
   }
 
   const openBulkEdit = () => {
+    // 批量编辑始终是全量文本，跟筛选无关 —— 否则筛选着点进去，
+    // 确定一下就把没显示的变量全删了
     setBulkText(editVars.map(v => {
       const parts = [v.key, v.value]
       if (v.description) parts.push(v.description)
@@ -388,50 +422,123 @@ function VariableTable({ variables, onSave, canWrite = true }) {
     }
     setEditVars(parsed)
     setDirty(true)
+    setFilter('')
     setBulkOpen(false)
   }
 
+  const kw = filter.trim().toLowerCase()
+  // 只影响渲染。editVars 一直是全量，保存/批量编辑都读它 —— 筛选状态下保存
+  // 绝不会把没显示的变量删掉。
+  const shown = kw
+    ? editVars.filter(v => `${v.key} ${v.value} ${v.description}`.toLowerCase().includes(kw))
+    : editVars
+
+  const cell = { fontSize: 12, fontFamily: 'var(--font-mono)', padding: '2px 4px' }
+
   return (<>
+    {/* 计数 + 未保存提示 + 搜索。原来这张表上方什么都没有：变量二十来个时
+        只能靠滚动数，也没法在里面找一个 key。 */}
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6, minHeight: 24 }}>
+      <span style={{ fontSize: 12, color: '#86909c' }}>
+        {editVars.length} 个变量
+        {kw && <span style={{ color: '#4e5969' }}> · 匹配 {shown.length} 个</span>}
+        {dirty && <span style={{ color: '#d48806', fontWeight: 600 }}> · 有未保存的修改</span>}
+      </span>
+      <span style={{ flex: 1 }} />
+      {editVars.length > 5 && (
+        <Input size="small" allowClear value={filter} onChange={e => setFilter(e.target.value)}
+          prefix={<SearchOutlined style={{ color: '#c9cdd4' }} />}
+          placeholder="搜变量名 / 值 / 备注" style={{ width: 210, fontSize: 12 }} />
+      )}
+    </div>
+
     {/* 表头 */}
-    <div style={{ display: 'flex', gap: 8, padding: '6px 8px', marginBottom: 2, borderBottom: '1px solid rgba(0,0,0,0.06)' }}>
+    <div style={{ display: 'flex', gap: 8, padding: '6px 8px', marginBottom: 2, borderBottom: '1px solid rgba(0,0,0,0.09)' }}>
       <div style={{ width: '25%', fontSize: 12, fontWeight: 600, color: '#4e5969' }}>变量名</div>
       <div style={{ width: '35%', fontSize: 12, fontWeight: 600, color: '#4e5969' }}>值</div>
       <div style={{ flex: 1, fontSize: 12, fontWeight: 600, color: '#4e5969' }}>备注</div>
-      <div style={{ width: 36 }} />
+      {/* 两个按钮（复制 / 删除），比原来的 36 宽一格 */}
+      <div style={{ width: 60 }} />
     </div>
+
     {/* 行 */}
     {editVars.length === 0 && (
       <div style={{ padding: '24px 0', textAlign: 'center', color: '#c9cdd4', fontSize: 12 }}>暂无变量，点击下方添加</div>
     )}
-    {editVars.map(v => (
-      <div key={v._uid} style={{ display: 'flex', gap: 8, padding: '3px 8px', alignItems: 'center', borderBottom: '1px solid rgba(0,0,0,0.03)' }}>
-        <Input spellCheck={false} value={v.key} onChange={e => updateVar(v._uid, 'key', e.target.value)}
-          placeholder="KEY" variant="borderless" size="small" readOnly={!canWrite}
-          style={{ width: '25%', fontSize: 12, fontFamily: 'var(--font-mono)', padding: '2px 4px' }} />
-        <Input spellCheck={false} value={v.value} onChange={e => updateVar(v._uid, 'value', e.target.value)}
-          placeholder="VALUE" variant="borderless" size="small" readOnly={!canWrite}
-          style={{ width: '35%', fontSize: 12, fontFamily: 'var(--font-mono)', padding: '2px 4px' }} />
-        <Input value={v.description} onChange={e => updateVar(v._uid, 'description', e.target.value)}
-          placeholder="变量用途说明" variant="borderless" size="small" readOnly={!canWrite}
-          style={{ flex: 1, fontSize: 12, color: '#86909c', padding: '2px 4px' }} />
-        {canWrite ? (
-          <Popconfirm title="删除此变量？" onConfirm={() => removeVar(v._uid)}>
-            <Button type="text" size="small" icon={<DeleteOutlined />} style={{ color: '#c9cdd4', width: 28 }} />
-          </Popconfirm>
-        ) : <div style={{ width: 28 }} />}
+    {editVars.length > 0 && shown.length === 0 && (
+      <div style={{ padding: '24px 0', textAlign: 'center', color: '#c9cdd4', fontSize: 12 }}>
+        没有变量匹配「{filter.trim()}」—— 这 {editVars.length} 个变量都还在，清掉搜索词就能看到
       </div>
-    ))}
+    )}
+    {shown.map(v => {
+      const secret = isSecret(v.key)
+      const hovered = hoverUid === v._uid
+      return (
+        <div key={v._uid}
+          onMouseEnter={() => setHoverUid(v._uid)}
+          onMouseLeave={() => setHoverUid(prev => (prev === v._uid ? null : prev))}
+          style={{
+            display: 'flex', gap: 8, alignItems: 'center',
+            // 3px → 5px：原来一行才 26px 高，二十行堆在一起分不出行
+            padding: '5px 8px',
+            borderBottom: '1px solid rgba(0,0,0,0.05)',
+            background: hovered ? 'rgba(14,165,160,0.05)' : 'transparent',
+            borderRadius: 6,
+            transition: 'background .12s',
+          }}>
+          <Input spellCheck={false} value={v.key} onChange={e => updateVar(v._uid, 'key', e.target.value)}
+            placeholder="KEY" variant="borderless" size="small" readOnly={!canWrite}
+            style={{ ...cell, width: '25%' }} />
+          {secret ? (
+            // 打码但可看：Input.Password 自带眼睛，不用自己管展开状态。
+            // 判断只看变量名，所以这永远只是「默认折起来」，不是权限控制 ——
+            // 值本身接口就是明文返回的，真要保密得在后端做。
+            <Input.Password spellCheck={false} value={v.value} onChange={e => updateVar(v._uid, 'value', e.target.value)}
+              placeholder="VALUE" variant="borderless" size="small" readOnly={!canWrite}
+              style={{ ...cell, width: '35%' }} />
+          ) : (
+            <Input spellCheck={false} value={v.value} onChange={e => updateVar(v._uid, 'value', e.target.value)}
+              placeholder="VALUE" variant="borderless" size="small" readOnly={!canWrite}
+              style={{ ...cell, width: '35%' }} />
+          )}
+          <Input value={v.description} onChange={e => updateVar(v._uid, 'description', e.target.value)}
+            placeholder="变量用途说明" variant="borderless" size="small" readOnly={!canWrite}
+            style={{ flex: 1, fontSize: 12, color: '#86909c', padding: '2px 4px' }} />
+          {/* 复制值：打码的那些光靠看抄不出来，得有个按钮。
+              悬浮才显形，用 visibility 而不是条件渲染 —— 否则鼠标进出会让整行宽度跳一下 */}
+          <Tooltip title="复制值">
+            <Button type="text" size="small" icon={<CopyOutlined />}
+              style={{ color: '#c9cdd4', width: 28, visibility: hovered && v.value ? 'visible' : 'hidden' }}
+              onClick={() => copyToClipboard(v.value).then(
+                () => message.success(`已复制 ${v.key || '变量'} 的值`),
+                () => message.error('复制失败'),
+              )} />
+          </Tooltip>
+          {canWrite ? (
+            <Popconfirm title="删除此变量？" onConfirm={() => removeVar(v._uid)}>
+              <Button type="text" size="small" icon={<DeleteOutlined />} style={{ color: '#c9cdd4', width: 28 }} />
+            </Popconfirm>
+          ) : <div style={{ width: 28 }} />}
+        </div>
+      )
+    })}
 
     {canWrite && (
-      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+      <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
         <Button type="dashed" icon={<PlusOutlined />} onClick={addVar} size="small">添加变量</Button>
         <Button icon={<UnorderedListOutlined />} onClick={openBulkEdit} size="small">批量编辑</Button>
+        {/* 保存按钮只在有改动时出现（原来就是这样）。旁边那句话是给它配的：
+            按钮凭空冒出来，就得说清为什么冒出来、不点会怎样。 */}
         {dirty && <Button type="primary" size="small" onClick={handleSave}>保存</Button>}
+        {dirty && <span style={{ fontSize: 12, color: '#d48806' }}>改动还没提交，离开这一页会丢</span>}
       </div>
     )}
 
     <Modal title="批量编辑" open={bulkOpen} onOk={handleBulkConfirm} onCancel={() => setBulkOpen(false)} okText="确定" cancelText="取消" width={560}>
-      <div style={{ fontSize: 13, color: '#86909c', marginBottom: 10 }}>格式: <span style={{ color: '#4e5969', fontFamily: 'var(--font-mono)' }}>变量名,值,备注</span></div>
+      <div style={{ fontSize: 13, color: '#86909c', marginBottom: 10 }}>
+        格式: <span style={{ color: '#4e5969', fontFamily: 'var(--font-mono)' }}>变量名,值,备注</span>
+        <span style={{ color: '#d48806', marginLeft: 8 }}>确定后按这里的内容整份替换 —— 没列出来的变量会被删掉</span>
+      </div>
       <Input.TextArea value={bulkText} onChange={e => setBulkText(e.target.value)} rows={10}
         placeholder={'BASE_URL,https://staging.example.com,测试目标地址\nDB_HOST,10.0.1.100,数据库主机'}
         style={{ fontFamily: 'var(--font-mono)', fontSize: 13 }} />

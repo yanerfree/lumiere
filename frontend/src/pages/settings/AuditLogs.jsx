@@ -113,9 +113,10 @@ export default function AuditLogs() {
 
   const columns = [
     {
-      // 180 不是随手加的：最长的一条 actorLabel 是「ai-admin项目使用」(8 拉丁 + 4 汉字)，
-      // 11px 下标签整体约 134px，加两侧单元格 padding 32 → 166 才刚够。留到 180。
-      title: '操作人', dataIndex: 'username', width: 180, align: 'center',
+      // **下限是 180**，不是随手加的：最长的一条 actorLabel 是「ai-admin项目使用」
+      // (8 拉丁 + 4 汉字)，11px 下标签整体约 134px，加两侧单元格 padding 32 → 166 才刚够。
+      // 往上加宽随意，往下不能破 180。
+      title: '操作人', dataIndex: 'username', width: 240, align: 'center',
       // 光有 username 分不出是哪台 CC —— 建 Key 的接口只能给自己建，
       // 所有 CC 的 Key 归属人都是同一个（通常是 admin）。actorLabel 是那把 Key 的名字，
       // 它才是「哪个连接」的身份，所以跟人名并列显示，而不是藏进详情。
@@ -139,42 +140,47 @@ export default function AuditLogs() {
     {
       // 跟下面那列（详情按钮）同名叫「操作」，一张表里两个「操作」表头分不清谁是谁。
       // 改成跟上方筛选器同名的「操作类型」。
-      title: '操作类型', dataIndex: 'action', width: 88, align: 'center',
+      title: '操作类型', dataIndex: 'action', width: 150, align: 'center',
       render: v => {
         const cfg = ACTION_CONFIG[v] || { label: v, color: '#86909c', bg: 'rgba(0,0,0,0.04)' }
         return <Tag style={{ color: cfg.color, background: cfg.bg, border: 'none' }}>{cfg.label}</Tag>
       },
     },
     ...(!projectId ? [{
-      title: '所属项目', dataIndex: 'projectName', width: 120,
+      title: '所属项目', dataIndex: 'projectName', width: 150, ellipsis: true,
       render: v => v ? <span style={{ fontSize: 13, color: '#4e5969' }}>{v}</span> : <span style={{ color: '#c9cdd4' }}>-</span>,
     }] : []),
     {
-      title: '对象类型', dataIndex: 'targetType', width: 90, align: 'center',
+      title: '对象类型', dataIndex: 'targetType', width: 150, align: 'center',
       render: v => <Tag style={{ color: '#4e5969', background: 'rgba(0,0,0,0.04)', border: 'none' }}>
         {TARGET_TYPE_LABELS[v] || v}
       </Tag>,
     },
     {
-      // 「对象名称」和「变更摘要」都不定宽，富余宽度对半分。原来只有摘要那列不定宽，
-      // 宽屏上白占的空间全堆给它（大半行摘要还是「-」），标题反倒被 200px 挤成两行；
-      // 反过来只让名称不定宽也不对 —— 修改类的摘要 JSON 比标题还长。
-      title: '对象名称', dataIndex: 'targetName',
+      // 「对象名称」和「变更摘要」原来都不定宽、富余宽度对半分。那修掉了更早的
+      // 「只有摘要不定宽、白占的空间全堆给它」，但换来另一头的毛病：1920 屏上这两列
+      // 各自被摊到 570 多像素，而其余六列挤在 530px 里 —— 一张表看着像两列宽表
+      // 后面拖了一串窄条。
+      //
+      // 现在两列都钉宽，并把富余宽度**提前分给其余各列**（各列加起来 ~1530px，
+      // 内容区约 1688px，余量只剩一成，按比例摊下去谁都不变形）。
+      // 这两列本来就是靠 ellipsis + 悬浮看全文的，钉宽不丢信息。
+      title: '对象名称', dataIndex: 'targetName', width: 330, ellipsis: true,
       render: v => <span style={{ fontSize: 13, color: '#4e5969' }}>{v || '-'}</span>,
     },
     {
       // 单行省略交给 CSS 而不是 substring(0, 80) —— 按字符截断跟实际像素宽没关系，
       // 窄屏还是溢出、宽屏又留白。全文在 title 悬浮和详情里都还在。
-      title: '变更摘要', dataIndex: 'changes', ellipsis: true,
+      title: '变更摘要', dataIndex: 'changes', width: 400, ellipsis: true,
       render: v => {
         if (!v) return <span style={{ color: '#c9cdd4' }}>-</span>
         const text = typeof v === 'string' ? v : JSON.stringify(v)
         return <span style={{ fontSize: 12, color: '#86909c', cursor: 'default' }} title={text}>{text}</span>
       },
     },
-    timeColumn({ key: 'createdAt', title: '时间' }),
+    timeColumn({ key: 'createdAt', title: '时间', width: 160 }),
     {
-      title: '操作', width: 60, align: 'center',
+      title: '操作', width: 100, align: 'center',
       render: (_, record) => (
         <a style={{ fontSize: 12, color: '#0ea5a0' }} onClick={() => setDetailLog(record)}>详情</a>
       ),

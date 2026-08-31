@@ -393,7 +393,19 @@ export default function I18nMessages() {
           loading={loading}
           columns={columns}
           dataSource={visibleRows}
-          pagination={{ pageSize: 20, showSizeChanger: true, showTotal: (t) => `共 ${t} 条` }}
+          // 这里必须用 defaultPageSize，**不能写 pageSize**：写 pageSize 就是受控，
+          // rc-pagination 里 useControlledState(defaultPageSize, pageSizeProp) 会把页大小钉死，
+          // 而受控又没给 onShowSizeChange/onChange 的话 changePageSize 的回调全落空 ——
+          // 「每页几条」点了一点反应都没有（词典 2400+ 条，这就是唯一翻页手段）。
+          pagination={{
+            defaultPageSize: 20,
+            size: 'small',
+            showSizeChanger: true,
+            // 20 得留在选项里，否则从别的档位切回默认值就没路可走了
+            pageSizeOptions: [10, 20, 50, 100, 200],
+            showQuickJumper: true,
+            showTotal: (t) => `共 ${t} 条`,
+          }}
           locale={{ emptyText: <Empty description="暂无词条，点击「扫描脚本检查」从已生成脚本抽取，或「新增词条」手工录入" /> }}
         />
       </Card>
@@ -415,7 +427,6 @@ export default function I18nMessages() {
             label="键"
             tooltip="语言中立的键，如 services.form.nameRequired。段落本身就是位置：命名空间.区域.控件类型.具体项。测试里引用它，切语种时取对应译文。"
             rules={[{ required: true, message: '请输入键' }]}
-            tooltip="被测系统里真实的中文文案，如「确认绑定」。这是词典的键，二期脚本用它做匹配。"
           >
             <Input placeholder="如 services.detail.btn.enable"
               style={{ fontFamily: 'var(--font-mono)' }}
