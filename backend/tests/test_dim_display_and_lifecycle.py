@@ -182,3 +182,22 @@ def test_列表两列不重名():
     src = (ROOT / "frontend/src/pages/cases/CaseManagement.jsx").read_text(encoding="utf-8")
     assert "title: '三件套'" not in src, "还留着「三件套」"
     assert "title: '覆盖'" in src and "title: '类型'" in src
+
+
+def test_人显式改的状态不被自动重算盖掉():
+    """**人可以改状态，平台不拦。**
+
+    自动重算是给"没人管"的情况兜底的，不是用来管人的。详情页有状态下拉，
+    人要拍板说这条就是完成，那就是完成 —— 拦下来就又变成一个
+    「弹保存成功、值没进去」，跟 target_level 那个漏字段是同一种病。
+
+    盯的是**顺序**：显式赋值必须排在 `sync_after_plan_change` 之后。
+    反过来的话重算会把人选的值冲掉，而且不报错、不留痕。
+    """
+    src = (ROOT / "backend/app/services/case_service.py").read_text(encoding="utf-8")
+    i = src.index("sync_after_plan_change(case)")
+    tail = src[i:i + 900]
+    assert "data.lifecycle_status is not None" in tail, \
+        "重算之后没把人显式设的 lifecycle_status 拨回来 —— 人选的值被平台冲掉了"
+    assert "data.review_status is not None" in tail, \
+        "同理，人显式设的 review_status 也会被冲掉"
