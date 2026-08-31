@@ -252,6 +252,14 @@ async def update_case(
         # 在 sync_review_status 里会被整个跳过，「状态」列就冻在旧计划的结论上。
         from app.services.script_run_service import sync_after_plan_change
         sync_after_plan_change(case)
+        # **人显式指定的，以人为准。** 上面那个重算是给"没人管"的情况兜底的，
+        # 不是用来管人的：详情页有状态下拉，人要拍板说这条就是完成，那就是完成，
+        # 平台不拦。拦了就变成另一个「弹保存成功、值没进去」—— 跟这次要修的
+        # 是同一种病（详情页保存是**整份表单原样回传**，改计划时这两个字段必然同行）。
+        if data.lifecycle_status is not None:
+            case.lifecycle_status = data.lifecycle_status
+        if data.review_status is not None:
+            case.review_status = data.review_status
 
     await session.flush()
     await session.refresh(case)
