@@ -5,6 +5,15 @@
  * hover 出 Popover 展开分组明细，点它跳 /settings/services 看全表。
  *
  * 轮询 30s（详情页是 10s）：顶栏只要能反映"有东西挂了"就够，没必要更勤。
+ *
+ * **只有系统管理员看得见**（perm `system.service.read`，ADMIN_ONLY_PERMISSIONS 里的一条）。
+ * 这条胶囊漏出去的是整套环境的拓扑：17 个服务的名字 + 端口 + 谁没起来 —— 对普通用户
+ * 既没用（他没有任何一页能点进去看，/settings/services 本来就挡着）又是多余的暴露面。
+ * 挡在组件自己里而不是调用处（App.jsx 顶栏），是因为顶栏那行还会被别处复用，
+ * 挡在外面等于每加一个调用点就要记得再挡一次 —— 这种保护迟早会静默漏掉一处。
+ * 没权限时**连轮询都不发**：否则每 30s 一发 403，日志里刷出一片假告警。
+ * 真正的强制在后端（GET /api/system/services 挂 require_role("admin")）——
+ * 这里只是 UX 收口，不是安全边界。
  * 配色跟全站一致走 CSS 变量：全好=主色 teal，有挂的=橙，拿不到=灰。
  */
 import { useState, useEffect, useRef } from 'react'
@@ -12,6 +21,8 @@ import { useNavigate } from 'react-router-dom'
 import { Popover } from 'antd'
 import { api } from '../utils/request'
 import { withFrontendRow } from '../utils/serviceList'
+import { usePermissions } from '../utils/PermissionContext'
+import { PERM } from '../utils/permissions'
 
 const DOT = { up: '#0ea5a0', down: '#c9cdd4', notConfigured: '#e5e6eb' }
 
@@ -34,11 +45,17 @@ function Dot({ status, size = 6 }) {
 
 export default function ServiceStatusBadge() {
   const navigate = useNavigate()
+  const { has, loading: permLoading } = usePermissions()
+  // 权限还没拉回来时按"没有"算（fail-closed，与全站一致）：宁可晚半拍出现，
+  // 也不要先闪一下再消失 —— 那一闪本身就把"有这么个东西"说出去了。
+  const canSee = !permLoading && has(PERM.SYS_SERVICE_READ)
   const [data, setData] = useState(null)
   const [failed, setFailed] = useState(false)
   const timerRef = useRef(null)
 
   useEffect(() => {
+    // hooks 不能条件调用，所以门开在 effect 里面：没权限就既不首拉也不起定时器
+    if (!canSee) return
     let alive = true
     const load = async () => {
       try {
@@ -53,7 +70,7 @@ export default function ServiceStatusBadge() {
     load()
     timerRef.current = setInterval(load, 30000)
     return () => { alive = false; clearInterval(timerRef.current) }
-  }, [])
+  }, [canSee])
 
   // 与详情页共用补全逻辑，否则顶栏 16/17、页面 17，两处数字对不上
   const { groups, summary } = withFrontendRow(data)
@@ -61,6 +78,9 @@ export default function ServiceStatusBadge() {
   const bad = summary?.down || 0
   const tone = failed || !summary ? TONE.unknown : bad === 0 ? TONE.ok : TONE.warn
   const label = failed || !summary ? '服务 —' : `服务 ${summary.up}/${summary.total}`
+
+  // 非管理员：整个胶囊不渲染。放在 hooks 全部调用完之后，顺序才稳定。
+  if (!canSee) return null
 
   const content = (
     <div style={{ width: 316, letterSpacing: 0.3 }}>

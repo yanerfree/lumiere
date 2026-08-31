@@ -1,6 +1,6 @@
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -88,6 +88,22 @@ async def update_user(session: AsyncSession, user_id: uuid.UUID, data: UpdateUse
     await session.flush()
     await session.refresh(user)  # 重新加载 DB 侧更新的字段（如 updated_at）
     return user
+
+
+async def count_active_admins(
+    session: AsyncSession, exclude_id: uuid.UUID | None = None
+) -> int:
+    """还剩几个**启用中**的系统管理员（可排除某一个，用来预演"删掉他之后"）。
+
+    只数 is_active 的：停用的管理员登不进来，把他算进"还有人管"等于自欺 ——
+    真出事时那个账号一样救不了场，而它的存在会让最后一道删除保护静默失效。
+    """
+    stmt = select(func.count()).select_from(User).where(
+        User.role == "admin", User.is_active.is_(True)
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(User.id != exclude_id)
+    return int((await session.execute(stmt)).scalar_one())
 
 
 @audit_log(action="delete", target_type="user")

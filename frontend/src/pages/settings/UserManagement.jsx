@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { timeColumn } from '../../utils/timeCol'
 import { Table, Button, Tag, Modal, Form, Input, Select, Switch, message, Popconfirm, Space, Avatar, Tooltip } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, UserOutlined, ReloadOutlined } from '@ant-design/icons'
@@ -25,19 +25,24 @@ const roleCfg = (v) => ROLE_CONFIG[v] ?? { label: v || '未知', color: '#86909c
 const PROJECT_ROLE_LABEL = { manager: '项目管理员', member: '成员' }
 const projectRoleLabel = (v) => PROJECT_ROLE_LABEL[v] ?? `${v || '未知'}（旧角色）`
 
-// 一行最多平铺几个项目，多的收进 +N。3 枚 chip（各最宽 168px）加上 admin 那枚
-// 「全部项目」正好占满「归属项目」列的 560px，再多一个就折行、把整行的高度顶起来。
-const MAX_PROJECT_TAGS = 3
+// 一行最多平铺几个项目，多的收进 +N。跟着「归属项目」列宽走：
+// 该列 560 → 440 之后，admin 那行的最坏情况是「全部项目」(76) + N 枚 chip + 「+N」(28) + 间距，
+// N=2 时 76 + 2×132 + 28 + 4×6 = 392 ≤ 440 放得下，N=3 就 530 顶破了 —— **折行会把整行
+// 高度顶起来**，一张表里高矮不齐比少显示一枚难看得多。改列宽必须回头改这两个数。
+const MAX_PROJECT_TAGS = 2
+// chip 最宽 168 → 132（同上：列窄了）。截断变多，所以下面 Tooltip 里补了项目全名 ——
+// 原来那个悬浮只说角色，名字被 ellipsis 吃掉之后就没有任何地方能看到全名了。
+const PROJECT_CHIP_MAX = 132
 
 function ProjectChip({ project }) {
   const c = nameColor(project.name)
   return (
-    <Tooltip title={`项目角色：${projectRoleLabel(project.role)}`} mouseEnterDelay={0.3}>
+    <Tooltip title={<>{project.name}<br />项目角色：{projectRoleLabel(project.role)}</>} mouseEnterDelay={0.3}>
       <span style={{
         display: 'inline-flex', alignItems: 'center', gap: 5,
         padding: '1px 8px 1px 6px', borderRadius: 6, fontSize: 12, lineHeight: '18px',
         background: 'rgba(255,255,255,0.55)', border: '1px solid rgba(0,0,0,0.06)',
-        color: '#4e5969', maxWidth: 168,
+        color: '#4e5969', maxWidth: PROJECT_CHIP_MAX,
       }}>
         <span style={{ width: 6, height: 6, borderRadius: '50%', background: c.color, flexShrink: 0 }} />
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>
@@ -88,7 +93,16 @@ function ProjectCell({ user }) {
   )
 }
 
+// 内置管理员账号名。它是**装机时就在**的那一个（backend 的初始化种子），
+// 不是「所有 role=admin 的人」—— 后者现在允许删。
+const BUILTIN_ADMIN = 'admin'
+
 export default function UserManagement() {
+  // 登录时存下的那份（pages/auth/Login.jsx）。取 id 不取 username：
+  // 改名之后 username 会对不上，id 不会。
+  const currentUserId = useMemo(() => {
+    try { return JSON.parse(localStorage.getItem('user') || '{}').id ?? null } catch { return null }
+  }, [])
   const [users, setUsers] = useState([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -166,10 +180,16 @@ export default function UserManagement() {
 
   const columns = [
     {
-      // 列宽整体思路：**所有列都钉宽，且加起来贴近真实内容区**（下面六列 1500px，
+      // 列宽整体思路：**所有列都钉宽，且加起来贴近真实内容区**（下面六列合计仍是 1500px，
       // 1920 屏内容区约 1688px）。余量只剩一成，antd 按比例摊下去每列各长十几像素，
       // 谁都不会被拉变形 —— 这比"留一列不钉宽去背余量"协调得多（见下面「归属项目」）。
-      title: '用户', dataIndex: 'username', width: 300,
+      //
+      // 2026-08-31 重排了一次：合计不变，把「归属项目」让出来的 120px 分给两头。
+      // 原来的毛病是**空白全堆在一处** —— 「归属项目」560px 里通常只坐着一两枚 chip，
+      // 右边留出小半格死白，紧接着「状态」又是居中的，一行看过去左边挤、中间空、右边散。
+      // 现在：项目列收窄到 440 并居中，剩下的宽度回到「用户」(识别列，最该宽) 和
+      // 「创建时间 / 操作」(原本贴边显局促的两列)。
+      title: '用户', dataIndex: 'username', width: 380,
       render: (v) => {
         const c = nameColor(v)
         return (
@@ -185,7 +205,7 @@ export default function UserManagement() {
       },
     },
     {
-      title: '角色', dataIndex: 'role', width: 180, align: 'center',
+      title: '角色', dataIndex: 'role', width: 170, align: 'center',
       render: (v) => {
         const cfg = roleCfg(v)
         return <Tag style={{ color: cfg.color, background: cfg.bg, border: 'none' }}>{cfg.label}</Tag>
@@ -199,15 +219,20 @@ export default function UserManagement() {
       // 这一列以前不写宽度，专门用来吸收富余宽度（其余列都钉宽时 antd 会把余量按
       // 比例摊给每一列，「创建时间」被撑到 231px 装 112px 的内容）。代价是它自己在
       // 1920 屏上被摊到一千像素出头，两三枚项目标签后面拖着大半格空白。
-      // 现在改成钉宽 —— 余量提前分给其余各列，这一列拿到的还是最大的一份
-      // （六列里占 37%，够放 admin 那枚标签 + 3 个项目 chip 不折行），但不再独吞。
+      // 钉宽解决了独吞，但 560 还是过宽：常规行只有一两枚 chip，右侧照样空半格。
+      // 440 + 居中 —— 这两件事得一起做：**只收窄，死白只是变少；只居中，死白只是
+      // 从右边挪到两边**。合起来才是「内容坐在自己那一格的正中」，跟右边三列
+      // （状态/创建时间/操作，本来就居中）连成一条轴。
+      // 只有「用户」列保持左对齐：它是识别列，头像 + 名字左边界对齐才扫得动，
+      // 居中会让每行的起点随名字长短来回跳。
       title: '归属项目',
       key: 'projects',
-      width: 560,
+      width: 440,
+      align: 'center',
       render: (_, record) => <ProjectCell user={record} />,
     },
     {
-      title: '状态', dataIndex: 'isActive', width: 150, align: 'center',
+      title: '状态', dataIndex: 'isActive', width: 140, align: 'center',
       render: (v, record) => (
         <Switch
           size="small"
@@ -218,16 +243,28 @@ export default function UserManagement() {
         />
       ),
     },
-    timeColumn({ key: 'createdAt', title: '创建时间', align: 'center', width: 170 }),
+    timeColumn({ key: 'createdAt', title: '创建时间', align: 'center', width: 200 }),
     {
-      title: '操作', width: 140, align: 'center',
+      title: '操作', width: 170, align: 'center',
       render: (_, record) => (
         <Space size={4}>
           <Button type="text" size="small" icon={<EditOutlined />} onClick={() => openEdit(record)} style={{ color: '#86909c' }} />
-          {/* 保护的是「系统管理员」这个角色，不是叫 admin 的那个人 ——
-              按用户名判的话，把 admin 改名、或另建一个管理员账号，保护就失效了，
-              而且失效得静默（按钮照常出现，删完才发现没人能管理系统了）。 */}
-          {record.role !== 'admin' && (
+          {/* 保护范围 2026-08-31 收窄成**两个具体账号**，不再是整个「系统管理员」角色：
+              内置的 admin，以及**当前登录的自己**。其余用户（含其他系统管理员）都可删。
+
+              原来按 `record.role !== 'admin'` 挡整个角色，理由是「保护的是角色不是人名」。
+              那条理由本身没错，但它挡出来的结果是**管理员这一档只进不出** —— 项目里
+              testuser008 / tester / liyan 这类历史管理员账号一个都清不掉，只能先降级
+              再删（两步，而且中间那一步没人记得做）。
+
+              换成按账号判之后，原来那条顾虑要正视：把内置 admin 改个名，这道保护就没了。
+              所以**真正兜底的不是这里**，是后端 users.py 里同名的那道 ——
+              它连「删到一个管理员都不剩」也一起挡了，那才是不管账号叫什么都成立的判据。
+              这里少挡一个是体验问题，不是越权。
+
+              自己那行也不给删按钮：删完当场掉线，而且是这次放宽才够得着的新坑
+              （以前管理员之间互相删不了，自然也删不到自己）。 */}
+          {record.username !== BUILTIN_ADMIN && record.id !== currentUserId && (
             <Popconfirm
               title={`确定删除用户 ${record.username}？`}
               description={record.isActive ? '该用户当前处于启用状态' : undefined}

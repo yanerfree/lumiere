@@ -55,6 +55,25 @@ const STATE_TAG = {
 
 const PRIORITY_COLOR = { P0: C.red, P1: C.orange, P2: C.teal, P3: C.gray }
 
+// 进度条专用的马卡龙色 —— **只许喂给 strokeColor 和图例色块，不许拿去渲染字**。
+// 上面 C 那套是按"文字"的线挑的（白底 ≥4.8:1），压暗之后进度条跟着变深：24 个域的条子
+// 铺满半屏，一片深红深橙看着像整页在报警；而 P0 #cf3128 与 P1 #b35800 色相只差 26°，
+// 又都是暗调暖色 —— 两根条子并排放着**分不出哪根是哪根**，颜色那条通道等于白占。
+//
+// 换成同族浅色：四支对白底 2.15~2.49:1（旧的 4.8~5.4:1），且**彼此只差 1.01~1.16:1** ——
+// 亮度几乎齐平是故意的，谁都不比谁"重"，一眼看过去是一组，而不是一串轻重不一的警报。
+// 分档全部交给色相：P0↔P1 从 26° 拉到 47°（粉 vs 杏，不再是"深红 vs 深棕"），其余各档 ≥55°。
+//
+// 代价写清楚：浅色对轨道只剩 1.89~2.19:1，够不到图形 3:1 的线。**这里敢这么做，是因为
+// 每根条子右边都钉着精确数字**（`179/249`、`13/28`）—— 条长和颜色都不是唯一出口，真正
+// 承载结论的是那个数和旁边那句话。哪天把数字挪走了，这套颜色必须跟着回深。
+//
+// ⚠ 同 C 那段：定色不许心算。上面每个比值都是 WCAG 公式实算出来的，改色请重算再落。
+const BAR = { P0: '#F0839A', P1: '#EDA13C', P2: '#45C3A9', P3: '#9DAFDC' }
+// 轨道比 antd 默认的 rgba(0,0,0,0.06) 略冷一点点：浅色条子跟它拉开的是色相不是明度，
+// 纯灰轨道会让蜜杏那根看着发脏。
+const BAR_TRAIL = '#eef0f4'
+
 // 解析器认出来的列角色 → 页面上的说法。用的是这一页表头本来就用的词，
 // 别让人在"认列结果"和"表格列名"之间再翻译一次。
 const COLUMN_ROLE_CN = {
@@ -264,11 +283,12 @@ function DomainWhen({ d, now, anchor }) {
 // 域行那条覆盖率进度条的颜色。原来 24 个域全是一支 C.teal —— 长短已经把覆盖率
 // 说过一遍了，颜色再说同一件事等于白占一条通道，而这一页真正要先跳出来的是
 // **哪几个域卡着门禁**。所以颜色改成「缺的是什么」，跟条长各说一件事。
-// 红/橙/青跟 PRIORITY_COLOR 同源（P0 红、P1 橙），整页颜色语义是一套。
+// 粉/杏/薄荷跟上面 BAR 同源（P0 粉、P1 杏），整页进度条颜色语义是一套 —— 这里取的是
+// BAR 不是 C：这一列画的是条子和图例色块，不渲染字，走图形那套浅色。
 const COVER_STROKE = [
-  { key: 'p0', color: C.red, label: '缺 P0', note: 'P0 有缺口 —— check-coverage.sh 直接 BLOCK' },
-  { key: 'gap', color: C.orange, label: '有缺口', note: '缺的都不是 P0，不阻断门禁' },
-  { key: 'full', color: C.teal, label: '全认领', note: '清单里每条都有脚本认领 —— 认领不等于跑绿' },
+  { key: 'p0', color: BAR.P0, label: '缺 P0', note: 'P0 有缺口 —— check-coverage.sh 直接 BLOCK' },
+  { key: 'gap', color: BAR.P1, label: '有缺口', note: '缺的都不是 P0，不阻断门禁' },
+  { key: 'full', color: BAR.P2, label: '全认领', note: '清单里每条都有脚本认领 —— 认领不等于跑绿' },
   { key: 'none', color: C.line, label: '清单没行', note: '清单里读不到这个域的行，条是空的' },
 ]
 const coverStrokeOf = (d) => {
@@ -1040,7 +1060,8 @@ export default function QaCatalog() {
                   <span style={{ width: 22, color: PRIORITY_COLOR[p] }}>{p}</span>
                   <Progress
                     percent={s.total ? Math.round((s.covered / s.total) * 100) : 0}
-                    size="small" strokeColor={PRIORITY_COLOR[p]} style={{ flex: 1, margin: 0 }} showInfo={false}
+                    size="small" strokeColor={BAR[p]} trailColor={BAR_TRAIL}
+                    style={{ flex: 1, margin: 0 }} showInfo={false}
                   />
                   <span style={{ color: C.gray, width: 60, textAlign: 'right' }}>{s.covered}/{s.total}</span>
                 </Hit>
@@ -1315,7 +1336,7 @@ export default function QaCatalog() {
                       <span style={{ width: 110, color: C.gray, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</span>
                       <Progress
                         percent={d.total ? Math.round((d.covered / d.total) * 100) : 0}
-                        size="small" showInfo={false} strokeColor={coverStrokeOf(d).color}
+                        size="small" showInfo={false} strokeColor={coverStrokeOf(d).color} trailColor={BAR_TRAIL}
                         style={{ flex: 1, margin: 0, minWidth: 60 }}
                       />
                       <span style={{ width: 52, textAlign: 'right', color: C.gray }}>{d.covered}/{d.total}</span>

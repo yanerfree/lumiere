@@ -13,6 +13,13 @@ PLAYWRIGHT_MCP_URL、deploy/start-ai-services.sh 的 38210/38931、vite.config.j
     playwright-mcp、AI 网关）需要真连一下。全部并发 + 0.8s 超时，整个接口 P99 < 1s。
 
 本接口不返回任何 token/密钥（AI 网关只给 host:port，不给 AUTH_TOKEN）。
+
+**只有系统管理员能调**（`require_role("admin")`，与 P_SYS_SERVICE_READ 那条权限点同档 ——
+它在 core/permissions.ADMIN_ONLY_PERMISSIONS 里）。不返回密钥不等于可以随便给：
+这张表本身就是环境拓扑 —— 17 个服务的名字、端口、谁没起来，凑起来是一份现成的内网探测
+结果，而普通用户一页都点不进去（/settings/services 前端就挡着），拿到它没有任何用途。
+前端顶栏那颗胶囊（components/ServiceStatusBadge.jsx）同一条件下才渲染，但**那只是 UX**，
+真正把门的是这里。
 """
 from __future__ import annotations
 
@@ -20,9 +27,11 @@ import asyncio
 import os
 from urllib.parse import urlsplit
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 
 from app.config import settings
+from app.deps.auth import require_role
+from app.models.user import User
 from app.services.proxy_probe_manager import split_hostport
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -151,7 +160,10 @@ def _self_port(request: Request) -> int:
 
 
 @router.get("/services")
-async def list_services(request: Request):
+async def list_services(
+    request: Request,
+    _: User = Depends(require_role("admin")),
+):
     from app.services.api_mock_manager import api_mock_server
     from app.services.grpc_mock_manager import grpc_mock_server
     from app.services.llm_mock_manager import mock_server as llm_mock_server
