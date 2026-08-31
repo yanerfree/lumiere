@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { timeColumn } from '../../utils/timeCol'
 import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox, Dropdown, Alert, Progress } from 'antd'
-import { BugOutlined, SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons'
+import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons'
 import { useNavigate, useParams } from 'react-router-dom'
 import { api, getValidToken } from '../../utils/request'
 import { useBranch } from '../../utils/branch'
@@ -1041,7 +1041,7 @@ export default function CaseManagement() {
     // 列名挂解释：用户问过「有的显示 admin#xx，有的 #xxx，有什么区别」——
     // 单号是原样存的自由文本，前缀就是仓库，平台不解析（见 utils/bugRef.js）。
     // 光看那一列看不出来的事，就得在列名上说，不能指望人记住口头约定。
-    { key: 'bugRefs', dataIndex: 'bugRefs', width: 98, defaultVisible: true,
+    { key: 'bugRefs', dataIndex: 'bugRefs', width: 108, defaultVisible: true,
       title: (
         <Tooltip title={<div style={{ fontSize: 12, maxWidth: 300, lineHeight: 1.8 }}>
           这条用例关联的缺陷单。<b>单号是原样记的</b>，前缀是<b>哪个仓库</b>：
@@ -1080,14 +1080,36 @@ export default function CaseManagement() {
             <div style={{ marginTop: 4, color: '#c9cdd4' }}>明细和链接看详情页「关联 bug」</div>
           </div>
         )
+        // ⚠ **这一格必须放得下一个完整单号**，否则整列只剩「admi…」——
+        //   单号被截掉的正是仓库后面那半段（`admin#484` 的 `#484`），而那半段才是
+        //   唯一能区分两条 bug 的信息。留一个"看不出是哪条"的标签等于没有这一列。
+        //   浏览器里量过（tests 里那条封样跑的就是这组数）：size="small" 的单元格
+        //   98 − 左右 padding 16 = **82px 可用**；`admin#484` 正文字体 11px 占 57.1px，
+        //   加 Tag 内边距 14 + BugOutlined 图标一档 18 = 89.1 > 82 —— 差 9px，
+        //   于是每一行都截。四处一起腾：
+        //     · 去掉 BugOutlined（省 18px）—— 列名已经写着「关联bug」，
+        //       这一列也只有这一种标签，图标不承担区分作用；红/灰仍然表示验没验回来。
+        //     · 单号改等宽字体（省 7.6px，49.5px）—— 它是个 ID，和「用例ID」那列同款。
+        //     · 内边距 7→6（省 2px）。
+        //     · 列宽 98 → 108（可用 92）。**是加宽不是挤别人** —— 上面那条
+        //       「匀宽度只能匀量过的余量」说的是砍，砍会把状态标签挤到换行、
+        //       行高从 42 跳到 55。这 10px 走的是横向总宽 1220 → 1230，
+        //       容器（实测 1466）放得下，没人被挤。改了记得同步下面 scroll.x。
+        //   量出来的余量（headless 复刻同款盒模型，tests 那条封样跑的就是这组数）：
+        //     admin#484 需 62 ≤ 92（带 +N 时 ≤ 76）、admin#1234 需 67 ≤ 76 —— 都完整。
+        //     只有 stoa-admin#4841 这种 15 字符的会收省略号，悬浮看全。
+        //   **加东西回来之前先回去量一遍**，别照截图估。
+        const bare = { border: 'none', padding: '0 6px' }
         return (
           <Tooltip title={tip} placement="topLeft" mouseEnterDelay={0.25} styles={{ body: { maxWidth: 360 } }}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, maxWidth: 82 }}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, maxWidth: 92 }}
               onClick={e => e.stopPropagation()}>
-              <Tag icon={<BugOutlined />} color={openRefs.length ? 'error' : undefined}
-                style={{ fontSize: 11, margin: 0, maxWidth: rest > 0 ? 56 : 80, overflow: 'hidden',
-                         textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                         ...(openRefs.length ? {} : { background: 'rgba(0,0,0,0.04)', color: '#86909c', border: 'none' }) }}>
+              <Tag style={{ fontSize: 11, margin: 0, maxWidth: rest > 0 ? 76 : 92, overflow: 'hidden',
+                            textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                            fontFamily: 'var(--font-mono)', letterSpacing: 0, ...bare,
+                            ...(openRefs.length
+                                ? { background: 'rgba(232,69,60,0.12)', color: '#e8453c' }
+                                : { background: 'rgba(0,0,0,0.04)', color: '#86909c' }) }}>
                 {head}
               </Tag>
               {rest > 0 && <span style={{ fontSize: 11, color: '#c9cdd4' }}>+{rest}</span>}
@@ -1790,11 +1812,11 @@ export default function CaseManagement() {
               pagination={false}
               size="small"
               loading={loading}
-              // x 跟默认显示的那几列**加起来**对齐（118+288+60+80+62+200+98+66+44+100+64+40
-              // = 1220）。原来写死 1142、而列宽之和是 1208 —— 对不上时 antd 仍按列宽之和
+              // x 跟默认显示的那几列**加起来**对齐（118+288+60+80+62+200+108+66+44+100+64+40
+              // = 1230）。原来写死 1142、而列宽之和是 1208 —— 对不上时 antd 仍按列宽之和
               // 排版，但"要不要画固定列阴影"是拿这个数判的，于是会出现"没滚动也画阴影"
               // 或反过来。改列宽记得回来改这里。
-              scroll={{ x: 1220, y: 'calc(100vh - 330px)' }}
+              scroll={{ x: 1230, y: 'calc(100vh - 330px)' }}
               rowSelection={{ selectedRowKeys: selectedRowKeys, onChange: setSelectedRowKeys }}
               style={{ flex: 1 }}
               locale={{ emptyText: <Empty description="暂无用例" /> }}

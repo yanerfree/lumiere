@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.services import case_service
 from app.services.folder_service import list_folder_tree
+from app.services.script_run_service import sync_after_plan_change
 
 
 def _case_to_dict(c) -> dict:
@@ -348,9 +349,13 @@ async def create_case(
         preconditions=preconditions,
         steps=steps or [],
         expected_result=expected_result,
+        # **必须从请求里带进去，不能建完再赋。** create_case 内部 sync_manual_status →
+        # sync_review_status 是在**建的那一刻**跑的：那时 target_level 还是默认 spec，
+        # 于是「写了步骤 = manual completed = 计划兑现」立刻成立，一条 full 的用例
+        # 刚建出来就顶着「完成 + 待审」，而接口和 UI 两维一次都没跑过。
+        target_level=target_level,
     )
     case = await case_service.create_case(session, uuid.UUID(branch_id), data, source="ai")
-    case.target_level = target_level
     if (target_level_reason or "").strip():
         case.target_level_reason = target_level_reason.strip()[:1000]
     # CC 侧确认记录：平台只存不判。改了步骤/预期结果会被 update_case 自动清掉，
@@ -546,8 +551,11 @@ async def update_case(
     case = await case_service.update_case(session, cid, data)
     if target_level_reason is not None:
         case.target_level_reason = (target_level_reason or "").strip()[:1000] or None
-    if target_level is not None:
+    if target_level is not None and target_level != case.target_level:
         case.target_level = target_level
+        # 计划变了，「状态」列必须跟着变 —— 见 sync_after_plan_change 的注释。
+        # 这一行是 2026-08-31 那批「UI·草稿 + 状态·完成 + 审核·通过」的正解。
+        sync_after_plan_change(case)
     # 「卡在外部条件上」：写一句等什么，写空字符串＝解除标注（条件到位了自己撤）
     if blocked_external is not None:
         case.blocked_external = blocked_external.strip()[:500] or None

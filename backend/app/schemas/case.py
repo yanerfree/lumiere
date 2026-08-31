@@ -67,6 +67,10 @@ class UpdateCaseRequest(BaseSchema):
     manual_status: Literal["draft", "debugging", "completed"] | None = None
     ui_status: Literal["draft", "debugging", "completed"] | None = None
     api_status: Literal["draft", "debugging", "completed"] | None = None
+    # 覆盖计划。**这个字段以前漏在这里**，而详情页的「计划·」下拉一直在往上传 ——
+    # pydantic 默认 extra='ignore'，于是改完点保存弹「保存成功」、库里一个字没变，
+    # 刷新一下又跳回原值。漏字段不报错，比报错难发现得多。
+    target_level: Literal["spec", "spec_api", "full"] | None = None
 
 
 class BatchCaseRequest(BaseSchema):

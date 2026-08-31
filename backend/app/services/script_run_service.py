@@ -266,6 +266,43 @@ def copied_unverified(case) -> bool:
             and getattr(case, "ui_status", "draft") == "draft")
 
 
+def plan_satisfied(case) -> bool:
+    """**这条用例的覆盖计划兑现了没有** —— 只算 target_level 点名要做的那几维。
+
+    spec = 只要手工步骤 / spec_api = 步骤+接口 / full = 三件套。
+    不在计划里的那一维永远停在 draft（页面显示「无」），**不能拿它拖住整体状态**。
+    """
+    target = getattr(case, "target_level", None) or "spec"
+    dims = ["manual"] + (["api"] if target in ("spec_api", "full") else []) \
+        + (["ui"] if target == "full" else [])
+    return all(getattr(case, f"{d}_status", None) == "completed" for d in dims)
+
+
+def sync_after_plan_change(case) -> None:
+    """**改完 target_level 必须调这个**，`sync_review_status` 一个人不够。
+
+    改计划和跑一次用例是两件事：
+    · 跑一次 —— `sync_review_status` 对人已审过的（approved/rejected/inconclusive）
+      提前 return，护的是「别让一次重跑悄悄抹掉人的结论」，对的。
+    · 改计划 —— 是有人明确说「这条还要多做一维」。多出来的那一维摆在那儿没做，
+      整条就**不再是「完成」**，跟谁审过没关系。审核结论仍然不动（那是人的判断，
+      审的是当时那几维），只把「状态」列拨回实情。
+
+    不加这一步的症状（2026-08-31 用户截图指出来的就是它）：一条 spec_api 的用例
+    三维齐了 → 自动「完成 + 待审」；后来发现 UI 那边也有问题，把计划提到 full，
+    `target_level` 是在 `update_case` **之后**单独赋的、没人重算 ——
+    于是列表上一行同时写着「UI·草稿」和「状态·完成」「审核·通过」，
+    三个信号互相打架。实测库里 4 条这样（TC-FWGL-00017/00033/00035、TC-JKQQRZ-00001）。
+    """
+    if case is None:
+        return
+    sync_review_status(case)
+    # 人已审过的上面那步整个跳过了，状态列得单独拨回来。「废弃」是人的决定，不碰。
+    if (case.review_status in ("approved", "rejected", "inconclusive")
+            and getattr(case, "lifecycle_status", None) != "deprecated"):
+        case.lifecycle_status = "done" if plan_satisfied(case) else "draft"
+
+
 def sync_review_status(case) -> None:
     """三维按 target_level 全部完成 → 审核标签自动进「待审」。
 
@@ -274,6 +311,10 @@ def sync_review_status(case) -> None:
 
     往回也自动：任何一维被打回调试，标签退回 NULL（待提审）。但**人已经审过的
     （approved/rejected）不动** —— 那是人的结论，不能被一次重跑悄悄抹掉。
+
+    ⚠ 那条提前 return 把**整体状态也一起冻住了**，这是它的代价。跑用例时无所谓
+    （维度没变、计划没变，状态本来就该维持），但**改 target_level 时不行** ——
+    计划变了状态必须跟着变。所以改计划走 `sync_after_plan_change`，别直接调这个。
 
     `inconclusive`（无法审核）一样不动。它是**审过了、但这次没能得出结论**
     （缺环境/环境挂了/没得跑），不是"还没审"。被这里冲回 pending 的话，
@@ -300,10 +341,7 @@ def sync_review_status(case) -> None:
         if getattr(case, "lifecycle_status", None) != "deprecated":
             case.lifecycle_status = "draft"
         return
-    target = getattr(case, "target_level", None) or "spec"
-    dims = ["manual"] + (["api"] if target in ("spec_api", "full") else []) \
-        + (["ui"] if target == "full" else [])
-    all_done = all(getattr(case, f"{d}_status", None) == "completed" for d in dims)
+    all_done = plan_satisfied(case)
     case.review_status = "pending" if all_done else None
 
     # 整体状态跟着一起走。**否则同一行三个信号自相矛盾**：列表页「状态」列写着

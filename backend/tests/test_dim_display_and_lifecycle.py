@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
-from app.services.script_run_service import sync_review_status
+from app.services.script_run_service import sync_after_plan_change, sync_review_status
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -56,6 +56,83 @@ def test_人已审过的不被重跑抹掉():
     c = _case(review="approved", api="debugging")
     sync_review_status(c)
     assert c.review_status == "approved"
+
+
+# ── 改覆盖计划 ────────────────────────────────────────────────────
+# 2026-08-31 用户截图：一行里同时写着「UI·草稿」「状态·完成」「审核·通过」。
+# 成因是 target_level 在 update_case **之后**单独赋值、没人重算派生状态 ——
+# 一条 spec_api 的用例三维齐了自动「完成+待审」，后来把计划提到 full，
+# 多出来的 UI 维摆在那儿没做，状态却还冻在「完成」上。
+
+
+def test_计划提高后整体状态退回草稿():
+    """spec_api 做完了 → 提到 full → UI 那一维还欠着，就不再是「完成」。"""
+    c = _case(target="spec_api", ui="draft", lifecycle="done", review="pending")
+    c.target_level = "full"
+    sync_after_plan_change(c)
+    assert c.lifecycle_status == "draft", "计划多了一维，状态列还写「完成」—— 同一行自相矛盾"
+    assert c.review_status is None
+
+
+def test_人审过的计划提高后状态也要退回_但审核结论不动():
+    """**这条是那批脏数据的正解。**
+
+    审核是人的判断、审的是当时那几维，不能被自动流程抹掉；但「状态」列说的是
+    「做完没有」，计划多一维就是没做完 —— 两件事，不能一起冻住。
+    """
+    for verdict in ("approved", "rejected", "inconclusive"):
+        c = _case(target="spec_api", ui="draft", lifecycle="done", review=verdict)
+        c.target_level = "full"
+        sync_after_plan_change(c)
+        assert c.lifecycle_status == "draft", f"{verdict} 把整体状态一起冻住了"
+        assert c.review_status == verdict, f"{verdict} 被自动流程改掉了"
+
+
+def test_计划降低后整体状态跟着变完成():
+    """反过来也要走：full 降到 spec_api，UI 不再算数，这条就齐了。"""
+    c = _case(target="full", ui="draft", lifecycle="draft", review=None)
+    c.target_level = "spec_api"
+    sync_after_plan_change(c)
+    assert c.lifecycle_status == "done"
+    assert c.review_status == "pending"
+
+
+def test_改计划也不许碰废弃():
+    c = _case(target="spec_api", ui="draft", lifecycle="deprecated", review="approved")
+    c.target_level = "full"
+    sync_after_plan_change(c)
+    assert c.lifecycle_status == "deprecated"
+
+
+def test_改计划的两条写入路径都要重算():
+    """MCP 的 lum_update_case 和详情页保存走的是两个函数，**两条都得调**。
+
+    只修一条的话，另一条继续产同样的脏数据 —— 而它们产出的行长得一模一样，
+    根本分不出是哪条路进来的。
+    """
+    mcp = (ROOT / "backend/app/mcp/tools/test_cases.py").read_text(encoding="utf-8")
+    assert "sync_after_plan_change" in mcp, "lum_update_case 改完 target_level 没重算"
+    svc = (ROOT / "backend/app/services/case_service.py").read_text(encoding="utf-8")
+    assert "sync_after_plan_change" in svc, "update_case 改完 target_level 没重算"
+
+
+def test_更新接口收得下覆盖计划():
+    """详情页的「计划·」下拉一直在传 targetLevel，而 UpdateCaseRequest 没这个字段 ——
+    pydantic 默认 extra='ignore'，于是弹「保存成功」、库里一个字没变。"""
+    src = (ROOT / "backend/app/schemas/case.py").read_text(encoding="utf-8")
+    i = src.index("class UpdateCaseRequest")
+    j = src.index("class BatchCaseRequest")
+    assert "target_level" in src[i:j], "UpdateCaseRequest 收不下 target_level，详情页改了存不进去"
+
+
+def test_建用例时计划要在建之前就位():
+    """create_case 内部的 sync 跑在建的那一刻。target_level 建完再赋，
+    那一刻它还是默认 spec —— 一条 full 的用例刚建出来就顶着「完成 + 待审」。"""
+    src = (ROOT / "backend/app/mcp/tools/test_cases.py").read_text(encoding="utf-8")
+    i = src.index("CreateCaseRequest(")
+    j = src.index("create_case(session", i)
+    assert "target_level=target_level" in src[i:j], \
+        "lum_create_case 没把 target_level 带进 CreateCaseRequest"
 
 
 # ── 显示层 ──────────────────────────────────────────────────────

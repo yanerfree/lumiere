@@ -19,6 +19,8 @@
 from __future__ import annotations
 
 import inspect
+import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -26,6 +28,10 @@ import pytest
 from app.core.exceptions import ValidationError
 from app.services.bug_ref_service import (blocked_by_bug, has_fixed_bug,
                                           normalize_bug_refs, normalize_tags)
+
+
+ROOT = Path(__file__).resolve().parents[2]
+CASE_LIST = ROOT / "frontend/src/pages/cases/CaseManagement.jsx"
 
 
 def _case(refs=None, **kw):
@@ -308,3 +314,71 @@ def test_none分支要挡住标量():
     from app.services.case_service import list_cases as rest_list
     for fn in (list_cases, rest_list):
         assert "jsonb_typeof" in inspect.getsource(fn)
+
+
+# ── 这一列得放得下一个完整单号 ────────────────────────────────────
+# 2026-08-31 用户原话：「一个完整的 bug 都显示不出来了」。整列都是「admi…」——
+# 被截掉的恰好是仓库后面那半段（`admin#484` 的 `#484`），而那半段才是唯一能
+# 区分两条 bug 的信息。**留一个"看不出是哪条"的标签，等于没有这一列。**
+# 成因是格子里塞了四样东西：列宽 98 − 单元格左右 padding 16 = 82 可用，
+# 而 `admin#484`（11px 正文字体，实测 57.1px）+ Tag 内边距 14 + 图标一档 18
+# = 89.1 —— 差 9px，于是每一行都截。
+
+
+def _code_only(text: str) -> str:
+    """剥掉 `//` 注释行再判。
+
+    上面那一列的注释里就写着「去掉 BugOutlined」这句话 —— 不剥的话这条测试
+    读到的是自己的说明文字，永远红。（同一个坑「列定义的字面写法别写进注释」
+    在 CaseManagement.jsx 里已经用中文钉过一次。）
+    """
+    return "\n".join(l for l in text.splitlines() if not l.strip().startswith("//"))
+
+
+def _bug_column() -> str:
+    src = CASE_LIST.read_text(encoding="utf-8")
+    i = src.index("key: 'bugRefs'")
+    return src[i:src.index("key: 'tags'", i)]
+
+
+def test_单号不许再挤在图标旁边():
+    """图标不承担区分作用（列名已经写着「关联bug」，这一列也只有这一种标签），
+    而它吃掉的 18px 正是单号差的那一截。红/灰仍然表示验没验回来。"""
+    assert "BugOutlined" not in _code_only(CASE_LIST.read_text(encoding="utf-8")), \
+        "图标加回来了 —— 它一个人就够把单号截掉，加之前先回去量一遍"
+
+
+def test_单号用等宽字体():
+    """它是个 ID，和「用例ID」那列同款；等宽还省 7.6px。"""
+    assert "var(--font-mono)" in _bug_column(), "单号没用等宽字体"
+
+
+def test_标签宽度跟列宽对得上():
+    """列宽、外层 span、Tag 三个数必须同时改，只改一个就还是截。
+
+    size="small" 的单元格左右 padding 各 8 —— 可用宽度 = 列宽 − 16。
+    """
+    col = _bug_column()
+    width = int(re.search(r"width:\s*(\d+)", col).group(1))
+    avail = width - 16
+    wrap = int(re.search(r"gap:\s*2,\s*maxWidth:\s*(\d+)", col).group(1))
+    assert wrap == avail, f"外层 span maxWidth={wrap}，可用宽度是 {avail}"
+    solo = int(re.search(r"maxWidth:\s*rest\s*>\s*0\s*\?\s*\d+\s*:\s*(\d+)", col).group(1))
+    assert solo == avail, f"只有一个单号时 Tag maxWidth={solo}，可用宽度是 {avail}"
+    # 实测（headless 复刻同款盒模型）：admin#484 等宽 11px + 内边距 12 = 62px。
+    assert avail >= 62, f"可用 {avail}px，放不下一个 admin#484（62px）"
+
+
+def test_列宽之和要跟scroll_x对上():
+    """antd 拿 scroll.x 判「要不要画固定列阴影」，对不上就会没滚动也画阴影。
+    列宽注释里那串加法是唯一的账本 —— 改列宽必须回去改它。"""
+    src = CASE_LIST.read_text(encoding="utf-8")
+    i = src.index("scroll={{ x:")
+    head = src[max(0, i - 600):i].replace("//", " ")
+    expr, total = re.search(r"((?:\d+\s*\+\s*)+\d+)\s*\n?\s*=\s*(\d+)", head).groups()
+    assert sum(int(n) for n in re.findall(r"\d+", expr)) == int(total), \
+        "注释里那串加法自己就不等于它写的和"
+    x = int(re.search(r"scroll=\{\{ x:\s*(\d+)", src[i:]).group(1))
+    assert x == int(total), f"scroll.x={x}，而列宽之和是 {total}"
+    assert str(int(re.search(r"width:\s*(\d+)", _bug_column()).group(1))) in expr, \
+        "关联bug 的列宽没进那串加法"

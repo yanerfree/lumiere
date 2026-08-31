@@ -211,6 +211,11 @@ async def update_case(
         case.ui_status = data.ui_status
     if data.api_status is not None:
         case.api_status = data.api_status
+    # 覆盖计划变了 —— 记下来，等下面内容判完一起重算（重算两遍没意义）。
+    plan_changed = (data.target_level is not None
+                    and data.target_level != case.target_level)
+    if data.target_level is not None:
+        case.target_level = data.target_level
 
     # 换模块。两条路，**folder_id 优先**：
     #   · folder_id —— 人在页面上从目录树里挑的那个目录，精确、任意层级、不建新目录。
@@ -242,6 +247,11 @@ async def update_case(
         # 重算一次，否则这条用例要等到下一次执行才更新审核标签。
         from app.services.script_run_service import sync_review_status
         sync_review_status(case)
+    if plan_changed:
+        # 计划变了要走 `sync_after_plan_change`，不是上面那个 —— 人已审过的用例
+        # 在 sync_review_status 里会被整个跳过，「状态」列就冻在旧计划的结论上。
+        from app.services.script_run_service import sync_after_plan_change
+        sync_after_plan_change(case)
 
     await session.flush()
     await session.refresh(case)
