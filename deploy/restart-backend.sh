@@ -16,6 +16,15 @@ PORT=8756
 LOG="$REPO/backend/.logs/uvicorn-lumiere.log"
 mkdir -p "$(dirname "$LOG")"
 
+# ── 日志**追加**，不是覆盖 ──
+# 原来是 `> "$LOG"`：每次重启把上一轮日志整个截断。代价在 2026-08-31 现形 ——
+# 外部 CC 报「MCP 通道断了两次」，我们只查得到当前进程那一次，上一轮的证据
+# 已经被这次重启自己擦掉了，于是「服务端为什么断」变成一个查不出来的事实。
+# 每次起服务先盖一条带时间戳的横幅，日志里就分得清哪一段属于哪个进程。
+if [ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 20000000 ]; then
+  mv -f "$LOG" "$LOG.1"   # 只留一代，够查最近两轮；再多没人翻
+fi
+
 pids_on_port() { ss -ltnp 2>/dev/null | grep ":$PORT " | grep -oP 'pid=\K[0-9]+' | sort -u; }
 
 # ── 解释器要在**杀之前**定下来 ──
@@ -52,7 +61,8 @@ fi
 
 # cwd 必须是 backend/ —— .env 是按 cwd 找的，换个目录起会静默丢掉它（429 降级通道跟着没）。
 cd "$REPO/backend"
-nohup "$PYBIN" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" > "$LOG" 2>&1 &
+{ echo; echo "======== 重启 $(date '+%Y-%m-%d %H:%M:%S') · 提交 $(git -C "$REPO" log -1 --format='%h %s' 2>/dev/null) ========"; } >> "$LOG"
+nohup "$PYBIN" -m uvicorn app.main:app --host 0.0.0.0 --port "$PORT" >> "$LOG" 2>&1 &
 echo "启动中 (pid $!) …"
 
 for _ in $(seq 1 40); do

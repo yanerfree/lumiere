@@ -22,12 +22,16 @@ instructions 里的引导是**软约束**，模型不一定听；这里做成**�
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import time
 import uuid
 
 from fastmcp.exceptions import ToolError
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import Middleware
+
+_log = logging.getLogger(__name__)
 
 # key_hash -> (allowed_tools|None, user_id|None, key_name|None, project_id|None, 写入时间)。
 # allowed=None 表示不限制工具；project_id=None 表示不限制数据范围。
@@ -311,6 +315,84 @@ async def current_caller_project_id() -> str | None:
         return None
 
 
+# ─────────────────────────────────────────────────────────────
+# 入参形状还原：只收 object/array 的参数，收到 JSON 字符串就先解回来
+# ─────────────────────────────────────────────────────────────
+#
+# 实测（2026-08-31 14:51 后端日志）：CC 调 lum_sync_orchestrated_scenario 时把
+# `reflections` 序列化成 JSON 字符串传进来，pydantic 在**工具函数还没执行**的时候
+# 就拒了（fastmcp server.py 的 "Invalid arguments for tool"），那一次带的 2KB 反思
+# 全废、得整条重发。同形状的参数全库有 19 个（13 个工具），谁都可能踩。
+# （其中 3 个原来标的是 `Any` —— 那等于**不校验**，字符串会一路混到函数体里才炸，
+#  同时也躲开了这里的判据；已改标 `dict`，见 tools/analysis.py 的 evidence。）
+#
+# 为什么在中间件做而不是逐个改签名：`call_next` 读的是 `context.message.arguments`
+# （fastmcp server.py:1266），在这里改完 dict 就是校验器看到的入参 —— 一处覆盖 61 个工具，
+# 而且**不放宽任何一条校验**：解回来的 dict/list 照旧走原来的 pydantic 校验，
+# 形状不对该报的错一个字不少。它只把「本来必挂」变成「能过」，不会把「本来该挂」变成「过」。
+#
+# ⚠ **必须查 schema，不能凭 "{" 开头就解析**。`lum_create_api_node.body`、
+# `lum_upsert_llm_mock_route.response_body` 这类真·字符串参数本来就常以 `{` 开头，
+# 盲解析会把请求体从字符串换成 dict，入库形状整个变 —— 而且不会报错。
+# 判据因此是两条都要：schema 接受 object/array **且不接受 string**。
+_JSON_SHAPED: dict[str, frozenset[str]] = {}
+
+
+def _accepts_json_shape(spec: object) -> bool:
+    """这个参数是否「只收 object/array」。`dict | str` 那种一律返回 False。"""
+    types: set[str] = set()
+    stack = [spec]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, dict):
+            continue
+        t = node.get("type")
+        if isinstance(t, str):
+            types.add(t)
+        elif isinstance(t, list):
+            types.update(x for x in t if isinstance(x, str))
+        for kw in ("anyOf", "oneOf", "allOf"):
+            stack.extend(node.get(kw) or [])
+    return bool(types & {"object", "array"}) and "string" not in types
+
+
+async def _json_shaped_params(tool_name: str) -> frozenset[str]:
+    cached = _JSON_SHAPED.get(tool_name)
+    if cached is not None:
+        return cached
+    try:
+        from app.mcp import mcp as _mcp  # 延迟导入：app.mcp 在文件末尾才 import 本模块
+        tool = await _mcp.get_tool(tool_name)
+        props = (getattr(tool, "parameters", None) or {}).get("properties") or {}
+        names = frozenset(p for p, spec in props.items() if _accepts_json_shape(spec))
+    except Exception:  # noqa: BLE001
+        return frozenset()  # 拿不到 schema 就一个字不动 —— 绝不靠猜
+    _JSON_SHAPED[tool_name] = names
+    return names
+
+
+async def _revive_json_args(name: str, args: object) -> list[str]:
+    """把点名参数上的 JSON 字符串解回 dict/list。返回被还原的参数名（供日志）。"""
+    if not isinstance(args, dict) or not args:
+        return []
+    shaped = await _json_shaped_params(name)
+    if not shaped:
+        return []
+    revived = []
+    for p in shaped & args.keys():
+        v = args[p]
+        if not isinstance(v, str) or v.lstrip()[:1] not in ("{", "["):
+            continue
+        try:
+            parsed = json.loads(v)
+        except ValueError:
+            continue  # 解不动就原样往下走，让 pydantic 报它本来的错
+        if isinstance(parsed, (dict, list)):
+            args[p] = parsed
+            revived.append(p)
+    return revived
+
+
 class ToolScopeMiddleware(Middleware):
     """按 Key 过滤工具列表 + 拦截越权调用。"""
 
@@ -370,6 +452,14 @@ class ToolScopeMiddleware(Middleware):
                 "如需使用，请在 Lumiere「MCP 工具中心 → 工具范围」调整 —— "
                 "范围是项目级的，改一次本项目所有 Key 都生效，不用重新建 Key。"
             )
+
+        # 入参形状还原：只收 dict/list 的参数收到 JSON 字符串就解回来（见文件中段那段注释）。
+        # 放在数据范围校验**之前** —— 那一层要在入参里翻 project_id/branch_id，
+        # 还是字符串的话它翻不进去，等于对序列化过的入参整层失效。
+        revived = await _revive_json_args(context.message.name, context.message.arguments)
+        if revived:
+            _log.info("MCP 入参已从 JSON 字符串还原: %s.%s",
+                      context.message.name, ",".join(sorted(revived)))
 
         # 数据范围：入参里的 id 必须属于这把 Key 归属的项目。
         # 归属为 NULL 的存量 Key 不限制 —— 跟 pick_scope 那条判据同一个口径

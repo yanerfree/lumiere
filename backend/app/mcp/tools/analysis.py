@@ -25,7 +25,11 @@ async def submit_analysis(
     cause: str,
     confidence: str,
     reasoning: str,
-    evidence: Any = None,
+    # `Any` 会让校验器**什么都收** —— CC 把它序列化成 JSON 字符串照样放过，
+    # 一路走到 analysis_service 里才炸，而且中间件那层按 schema 判形状的还原
+    # 也够不到它（schema 上连 type 都没有，接受 string 是合法的）。
+    # 标成 dict 之后两件事同时成立：形状不对当场报清楚，字符串自动还原。
+    evidence: dict | None = None,
     proposed_fix_target: str = "none",
 ) -> dict:
     """把你对某次失败的归因写回平台。

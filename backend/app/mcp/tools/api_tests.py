@@ -66,11 +66,70 @@ async def list_api_test_scenarios(
     }
 
 
+# 步骤名里带半角逗号是常态 —— 实测全库 2647 个步骤里 134 个有（前置条件那种长句
+# 「…（关掉则申请直接 active、不派待办,本条整条落空）」）。所以"逗号分隔的名字"这个
+# 契约对它们**天然失效**：逗号把名字切两半，两半都匹配不上，报「找不到」，
+# 而调用方按提示去 outline 抄了逐字一致的名字回来，照样找不到 —— 无解循环。
+# 所以点名一律**先认序号**（outline 给的 sortOrder，纯数字，切不坏），
+# 名字仍然收；名字里真带逗号的走 JSON 数组形式 `'["名字A","名字B"]'`。
+def _parse_step_picks(raw: str) -> list[str]:
+    """把 step_names / skip_steps 的原文切成一串"点名"。序号和名字混着给也行。"""
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    if raw[:1] == "[":
+        try:
+            arr = json.loads(raw)
+        except ValueError:
+            arr = None
+        if isinstance(arr, list):
+            return [str(x).strip() for x in arr if str(x).strip()]
+    sep = "\n" if "\n" in raw else ","
+    return [x.strip() for x in raw.split(sep) if x.strip()]
+
+
+def _resolve_step_picks(steps, picks: list[str]) -> tuple[list[str], list[str]]:
+    """点名 → (匹配到的步骤名·按场景原顺序, 没匹配上的原文)。序号优先于名字。"""
+    by_name = {st.name: st.name for st in steps}
+    by_order = {str(st.sort_order): st.name for st in steps}
+    hit, missing = set(), []
+    for p in picks:
+        name = by_order.get(p) or by_name.get(p)
+        if name is None:
+            missing.append(p)
+        else:
+            hit.add(name)
+    return [st.name for st in steps if st.name in hit], missing
+
+
+# 部分读取时**必须**喊出来的那句话。`mode="replace"` 是默认值，
+# 拿着 3 步的读取结果去 replace = 把另外 56 步静默删掉，而且当场不报错 ——
+# 下一次回归才发现，那时已经分不清是谁删的。
+_PARTIAL_WARNING = ("这是**部分读取**，不是整条场景。改完只能用 "
+                    "lum_sync_orchestrated_scenario(mode='patch') 回推 —— "
+                    "用 mode='replace' 会把这次没读到的步骤整个删掉。")
+
+
 async def get_api_test_scenario(
     session: AsyncSession,
     scenario_id: str,
+    step_names: str | None = None,
+    outline: bool = False,
 ) -> dict:
-    """获取场景详情（含所有步骤）"""
+    """获取场景详情（含所有步骤）。
+
+    默认整条给全 —— **默认行为一个字节都没变**。两个可选的省读方式：
+      · `outline=True`：只给步骤骨架（名字/顺序/分组/方法/URL/启停/上次状态），
+        不给断言、头、体、提取物。用来拿准确的步骤名。
+      · `step_names="12,13"`：只给点名的那几步，**字段照旧给全**。点名用 outline 给的
+        **序号**最稳；名字也收，但名字里带半角逗号的（全库 5%）必须传 JSON 数组
+        `'["名字A","名字B"]'`，否则会被逗号切坏。
+
+    为什么加它们：实测库里最大的场景（TC-DYGL-00020，59 步）整条读回来 53,887 B，
+    而按字段拆开看没有一处是冗余的（name 24%、assertions 23%，全是正文）——
+    省不出来只能少读。改 3 个断言的正确姿势是 outline 拿名字 → 点名读那 3 步 →
+    mode='patch' 推回去，而不是把 54KB 拉回来再整条覆盖。
+    """
     s = await session.get(ApiTestScenario, uuid.UUID(scenario_id))
     if not s:
         return {"error": "场景不存在"}
@@ -78,9 +137,42 @@ async def get_api_test_scenario(
     steps_result = await session.execute(
         select(ApiTestStep).where(ApiTestStep.scenario_id == s.id).order_by(ApiTestStep.sort_order)
     )
-    steps = steps_result.scalars().all()
+    steps = list(steps_result.scalars().all())
+    total = len(steps)
+
+    picks = _parse_step_picks(step_names or "")
+    wanted, missing = _resolve_step_picks(steps, picks)
+    if missing:
+        # 名字对不上就直接报，别静默少给几步 —— 少给的那几步在调用方眼里
+        # 和「这几步不存在」长得一模一样，接着就会拿 replace 去"补"。
+        return {"error": f"这几步在场景里找不到：{missing}。"
+                         f"用 availableSteps 里的**序号**点名最稳（名字里可能带逗号，"
+                         f"会被逗号分隔切坏）；要用名字就传 JSON 数组："
+                         f"""step_names='["名字A","名字B"]'。""",
+                "availableSteps": [f"{st.sort_order}. {st.name}" for st in steps]}
+    if wanted:
+        steps = [st for st in steps if st.name in set(wanted)]
+
+    if outline:
+        # 骨架档：assertions/headers/body/variablesExtract 和运行事实一概不给。
+        # 缺的不是"省掉的零值"而是"这一档不含它"，所以下面 partial 那几个字段
+        # 必须跟着一起给，不然调用方分不清"没有断言"和"这次没读断言"。
+        return {
+            "id": str(s.id), "code": s.code, "title": s.title, "status": s.status,
+            "source": s.source, "priority": s.priority,
+            "partial": True, "stepsReturned": len(steps), "stepsTotal": total,
+            "warning": _PARTIAL_WARNING + " 本次是 outline 档：断言/头/体/提取物都没给，"
+                                          "要看它们用 step_names 点名读。",
+            "steps": [{
+                "name": st.name, "sortOrder": st.sort_order, "groupName": st.group_name,
+                "method": st.method, "url": st.url, "enabled": st.enabled,
+                "lastStatus": st.last_status,
+            } for st in steps],
+        }
 
     return {
+        **({"partial": True, "stepsReturned": len(steps), "stepsTotal": total,
+            "warning": _PARTIAL_WARNING} if wanted else {}),
         "id": str(s.id),
         "code": s.code,
         "title": s.title,
@@ -357,7 +449,16 @@ async def check_assertion_bite(
             base_env = {item["key"]: item["value"] for item in merged}
         except Exception:  # noqa: BLE001
             pass
-    names = [n.strip() for n in (skip_steps or "").split(",") if n.strip()]
+    # 同一套切分/点名逻辑（见 _parse_step_picks 上面那段注释）：这里也支持按**序号**跳，
+    # 名字带逗号的走 JSON 数组。没匹配上的原文照样往下传 —— 由服务层报
+    # notFound（它本来就硬拦不放行），错误只留一个出口，别两处各报一遍。
+    picks = _parse_step_picks(skip_steps or "")
+    all_steps = list((await session.execute(
+        select(ApiTestStep).where(ApiTestStep.scenario_id == scenario.id)
+        .order_by(ApiTestStep.sort_order)
+    )).scalars().all())
+    resolved, missing = _resolve_step_picks(all_steps, picks)
+    names = resolved + missing
     result = await _run(session, scenario.id, names, base_env=base_env, env_name=env_name)
 
     # **结论落库。** 此前它只回给 CC，于是"这条用例的断言咬得住"这件事在库里

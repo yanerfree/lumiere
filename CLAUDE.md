@@ -15,6 +15,14 @@
   怀疑时对一眼：`ps -o lstart= -p <pid>` 的进程启动时间 vs `git log -1 --format='%ci'`。
   （2026-08-27 实测：QA 对账页「拉取最新」提示成功、数字一动不动，查了半天 —— 那个 bug
   `4aff452` 前一天 16:58 就修好了，后端还停在 15:38 起的那个进程上。）
+  **顺带一条：普通重启也会让所有连着 :18800 的 MCP 客户端掉线。**
+  fastmcp 的 lifespan 收尾会优雅终止全部 streamable-http 会话，而
+  `event_store=None`（不可续传），所以客户端只能整条重新 initialize —— 在外部 CC 那边
+  显示成「lumiere MCP 通道断开」。2026-08-31 外部 CC 就据此归因到「响应体积过大 /
+  会话空闲回收」，两条实测都不成立（45KB 响应连打 5 次 + 空闲 40s 会话号不变；
+  `session_idle_timeout` 我们从没传过 → None）。**要判是不是重启导致的**：
+  `grep 'Created new transport' backend/.logs/uvicorn-lumiere.log` 对时间 ——
+  会话生死现在有日志了，重启横幅也在同一个文件里。
 - **AI 模型 ID 只能填裸 ID**（`claude-sonnet-5`、`claude-opus-5`）。CLI 的长上下文后缀写法 `claude-opus-5[1m]` 打到接口会 404 —— 见下方文档的「红线」一节。
 - **不要删 `app/services/ai/llm_client.py` 里的 429 两层处理**（退避重试 + 降级 CLI 通道）。文本主路此前零重试，一个 429 会打死整条场景生成；原因和验证方法都写在文档里。
 - 换 AI 模型**不需要改代码**：走「AI 服务配置 → AI 能力→模型」页面即可（下拉是动态拉网关的）。

@@ -185,6 +185,28 @@ def _start_standalone_mcp_server():
 
     mcp_port = int(os.environ.get("MCP_PORT", "18800"))
 
+    # ── 把「会话什么时候建、什么时候没了」变成可查的事实 ──
+    # 2026-08-31：外部 CC 报 MCP 通道断了两次，问服务端日志 —— 我们**一条都答不出来**。
+    # 这个 uvicorn 是 log_level="warning"（没有访问日志），而 SDK 记会话生命周期
+    # （"Created new transport with session ID" / "Terminating session"）用的是 INFO，
+    # 本进程又没配任何 logging handler，root 只有 level=WARNING 的 lastResort 兜着，
+    # 于是那些 INFO 全被丢掉。断连于是成了一个查不出来的事实，而查不出来的事实
+    # 谁都可以随便归因（那次 CC 归到「响应体积过大」和「会话空闲回收」，两条实测都不成立：
+    # 45KB 响应连打 5 次 + 空闲 40s 会话不变，session_idle_timeout 我们从没传过 → None）。
+    #
+    # 只给这一个 logger 挂 handler，不动 root —— root 开 INFO 会把 httpx 每个请求都刷出来。
+    # 访问日志仍然不开：一次工具调用一行 POST /mcp/ 200 说明不了断连原因，
+    # 真正有用的是会话 id 的生生死死，就是下面这条。
+    _sess_log = logging.getLogger("mcp.server.streamable_http_manager")
+    if not _sess_log.handlers:
+        _h = logging.StreamHandler()
+        _h.setFormatter(logging.Formatter("%(asctime)s MCP会话 %(levelname)s %(message)s"))
+        _sess_log.addHandler(_h)
+        _sess_log.setLevel(logging.INFO)
+        # 不往上传：进程里已经有一个 basicConfig 风格的 root handler
+        # （"WARNING:app.services.ai.llm_client:…" 那种），不掐掉每条会话记录会落两遍。
+        _sess_log.propagate = False
+
     @_acm
     async def _noop_lifespan(_app):
         # session manager 已由主 app 的 lifespan 初始化，这里不重复初始化

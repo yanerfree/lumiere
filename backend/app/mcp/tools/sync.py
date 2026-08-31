@@ -1154,7 +1154,14 @@ async def get_sync_spec(kind: str = "all") -> dict:
         "5. 要顺带补 UI 脚本：本地写好跑通 → lum_sync_ui_script 入库 → lum_run_ui_script 在目标环境再跑一遍。\n\n"
         + "\n\n".join(selected.values())
     )
-    return {"kind": kind, "playbook": playbook, "sections": selected}
+    # **`sections` 只给名字，不给正文。** 原来这里返的是 selected 整个 dict，而
+    # `playbook` 已经把同样的 section 逐字拼在里面了 —— 一次 kind='all' 的响应
+    # 44,921 字符里有 21,085 是一字不差的重复（实测 `"\n\n".join(sections.values()) in playbook`
+    # 为 True）。CC 每轮开场必调这个工具，等于每轮白烧一半。
+    # 名字留着有用：告诉调用方这次拿到的是哪几节、还能单独取哪几节。
+    return {"kind": kind, "playbook": playbook,
+            "sections": list(selected),
+            "sectionsNote": "正文都在 playbook 里；要单独取某一节用 kind=<节名>。"}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2044,8 +2051,9 @@ async def upsert_automation_resource(
     session: AsyncSession,
     project_id: str,
     name: str,
-    exists_check: Any = None,
-    create_def: Any = None,
+    # 同 analysis.py 的 evidence：`Any` 等于不校验，字符串会一路混到函数体里。
+    exists_check: dict | None = None,
+    create_def: dict | None = None,
     description: str | None = None,
     keep: bool = True,
 ) -> dict:
