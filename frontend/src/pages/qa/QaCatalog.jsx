@@ -102,24 +102,45 @@ const C = {
   //   彩字亮，也都比彩字显眼。**任何"给这个字上个色"的需求，答案都是给它一个药丸。**
 }
 
-// —— 图形档：图标、✓/⚠ 这类符号、以及 ≥24px 的英雄数字。
-// WCAG 对非文字图形和大字号都是 3:1，而 3:1 的天花板正好在 L*56
-// （L*57 就掉到 2.99:1，实算过）—— 所以这三支已经是这一页**能取到的最亮**。
-// 页面上所有"表态"的颜色都集中在这一档：⚠ 图标、✓ 图标、两个大数字。
-// 红和绿取相对彩度 0.92：笔画细，眼睛没得比，只能各自开到自己上限的同一百分比
-// （等绝对彩度会让琥珀独自发闷 —— 同样 C*44，红占上限 78%、绿 75%、琥珀只有 56%）。
-// **琥珀是唯一的例外，它贴满 1.00。** 原来它也是 0.92（#cf6c16），被退掉了：
-//   L*56 的 60° 本来就叫"褐"，这一档的橙离土黄只差一点点；而 L* 已经被 3:1 顶死
-//   （L*57 就掉到 2.99:1），**只剩彩度这一个把手**，只能拧到底。
-//   同样欠 8% 彩度，红是藕粉、绿是灰绿，都不脏 —— 所以那两支不用跟着动。
-//   三档橙现在落在 L*84 91% / L*70 90% / L*56 100%；被退过的两支是
-//   L*56 92%（就是这次）和 L*84 70%（#f3c9af，见下）—— 90% 是这条线的下限，
-//   而**最暗那一档连 92% 都不够**。
+// —— 图形档：图标、✓/⚠ 这类符号、以及 ≥24px 的英雄数字。**不渲染正文字**。
+//
+// ⚠ **这一档 2026-09-01 整体从 L*56 抬到 L*68，也就是主动放弃了 WCAG 的 3:1。**
+//   别当成漏检查改回去 —— 那是一个权衡，不是一个疏忽，来龙去脉如下。
+//
+// 原来的理由是硬的：非文字图形要 3:1，而这一页的纸近白，3:1 的天花板正好在 L*56
+// （L*57 就掉到 2.99:1，实算过）。于是三支只能是 #f73e52 / #d36900 / #229866。
+// 问题也出在这里 —— L*56 的 60° 本来就叫"褐"，而 L* 被 3:1 顶死之后**只剩彩度
+// 一个把手**，拧到 100% 也还是深橙。同一天里"这个颜色太暗了"被说了四次，
+// 四次点的位置各不相同（P1 那根条、165 那个数字、✓ 已覆盖那颗药丸、整体印象），
+// 但量下来**全部落在这一档**：这不是四个毛病，是一个。
+//
+// 所以这次动的是判据本身，而不是继续在 L*56 里挑色：
+//   3:1 那条线管的是"颜色是**唯一**的信息出口"。这一页不是那种情形 ——
+//   每个有色图标旁边都钉着同义文字（「已覆盖」「风险 ≥6 却排在 P2/P3」
+//   「评完之后这个域又动过」），每个大数字下面都写着它是什么数。
+//   颜色在这里做的是**强调**，不是编码。
+// ⚠ 反过来说：**哪天把某个图标旁边的文字拿掉了，这一档必须跟着回深。**
+//   判断方法很简单 —— 遮住颜色，这条信息还读得出来吗？读不出来就不许用这一档。
+//
+// 新值取 L*68 各自贴自己色域的顶（99% / 99% / 100%）。为什么是"贴顶"而不是像
+// 底纹档那样按色相分配百分比：这一档的笔画细（11~15px 的图标），细笔画本来就吃亏，
+// 三支同时开到最艳是唯一不让某一支发闷的做法 —— 尤其是橙，它欠一点饱和就是土黄
+// （这条规律在下面 BAR 那段有三次实测记录）。
+// 为什么是 68 而不是更亮：再往上走绿会先掉出可辨范围（L*72 时对纸只有 1.8:1，
+// 那颗 ✓ 就成了一团淡雾）。68 这一档三支对最深那张纸都是 2.09:1，整齐。
 const VIVID = {
-  red: '#f73e52',  // 3.11:1  L*56 C*76.9 H 25°   92% 上限
-  warn: '#d36900', // 3.10:1  L*56 C*74.1 H 60°  100% 上限（贴满，理由见上）
-  ok: '#229866',   // 3.12:1  L*56 C*47.2 H158°   92% 上限
+  red: '#ff7f7f',  // L*68 C*53.7 H 25°   99% 上限   对纸 2.09:1（旧值 dE 26.1）
+  warn: '#ff8415', // L*68 C*82.2 H 60°   99% 上限   对纸 2.09:1（旧值 dE 14.3）
+  ok: '#00bd7b',   // L*68 C*60.0 H158°  100% 上限   对纸 2.09:1（旧值 dE 17.6）
 }
+// ⚠ 抬亮的一个**已知副作用**，写在这儿免得被当成手误：
+//   `VIVID.red` 和下面的 `BAR.danger`（#f9797a）现在只差 dE 2.1，肉眼是同一个颜色。
+//   不是漏改 —— 红在 L*66~68 之间的色域就那么点空间，而这两档原来分得开，
+//   靠的正是 VIVID 被 3:1 压在 L*56。那条线一去，红这一支的两档就合并了。
+//   橙（dE 8.3）和绿（dE 6.9）还分得开。真要把红拆回两档，只有把 BAR.danger
+//   往亮处挪，而那会动到进度条的轻重次序（红 66 < 橙 70 < 绿 74 是故意的），
+//   代价比"红的图标和红的条子同色"大得多。**同色在这里不产生歧义**：
+//   一个是图标、一个是长条，形状本来就不一样。
 
 // —— 条子档：进度条 + 药丸/圆点以外的所有色块。**不许拿去渲染字**（对纸只有 1.6~2.2:1）。
 //
@@ -145,8 +166,11 @@ const VIVID = {
 // **每根条子右边都钉着精确数字**（`182/252`、`13/28`）—— 条长和颜色都不是唯一出口。
 // 哪天把数字挪走了，这套颜色必须跟着回深。
 const BAR = {
-  danger: '#f9797a', // L*66 C*54.0（92% 上限）H 25°  ← 和 VIVID.red 同色相
-  warn: '#f99140',   // L*70 C*66.7（90%）    H 60°  ← 和 VIVID.warn 同色相
+  danger: '#f9797a', // L*66 C*54.0（92% 上限）H 25°  ← 和 VIVID.red 同色相（现已同色，见上）
+  warn: '#ff8d31',   // L*70 C*74.1（99% 上限）H 60°  ← 和 VIVID.warn 同色相
+                     //   2026-09-01 从 90% 提到贴顶（#f99140 → dE 7.4）：P1 那根条子
+                     //   被单独点名"偏暗"。**橙在三档里都得贴着自己的上限** ——
+                     //   这是下面那三次实测唯一收敛出来的一条规矩。
   ok: '#3ecd8d',     // L*74 C*56.6（88%）    H158°  ← 和 VIVID.ok 同色相
   mute: '#c4b4e3',   // L*76 C*26.0（58%）    H305°  ← P2：淡紫，不表态但**是个颜色**
   mute2: '#d3c6eb',  // L*82 C*20.2（60%）    H305°  ← P3：同一支再淡一档
@@ -212,9 +236,16 @@ const VEIL = 'rgba(255,255,255,.55)'
 // （原生 <button> 那几个筹码不受影响，它们自己写了 borderStyle/borderWidth。）
 const RING = c => `inset 0 0 0 1px ${c}`
 
+// ⚠ **有底色的那两档故意不带图标**（2026-09-01）。这一颗药丸是被单独截图点名
+//   「这个颜色太暗了」的那一个，而量它的像素得到的答案很具体：整片 65.6% 是
+//   #aedcc2 那层浅绿底，真正暗的只有两小块 —— 那枚 L*56 的 ✓（4.1% 面积）
+//   和墨字（5.2%）。图形档抬亮到 L*68 之后 ✓ 压在自己那块底上只剩 1.61:1，
+//   留着就是一团看不清的绿雾：**要么是暗点，要么是脏点，没有第三种结果。**
+//   所以直接去掉 —— 「已覆盖」三个字本来就在图标右边，颜色少一个出口不丢信息。
+//   （「已废弃」那一档反而必须留图标：它没有底色，图标是它唯一的形。）
 const STATE_TAG = {
-  covered: { text: '已覆盖', color: C.ink, bg: WASH.ok, icon: VIVID.ok, Icon: CheckCircleFilled },
-  gap: { text: '待补', color: C.ink, bg: WASH.warn, icon: VIVID.warn, Icon: BorderOutlined },
+  covered: { text: '已覆盖', color: C.ink, bg: WASH.ok },
+  gap: { text: '待补', color: C.ink, bg: WASH.warn },
   // 「已废弃」不给底：它是"这条不算了"，不是一种表态。见下面 TAG_TONE.mute。
   deprecated: { text: '已废弃', color: C.gray, bg: 'transparent', icon: C.faint, Icon: CloseCircleOutlined },
 }
@@ -248,6 +279,9 @@ const TAG_TONE = {
 // 这一页四条 info 说的都是「平台对这个仓库永远只读」这类**中性说明** ——
 // 不表态好坏，不该占一支色相（原来占的是蓝，这一版蓝整支删了）。
 // 所以 info 走白纱 + 发丝边，只有真的报警才上色。
+// 这里的图标**留着**，跟上面 STATE_TAG 去图标不矛盾：说明条是整条宽底，图标 15px，
+// 1.61:1 在这个尺寸上还能看出是个三角还是个圆；12px 的小药丸上就看不出了。
+// 何况说明条只出现四五处，不像状态列那样 537 行每行一个。
 const ALERT_TONE = {
   info: { bg: VEIL, Icon: InfoCircleOutlined, icon: C.gray },
   warning: { bg: WASH.warn, Icon: WarningFilled, icon: VIVID.warn },
@@ -563,9 +597,24 @@ const D = 24 * H
 // 凉的两档**不给琥珀/红**：搁置是元信息，不是错。一上暖色就等于替人下
 //「这个域该骂」的结论，而这一页没有任何依据这么说。
 // 每一档都另留一条不靠辨色的出口：圆点 实心●/空心○/没有 + 字重。
+//
+// 2026-09-01：热的两档在**域网格里**从"绿圆点 + 墨字"改成整格一颗浅绿药丸
+// （`pill`）。原来只有一颗 6px 的绿点上色，被点名"这一列没改" —— 说得对，
+// 一颗点在 24 行里根本扫不出来。
+// ⚠ 实测热的行是 **11/24（46%）**，不是少数。这个数字看着违反本页的音量规矩
+//   （见风险那一列：≥9 才带壳，占 30%），但那条规矩管的是**报警**，不管**分类**：
+//   这一列答的是"这个域还在做吗"，是个二分，而二分不能只标一半 ——
+//   少标的那一半会被读成"没数据"（跟优先级那一列同一个道理，见 PRIORITY_TONE）。
+//   46% 对 54% 恰恰是这份数据的实情：这个仓有一半的域在推进、一半搁着，
+//   一眼看见"差不多一半"本身就是要传达的信息。
+// 凉的两档继续走灰字，一个像素都不动 —— 「搁置」是元信息不是错，
+// 给它上暖色等于替人下"这个域该骂"的结论，而这一页没有依据这么说。
+// ⚠ `dotColor` 这一列**是给主表用的**（那边不带底，圆点是唯一的彩色出口），
+//   别再像第一版那样把它改成墨色 —— 那会把主表 530 行的绿点一起改掉。
+//   药丸里的圆点在**渲染处**就地压成墨色：浅绿底上再放绿点只有 1.61:1，看不见。
 const ACTIVITY_TIERS = [
-  { key: 'live',  within: 6 * H,    label: '刚动过', note: '离本仓最后一次动静 6 小时内（同一轮）', dot: '●', dotColor: VIVID.ok, color: C.ink,  weight: 600 },
-  { key: 'today', within: D,        label: '今天',   note: '24 小时内',        dot: '○', dotColor: VIVID.ok, color: C.ink,  weight: 400 },
+  { key: 'live',  within: 6 * H,    label: '刚动过', note: '离本仓最后一次动静 6 小时内（同一轮）', dot: '●', dotColor: VIVID.ok, color: C.ink,  weight: 600, pill: 'ok' },
+  { key: 'today', within: D,        label: '今天',   note: '24 小时内',        dot: '○', dotColor: VIVID.ok, color: C.ink,  weight: 400, pill: 'ok' },
   { key: 'week',  within: 7 * D,    label: '本周',   note: '一周内 —— 别人今天动了，它没有', dot: '○', dotColor: C.faint, color: C.gray,  weight: 400 },
   { key: 'cold',  within: Infinity, label: '搁置',   note: '一周以上没动过',   dot: '',  dotColor: C.faint, color: C.gray, weight: 400 },
 ]
@@ -633,26 +682,37 @@ function DomainWhen({ d, now, anchor }) {
                 照白底调的 —— 所以图例可以跟格子里用同一支色。
                 图例和格子不同色，比没有图例更坏：它会教错人。 */}
             {ACTIVITY_TIERS.map(t => (
-              <div key={t.key} style={{ paddingLeft: 6, fontWeight: t.weight, color: t.color }}>
-                <span style={{ display: 'inline-block', width: 14, color: t.dotColor }}>{t.dot}</span>
-                <b>{t.label}</b> · {t.note}
+              <div key={t.key} style={{ paddingLeft: 6, marginBottom: 2 }}>
+                <span style={{
+                  fontWeight: t.weight, color: t.color,
+                  ...(t.pill ? { background: WASH[t.pill], padding: '1px 7px', borderRadius: 9 } : null),
+                }}>
+                  <span style={{ display: 'inline-block', width: 14, color: t.pill ? C.ink : t.dotColor }}>{t.dot}</span>
+                  <b>{t.label}</b>
+                </span>
+                {' · '}{t.note}
               </div>
             ))}
           </div>
         </div>
       }
     >
-      <span
-        style={{
-          width: 86, textAlign: 'right', whiteSpace: 'nowrap',
-          color: act ? act.color : C.faint,
-          fontWeight: act ? act.weight : 400,
-        }}
-        onClick={e => e.stopPropagation()}
-      >
-        {act?.dot && <span style={{ marginRight: 3, color: act.dotColor }}>{act.dot}</span>}
-        {onlyCatalog && d.updatedAt && <span style={{ color: C.gray, marginRight: 3 }}>清单</span>}
-        {relWhen(d.updatedAt, now)}
+      <span style={{ width: 96, textAlign: 'right', whiteSpace: 'nowrap' }} onClick={e => e.stopPropagation()}>
+        <span
+          style={{
+            color: act ? act.color : C.faint,
+            fontWeight: act ? act.weight : 400,
+            // 只有热的两档带底。带底就得有内边距和圆角，否则字贴着底边看着像截断的
+            ...(act?.pill ? {
+              background: WASH[act.pill], padding: '1px 7px', borderRadius: 9,
+              display: 'inline-block', lineHeight: '16px',
+            } : null),
+          }}
+        >
+          {act?.dot && <span style={{ marginRight: 3, color: act.pill ? C.ink : act.dotColor }}>{act.dot}</span>}
+          {onlyCatalog && d.updatedAt && <span style={{ color: act?.pill ? C.ink : C.gray, marginRight: 3 }}>清单</span>}
+          {relWhen(d.updatedAt, now)}
+        </span>
       </span>
     </Tooltip>
   )
@@ -664,6 +724,15 @@ function DomainWhen({ d, now, anchor }) {
 // 取 BAR 不取 C：这一列画的是条子和图例色块，不渲染字，走图形那档浅色。
 // 三支跟 VIVID / WASH 是同色相（差 0.1°/0.0°/0.3°），所以「缺 P0」的条、它右边
 // 那颗红图标、P0 标签的红底纹，是同一支色相的三个亮度档 —— 整页只有一套语义。
+// 缺口那颗药丸的底：跟进度条**同一个分类器**（COVER_STROKE 的 key）映到 TAG_TONE。
+// 单独列一张表而不是在渲染处写 if，是为了让"两处必须同源"这件事在代码里看得见。
+const GAP_TONE = { p0: 'bad', gap: 'warn', full: 'ok' }
+
+// AI 评审那枚筹码的底：305° 淡紫的 L*92 档（C*11.7，65% 上限），墨字其上 8.15:1。
+// 比 WASH.low 再淡一档（dE 11.6）—— 它是**动作入口**，不是一个语义标签，
+// 不该和 P2 那颗药丸看着一样。
+const AI_CHIP = '#ece5f7'
+
 const COVER_STROKE = [
   { key: 'p0', color: BAR.danger, label: '缺 P0', note: 'P0 有缺口 —— check-coverage.sh 直接 BLOCK' },
   { key: 'gap', color: BAR.warn, label: '有缺口', note: '缺的都不是 P0，不阻断门禁' },
@@ -1222,7 +1291,7 @@ export default function QaCatalog() {
             <span style={{
               color: t.color, background: t.bg, padding: '2px 8px', borderRadius: 10,
               fontSize: 12, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 4,
-            }}><t.Icon style={{ fontSize: 11, color: t.icon }} />{t.text}</span>
+            }}>{t.Icon && <t.Icon style={{ fontSize: 11, color: t.icon }} />}{t.text}</span>
             {r.knownBugs?.length > 0 && (
               <Tooltip title="有脚本，但脚本头上挂着 @known-bug —— 跑得通，结论是红的">
                 <Tag style={tagStyle('bad')}>带缺陷</Tag>
@@ -1336,9 +1405,10 @@ export default function QaCatalog() {
                 一列里每行都一样的东西，本来就不需要颜色去区分。
                 所以这里：圆点带色、字用 C.gray。圆点三态 —— 实心绿 = 这一轮动过、
                 空心绿 = 今天动过、空心灰 = 更早（"搁置"连点都没有）。
-                第二轮改动后连域网格的字也退回墨色了（原来那两档是 #007b4e 深绿，
-                属于"暗色"），所以现在两处的区别只剩字重，不再有一处彩字。
-                域网格反过来 —— 那 24 行真的分成两半，颜色在那儿是有信息量的。 */}
+                域网格反过来 —— 那 24 行真的分成两半（实测 11/24 热），
+                所以那边热的两档整格给一颗浅绿药丸。**两处形不同是故意的**：
+                同一件事，在"就是要回答它"的地方给足，在"只是附注"的地方留一颗点。
+                ⚠ 别为了"统一"把药丸抄到这一列来 —— 上面那段说的就是抄过来的后果。 */}
             <span style={{
               fontSize: 12, whiteSpace: 'nowrap', cursor: 'help',
               color: act ? C.gray : C.faint,
@@ -1828,7 +1898,9 @@ export default function QaCatalog() {
                   评审徽标前有这个 = 评完之后这个域又动过，结论已过期
                 </span>
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(600px, 1fr))', gap: '2px 24px' }}>
+              {/* 600 → 618：缺口那格 96→104、更新时间那格 86→96，两格各多留出药丸的
+                  内边距。min 跟不上就是进度条被挤成 0 宽（理由见上面那条注释）。 */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(618px, 1fr))', gap: '2px 24px' }}>
                 {domainRows.map(d => {
                   const rv = reviews[d.code]
                   return (
@@ -1841,16 +1913,27 @@ export default function QaCatalog() {
                         style={{ flex: 1, margin: 0, minWidth: 60 }}
                       />
                       <span style={{ width: 52, textAlign: 'right', color: C.gray }}>{d.covered}/{d.total}</span>
-                      {/* 整格走中性，「· P0 n」也不例外 —— 这是全页唯一一处**明明是报警却不上色**
-                          的地方，理由是实测的频次：24 个域里 22 个缺 P0（92%）。
-                          按这一页的音量规矩（见风险那一列：≥9 才带壳，占 30%），92% 根本轮不到
-                          带壳；真给它一颗药丸，24 行叠起来是一条竖着的粉带，眼睛先看见那条带、
-                          再看见它右边那根条子 —— 而条子才是这一格的主信号（长短 = 覆盖率）。
-                          何况「缺的是不是 P0」左边那根条子已经用红色说过一遍了（见 COVER_STROKE）：
-                          这里只是把它数出来。**同一行里同一件事不上第二次色。**
-                          「缺 0」也不判绿：那一行的条子本来就是满格的绿，字再绿一次是第二次。 */}
-                      <span style={{ width: 96, textAlign: 'right', color: C.gray }}>
-                        缺 {d.gap}{d.p0Gap ? <b style={{ color: C.ink }}> · P0 {d.p0Gap}</b> : null}
+                      {/* 这一格 2026-09-01 从"整格墨色"改成一颗药丸。
+                          上一版的理由是频次：24 个域里 22 个缺 P0（92%），而这一页的音量规矩
+                          是"响的行要少"（见风险那一列：≥9 才带壳，占 30%），92% 轮不到带壳。
+                          那个理由本身没错，但它算漏了一件事 —— **这一列是这一格的落点，
+                          不是这一格的全部**：扫的人第一眼要找的就是"哪个域缺 P0"，而墨色让
+                          22 行和 2 行长得一模一样，等于把主信号写成了脚注。被当面点名了。
+                          现在的做法是上色，但**用左边那根条子同一个分类器**（coverStrokeOf）：
+                          缺 P0 → 粉底、缺但不含 P0 → 橙底、全认领 → 绿底，跟条子的颜色一一对上
+                          （WASH 和 BAR 是同色相的两个亮度档）。
+                          这样"24 行叠成一条粉带"那个担心还在，但那条带**说的和条子是同一句话**，
+                          不是第二句 —— 一行之内没有两个互相打架的颜色，只有一句话说了两遍，
+                          一遍用长短、一遍用颜色。给 `缺 0` 判绿也是同一个道理。
+                          ⚠ 别在这儿另写一套判缺口的 if：颜色一旦和条子不同源，就会出现
+                          「条子是绿的、药丸是粉的」那种自相矛盾的行，而没人查得出为什么。 */}
+                      <span style={{ width: 104, textAlign: 'right' }}>
+                        <span style={{
+                          ...tagStyle(GAP_TONE[coverStrokeOf(d).key]),
+                          display: 'inline-block', padding: '1px 7px', borderRadius: 9, lineHeight: '16px',
+                        }}>
+                          缺 {d.gap}{d.p0Gap ? <b> · P0 {d.p0Gap}</b> : null}
+                        </span>
                       </span>
                       <DomainWhen d={d} now={renderedAt} anchor={activityAnchor} />
                       {/* 80 → 96。原来这一格里最宽的是「AI 评审」按钮（实测 62px），
@@ -1879,19 +1962,28 @@ export default function QaCatalog() {
                           // 而它是全页重复次数最多的可点元素。上一版给的是品牌青的 link 按钮，
                           // 于是 24 个高饱和色块沿右边缘排成一列，比它旁边真正要人看的
                           // 「缺 · P0 n」还抢眼 —— **重复得越多，就越该轻**。
-                          // 默认灰、悬停转墨 —— 悬停只是"这个能点"，不是一个新语义，
-                          // 不该为它引入第五支色相。（这行原来写的是"悬停上蓝"，
-                          // 而代码一直是 C.ink：蓝在这一页已经整支删掉了。）
+                          // 2026-09-01：从"全灰文字 + 悬停转墨"改成**浅紫筹码 + 墨字**。
+                          // 「AI 评审按钮全是灰色」是原话。上一版那个"越重复越该轻"的判据
+                          // 走过头了 —— 轻到只剩灰字，它就不再像个能点的东西，
+                          // 而它右边那一列**每一行都长得像一段说明文字**。
+                          // 底色取 305° 那支淡紫的**再淡一档**（L*92，比 WASH.low 还淡
+                          // 一个档，dE 11.6，不会跟 P2 那颗药丸混）。为什么是紫不是三支
+                          // 语义色：按这一页的规矩，紫这一族管的就是「不表态好坏」
+                          // （P2、P3、空轨都在这一族），而"能点一下"正是不表态 ——
+                          // 一个动作入口不该借用「危险 / 待补 / 已覆盖」里的任何一支。
+                          // 24 行排下来仍然安静：这个底对纸只有 1.05:1，是一片淡影，
+                          // 不是 24 个色块。悬停加深到 WASH.low（同一族，深一档）。
                           <button
                             type="button"
                             onClick={() => { setReviewFor(d); setEnvId(envs[0]?.id) }}
                             style={{
-                              font: 'inherit', fontSize: 12, lineHeight: 1.6, padding: 0,
-                              border: 0, background: 'transparent', cursor: 'pointer',
-                              color: C.gray, display: 'inline-flex', alignItems: 'center', gap: 4,
+                              font: 'inherit', fontSize: 12, lineHeight: '16px',
+                              padding: '1px 8px', borderRadius: 9,
+                              border: 0, background: AI_CHIP, cursor: 'pointer',
+                              color: C.ink, display: 'inline-flex', alignItems: 'center', gap: 4,
                             }}
-                            onMouseEnter={e => { e.currentTarget.style.color = C.ink }}
-                            onMouseLeave={e => { e.currentTarget.style.color = C.gray }}
+                            onMouseEnter={e => { e.currentTarget.style.background = WASH.low }}
+                            onMouseLeave={e => { e.currentTarget.style.background = AI_CHIP }}
                           ><RobotOutlined style={{ fontSize: 12 }} />AI 评审</button>
                         ) : null}
                       </span>
