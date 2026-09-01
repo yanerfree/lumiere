@@ -19,6 +19,7 @@ async def next_duty(session: AsyncSession, branch_id: str, limit: int = 10) -> d
     ② 待复跑   —— 已经修好/bug 标 fixed 的：跑一遍，绿了单子自动关
     ③ 待补场景 —— 审核时被反复提到的模块级缺口：补用例
     ④ 待自证   —— 回推四问没答的：补 reflections
+    ⑩ 平台反馈有回音 —— 你报给平台的问题有结论了：lum_list_my_feedback 取回来
 
     每条都带**下一步该调哪个工具**，不用回头翻规范。
     """
@@ -94,11 +95,20 @@ async def next_duty(session: AsyncSession, branch_id: str, limit: int = 10) -> d
     from app.mcp.tools.selectors import selector_gaps_for_branch
     to_fix_testid, to_resume_ui = await selector_gaps_for_branch(session, bid)
 
+    # ⑩ 平台反馈的回音。**这一条和上面九条不同：它不是"你欠平台的"，是"平台欠你的"。**
+    # 放进同一个入口是有意的 —— 回音要是只在 lum_list_my_feedback 里，就得 CC
+    # 自己记得去查，而"记得去查"正是这条通道最不能依赖的东西（会话一换就没了）。
+    # 每轮上来都问的这个工具替它记着。
+    # 判「不需要处理」的那些尤其要送到眼前：没看到回复，同一个问题下轮照报不误，
+    # 而平台这边只会静默归并 +1，两边都以为对方在动。
+    echoes = await _feedback_echoes(session, bid)
+
     counts = {"待归因": len(to_analyze), "待复跑": len(to_rerun),
               "待处理接口变动": len(to_revise), "待补用例": len(to_cover_new),
               "待补场景": len(to_cover), "待自证": len(to_selfcheck),
               "待补 testid": len(to_fix_testid), "回来写 UI": len(to_resume_ui),
-              "等人拍板的废弃": len(awaiting_human)}
+              "等人拍板的废弃": len(awaiting_human),
+              "平台反馈有回音": len(echoes)}
     order = [k for k, v in counts.items() if v]
     return {
         "summary": counts,
@@ -112,6 +122,7 @@ async def next_duty(session: AsyncSession, branch_id: str, limit: int = 10) -> d
         "待补 testid": to_fix_testid[:limit] or None,
         "回来写 UI": to_resume_ui[:limit] or None,
         "等人拍板的废弃": awaiting_human[:limit] or None,
+        "平台反馈有回音": echoes[:limit] or None,
         "usage": "待归因堵得最死（不判原因，后面全卡着）；待复跑最便宜（跑一遍就可能关单）；"
                  "待处理接口变动是版本升级对账算出来的，一条条改（**预期按新版本的需求写，"
                  "不是按新版本的实测抄**）；待补用例是新版本的新端点，谁都没覆盖它；"
@@ -120,7 +131,10 @@ async def next_duty(session: AsyncSession, branch_id: str, limit: int = 10) -> d
                  "合了之后把那条选择器改成 active；"
                  "**回来写 UI 是最容易烂尾的一条** —— 抓手已经有了、"
                  "当初为它让路的用例还欠着 UI 脚本，写完跑通它自己出队。"
-                 "**别自己关单**：跑绿了平台自动关；要强行放过就人工关闭并写原因。",
+                 "**别自己关单**：跑绿了平台自动关；要强行放过就人工关闭并写原因。"
+                 "「平台反馈有回音」是你报给平台的问题有结论了 —— "
+                 "调 lum_list_my_feedback 取回来（取到即算已读，这条就出队）；"
+                 "判成「不需要处理」的回复里写了正确做法，照它改，别再报同一条。",
     }
 
 
@@ -214,3 +228,26 @@ async def _diff_duties(session: AsyncSession, bid, cases: dict, limit: int):
     } for c in pend]
 
     return to_revise, to_cover_new, awaiting_human
+
+
+async def _feedback_echoes(session: AsyncSession, bid) -> list[dict]:
+    """这个分支所属项目 / 这把 Key 报过的平台问题，有结论还没被取走的那些。
+
+    **失败不阻断整个 next_duty。** 这一条是"平台欠你的"，不是待办的主干；
+    反馈表出任何问题都不该让 CC 连"该干什么"都问不出来 —— 那等于新加的通道
+    把老的九个队列一起拖下水。
+    """
+    try:
+        from app.mcp.middleware import current_caller_key_name
+        from app.models.project import Branch
+        from app.services import cc_feedback_service as svc
+
+        br = await session.get(Branch, bid)
+        pid = str(br.project_id) if br is not None and br.project_id else None
+        rows = await svc.unread_echoes(
+            session, project_id=pid, reporter=await current_caller_key_name())
+    except Exception:
+        return []
+    for r in rows:
+        r["下一步"] = "lum_list_my_feedback() 取回音（取到即已读）；照回复里的做法改，别再报同一条"
+    return rows

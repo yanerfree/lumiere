@@ -361,3 +361,20 @@ def test_能读项目须知的档位也必须能写回去():
         tools = p["tools"]
         if tools and "lum_list_project_notes" in tools:
             assert "lum_add_project_note" in tools, p["key"]
+
+
+def test_平台反馈通道每一档都发():
+    """唯一一组「跨全部档位」的工具 —— 撞到平台自己的毛病**不挑活**。
+
+    写 UI 脚本会撞、归因会撞、只读 QA 结论也会撞（那一档只有两个工具，
+    描述有歧义就没有别的路可走）。哪一档没有这对工具，哪一档的 CC 就只能
+    把问题写进会话里，会话一结束就没了 —— 而那正是这条通道要消灭的东西。
+
+    读的那半必须同档：只写不读的通道必死。平台侧现成的反面样本是共享自动化资源，
+    写通道做好了，全平台 0 行 —— 因为写进去之后没有任何地方会再提起它。
+    """
+    for p in PROFILES:
+        if p["tools"] is None:
+            continue  # 「全量」档不限制，本来就有
+        assert "lum_report_feedback" in p["tools"], p["key"]
+        assert "lum_list_my_feedback" in p["tools"], p["key"]

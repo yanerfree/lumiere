@@ -25,6 +25,9 @@ export const PERM = {
   SYS_PROVIDER_MANAGE: 'system.provider.manage',
   SYS_SKILL_MANAGE: 'system.skill.manage',
   SYS_SERVICE_READ: 'system.service.read',
+  // CC 反馈（外部 Claude Code 报回来的**平台自身**问题）。全局，不挂项目 ——
+  // 一条平台缺陷不该按项目分成 N 条，见 docs/cc-feedback-channel.md §2。
+  SYS_FEEDBACK_MANAGE: 'system.feedback.manage',
   // 「工具」整组（mock/压测/抓包/HTTP 客户端…）的入口权限。
   // 这一组此前**一个 perm 都没挂** —— 于是游客也能看见八个入口，点进去全 403。
   SYS_TOOLS_USE: 'system.tools.use',

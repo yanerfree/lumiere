@@ -16,6 +16,7 @@ from app.api.variables import env_router, gvar_router
 from app.api.plans import router as plans_router, reports_router
 from app.api.tasks import router as tasks_router
 from app.api.logs import router as logs_router
+from app.api.cc_feedback import router as cc_feedback_router
 from app.api.scripts import router as scripts_router, export_router as scripts_export_router
 from app.api.scenario_variables import router as scenario_variables_router
 from app.api.automation_resources import router as automation_resources_router
@@ -393,6 +394,8 @@ app.include_router(api_test_router, dependencies=_SCOPED)
 app.include_router(scenario_gen_router, dependencies=_SCOPED)
 app.include_router(case_file_router, dependencies=[Depends(verify_case_access)])
 app.include_router(skill_manage_router, dependencies=_AUTHED)
+# 全局，**故意不挂 _SCOPED**：反馈的对象是平台自己，一条平台缺陷不按项目分家
+app.include_router(cc_feedback_router, dependencies=_AUTHED)
 app.include_router(project_skills_router)
 app.include_router(knowledge_router)
 app.include_router(screenshots_router)

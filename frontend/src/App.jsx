@@ -8,7 +8,7 @@ import {
   ThunderboltOutlined, ToolOutlined, SendOutlined,
   NodeIndexOutlined, SearchOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
-  DeploymentUnitOutlined,
+  DeploymentUnitOutlined, CommentOutlined,
 } from '@ant-design/icons'
 import { api, reviveSession } from './utils/request'
 import { useLang } from './utils/i18n.jsx'
@@ -30,6 +30,7 @@ import ManualRecord from './pages/plan/ManualRecord'
 import EnvConfig from './pages/settings/EnvConfig'
 import UserManagement from './pages/settings/UserManagement'
 import AuditLogs from './pages/settings/AuditLogs'
+import CCFeedback from './pages/settings/CCFeedback'
 import ChannelConfig from './pages/settings/ChannelConfig'
 import ApiManagement from './pages/apis/ApiManagement'
 import QaCatalog from './pages/qa/QaCatalog'
@@ -235,6 +236,9 @@ function AppLayout() {
         // 每项挂 perm，由下方 gate() 统一按 /me/permissions 过滤 —— 同一份权限点，菜单和后端守卫一处对齐，
         // 不再前端硬编码 role === 'admin'。普通用户三项全无 → 整个「系统管理」组自动消失。
         { key: '/settings/users', icon: <UserOutlined />, label: t('menu.users'), perm: PERM.SYS_USER_MANAGE },
+        // CC 反馈是**待办队列**不是查阅页 —— 排在日志/服务前面，因为它是唯一一项
+        // 「有人在等回音」的：压着不处理，外面那台 CC 下一轮照原样再撞一次。
+        { key: '/settings/cc-feedback', icon: <CommentOutlined />, label: t('menu.ccFeedback'), perm: PERM.SYS_FEEDBACK_MANAGE },
         { key: '/settings/logs', icon: <FileSearchOutlined />, label: t('menu.logs'), perm: PERM.SYS_USER_MANAGE },
         { key: '/settings/services', icon: <DeploymentUnitOutlined />, label: t('menu.services'), perm: PERM.SYS_SERVICE_READ },
       ],
@@ -422,6 +426,7 @@ function AppLayout() {
             <Route path="/settings/ai-providers" element={<RequirePerm perm={PERM.SYS_PROVIDER_READ}><AIProviderConfig /></RequirePerm>} />
             <Route path="/settings/users" element={<RequirePerm perm={PERM.SYS_USER_MANAGE}><UserManagement /></RequirePerm>} />
             <Route path="/settings/logs" element={<RequirePerm perm={PERM.SYS_USER_MANAGE}><AuditLogs /></RequirePerm>} />
+            <Route path="/settings/cc-feedback" element={<RequirePerm perm={PERM.SYS_FEEDBACK_MANAGE}><CCFeedback /></RequirePerm>} />
             <Route path="/tools/llm-mock" element={<LlmMock />} />
             <Route path="/tools/api-mock" element={<ApiMock />} />
             <Route path="/tools/proxy-probe" element={<ProxyProbe />} />

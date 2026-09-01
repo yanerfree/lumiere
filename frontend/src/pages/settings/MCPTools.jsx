@@ -24,7 +24,10 @@ const CAT_COLORS = {
   '需求→用例流水线': 'magenta', 'UI 脚本': 'volcano', '执行报告': 'purple',
   '项目须知': 'magenta', 'Mock 与观测': 'cyan',
   '文档规范': 'gold', 'Skill 共享': 'lime', '失败归因': 'error',
-  '版本升级·分支对账': 'gold', 'QA 仓对账': 'processing', '其它': 'default',
+  '版本升级·分支对账': 'gold', 'QA 仓对账': 'processing',
+  // 平台反馈是**唯一一组「对象是 Lumiere 自己」的工具**，色相刻意跟其它组拉开：
+  // 别的组都在说被测系统，只有这一组在说平台自己。
+  '平台反馈': 'slate', '其它': 'default',
 }
 
 /*
@@ -45,6 +48,7 @@ const CAT_HEX = {
   green: '#2ec4b6', blue: '#4e8af0', cyan: '#0ea5a0', geekblue: '#5a6fd8',
   orange: '#ff7d00', red: '#e8453c', magenta: '#d9548f', volcano: '#f2734d',
   purple: '#7c5cbf', gold: '#faad14', lime: '#8fbf3f', error: '#e8453c',
+  slate: '#6b7a99',
   default: '#a9b0ba',
 }
 const catHex = (cat) => CAT_HEX[CAT_COLORS[cat]] || CAT_HEX.default

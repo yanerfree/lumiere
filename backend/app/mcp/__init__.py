@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastmcp import FastMCP
 
 from app.mcp.deps import get_mcp_session
-from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff, qa_catalog, selectors
+from app.mcp.tools import test_cases, api_endpoints, environments, test_reports, api_tests, scenario_gen, projects, ui_scripts, sync, skills, plans, analysis, project_notes, mocks, deliverable, review, duty, branch_diff, qa_catalog, selectors, feedback
 
 mcp = FastMCP(
     name="Lumiere",
@@ -72,8 +72,13 @@ mcp = FastMCP(
      · **卡住了**：环境连不上、账号没权限、依赖的数据造不出来、
        同一个坎试了两三次还是过不去 —— **说出来，别硬试**。
        闷头试一小时不如问一句；这里没有"问了显得不行"这回事。
-     · **发现了这条用例之外的问题**：别的模块的缺陷、平台工具本身不对劲、
-       文档和代码互相矛盾 —— 顺手说一声，别因为"不在这次范围内"就咽下去。
+     · **发现了这条用例之外的问题**：别的模块的缺陷、文档和代码互相矛盾 ——
+       顺手说一声，别因为"不在这次范围内"就咽下去。
+       ⚠ 其中**「平台工具本身不对劲」有专门的去处，不要只在对话里说一句**：
+       调 **lum_report_feedback** 报回来（工具描述有歧义、返回缺字段、门禁误伤、
+       文档跟实际对不上，都算）。说在对话里等于没说 —— 会话一结束就没了，
+       攒进一份文档等人来搬运，等读到的时候现场也没了。
+       回音看 lum_list_my_feedback，或者 lum_next_duty 的「平台反馈有回音」队列。
      · **要做影响别人的动作**：改平台级开关/全局配置、删除或改动不是你造的数据、
        动别的用例 —— 先说再做。这类事回滚代价高，而且会让并跑的用例莫名其妙挂掉。
 
@@ -511,6 +516,50 @@ _register(
     description="把这一轮撞出来的坑写回项目须知，别让下一轮再踩一遍。**一条只说一件事，正文 200 字以内**（超了直接拒，不截断），写成「现象 + 别踩的坑」。只记你亲手撞到的**事实**（「这个接口 404 有两种：上游的 404 和网关无路由的 404，只断状态码会误判」），不记判断结论（结论会过期，事实不会）。同标题覆盖。**规范/流程/写法约定别往这儿塞**：那种正文的家是 lum_push_skill（不限长度），这儿只留一条指路的事实 —— 撞了上限把正文压成「去看某某」，等于只剩一个指向空处的指针。参数: project_id, title, content, category(api_note/bug_pattern/custom，默认 api_note)",
 )
 
+
+# ── 平台反馈 ──────────────────────────────────────
+# CC 唯一一条「往 Lumiere 自己身上写」的路。判据、闸门、回音四条路径见
+# app/mcp/tools/feedback.py 的模块 docstring 和 docs/cc-feedback-channel.md。
+
+_section("平台反馈")
+
+_register(
+    feedback.report_feedback,
+    name="lum_report_feedback",
+    description="【平台自己有毛病就报这儿】撞到 Lumiere 的问题（工具描述有歧义、返回缺字段、"
+                "门禁误伤、文档和实际对不上）就报一条，别攒着也别咽下去 —— 攒到一份文档里等人来读，"
+                "等读到的时候现场早没了。**只报平台的**：被测系统的缺陷走 lum_submit_analysis，"
+                "被测系统的反直觉行为走 lum_add_project_note，用例自己的毛病你自己改。"
+                "判据一句话：**这条观察有没有一个「能自己报错」的家**？有就走那个家，没有才落这儿。"
+                "category 三选一：**bug**=平台说了会做 A 实际做了 B（含静默失败：知道出错却返回"
+                "语法上合法的结果）/ **improvement**=行为没错但代价不合理、容易把人带错路 / "
+                "**requirement**=平台今天没这个能力。**报错类不扣分**，平台分诊会重判一次，"
+                "两边不一致本身就是有用的信号。⚠ 三道闸：正文 ≥40 字（「这个工具不好用」没法处理）；"
+                "category=bug 时 expected 和 actual 都必填（「说好的是什么/实际是什么」想不清楚的，"
+                "多半不是缺陷是用法）；每把 Key 每天 40 条新指纹，**撞同一个坑再多次都不占配额**"
+                "（那走归并，只 +1，撞得越多排得越靠前）。同一件事被判过「不需要处理」的，"
+                "再报会当场把上次的理由甩回给你、不新建行。回音走 lum_list_my_feedback 和 "
+                "lum_next_duty 的「平台反馈有回音」队列。参数: title(一句话说清是什么毛病), "
+                "body(三段：想干什么/平台实际怎么反应的-原始返回抄一段/期望它怎么反应), category, "
+                "tool_name(撞到的是哪个 lum_* 工具，强烈建议填 —— 它是指纹的一半), "
+                "expected, actual, repro(怎么复现), refs(用例编号/场景id/运行id 列表), project_id(可选，默认取本 Key 的项目)",
+)
+
+_register(
+    feedback.list_my_feedback,
+    name="lum_list_my_feedback",
+    description="看自己报过的平台问题现在什么下场：认下了没、判成哪一类、回音是什么。"
+                "**读到的回音当场算已读**，不会再出现在 lum_next_duty 里 —— 所以别只为了"
+                "「看一眼」调它，看了就要处理。判为「已处理」的会带一句提醒：平台后端不带 --reload，"
+                "验之前得先重启，不然你会得出「他没修」的结论而那是旧进程在跑。"
+                "判为「不需要处理」的会带**正确做法** —— 那种多半是你没找对方法，照着做别再报一遍。"
+                "参数: status(可选，按状态筛), unread_only(默认true，只看还没取走的回音), project_id(可选)",
+)
+
+
+# _section 是「自上而下线性执行」的状态，不写就沿用上一段 —— 下面这两条本来就该
+# 归「用例·手工步骤」（此前一直挂在「项目须知」名下，正是这种沿用漏出来的）。
+_section("用例·手工步骤")
 
 _register(
     test_cases.update_case,

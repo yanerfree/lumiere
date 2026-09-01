@@ -43,6 +43,16 @@ _LOCATE = ["lum_list_projects", "lum_list_branches"]
 # 或脚本的工具` 钉的就是那个集合，不是"一个字都不许写"。
 _NOTES = ["lum_list_project_notes", "lum_add_project_note"]
 
+# 平台反馈：**每一档都发**，包括那些刻意"只读"的档。
+# 理由跟 _NOTES 同源但更硬一层：撞到平台自己的毛病是**没法预先分到某一档**的 ——
+# 恰恰是最窄的那几档（只读 QA 结论、只提归因）最容易撞到工具描述有歧义、返回缺字段，
+# 而那几档如果发不出这个工具，它就只能把问题写进会话里，会话一结束就没了。
+# 这不违反归因/QA 档那两条纪律：纪律是**不改用例/脚本/执行状态**、
+# **不往 QA 仓写**，报一条平台自己的问题两样都不碰。
+# 读的那半（lum_list_my_feedback）必须同档发 —— 只写不读的通道必死，
+# 平台侧现成的反面样本是共享自动化资源：写通道做好了，全平台 0 行。
+_FEEDBACK = ["lum_report_feedback", "lum_list_my_feedback"]
+
 # 档位名单列出来：全链路那一档的说明要**逐字引用**这四个名字拼出来。
 # 手写一句"写用例 → 回填接口场景和 UI 脚本 → 组计划跑一轮 → 读报告 → 提归因"
 # 看着顺，但和子档各自的说法对不上 —— 人得自己猜"这一档到底包不包含那一件"。
@@ -58,7 +68,7 @@ _LABELS = {
 # 又得回头猜哪个才算数。test_四段的排列顺序和说明一致 钉住了这条。
 _CHAIN = ["live", "uiscript", "regression", "triage"]
 
-_LIVE = _LOCATE + _NOTES + [
+_LIVE = _LOCATE + _NOTES + _FEEDBACK + [
     "lum_list_cases", "lum_get_case", "lum_get_folder_tree", "lum_create_case", "lum_update_case",
     "lum_list_api_tree", "lum_get_api_node",
     "lum_list_environments", "lum_get_merged_variables",
@@ -102,7 +112,7 @@ _MOCKS = [
     "lum_llm_mock_requests", "lum_llm_mock_reset", "lum_proxy_capture",
 ]
 
-_UISCRIPT = _LOCATE + _NOTES + [
+_UISCRIPT = _LOCATE + _NOTES + _FEEDBACK + [
     "lum_list_cases", "lum_get_case",
     "lum_get_sync_spec", "lum_list_global_data",
     "lum_list_scenario_variables", "lum_upsert_scenario_variables",
@@ -119,7 +129,7 @@ _UISCRIPT = _LOCATE + _NOTES + [
     "lum_review_batch", "lum_review_batch_status", "lum_module_checkup",
 ]
 
-_TRIAGE = _LOCATE + _NOTES + [
+_TRIAGE = _LOCATE + _NOTES + _FEEDBACK + [
     "lum_list_plans", "lum_list_reports", "lum_get_report_summary",
     "lum_get_failed_scenarios", "lum_get_ui_script_result", "lum_get_case",
     "lum_submit_analysis", "lum_list_pending_confirm",
@@ -127,7 +137,7 @@ _TRIAGE = _LOCATE + _NOTES + [
     "lum_next_duty",
 ]
 
-_REGRESSION = _LOCATE + [
+_REGRESSION = _LOCATE + _FEEDBACK + [
     "lum_list_cases", "lum_list_environments",
     "lum_create_plan", "lum_run_plan", "lum_list_plans",
     "lum_list_reports", "lum_get_report_summary", "lum_get_failed_scenarios",
@@ -194,7 +204,7 @@ PROFILES: list[dict] = [
                 "并断言它到底往上游发了什么；或者用代理抓真实请求当写用例的素材",
         "hint": "测 AI 网关绕不开这一档 —— 用真上游又慢又费钱又不确定，"
                 "而且「网关往上游发了什么」只有 Mock 看得见（客户端只看得到最终响应）",
-        "tools": _LOCATE + _MOCKS,
+        "tools": _LOCATE + _FEEDBACK + _MOCKS,
     },
     # 「需求文档批量生成用例」档已删 —— 那条流水线的入口整体下线了，
     # 原因见 app/mcp/__init__.py 里「需求→用例流水线：已下线」那段注释。
@@ -208,7 +218,7 @@ PROFILES: list[dict] = [
         "label": "维护接口库",
         "task": "把系统有哪些接口、怎么调记进接口库，供后续写用例和编排场景时查阅",
         "hint": "接口库只是文档，没有断言、不能执行。要可执行的接口场景，选「用例：步骤 + 接口场景」亲手跑通再回推",
-        "tools": _LOCATE + [
+        "tools": _LOCATE + _FEEDBACK + [
             "lum_list_api_tree", "lum_get_api_node", "lum_create_api_node",
             "lum_list_api_tests", "lum_get_api_test",
         ],
@@ -221,16 +231,19 @@ PROFILES: list[dict] = [
         "label": "Skill 取用与共享",
         "task": "把本项目的 skill 推上平台，或取用别的项目共享出来的",
         "hint": "存的是客户端侧执行的 skill（跑在你机器的 Claude Code 里），平台只做存取",
-        "tools": ["lum_list_projects", "lum_list_skills", "lum_pull_skill", "lum_push_skill"],
+        "tools": ["lum_list_projects", "lum_list_skills", "lum_pull_skill", "lum_push_skill"] + _FEEDBACK,
     },
     {
         "key": "qareview",
         "label": "QA 仓：取域评审结论",
         "task": "把平台对某个域的评审结论拿回本地，照 evidence 里的锚点 grep 定位，逐条改脚本",
         "hint": "**平台对 QA 仓永远只读**，这一档也只有「拿」没有「写」—— "
-                "结论是建议不是门禁，改不改由仓库主人定。刻意不含任何写平台库的工具：读结论的人"
-                "跟写用例的人不是同一拨，给他全链路那一档等于把别人的用例库也一并交出去",
-        "tools": ["lum_list_projects", "lum_get_qa_review"],
+                "结论是建议不是门禁，改不改由仓库主人定。刻意不含任何写**用例库**的工具：读结论的人"
+                "跟写用例的人不是同一拨，给他全链路那一档等于把别人的用例库也一并交出去。"
+                "唯一的例外是 lum_report_feedback —— 报的是 Lumiere 自己的毛病，"
+                "不碰用例也不碰 QA 仓，而这一档恰恰最容易撞到平台的问题（它只有两个工具，"
+                "描述有歧义就没有别的路可走）",
+        "tools": ["lum_list_projects", "lum_get_qa_review"] + _FEEDBACK,
     },
     {
         "key": "all",

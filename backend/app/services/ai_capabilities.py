@@ -81,6 +81,9 @@ CAPABILITY_REGISTRY = [
     # 顶栏 AI 助手（操作助手）：把用户意图变成受权限约束的操作提议。走 text 档，不新增独立档位
     # （新档位没绑模型就会在「AI 能力→模型」页冒一个绑不上的空档，见本文件顶部约定）。
     {"key": "assistant",               "label": "AI 助手（操作助手）",   "category": "text",      "where": "顶栏「AI 助手」抽屉"},
+    # CC 反馈分诊。走 text 档，不新增独立档位（新档位没绑模型就会在这一页冒一个空档）。
+    # 它**只出建议不改状态** —— 理由见 models/cc_feedback.py 的 ai_analysis 那段注释。
+    {"key": "cc-feedback-triage",      "label": "CC 反馈分诊",          "category": "text",      "where": "系统管理 →「CC 反馈」→ 某条详情 →「AI 分析」"},
     # ── UI 脚本型(agentic) ──
     {"key": "ui-script",               "label": "AI 生成 UI 自动化脚本","category": "ui_script", "where": "已封存",            "deprecated": True, "deprecatedNote": "改由外部 Claude Code 写好回推，见 docs/cc-platform-loop-spec.md 红线 1"},
     {"key": "ui-script-repair",        "label": "UI 脚本自动修复",      "category": "ui_script", "where": "已封存",            "deprecated": True, "deprecatedNote": "自愈归 CC，平台只出证据"},

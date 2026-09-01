@@ -82,6 +82,16 @@
   有封样测试盯着；也**不要求对方仓库为我们加任何字段/文件/钩子**。要做回写先跟仓库主人谈，
   别从这个模块长出来。**配置在「QA 对账」页里配，不在编辑项目弹窗**；只有仓库地址必填，
   分支/清单路径/脚本范围留空 = 自动识别，**别给它们塞 uag-qa 的默认值**（见文档 §3）。
+- **CC 反馈的处置只有人能落，AI 只出建议。** 页面在**系统管理 →「CC 反馈」**（全局一张表，
+  不在项目内 —— 报的是平台自己的毛病，跟哪个项目无关；`project_id` 只当来源标注）。
+  「AI 分析」这个按钮**故意不改状态**：`wont_fix` 的回音会**永久短路**同指纹的后续上报
+  （`report()` 第 ① 步），让 AI 单方面落这个状态，等于给它一个「把一类反馈永久关死、
+  以后没人再看得到」的开关 —— 这种错不报错，只是安静地少一批反馈。
+  **另外别把「模型回空」存成一次分析**：那在页面上是一块**空的** AI 分析，看着像模型读过
+  觉得没啥可说，实际是一个字都没回来，还会覆盖掉上一次真有内容的那份。
+  实测（2026-09-01）：主路 429 → 降级到 CLI 通道（claude-proxy :38210，那头是 Claude Code），
+  反馈正文本身长得像一件待办，它会去**做事**而不是作答，回来就是空的 —— 所以那里 `_err` 报错，
+  不落库；换个没被限流的模型（.env 默认的 haiku）走主路，同一条提示词稳定出 JSON。
 - **别把项目 skill 放进 `app/skills/preset/`**。那个目录只放平台侧执行的 `lum-*`（会被当 prompt 喂后端 LLM、要绑模型档位）；客户端侧执行的 skill 走 DB，见下方文档。混了会让「AI 能力→模型」页冒出绑不上模型的空档位。
 
 ## 测试：**两套，都要跑**
@@ -118,7 +128,7 @@ cd /home/dreamer/lumiere && DATABASE_URL='postgresql+asyncpg://postgres:postgres
 | **LLM Mock 智能应答**：指令契约（MODE:/SAY:）、护栏回显协议、开关前后页面为什么长得不一样 | [docs/llm-mock-smart-contract.md](docs/llm-mock-smart-contract.md) |
 | 下阶段做什么：生成效率 / 生成质量 / 失败优化（含现状实测盘点） | [docs/next-phase-gen-quality-and-failure.md](docs/next-phase-gen-quality-and-failure.md) |
 | **CC ↔ 平台闭环的边界规则、红线、Story 清单**（改这一块之前先读） | [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) |
-| **CC 反馈通道**（平台工具缺陷/规范冲突/卡住了往哪报、防倒灌三道闸、回音为什么不能砍）**规划中，未实现** | [docs/cc-feedback-channel.md](docs/cc-feedback-channel.md) |
+| **CC 反馈通道**（平台工具缺陷/规范冲突/卡住了往哪报、防倒灌三道闸、回音为什么不能砍、为什么是全局一张表而不是项目内） | [docs/cc-feedback-channel.md](docs/cc-feedback-channel.md) |
 | **版本升级怎么复用上一版用例**：分支对账（端点反查）、三堆分法、状态流转、废弃审核 | [docs/version-upgrade-branch-diff.md](docs/version-upgrade-branch-diff.md) |
 | **数据归属与隔离**：MCP Key 为什么管不住数据、环境改项目级、哪些表该留全局（含一条「假隔离」陷阱） | [docs/data-scoping-and-isolation.md](docs/data-scoping-and-isolation.md) |
 | **权限模型**：440 个端点各挂什么守卫、角色档位（系统 admin/user/guest + 项目 manager/member）、前端按权限藏入口的口径、**2026-08-29 为什么砍到这几档** | [docs/permission-audit-2026-08.md](docs/permission-audit-2026-08.md) + `backend/app/core/permissions.py`（权限点与角色映射的唯一出处） |

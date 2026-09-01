@@ -51,6 +51,7 @@ P_SYS_PROVIDER_MANAGE = "system.provider.manage"  # 改 AI provider
 P_SYS_SKILL_MANAGE = "system.skill.manage"      # 改预置 skill
 P_SYS_SERVICE_READ = "system.service.read"      # 看服务监控
 P_SYS_TOOLS_USE = "system.tools.use"            # 工具组（mock/压测/http-client/toolbox…）
+P_SYS_FEEDBACK_MANAGE = "system.feedback.manage"  # CC 反馈（外部 CC 报回来的平台自身问题）
 
 # 全部权限点（admin 解析成这一整套）
 ALL_PERMISSIONS: frozenset[str] = frozenset({
@@ -59,7 +60,7 @@ ALL_PERMISSIONS: frozenset[str] = frozenset({
     P_MEMBER_MANAGE, P_PROJECT_SETTINGS,
     P_PROJECT_CREATE, P_SYS_USER_MANAGE, P_SYS_CHANNEL_READ, P_SYS_CHANNEL_MANAGE,
     P_SYS_PROVIDER_READ, P_SYS_PROVIDER_MANAGE, P_SYS_SKILL_MANAGE, P_SYS_SERVICE_READ,
-    P_SYS_TOOLS_USE,
+    P_SYS_TOOLS_USE, P_SYS_FEEDBACK_MANAGE,
 })
 
 # ── 项目角色 → 权限点集合（单调递增：member ⊂ manager）──
@@ -98,7 +99,7 @@ SYSTEM_ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
 ADMIN_ONLY_PERMISSIONS: frozenset[str] = frozenset({
     P_SYS_USER_MANAGE, P_SYS_CHANNEL_READ, P_SYS_CHANNEL_MANAGE,
     P_SYS_PROVIDER_READ, P_SYS_PROVIDER_MANAGE, P_SYS_SKILL_MANAGE,
-    P_SYS_SERVICE_READ,
+    P_SYS_SERVICE_READ, P_SYS_FEEDBACK_MANAGE,
 })
 
 # ── 系统角色封顶 ──────────────────────────────────────────────────

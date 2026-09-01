@@ -198,6 +198,10 @@ async function request(url, options = {}, _retried = false) {
     const err = new Error(errMsg)
     err.code = data?.error?.code
     err.status = res.status
+    // detail 是「为什么被拒 + 该怎么改」那一段（后端 AppError.detail）。
+    // 不挂上来的话，调用方只能拿到一句结论 —— 而拒绝理由本身常常才是有用的
+    // 那部分（CC 反馈通道的 why/howTo 就走这里）。
+    err.detail = data?.error?.detail
     return Promise.reject(err)
   }
 
@@ -206,8 +210,8 @@ async function request(url, options = {}, _retried = false) {
 
 export const api = {
   get: (url, options) => request(url, options),
-  post: (url, body) => request(url, { method: 'POST', body }),
-  put: (url, body) => request(url, { method: 'PUT', body }),
+  post: (url, body, options) => request(url, { method: 'POST', body, ...options }),
+  put: (url, body, options) => request(url, { method: 'PUT', body, ...options }),
   patch: (url, body, options) => request(url, { method: 'PATCH', body, ...options }),
   del: (url) => request(url, { method: 'DELETE' }),
   delete: (url) => request(url, { method: 'DELETE' }),
