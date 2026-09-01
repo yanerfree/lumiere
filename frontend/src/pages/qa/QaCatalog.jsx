@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
-  Card, Table, Tag, Space, Button, Input, Select, Alert, message, Tooltip,
+  Card, Table, Tag, Space, Button, Input, Select, message, Tooltip,
   Progress, Modal, Form, Collapse, Popconfirm, Popover, Checkbox, Drawer, Empty, Spin, Tabs,
+  ConfigProvider,
 } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, BugOutlined, FileTextOutlined, SettingOutlined,
@@ -15,181 +16,274 @@ import { copyToClipboard } from '../../utils/clipboard'
 import { PERM } from '../../utils/permissions'
 import { usePermissions } from '../../utils/PermissionContext'
 
-// 这一页的颜色只有一套，规矩就一条：**按语义定色相，按用途定深浅**。
-// 同一个意思永远同一个色相；同一支色相按用途分三档 —— 大字（BIG）、正文（C）、图形（BAR）。
+// 这一页的颜色只有一条规矩：**颜色只画色块，文字只用墨色**。
 //
-// 上一版栽的跟头正是缺这条规矩：文字那套按"能不能读"压暗（P0 #cf3128，H35.9°），
-// 进度条那套按"别刺眼"另挑浅色（P0 #F0839A，H8.5°）—— **同一个 P0，色相差了 27.4°**，
-// 标签是砖红、紧挨着的条是糖果粉，看着根本不是一回事；P1 差 12.1°、P2 差 15.9°。
-// 一页上于是并存 8 支色相，那不是"配色不好看"，是**同一个语义被画成了两个东西**。
-// 现在同语义各档的色相极差 ≤0.7° —— 三档是一支颜色的三个亮度，不是三支颜色。
+// 上一版栽的跟头不是色相不统一（那一版已经统一到四支色相了），是**把颜色刷到了笔画上**。
+// 起因听着很对：让「P1」「待补」「风险错配」这些字自己带上语义色。但 12px 的字要过
+// AA 4.5:1，在这一页的纸（最暗 #edecf6）上就把色相硬压到 L*≤45 —— 而 L*45 那一带：
+//     琥珀 = #9d500e 深褐      蓝 = #1e699e 藏青      绿 = #17734c 墨绿
+// 三支全是"掺了黑的颜色"。整页于是铺着几十处深褐深青，这就是**暗沉**的来源；
+// 又因为文字 / 底纹 / 条子 / 图标四种形态各自带色，同屏有色元素上百个，这就是**杂色**。
 //
-// 全页只有这四支色相，想加第五支，先说清它回答的是哪个问题：
+// 结论很硬：**「文字上色」和「不暗沉」在 4.5:1 这条线上是互斥的**，只能选一个。
+// 这一版选不暗沉：
+//     笔画（文字）→ 只有中性墨色三档 ink / gray / faint，外加一支红 crit
+//     色块        → 颜色全在这里：标签底纹 WASH、进度条 BAR、图标与大数字 VIVID
+//
+// 色块有色彩空间，是因为门槛根本不同：
+//   · 图形和 ≥24px 大字只要 **3:1** —— 天花板在 L*56，那是**鲜亮**的红/琥珀/绿；
+//   · 底纹只需要托住**墨字**（6.5:1，富余得很），不必再托 4.5:1 的彩字 ——
+//     于是底纹可以同时更亮**又**更艳：C*12.8 → C*21.6，对纸 1.09:1 → 1.30:1。
+//     上一版底纹淡到 1.09:1，"底 + 字"那个标签形状根本没长出来，屏幕上只剩一串
+//     深色小字浮着 —— 那是暗沉的另一半原因：**不是底太深，是底没有、字太深**。
+//
+// 全页三支彩色相 + 一支冷灰。蓝**降级**成只有一块浅天蓝底纹（「不表态」）：
+// 原来更新时间那三级藏青（live #0f4266 / today #175785，两列合计重复 500+ 次，
+// 是全页最大的一片蓝）全部撤掉，改成中性三档配实心/空心点 ——
+// 那一列本来就写着"15 小时前"，颜色是同一件事说的第二遍。
 //    25°  红   —— 挡住你的：P0、对不上、已知缺陷
 //    60°  琥珀 —— 要处理但不挡：P1、有缺口、待补、风险错配
 //   158°  绿   —— 好了：已覆盖、全认领、清单和脚本对得上
-//   265°  蓝   —— 不表态：中性文字、P2/P3、新鲜度、"筛选正生效"
-// 条与条的色相分离 35° / 98° / 107°，最窄的那处（红↔琥珀）恰是并排画条子的那对。
+//   265°  冷灰 —— 不表态：所有文字、P2/P3、新鲜度（浅天蓝底纹是这一支的有彩端）
 //
-// 中性灰也压在 265° 上（C* 3.9），不用纯灰：纯灰挨着琥珀会把琥珀衬得发脏，
-// 而一点点冷味的灰是这一页彩虹纸的补色方向，四支彩 + 一支冷灰是**一个色环上的五个点**。
+// 同一个语义在三种形态里仍然是**同一支色相**，只是深浅随形态走：
+//     P0     → 底纹 #fcc4c1 / 条子 #f18886 / 图标 #f73e52     全在 25°
+//     P1     → 底纹 #f3c9af / 条子 #e79d69 / 图标 #cf6c16     全在 60°
+//     已覆盖 → 底纹 #aedcc2 / 条子 #63c694 / 图标 #229866     全在 158°
+// 不用纯灰当中性：纯灰挨着琥珀会把琥珀衬得发脏，一点冷味（265°）是这页彩虹纸的补色方向。
 //
-// 规则：**faint 只许当装饰**（分隔点、占位破折号、0 值、图标、虚线边框）。
-// 只要渲染的是一句话，就必须用 hint 或更深的，一个例外都不留 —— 这一页三个维度旁边那列
-// 小字是**唯一**解释"这个数怎么来的"的地方，它读不到，剩下的就只有三个光秃秃的数字。
-//
-// ⚠ 定色不许心算，**也不许拿白底算**。
-// 上一版这里写着"页面背景不是纯白，所以按白底 ≥4.8 挑，把差额当余量"——
-// 方向对，余量估小了。这一页真正的"纸"是：.ant-card 只有 rgba(255,255,255,.3)，
-// 底下压着 .app-layout-root 那条六段彩虹渐变（见 styles/global.css），
-// 于是卡片里的白根本不是白的，而且左右两头还不一样。实测各区众数：
-//     卡1 #e8f2f8   卡2 #ecedf7   卡3 #f2ecf3   域网格 #f7f2f7   表格 #f4ecf2
-// 拿白底解出来的那套，落到这些纸上齐刷刷掉到 **4.13~4.37:1**，全线跌破 AA 4.5。
-// 所以下面每个比值都是**对最暗的那块纸 #edecf6** 实算的，不是对白底；
-// 六块纸（含纯白）逐块验过，取最低值写在注释里。
-//
-// ⚠ 第二条：**"一样鲜艳"没有唯一解，要先问"这支颜色是笔画还是色块"**。
-// sRGB 在同一个 L* 上给每支色相的**上限**天差地别：L*68 处红只能到 C*59、绿 C*56，
-// 琥珀却要一路涨到 C*78 才封顶。于是"对齐"有两种算法，各自只对一半的场景成立：
-//
-//   **笔画（文字、数字）比相对彩度** —— 占该色相在该 L* 上 sRGB 上限的百分比。
-//   笔画是细的，眼睛没得比，只能单独判断这支颜色"够不够鲜"，那就该让每支都开到自己上限的
-//   同一个百分比。上一版把它们对齐到同一个绝对 C*（42~46），数字齐得漂亮，看上去却只有
-//   琥珀发闷：同样的 C*44，红占了自己上限的 78%、绿 75%、**琥珀只占 56%**，
-//   于是并排读起来唯独它像掺了灰的土黄。BIG 和 C 两档都取 0.92。
-//
-//   **色块（条子、底纹）比绝对彩度** —— 色块是大片的、而且总是挨着别的色块，
-//   眼睛会直接比，这时候进眼睛的是绝对彩度，"离自己上限多远"没人看得出来。
-//   两头都吃过亏：近白的底纹按相对彩度解，会解出一块荧光薄荷底（实测绿 C*23 vs 红 C*5）；
-//   条子按相对彩度解，琥珀会冲到 C*64 而红只有 C*51 —— 一排条子里最响的是"要处理"
-//   而不是"过不了门禁"，轻重反了。
-//
-// 一句话：**笔画比相对、色块比绝对**，中间没有一个公式能同时管两头。
+// ⚠ 定色不许心算，也不许拿白底算。这一页的"纸"不是白的：.ant-card 只有
+// rgba(255,255,255,.3)，底下压着 .app-layout-root 那条六段彩虹渐变（styles/global.css），
+// 实测各区众数：卡1 #e8f2f8  卡2 #edecf6  卡3 #f2ecf3  域网格 #f7f2f7  表格 #f4ecf2。
+// 下面每个比值都是对**最暗的那块 #edecf6** 实算、六块纸逐块验过取最低值。
 
-// —— 大字档：只给 ≥24px 粗体的英雄数字用。WCAG 大字号门槛是 3:1 而不是 4.5:1 ——
-// 为什么要单开一档：正文档为了过 4.5 必须压到 L*45，而 L*45 的琥珀是**土黄色**，
-// 40px 的「161」用那个颜色像块泥。放开到大字号自己的门槛，同色相能亮回 L*57，
-// 「70%」和「161」才有英雄数字该有的精神，且**仍然合规**。
-// 三支都取 L*56.2±0.1、相对彩度 0.92 —— 「70%」「161」「27」并排时一样响。
-const BIG = {
-  teal: '#229966',   // 3.08:1  L*56.2 C*47.7 H158°  ← 和 C.teal 同色相
-  orange: '#d06c16', // 3.07:1  L*56.3 C*68.7 H 60°  ← 和 C.orange 同色相
-  red: '#f74053',    // 3.08:1  L*56.2 C*76.3 H 25°  ← 和 C.red 同色相
-}
-
-// —— 深的那档：渲染字。两条线**同时**要满足，缺一条就有一处读不了：
-//    ① 对最暗的那块纸 ≥4.55:1（AA 4.5 + 一点余量给渐变的另一头）
-//    ② 落在**自己那块底纹上**（WASH）也 ≥4.55:1 —— 这一条上一版漏了。
-//       底纹一压深到看得见（见 WASH 的注释），"对纸够 4.6" 就不再蕴含 "对底纹够 4.5"，
-//       标签里的字是全页字号最小的那一批，恰恰最不能省这半档。
-// 两条一起解，四支落在 L*42.7±0.2、相对彩度 0.92 —— 同深浅、同鲜艳度，只有色相不同。
+// —— 文字档：全页**只有这四个值**允许落在笔画上。
+// 前三档同在 265°、C*5.0，是一支冷灰的三个亮度，不是三支灰。
 const C = {
-  red: '#c51d39',    //  4.97:1 纸 / 4.57:1 自家底纹   L*42.8 C*69.8 H 25°
-  orange: '#9d500e', //  5.00 / 4.59                   L*42.7 C*55.7 H 60°
-  teal: '#17734c',   //  4.99 / 4.57                   L*42.7 C*38.6 H158°
-  blue: '#1e699e',   //  5.02 / 4.60                   L*42.5 C*35.2 H265°
-  // 新鲜度那把尺子要的是**单调变浅**，而上面那支蓝(L*42.5)跟 gray(L*41.4) 一样深，
-  // 两档并排就只剩彩度在分 —— 彩度恰恰是灰度图和色弱视觉里最先没的那条。
-  // 中间补一档，四档变成 26.6 → 35.4 → 41.4 → 44.7，是一把真的尺子。
-  // 三支都在 265° 上，是同一支蓝的三个亮度，不是三支蓝。
-  blueMid: '#175785',  // 6.55:1                       L*35.4 C*31.4 H265°  新鲜度「今天」
-  blueDeep: '#0f4266', // 9.00:1                       L*26.6 C*25.8 H265°  新鲜度「刚动过」
-                     //   —— 不借用 teal：绿在这一页已经是「覆盖好了」，
-                     //   一支颜色不能说两件事
-  ink: '#21252a',    // 13.16:1  正文
-  gray: '#5e6268',   //  5.24:1  次要文字、标签、P2/P3
-  hint: '#666a70',   //  4.64:1  说明小字（跟 gray 只差一点点，是**故意**的：
-                     //          它常常就嵌在 gray 那段里当下一层，差太多会变成两段并列的正文）
-  faint: '#83888e',  //  3.05:1  **只许装饰**，不许承载句子。按非文字 3:1 的线定，
-                     //          刚好够图标和虚线边框，不够读一句话 —— 这就是它的用途边界
-  line: '#dfe3e8',   //  分隔线。也在 265° 上，跟着上面那支冷灰走
+  ink: '#3d434a',   // L*28  8.54:1  正文、标签文字、强调数字 —— 唯一的"深"色
+                    //   上一版是 #21252a（L*14.5，近黑，13.16:1）。提亮 13.5 个 L* 之后
+                    //   仍有 8.5:1，读着一点不吃力；而"近黑"本身就是一层暗沉的底噪。
+  gray: '#636970',  // L*44  4.74:1  次要文字、说明小字、可点路径
+                    //   上一版这里是两支：gray #5e6268(L*41.4) 和 hint #666a70(L*45)。
+                    //   两支都被 4.5:1 顶在同一个位置上，差 3.6 个 L* —— 那不是两档，
+                    //   是同一档写了两遍。合并掉，全页少一支灰。
+  faint: '#81878f', // L*56  3.09:1  **只许装饰**：分隔点、占位破折号、0 值、虚线边框、图标。
+                    //   按非文字 3:1 定线 —— 够画图标，不够读一句话，这就是它的用途边界。
+  line: '#e0e6ef',  // L*91  分隔线、空条
+  crit: '#ca1e3a',  // L*44  4.77:1  唯一的彩色文字，只给"挡着门禁"的数（风险 ≥9）。
+                    //   为什么只有红留得下来：L*44 是 4.5:1 的天花板，而在这个亮度上
+                    //   只有红还看得出是"红"，琥珀已经是褐、蓝已经是藏青。
+                    //   ⚠ 只许放在**纸**上，不许放到 WASH 上 —— 对 WASH.danger 只有 3.67:1。
 }
 
-// —— 浅的那档：渲染图形（进度条、图例色块）。**不许拿去渲染字**，对纸只有 2.10:1 ——
-// 为什么必须浅：24 个域的条子铺满半屏，用文字那档的深色等于整页在报警。
-//
-// 这一档是**色块**，所以按等绝对彩度 C*51 解（见上面第二条 ⚠）。
-// 上一版在这里用了相对彩度 .88/.82/.80，解出琥珀 C*64、红 C*51 ——
-// 域网格里上下相邻的两根条子，**琥珀比红还响**，而红才是那根"过不了门禁"的。
-// 改成等彩度之后，三根一样鲜，**轻重整个交给 L***：
-//     红 L*66 < 琥珀 L*69 < 绿 L*70，越暗越沉、越先跳出来，正好是要的次序。
-// 彩度为什么正好停在 C*51：再往上红先撞到自己的上限（L*66 处 C*58 已经占 99%），
-// 变成一根发光的荧光粉，而绿同时开始泛酸；再往下琥珀先发土。C*51 是三支都还没变质的那一档。
-//
-// 代价写清楚：条对轨道只有 1.68~1.91:1，够不到图形 3:1 的线。**这里敢这么做，是因为每根
-// 条子右边都钉着精确数字**（`182/252`、`13/28`）—— 条长和颜色都不是唯一出口，真正承载
-// 结论的是那个数和旁边那句话。哪天把数字挪走了，这套颜色必须跟着回深。
-const BAR = {
-  danger: '#f57c7c', // L*66.0 C*51.1 H 25°  ← 和 C.red 同色相
-  warn: '#e89559',   // L*69.0 C*51.0 H 60°  ← 和 C.orange 同色相
-  ok: '#46c087',     // L*70.0 C*50.8 H158°  ← 和 C.teal 同色相
-  mute: '#a2acb9',   // L*70.0 C* 7.9 H264°  中性档（P2）
-  mute2: '#c6cdd5',  // L*82.1 C* 4.9 H260°  再淡一档（P3）
+// —— 图形档：图标、✓/⚠ 这类符号、以及 ≥24px 的英雄数字。
+// WCAG 对非文字图形和大字号都是 3:1，而 3:1 的天花板正好在 L*56
+// （L*57 就掉到 2.99:1，实算过）—— 所以这三支已经是这一页**能取到的最亮**。
+// 页面上所有"表态"的颜色都集中在这一档：⚠ 图标、✓ 图标、两个大数字。
+// 相对彩度都取 0.92：笔画细，眼睛没得比，只能各自开到自己上限的同一百分比
+// （等绝对彩度会让琥珀独自发闷 —— 同样 C*44，红占上限 78%、绿 75%、琥珀只有 56%）。
+const VIVID = {
+  red: '#f73e52',  // 3.11:1  L*56 C*77.0 H 25°
+  warn: '#cf6c16', // 3.09:1  L*56 C*68.3 H 60°
+  ok: '#229866',   // 3.12:1  L*56 C*47.5 H158°
 }
-// 轨道也归到 265° 那支，不用纯灰：浅色条子跟它拉开的是色相不是明度，纯灰会让琥珀那根发脏。
-// 深浅按"看得见但不抢条"定：对纸 1.24:1（上一版 1.02:1，等于没有轨道，0/9 那种行
-// 看上去是"这里什么都没有"，而不是"这一格一条都没认领"）。
+
+// —— 条子档：进度条。**不许拿去渲染字**（对纸只有 2.1:1）。
+// 这一档是色块，所以按**等绝对彩度**解：色块是大片的、而且总是上下挨着别的色块，
+// 眼睛直接比的是绝对彩度，"离自己上限多远"没人看得出来。
+//
+// 彩度从上一版的 C*51 降到 C*44：C*51 时红占到自己上限的 **99%**，
+// 屏幕上是一根发光的荧光粉（就是反馈截图里那根）。降到 C*44，三支退到 63~81%，
+// 还鲜，但不再刺眼 —— 这一列铺满半屏，"鲜艳"和"淡雅"在这里必须同时成立。
+// 轻重仍然整个交给 L*：红 68 < 琥珀 71 < 绿 73，越暗越沉、越先跳出来。
+//
+// 代价照旧写清楚：条对轨道只有 1.6~1.9:1，够不到图形 3:1 的线。敢这么做，是因为
+// **每根条子右边都钉着精确数字**（`182/252`、`13/28`）—— 条长和颜色都不是唯一出口。
+// 哪天把数字挪走了，这套颜色必须跟着回深。
+const BAR = {
+  danger: '#f18886', // L*68 C*44（81% 上限） H 25°  ← 和 VIVID.red 同色相
+  warn: '#e79d69',   // L*71 C*44（63%）      H 60°  ← 和 VIVID.warn 同色相
+  ok: '#63c694',     // L*73 C*44（69%）      H158°  ← 和 VIVID.ok 同色相
+  mute: '#a2acb9',   // L*70 C* 7.9 H264°  中性档（P2）
+  mute2: '#c6cdd5',  // L*82 C* 4.9 H260°  再淡一档（P3）
+}
+// 轨道也归到 265° 那支冷灰，不用纯灰：浅色条子跟它拉开的是色相不是明度，
+// 纯灰会让琥珀那根发脏。深浅按"看得见但不抢条"定，对纸 1.24:1 ——
+// 再淡下去 0/9 那种行看上去就成了"这里什么都没有"，而不是"这一格一条都没认领"。
 const BAR_TRAIL = '#d8dde4'
 
-// —— 底纹档：标签/风险块的底。四支取**等绝对彩度** C*13 @ L*90.5（见上面第二条 ⚠）——
-// 近白处 sRGB 的色域形状太偏，按相对彩度算会解出一块荧光薄荷底。
-//
-// 为什么从 L*94.7 压到 90.5：这一页的"纸"本身就在 L*93.7~96.0，
-// 上一版的底纹对纸只有 **1.01~1.03:1** —— 那不叫浅，那叫**没有**。
-// 屏幕上看到的是一串没有底的彩色小字，"标签"这个形状根本没长出来。
-// 现在 1.09~1.16:1：贴着看得见的最低线，够撑出形状，又不至于变成一排彩色贴纸。
+// —— 底纹档：标签的底。四支取**等绝对彩度** C*21.6 @ L*84。
+// 为什么是 L*84 而不是更浅：近白处 sRGB 的色域窄得厉害，实测四支色相的**共同**彩度上限
+//     L*88 → C*17.1     L*86 → C*20.2     L*84 → C*23.5     （每一档都卡在红上）
+// 想更艳就得往下走。而"往下走"这次不再有代价：底纹上放的是**墨字**（6.56~6.58:1），
+// 不是上一版那种 4.5:1 贴着线的彩字 —— 门槛一让开，L*84 / C*21.6 就取得到了，
+// 比上一版（L*90.5 / C*12.8）艳了 69%，对纸也从 1.09:1 提到 1.30:1，
+// 标签终于是"一块有颜色的底"，而不是"一串深色小字"。
 const WASH = {
-  danger: '#ffdcda', // 其上放 C.red    4.57:1
-  warn: '#f9dfcf',   // 其上放 C.orange 4.59:1
-  ok: '#cfeada',     // 其上放 C.teal   4.57:1
-  cool: '#d4e5fc',   // 其上放 C.blue   4.60:1  ← 选中态：这是"筛选正生效"，不是好坏
-  // 中性那块用半透明，让它跟着纸走 —— 它没有色相要表达，只要"比纸深一点点"。
-  // 0.075 是照着上面四支 1.09~1.16:1 配的；上一版 0.03 同样等于没有。
-  mute: 'rgba(33,37,42,0.075)',
+  danger: '#fcc4c1', // 墨字其上 6.57:1   对纸 1.30:1
+  warn: '#f3c9af',   //          6.56:1        1.30:1
+  ok: '#aedcc2',     //          6.58:1        1.30:1
+  // 第四支（蓝，H250）删了。它原来管「不表态 / 正在进行 / 选中」这三件事，
+  // 一件都不是好坏 —— 现在分别由白纱片、白纱片、墨色接走，全页只剩三支色相。
 }
+// 四支互相的 dE：最近的一对是 红↔琥珀 12.6，其余 31~43。12.6 足够分开，
+// 而这一对恰恰是并排出现最多的（P0 标签紧挨 P1 标签），所以单独记一笔。
 
 // ✅/⬜/❌ 这三个 emoji 是**清单文件自己的记号**，引用原文时该留（"标了 ✅ 却没有脚本"）；
 // 但拿它们当页面自己的状态图标就不行 —— emoji 的颜色是字体给的，
-// ✅ 那支绿和这一页的 C.teal 差着十万八千里，于是"已覆盖"这一个意思，
-// 一个格子里同时用两支绿画了两遍。改成矢量图标，颜色跟着 tone 走。
+// ✅ 那支绿和这一页的绿差着十万八千里，于是"已覆盖"这一个意思，
+// 一个格子里同时用两支绿画了两遍。改成矢量图标，颜色走 VIVID。
+//
+// 文字一律 ink：图标已经把"是好是坏"说了，字再上一遍色就是同一件事说两遍 ——
+// 而那第二遍的代价是把字压到 L*45 变褐变青，正是这次要消掉的东西。
+// 容器底纹一律**白纱**。上一版全是黑纱（rgba(0,0,0,.015~.04)）：黑纱做层次是靠
+// 把纸压暗，一页叠七八块就是整体发灰。白纱做同样的层次是靠提亮，卡片本来也是
+// rgba(255,255,255,.3) 浮在彩色渐变上，白纱只是把这件事继续做下去。
+const VEIL = 'rgba(255,255,255,.55)'
+
+// **标签上写 borderColor 一个像素都画不出来** —— `global.css` 有一条全站的
+// `.ant-tag { border: none !important }`。这一版最早给严重度设的鲜色描边、
+// 给 info 片设的发丝边，就是这么静静地没生效的：不报错、不告警，
+// 只是三档严重度（blocker/major/minor）在页面上长得一模一样，
+// 而白纱片落在近白的纸上等于隐形 —— 一个标签看着像没有标签。
+// 换 inset box-shadow：视觉上就是一圈 1px 的边，而 `border: none` 管不到它。
+// （原生 <button> 那几个筹码不受影响，它们自己写了 borderStyle/borderWidth。）
+const RING = c => `inset 0 0 0 1px ${c}`
+
 const STATE_TAG = {
-  covered: { text: '已覆盖', color: C.teal, bg: WASH.ok, Icon: CheckCircleFilled },
-  gap: { text: '待补', color: C.orange, bg: WASH.warn, Icon: BorderOutlined },
-  deprecated: { text: '已废弃', color: C.gray, bg: WASH.mute, Icon: CloseCircleOutlined },
+  covered: { text: '已覆盖', color: C.ink, bg: WASH.ok, icon: VIVID.ok, Icon: CheckCircleFilled },
+  gap: { text: '待补', color: C.ink, bg: WASH.warn, icon: VIVID.warn, Icon: BorderOutlined },
+  // 「已废弃」不给底：它是"这条不算了"，不是一种表态。见下面 TAG_TONE.mute。
+  deprecated: { text: '已废弃', color: C.gray, bg: 'transparent', icon: C.faint, Icon: CloseCircleOutlined },
 }
 
 // antd 的 <Tag color="error|warning|blue"> 拿的是**全站** token（见 main.jsx：
-// colorError #e8453c、colorWarning #f0a020、colorInfo #4e8af0），不是这一页的。
-// 上一版页面上因此并排站着两支红：P0 那一列是 #cf1f3c，紧挨着的「带缺陷」标签是 #e8453c ——
-// 亮 8.7 个 L*、偏橙 9.1°，看着像两个不同级别的红，实际说的是同一件事。
-//
-// 而且**顺手量出来这几支是不合规的**（在真页面上取的字色 + 框内众数底色）：
-//     带缺陷 / GL#608   #e8453c on #fff3f0   3.61:1
-//     P0 待补按钮        #e8453c on #f5f9fc   3.71:1
-//     脚本路径链接       #4e8af0 on #edebf6   2.87:1
-// 12px 的正文要 4.5，这三处都够不到 —— 全站 token 是照白底挑的，落到这一页的纸上就掉下来了。
-// 所以这一页不许再出现 color="error" 那种预设，一律走下面这张表，跟正文档同源。
+// colorError #e8453c、colorWarning #f0a020、colorInfo #4e8af0），不是这一页的，
+// 而且实测在这一页的纸上是不合规的（带缺陷 3.61:1 / P0 按钮 3.71:1 / 脚本链接 2.87:1，
+// 12px 正文要 4.5）—— 全站 token 是照白底挑的，落到这一页的彩虹纸上就掉下来了。
+// 所以这一页不许出现 color="error" 那种预设，一律走这张表。
 const TAG_TONE = {
-  bad: { color: C.red, background: WASH.danger },     // 4.57:1
-  warn: { color: C.orange, background: WASH.warn },   // 4.59:1
-  ok: { color: C.teal, background: WASH.ok },         // 4.57:1
-  info: { color: C.blue, background: WASH.cool },     // 4.60:1  进行中 / 选中 / 自动识别
-  mute: { color: C.gray, background: WASH.mute },     // 最低 4.58:1（半透明，逐块纸算过）
+  bad: { color: C.ink, background: WASH.danger },   // 6.57:1
+  warn: { color: C.ink, background: WASH.warn },    // 6.56:1
+  ok: { color: C.ink, background: WASH.ok },        // 6.58:1
+  // info 档不再是蓝底。它身上挂的三件事 —— 「清单口径要商量」（类别）、
+  // 「评审中」（进行中）、快捷筛选的回显（选中）—— 一件都不是**好坏**，
+  // 占掉一支色相纯属浪费，而且蓝是本页跟三支语义色最不搭的一支。
+  // 改成白片 + 发丝边：跟 bad/warn/ok 的「有色底」区分得开，跟 mute 的
+  // 「什么都没有」也区分得开，三档各是一种形，不靠辨色。
+  info: { color: C.ink, background: VEIL, boxShadow: RING(C.line) },
+  // 「不表态」这一档**取消底色**。上一版是 rgba(33,37,42,.075) 的灰底 + C.gray 的灰字：
+  // 灰底配灰字本身就发脏，而它是全页出现次数最多的标签 —— 执行层那一列 537 行每行一个，
+  // 于是表格正中竖着一条灰块带。底一去，那一列变成干净的灰字；
+  // 而且「有底 = 这条有话说 / 没底 = 中性」本身就成了一条能看懂的规矩，
+  // 不用再靠辨认灰的深浅去猜。
+  mute: { color: C.gray, background: 'transparent' },
 }
 // 不描边：这一页的标签本来就是「底纹 + 文字」那个样子（见上面 STATE_TAG），
 // antd 默认那圈边会让同一排里两种标签长得不一样。
-const tagStyle = tone => ({ ...TAG_TONE[tone], borderColor: 'transparent', margin: 0 })
+// 这一页四条 info 说的都是「平台对这个仓库永远只读」这类**中性说明** ——
+// 不表态好坏，不该占一支色相（原来占的是蓝，这一版蓝整支删了）。
+// 所以 info 走白纱 + 发丝边，只有真的报警才上色。
+const ALERT_TONE = {
+  info: { bg: VEIL, Icon: InfoCircleOutlined, icon: C.gray },
+  warning: { bg: WASH.warn, Icon: WarningFilled, icon: VIVID.warn },
+  error: { bg: WASH.danger, Icon: WarningFilled, icon: VIVID.red },
+  success: { bg: WASH.ok, Icon: CheckCircleFilled, icon: VIVID.ok },
+}
+// 图标自己给，不然 antd 会按 colorInfo/colorWarning 那套全站 token 上色 ——
+// 那几支是照白底挑的，落到这一页的彩虹纸上都不合规（实测 2.87~3.71:1）。
+// 文案也要自己包一层墨色。antd 把 .ant-alert-message / -description 的颜色写在
+// class 上，用的是全站 colorText #1d2129（L*13，近黑）—— 那支比本页的 C.ink 还深两档，
+// 挂在浅底纹上就是一块「暗沉」。挂在 class 上的颜色赢不过子元素的行内 style。
+// 这一页自己的默认文字色。全站 colorText 是 #1d2129（L*13 近黑，对纸 15:1）——
+// 探针数过：本页 1385 个可见文本节点里有 218 个**没有**显式给色，全在继承那支近黑，
+// 12~13px 的近黑铺满一页就是「整体偏暗沉」。
+// 挨个去补那 218 个 style 是错的做法：下次谁新写一行 <span> 又回到近黑。
+// 所以换页面根上的**默认值** —— 显式写了色的地方一个都不受影响（行内 style 更强）。
+const PAGE_THEME = {
+  token: {
+    colorText: C.ink,            // 近黑 L*13 → 墨色 L*28，仍有 8.54:1
+    colorTextHeading: C.ink,
+    colorTextDescription: C.gray,
+    // 占位符和禁用文字原来是**带 alpha 的黑**（rgba(0,0,0,.25) 一类）。
+    // 半透明黑压在这一页的彩色纸上不是浅黑，是**脏灰** —— 纸有什么色它就脏什么色，
+    // 六张纸六个结果，正是要消掉的杂色。换成实色的浅墨，六张纸上长一个样。
+    colorTextPlaceholder: C.faint,
+    colorTextDisabled: C.faint,
+    colorIcon: C.gray,
+    colorIconHover: C.ink,
+    colorSplit: C.line,
+    // 语义四色也换成本页那三支（图形档 3:1）。antd 那四支是照白底挑的，
+    // 落到这页彩虹纸上 2.87~3.71:1，而 colorInfo 的蓝本页已经整支删掉了 ——
+    // 「信息」不表态好坏，退回中性。
+    colorSuccess: VIVID.ok,
+    colorWarning: VIVID.warn,
+    colorError: VIVID.red,
+    colorInfo: C.gray,
+    // 下拉箭头这类「三四级」图标 antd 也给的是 rgba(0,0,0,.25)（实测 .ant-select-suffix），
+    // 同样是六张纸六个脏灰，一并换成实色。
+    colorTextTertiary: C.gray,
+    colorTextQuaternary: C.faint,
+  },
+  components: {
+    // **悬浮提示原来是近黑的**：实测底 rgba(0,0,0,.85)、字纯白。
+    // 这一页有 17 个 Tooltip，域表里那几个还是 420px 宽的多行块 ——
+    // 一页里最大最黑的面就是它，鼠标一扫就糊一片，正是「偏暗沉」最直接的来源。
+    // 改成白底墨字（跟 Popover 的白一致），靠 antd 自带的投影跟纸分开。
+    // 只落在这一页：外面别的页还指着深色提示，不动它们。
+    Tooltip: { colorBgSpotlight: '#fff', colorTextLightSolid: C.ink },
+  },
+}
 
-// 优先级是**序数**，不是好坏 —— 上一版 P2 给了青色，跟「已覆盖 / 全认领」的绿撞在一起，
-// 一支绿同时说"这条过了"和"这条是 P2"。现在颜色只分到「挡不挡」这一层：
-// P0 红、P1 琥珀、P2/P3 一律中性灰。不急的两档不需要各自一个颜色 —— 标签本身写着是哪档，
-// 而页面要先跳出来的是"哪些挡着门禁"。
-const PRIORITY_COLOR = { P0: C.red, P1: C.orange, P2: C.gray, P3: C.gray }
+// **不用 antd 的 `<Alert>`** —— `global.css` 里 `.ant-alert-info` 一类把 `background`
+// 和 `border-color` 双双写成了 `!important`，行内样式压不过去（作者 !important > 行内）。
+// 实测：给它 `background: rgb(1,2,3)`，量出来是 `rgba(78,138,240,.1)`。
+// 也就是说这一页所有说明条一直在用全站那支**蓝**，跟本页配色没有半点关系 ——
+// 而蓝这一版是整支删掉的，「说明」不表态好坏，退回中性白纱。
+// 自己拼一个 div 就没有这个问题（页首那几个筹码用原生 <button> 也是同一个原因）。
+function PageAlert({ type = 'info', style, message, description, action, showIcon = true }) {
+  const t = ALERT_TONE[type] || ALERT_TONE.info
+  return (
+    <div
+      style={{
+        display: 'flex', alignItems: 'flex-start', gap: 10,
+        padding: description ? '12px 14px' : '9px 14px',
+        borderRadius: 12, background: t.bg,
+        // 白纱那档几乎和纸同色，得靠一圈发丝边才看得出是一条说明；
+        // 有色底的三档自己就有形，再描一圈只是多一道杂色。
+        border: t.bg === VEIL ? `1px solid ${C.line}` : '1px solid transparent',
+        ...style,
+      }}
+    >
+      {showIcon && <t.Icon style={{ color: t.icon, fontSize: 15, marginTop: 2, flexShrink: 0 }} />}
+      <div style={{ flex: 1, minWidth: 0, color: C.ink, fontSize: 13, lineHeight: 1.7 }}>
+        <div style={{ fontWeight: description ? 600 : 400 }}>{message}</div>
+        {description && (
+          <div style={{ marginTop: 4, fontSize: 12, color: C.ink, lineHeight: 1.8 }}>{description}</div>
+        )}
+      </div>
+      {action && <div style={{ flexShrink: 0 }}>{action}</div>}
+    </div>
+  )
+}
+
+const tagStyle = tone => ({ margin: 0, ...TAG_TONE[tone] })
+
+// 优先级是**序数**，不是好坏。颜色只分到「挡不挡」这一层：
+// P0 红底、P1 琥珀底、P2/P3 **不给底**（走 mute，就是干净的灰字）。
+// 不急的两档不需要各自一个颜色 —— 标签本身写着是哪档，
+// 而页面要先跳出来的是"哪些挡着门禁"。"有没有底"正好画出这条界线。
+const PRIORITY_TONE = { P0: 'bad', P1: 'warn', P2: 'mute', P3: 'mute' }
 // 条子那档跟着分：P2/P3 用中性的两级，深浅本身就是优先级顺序。
 const PRIORITY_BAR = { P0: BAR.danger, P1: BAR.warn, P2: BAR.mute, P3: BAR.mute2 }
-// 标签那档也跟着分，别再手写 borderColor —— 那样一排筹码是四圈不同颜色的空框，
-// 跟这一页其它标签（底纹 + 文字，不描边）长得不是一套。
-const PRIORITY_TONE = { P0: 'bad', P1: 'warn', P2: 'mute', P3: 'mute' }
+// 筛选筹码的**选中**态：实底 + 白字。底色统一用 ink（白字 8.5:1），不按优先级分色 ——
+// 白字要过 4.5:1，实底就必须 L*≤45，而那个亮度上的琥珀正是要消掉的深褐。
+// 一次只可能选中一个，筹码上又写着「P0 缺 70」，深浅分色在这里挣不到任何信息。
+const SELECTED_FILL = C.ink
+// 纯文字场合的优先级：跟 PRIORITY_TONE 一个口径（P0/P1 有底 = 挡门禁 = 墨色，
+// P2/P3 不表态 = 灰）。上一版这里是 PRIORITY_COLOR 的四支深色，四行字四个颜色。
+const PRIORITY_TEXT = { P0: C.ink, P1: C.ink, P2: C.gray, P3: C.gray }
+
 
 // 解析器认出来的列角色 → 页面上的说法。用的是这一页表头本来就用的词，
 // 别让人在"认列结果"和"表格列名"之间再翻译一次。
@@ -210,7 +304,7 @@ const tierText = t => TIER[t]?.text || t || '—'
 const HIGH_RISK = 6      // 与后端 qa_catalog.HIGH_RISK 同口径
 const URGENT_RISK = 9
 
-const riskColor = r => (r >= URGENT_RISK ? C.red : r >= HIGH_RISK ? C.orange : C.gray)
+const riskColor = r => (r >= URGENT_RISK ? C.crit : C.ink)
 
 // 清单里一半的场景描述带 `反引号` 和 **加粗**，原样打出来是满屏符号
 //
@@ -248,7 +342,7 @@ const RICH_RE = /(`[^`\n。*<>]{1,80}`|\*\*[^*]+\*\*)/g
 function warnify(s, k) {
   if (!s.includes('⚠')) return s
   return s.split('⚠').flatMap((seg, i) => (
-    i === 0 ? [seg] : [<span key={`${k}w${i}`} style={{ color: C.orange }}>⚠</span>, seg]
+    i === 0 ? [seg] : [<span key={`${k}w${i}`} style={{ color: C.ink, fontWeight: 600 }}>⚠</span>, seg]
   ))
 }
 function Rich({ text }) {
@@ -262,7 +356,7 @@ function Rich({ text }) {
           // token 表的第五种蓝灰；而且它嵌在正文里时比正文浅、嵌在次要说明里时比说明深，
           // 层级一会儿正一会儿反。灰底片 + 等宽字已经把"这是原文里的字面量"说清楚了，
           // 颜色不必再说一遍 —— 继承还顺带保证了它在哪儿都跟宿主一样合规。
-          background: 'rgba(0,0,0,0.04)', borderRadius: 3, color: 'inherit',
+          background: VEIL, borderRadius: 3, color: 'inherit',
         }}>{p.slice(1, -1)}</code>
       )
     }
@@ -283,11 +377,15 @@ const clampTo = n => ({
   overflow: 'hidden', wordBreak: 'break-word',
 })
 
-function Panel({ title, extra, children, tone }) {
-  const border = tone === 'bad' ? BAR.danger : tone === 'warn' ? BAR.warn : undefined
+// 这里曾经按 tone 给整张卡描个红/琥珀的外沿 —— 但 `global.css` 把 `.ant-card` 的
+// `border` 和 `box-shadow` 双双锁成了 `!important`，行内样式**画不进去**
+// （作者样式的 !important 压得住行内），所以那圈色从来没出现在页面上。
+// 与其留个假的开关，不如认下来：这张卡的红/琥珀本来就写在标题右边那行
+// 「有会被门禁挡住的 / 有要处理的」上 —— 有字有鲜色图标，比一圈 1px 的边看得清。
+function Panel({ title, extra, children }) {
   return (
     <Card
-      size="small" style={{ flex: 1, minWidth: 300, borderColor: border }}
+      size="small" style={{ flex: 1, minWidth: 300 }}
       styles={{ body: { padding: '12px 16px' } }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
@@ -364,10 +462,12 @@ const absWhen = iso => (iso ? new Date(iso).toLocaleString('zh-CN', { hour12: fa
 const H = 3600 * 1000
 const D = 24 * H
 const ACTIVITY_TIERS = [
-  { key: 'live',  within: 6 * H,    label: '刚动过', note: '离本仓最后一次动静 6 小时内（同一轮）', dot: '●', color: C.blueDeep, weight: 600 },
-  { key: 'today', within: D,        label: '今天',   note: '24 小时内',        dot: '●', color: C.blueMid, weight: 400 },
+  // 四档只用「墨/灰 × 实心●/空心○/无点」表达，不上色。活跃度是元信息，不是好坏；
+  // 它在表里每行都出现一次，一上色就是几百个色点，本页最抢眼的杂色就是这个。
+  { key: 'live',  within: 6 * H,    label: '刚动过', note: '离本仓最后一次动静 6 小时内（同一轮）', dot: '●', color: C.ink,  weight: 600 },
+  { key: 'today', within: D,        label: '今天',   note: '24 小时内',        dot: '●', color: C.gray, weight: 400 },
   { key: 'week',  within: 7 * D,    label: '本周',   note: '一周内 —— 别人今天动了，它没有', dot: '○', color: C.gray,  weight: 400 },
-  { key: 'cold',  within: Infinity, label: '搁置',   note: '一周以上没动过',   dot: '',  color: C.hint, weight: 400 },
+  { key: 'cold',  within: Infinity, label: '搁置',   note: '一周以上没动过',   dot: '',  color: C.gray, weight: 400 },
 ]
 
 // 锚点 = 本仓最后一次动静。四档量的都是"离它多远"，不是"离今天多远"。
@@ -393,10 +493,10 @@ function DomainWhen({ d, now, anchor }) {
   const onlyCatalog = d.updatedFrom === 'catalog'
   const line = (label, at, commit, empty) => (
     <div style={{ marginBottom: 4 }}>
-      <span style={{ opacity: 0.7 }}>{label}</span>{' '}
+      <span style={{ color: C.gray }}>{label}</span>{' '}
       {at ? absWhen(at) : empty}
       {commit?.sha && (
-        <div style={{ opacity: 0.7, paddingLeft: 42 }}>
+        <div style={{ color: C.gray, paddingLeft: 42 }}>
           <code>{commit.sha}</code>{commit.subject ? ` ${commit.subject}` : ''}
         </div>
       )}
@@ -408,7 +508,7 @@ function DomainWhen({ d, now, anchor }) {
         <div style={{ fontSize: 12, lineHeight: 1.7, maxWidth: 420 }}>
           {line('脚本侧', d.scriptUpdatedAt, d.scriptCommit, '这个域一个脚本都没有')}
           {line('清单侧', d.catalogUpdatedAt, d.catalogCommit, '清单里读不到这个域的行')}
-          <div style={{ opacity: 0.7, borderTop: '1px solid rgba(255,255,255,0.2)', paddingTop: 4 }}>
+          <div style={{ color: C.gray, borderTop: `1px solid ${C.line}`, paddingTop: 4 }}>
             格子里显示的是{onlyCatalog ? '清单侧' : '脚本侧'}。
             {/* 这句是这一列最容易被误读的地方：整仓批量提交（重命名、一次性恢复）
                 会把所有域的清单侧刷成同一时间，那不是"这个域在推进" */}
@@ -440,20 +540,19 @@ function DomainWhen({ d, now, anchor }) {
         onClick={e => e.stopPropagation()}
       >
         {act?.dot && <span style={{ marginRight: 3 }}>{act.dot}</span>}
-        {onlyCatalog && d.updatedAt && <span style={{ color: C.hint, marginRight: 3 }}>清单</span>}
+        {onlyCatalog && d.updatedAt && <span style={{ color: C.gray, marginRight: 3 }}>清单</span>}
         {relWhen(d.updatedAt, now)}
       </span>
     </Tooltip>
   )
 }
 
-// 域行那条覆盖率进度条的颜色。原来 24 个域全是一支 C.teal —— 长短已经把覆盖率
+// 域行那条覆盖率进度条的颜色。原来 24 个域全是一支绿 —— 长短已经把覆盖率
 // 说过一遍了，颜色再说同一件事等于白占一条通道，而这一页真正要先跳出来的是
 // **哪几个域卡着门禁**。所以颜色改成「缺的是什么」，跟条长各说一件事。
 // 取 BAR 不取 C：这一列画的是条子和图例色块，不渲染字，走图形那档浅色。
-// 三支跟 C.red / C.orange / C.teal 是同色相的浅档（差 0.1°/0.0°/0.3°），
-// 所以「缺 P0」的条和它右边那句红字、「有缺口」的条和 P1 标签，各自都是同一个颜色 ——
-// 整页只有一套语义，条子和字只是同一支颜色的深浅两面。
+// 三支跟 VIVID / WASH 是同色相（差 0.1°/0.0°/0.3°），所以「缺 P0」的条、它右边
+// 那颗红图标、P0 标签的红底纹，是同一支色相的三个亮度档 —— 整页只有一套语义。
 const COVER_STROKE = [
   { key: 'p0', color: BAR.danger, label: '缺 P0', note: 'P0 有缺口 —— check-coverage.sh 直接 BLOCK' },
   { key: 'gap', color: BAR.warn, label: '有缺口', note: '缺的都不是 P0，不阻断门禁' },
@@ -489,34 +588,34 @@ function ReviewBadge({ d, rv, now, onOpen }) {
         <div><b>{v?.text || '已评'}</b></div>
         <div style={{ marginTop: 4 }}>
           评审于 <b>{relWhen(at, now)}</b>
-          <div style={{ opacity: 0.75 }}>{absWhen(at)}</div>
+          <div style={{ color: C.gray }}>{absWhen(at)}</div>
         </div>
         {stale && (
-          <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid rgba(255,255,255,0.25)' }}>
+          <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.line}` }}>
             <div><b>⚠ 这次评审已经过期</b></div>
             <div>
               评审跑完之后，这个域的{onlyCatalog ? '清单侧' : '脚本侧'}在
               {' '}{absWhen(d.updatedAt)}{' '}又动过。
             </div>
-            <div style={{ opacity: 0.85 }}>
+            <div style={{ color: C.gray }}>
               上面那句结论是改动<b>之前</b>得出的，现在不一定还成立 ——
               要拿它当验收依据，得重评一次。
             </div>
             {onlyCatalog && (
-              <div style={{ opacity: 0.75, marginTop: 4 }}>
+              <div style={{ color: C.gray, marginTop: 4 }}>
                 不过清单侧常常是整仓批量提交扫到的（重命名、一次性恢复），
                 那种情况下这个域的内容未必真变了 —— 点开看 commit 标题就知道。
               </div>
             )}
           </div>
         )}
-        <div style={{ opacity: 0.75, marginTop: 6 }}>
+        <div style={{ color: C.gray, marginTop: 6 }}>
           {rv.environmentName || '—'} · {rv.commitSha} · 点开看结论
         </div>
       </div>
     }>
       <span style={{ cursor: 'pointer' }} onClick={() => onOpen(rv)}>
-        {stale && <WarningFilled style={{ color: C.orange, marginRight: 4, fontSize: 12 }} />}
+        {stale && <WarningFilled style={{ color: VIVID.warn, marginRight: 4, fontSize: 12 }} />}
         <Tag style={{ ...tagStyle(v?.tone || 'mute'), cursor: 'pointer' }}>
           {v?.short || '已评'}
         </Tag>
@@ -532,9 +631,12 @@ function Hit({ onClick, active, children, style }) {
       style={{
         display: 'flex', alignItems: 'center', gap: 8, cursor: onClick ? 'pointer' : 'default',
         padding: '2px 6px', margin: '0 -6px', borderRadius: 4, fontSize: 12,
-        background: active ? WASH.cool : 'transparent', ...style,
+        // 选中不上色。全页「选中」只有一种表达 = 墨色（筹码是墨底白字，
+        // 这里是纯白 + 一圈墨环），跟悬浮的白纱区分得开，也不占色相。
+        background: active ? '#fff' : 'transparent',
+        boxShadow: active ? RING(C.ink) : 'none', ...style,
       }}
-      onMouseEnter={e => { if (onClick && !active) e.currentTarget.style.background = 'rgba(0,0,0,0.03)' }}
+      onMouseEnter={e => { if (onClick && !active) e.currentTarget.style.background = VEIL }}
       onMouseLeave={e => { if (onClick && !active) e.currentTarget.style.background = 'transparent' }}
     >
       {children}
@@ -594,11 +696,11 @@ const VERDICT_SOURCE = '这句总评是模型对整个域下的，不是把下�
 // 上一版这里给 catalog 发的是绿 —— 而绿在这一页只说「好了」，
 // 一支颜色不能既是"覆盖到位"又是"这条口径对不上"。
 const BLAME = {
-  script: { title: 'QA 的脚本要改', tone: 'bad', color: C.red,
+  script: { title: 'QA 的脚本要改', tone: 'bad',
             why: '断言写得站不住：跑绿了也证明不了它认领的那件事' },
-  env: { title: '不是脚本的问题：环境没铺东西', tone: 'warn', color: C.orange,
+  env: { title: '不是脚本的问题：环境没铺东西', tone: 'warn',
          why: '脚本可能写得很对，只是在这个环境里自己跳过了。我们只看得到自己这侧的环境记录，QA 跑的时候有没有，这儿判不了' },
-  catalog: { title: '清单口径要商量', tone: 'info', color: C.blue,
+  catalog: { title: '清单口径要商量', tone: 'info',
              why: '脚本和环境都没错，是清单认领的口径对不上，或者这件事清单里压根没列' },
 }
 // 人在这一页只做一个决定：这个域要不要停下来处理。
@@ -956,7 +1058,7 @@ export default function QaCatalog() {
       // 530 个彩色小方框，而「P0/P1」四个字符自己已经把档位说全了，框不增加任何信息。
       // 颜色仍按「挡不挡」分（P0 红 / P1 琥珀 / P2·P3 中性），只是不再各自带一圈边。
       render: v => v
-        ? <b style={{ color: PRIORITY_COLOR[v] || C.gray, fontWeight: v === 'P0' ? 600 : 500 }}>{v}</b>
+        ? <b style={{ color: PRIORITY_TEXT[v] || C.gray, fontWeight: v === 'P0' ? 600 : 500 }}>{v}</b>
         : <span style={{ color: C.faint }}>—</span>,
     },
     {
@@ -1006,7 +1108,7 @@ export default function QaCatalog() {
             <span style={{
               color: t.color, background: t.bg, padding: '2px 8px', borderRadius: 10,
               fontSize: 12, whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: 4,
-            }}><t.Icon style={{ fontSize: 11 }} />{t.text}</span>
+            }}><t.Icon style={{ fontSize: 11, color: t.icon }} />{t.text}</span>
             {r.knownBugs?.length > 0 && (
               <Tooltip title="有脚本，但脚本头上挂着 @known-bug —— 跑得通，结论是红的">
                 <Tag style={tagStyle('bad')}>带缺陷</Tag>
@@ -1027,7 +1129,7 @@ export default function QaCatalog() {
             onClick={() => openFile(s.path)}
             style={{
               fontSize: 12, fontFamily: 'var(--font-mono)', cursor: 'pointer', display: 'block',
-              // 不用 C.teal 区分主脚本：绿在这一页已经是「已覆盖」，
+              // 不用绿色区分主脚本：绿在这一页已经是「已覆盖」，
               // 同一格里再拿它说「这条是主的」，一支颜色就说了两件事。
               // 主次改用字重，颜色跟全页其它可点路径保持同一支。
               color: C.gray, fontWeight: s.primary ? 600 : 400,
@@ -1092,9 +1194,9 @@ export default function QaCatalog() {
               {rows.map(([k, t]) => (
                 <div key={k}>{k}：{absWhen(t)}</div>
               ))}
-              {!r.scriptUpdatedAt && <div style={{ opacity: 0.75, marginTop: 4 }}>还没有脚本</div>}
+              {!r.scriptUpdatedAt && <div style={{ color: C.gray, marginTop: 4 }}>还没有脚本</div>}
               {act && (
-                <div style={{ opacity: 0.75, marginTop: 4 }}>
+                <div style={{ color: C.gray, marginTop: 4 }}>
                   {act.dot} <b>{act.label}</b> —— {act.note}
                 </div>
               )}
@@ -1186,6 +1288,7 @@ export default function QaCatalog() {
   )
 
   return (
+    <ConfigProvider theme={PAGE_THEME}>
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div>
@@ -1220,7 +1323,7 @@ export default function QaCatalog() {
                   <>
                     拉取于 {new Date(repo.fetchedAt).toLocaleString('zh-CN')}
                     {fetchAge && (
-                      <span style={{ color: fetchAge.stale ? C.orange : C.gray }}>（{fetchAge.text}）</span>
+                      <span style={{ color: fetchAge.stale ? C.ink : C.gray }}>（{fetchAge.text}）</span>
                     )}
                   </>
                 ) : '还没拉取过'}
@@ -1233,7 +1336,7 @@ export default function QaCatalog() {
       </div>
 
       {!loading && configured === false && (
-        <Alert
+        <PageAlert
           type="info" showIcon style={{ marginBottom: 16 }}
           message="尚未配置 QA 仓"
           description={
@@ -1250,7 +1353,7 @@ export default function QaCatalog() {
       )}
 
       {data?.error && (
-        <Alert
+        <PageAlert
           type="error" showIcon style={{ marginBottom: 16 }}
           message="读取 QA 仓失败" description={data.error}
           action={canConfig && <Button size="small" onClick={openConfig}>改配置</Button>}
@@ -1266,7 +1369,7 @@ export default function QaCatalog() {
             extra={<span style={{ fontSize: 11, color: C.gray }}>不含 {summary.deprecated} 条已废弃</span>}
           >
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 30, fontWeight: 600, color: BIG.teal, lineHeight: 1 }}>{coverRate}%</span>
+              <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.ok, lineHeight: 1 }}>{coverRate}%</span>
               <span style={{ fontSize: 12, color: C.gray }}>
                 {summary.covered} / {summary.total} 条清单里有脚本认领
               </span>
@@ -1275,7 +1378,7 @@ export default function QaCatalog() {
               const s = summary.byPriority[p]
               return (
                 <Hit key={p} active={priority === p && !state && !quick} onClick={() => jump({ priority: p })}>
-                  <span style={{ width: 22, color: PRIORITY_COLOR[p] }}>{p}</span>
+                  <span style={{ width: 22, color: PRIORITY_TEXT[p] }}>{p}</span>
                   <Progress
                     percent={s.total ? Math.round((s.covered / s.total) * 100) : 0}
                     size="small" strokeColor={PRIORITY_BAR[p]} trailColor={BAR_TRAIL}
@@ -1293,9 +1396,9 @@ export default function QaCatalog() {
                     连接词都是红的，红就不再是重点，只是这一行的底色。
                     一行留一处彩 —— 图标和两个数走红，散文走灰，眼睛直接落在数上。 */}
                 <Hit active={quick === 'bugs'} onClick={() => jump({ quick: 'bugs' })} style={{ color: C.gray }}>
-                  <WarningFilled style={{ color: C.red }} />
+                  <WarningFilled style={{ color: VIVID.red }} />
                   <span style={{ flex: 1 }}>
-                    <b style={{ color: C.red }}>{summary.coveredWithBugs}</b> 条挂着已知缺陷，归到
+                    <b style={{ color: C.ink }}>{summary.coveredWithBugs}</b> 条挂着已知缺陷，归到
                     {bugRefs.length > 0 ? (
                       <Popover
                         placement="bottomLeft"
@@ -1304,7 +1407,7 @@ export default function QaCatalog() {
                           <div style={{ maxWidth: 360, fontSize: 12, lineHeight: 1.9 }}>
                             {bugRefs.map(b => (
                               <div key={b.ref}>
-                                <code style={{ color: C.red }}>{b.ref}</code>
+                                <code style={{ color: C.ink }}>{b.ref}</code>
                                 <span style={{ color: C.gray }}> 压住 {b.scenarios.length} 条 · </span>
                                 {b.scenarios.join(' ')}
                               </div>
@@ -1321,7 +1424,7 @@ export default function QaCatalog() {
                           onClick={e => e.stopPropagation()}
                           style={{ cursor: 'help', borderBottom: `1px dotted ${C.faint}`, margin: '0 2px' }}
                         >
-                          <b style={{ color: C.red }}>{bugRefs.length}</b> 个缺陷单
+                          <b style={{ color: C.ink }}>{bugRefs.length}</b> 个缺陷单
                         </span>
                       </Popover>
                     ) : <b> —</b>}
@@ -1337,7 +1440,7 @@ export default function QaCatalog() {
           {/* 2. 还欠多少 —— 一个数字要能直接变成明天的活儿 */}
           <Panel title="还欠多少" extra={<span style={{ fontSize: 11, color: C.gray }}>清单标 ⬜ 待补</span>}>
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 30, fontWeight: 600, color: BIG.orange, lineHeight: 1 }}>{summary.gap}</span>
+              <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.warn, lineHeight: 1 }}>{summary.gap}</span>
               <span style={{ fontSize: 12, color: C.gray }}>条场景还没有任何脚本</span>
             </div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
@@ -1346,7 +1449,7 @@ export default function QaCatalog() {
                   key={p} onClick={() => jump({ priority: p, state: 'gap', sortRisk: true })}
                   style={priority === p && state === 'gap'
                     // 选中＝实底白字（P0 5.71:1 / P1 5.72:1 / P2·P3 6.44:1，都够 AA）
-                    ? { margin: 0, cursor: 'pointer', border: 0, background: PRIORITY_COLOR[p], color: '#fff' }
+                    ? { margin: 0, cursor: 'pointer', border: 0, background: SELECTED_FILL, color: '#fff' }
                     : { ...tagStyle(PRIORITY_TONE[p]), cursor: 'pointer' }}
                 >
                   {p} 缺 {summary.byPriority[p].gap}
@@ -1366,7 +1469,7 @@ export default function QaCatalog() {
                       默认档      #0ea5a0 的青         整块卡里唯一一处第五色相
                   这个控件的实际身份是**筛选筹码**（点一下把表筛成这批），不是表单提交，
                   用原生 button 语义一样全（键盘可达、disabled 生效），还躲开了那套 !important。
-                  颜色就用本页的：选中实底（白字 on C.red 5.36:1），没选中底纹（C.red 4.75:1）。 */}
+                  颜色就用本页的：选中是墨底白字（8.5:1），没选中是红底纹 + 墨字（6.57:1）。 */}
               <button
                 type="button" disabled={!urgentCount}
                 onClick={() => jump({ quick: 'urgent', sortRisk: true })}
@@ -1377,10 +1480,10 @@ export default function QaCatalog() {
                   ...(!urgentCount
                     // 禁用不靠"调淡到看不清"来表达 —— 那等于把一句话降到读不到。
                     // 平掉颜色、去掉手型就够了，字仍然是 4.61:1 的 hint。
-                    ? { background: 'rgba(0,0,0,0.03)', borderColor: C.line, color: C.hint }
+                    ? { background: 'transparent', borderColor: C.line, color: C.gray }
                     : quick === 'urgent'
-                      ? { background: C.red, borderColor: C.red, color: '#fff' }
-                      : { background: WASH.danger, borderColor: BAR.danger, color: C.red }),
+                      ? { background: SELECTED_FILL, borderColor: SELECTED_FILL, color: '#fff' }
+                      : { background: WASH.danger, borderColor: BAR.danger, color: C.ink }),
                 }}
               >
                 P0 待补 · 风险 9 —— {urgentCount} 条
@@ -1389,31 +1492,30 @@ export default function QaCatalog() {
           </Panel>
 
           {/* 3. 清单可信吗 —— 前两项是 QA 自己门禁会 BLOCK 的，不该埋在页面底部 */}
-          {/* 外框的颜色跟里面五行同一个分组：只有 QA 门禁会 BLOCK 的那两项才把整张卡判红，
-              其余三项只让它变琥珀。上一版是"只要有一项不为 0 就整卡红"——
-              于是「风险排低了 3 条」和「268 行读串了」在卡片外沿上长得一模一样。 */}
+          {/* 标题右边那行的颜色跟里面五行同一个分组：只有 QA 门禁会 BLOCK 的那两项才判红，
+              其余三项只到琥珀。上一版是"只要有一项不为 0 就整卡红"——
+              于是「风险排低了 3 条」和「268 行读串了」在卡片上长得一模一样。 */}
           <Panel
             title="清单可信吗"
-            tone={blocking ? 'bad' : healthy ? undefined : 'warn'}
             extra={healthy
-              ? <span style={{ fontSize: 11, color: C.teal }}><CheckCircleFilled /> 清单和脚本对得上</span>
+              ? <span style={{ fontSize: 11, color: C.gray }}><CheckCircleFilled style={{ color: VIVID.ok }} /> 清单和脚本对得上</span>
               : blocking
-                ? <span style={{ fontSize: 11, color: C.red }}><WarningFilled /> 有会被门禁挡住的</span>
-                : <span style={{ fontSize: 11, color: C.orange }}><WarningFilled /> 有要处理的</span>}
+                ? <span style={{ fontSize: 11, color: C.gray }}><WarningFilled style={{ color: VIVID.red }} /> 有会被门禁挡住的</span>
+                : <span style={{ fontSize: 11, color: C.gray }}><WarningFilled style={{ color: VIVID.warn }} /> 有要处理的</span>}
           >
             <Hit active={quick === 'lying'} onClick={() => summary.claimedButUncovered && jump({ quick: 'lying' })}>
               {summary.claimedButUncovered
-                ? <WarningFilled style={{ color: C.red }} />
-                : <CheckCircleFilled style={{ color: C.teal }} />}
+                ? <WarningFilled style={{ color: VIVID.red }} />
+                : <CheckCircleFilled style={{ color: VIVID.ok }} />}
               <span style={{ flex: 1 }}>标了「已覆盖」却没有任何脚本</span>
-              <b style={{ color: summary.claimedButUncovered ? C.red : C.gray }}>{summary.claimedButUncovered}</b>
+              <b style={{ color: summary.claimedButUncovered ? C.ink : C.gray }}>{summary.claimedButUncovered}</b>
             </Hit>
             <Hit>
               {summary.orphanScripts
-                ? <WarningFilled style={{ color: C.red }} />
-                : <CheckCircleFilled style={{ color: C.teal }} />}
+                ? <WarningFilled style={{ color: VIVID.red }} />
+                : <CheckCircleFilled style={{ color: VIVID.ok }} />}
               <span style={{ flex: 1 }}>脚本声明了清单外的 ID</span>
-              <b style={{ color: summary.orphanScripts ? C.red : C.gray }}>{summary.orphanScripts}</b>
+              <b style={{ color: summary.orphanScripts ? C.ink : C.gray }}>{summary.orphanScripts}</b>
             </Hit>
             {/* 下面三行**不给红**。红在这一页是「挡住你的」，而这张卡自己的脚注写得很清楚：
                 只有前两项是 check-coverage.sh 会直接 BLOCK 的，后三项一条都不阻断。
@@ -1423,10 +1525,10 @@ export default function QaCatalog() {
                 而"268 行整份读串了"是明确要人处理的。） */}
             <Hit active={quick === 'mismatch'} onClick={() => summary.riskMismatch && jump({ quick: 'mismatch' })}>
               {summary.riskMismatch
-                ? <WarningFilled style={{ color: C.orange }} />
-                : <CheckCircleFilled style={{ color: C.teal }} />}
+                ? <WarningFilled style={{ color: VIVID.warn }} />
+                : <CheckCircleFilled style={{ color: VIVID.ok }} />}
               <span style={{ flex: 1 }}>风险 ≥{HIGH_RISK} 却排在 P2/P3</span>
-              <b style={{ color: summary.riskMismatch ? C.orange : C.gray }}>{summary.riskMismatch}</b>
+              <b style={{ color: summary.riskMismatch ? C.ink : C.gray }}>{summary.riskMismatch}</b>
             </Hit>
             {/* 这一行 0 也要显示：只在出问题时才冒出来的指标，跟"没算过"长得一模一样，
                 而这里少读一行的后果是那条场景在页面上根本不存在 —— 覆盖率不掉、缺口不涨 */}
@@ -1436,7 +1538,7 @@ export default function QaCatalog() {
               content={
                 <div style={{ maxWidth: 460, fontSize: 12, lineHeight: 1.8 }}>
                   {parseLoss === 0 && (
-                    <div style={{ color: C.teal }}>
+                    <div style={{ color: C.ink }}>
                       <CheckCircleFilled /> 清单里每一行都读进来了，
                       上面的 {summary.total} 条就是清单的全部。
                     </div>
@@ -1450,7 +1552,7 @@ export default function QaCatalog() {
                   {catalogIssues?.duplicateIds?.length > 0 && (
                     <div style={{ marginTop: 6 }}>
                       同一个 ID 出现了两次（只留了第一条）：
-                      <b style={{ color: C.orange }}> {catalogIssues.duplicateIds.join(' ')}</b>
+                      <b style={{ color: C.ink }}> {catalogIssues.duplicateIds.join(' ')}</b>
                     </div>
                   )}
                   <div style={{ color: C.gray, marginTop: 8, lineHeight: 1.6 }}>
@@ -1466,10 +1568,10 @@ export default function QaCatalog() {
               <div>
                 <Hit style={{ cursor: 'help' }}>
                   {parseLoss
-                    ? <WarningFilled style={{ color: C.orange }} />
-                    : <CheckCircleFilled style={{ color: C.teal }} />}
+                    ? <WarningFilled style={{ color: VIVID.warn }} />
+                    : <CheckCircleFilled style={{ color: VIVID.ok }} />}
                   <span style={{ flex: 1 }}>清单里读不进来的行</span>
-                  <b style={{ color: parseLoss ? C.orange : C.gray }}>{parseLoss}</b>
+                  <b style={{ color: parseLoss ? C.ink : C.gray }}>{parseLoss}</b>
                 </Hit>
               </div>
             </Popover>
@@ -1491,13 +1593,13 @@ export default function QaCatalog() {
                     <div key={c.index}>
                       第 {c.index + 1} 列
                       {c.header ? <code style={{ margin: '0 4px' }}>{c.header}</code> : ' '}
-                      → <b style={{ color: C.teal }}>{COLUMN_ROLE_CN[c.role] || c.role}</b>
+                      → <b style={{ color: C.ink }}>{COLUMN_ROLE_CN[c.role] || c.role}</b>
                       <span style={{ color: C.gray }}>（{c.basis}）</span>
                     </div>
                   ))}
                   {catalogIssues?.unresolvedColumns?.length > 0 && (
                     <div style={{ marginTop: 8 }}>
-                      <b style={{ color: C.orange }}>没认出角色的列（一个字都没往里填）：</b>
+                      <b style={{ color: C.ink }}>没认出角色的列（一个字都没往里填）：</b>
                       {catalogIssues.unresolvedColumns.map(c => (
                         <div key={c.index}>
                           第 {c.index + 1} 列
@@ -1511,7 +1613,7 @@ export default function QaCatalog() {
                   )}
                   {catalogIssues?.unknownStateTokens?.length > 0 && (
                     <div style={{ marginTop: 8 }}>
-                      <b style={{ color: C.orange }}>词表里没有的状态写法（平台自己反推的）：</b>
+                      <b style={{ color: C.ink }}>词表里没有的状态写法（平台自己反推的）：</b>
                       {catalogIssues.unknownStateTokens.map(t => (
                         <div key={t.token}>
                           <code>{t.token}</code> × {t.count} → <b>{STATE_TAG[t.resolvedAs]?.text || t.resolvedAs}</b>
@@ -1531,10 +1633,10 @@ export default function QaCatalog() {
               <div>
                 <Hit style={{ cursor: 'help' }}>
                   {parseConfusion
-                    ? <WarningFilled style={{ color: C.orange }} />
-                    : <CheckCircleFilled style={{ color: C.teal }} />}
+                    ? <WarningFilled style={{ color: VIVID.warn }} />
+                    : <CheckCircleFilled style={{ color: VIVID.ok }} />}
                   <span style={{ flex: 1 }}>清单里读不懂的列 / 状态写法</span>
-                  <b style={{ color: parseConfusion ? C.orange : C.gray }}>{parseConfusion}</b>
+                  <b style={{ color: parseConfusion ? C.ink : C.gray }}>{parseConfusion}</b>
                 </Hit>
               </div>
             </Popover>
@@ -1580,8 +1682,8 @@ export default function QaCatalog() {
                 ))}
                 {/* 这是一句话，不是装饰 —— 按上面 faint 的用途边界，得用 hint。
                     实测 faint 在这块纸上是 3.25:1，hint 是 4.61:1。 */}
-                <span style={{ color: C.hint }}>
-                  <WarningFilled style={{ color: C.orange, marginRight: 4 }} />
+                <span style={{ color: C.gray }}>
+                  <WarningFilled style={{ color: VIVID.warn, marginRight: 4 }} />
                   评审徽标前有这个 = 评完之后这个域又动过，结论已过期
                 </span>
               </div>
@@ -1604,7 +1706,7 @@ export default function QaCatalog() {
                           红只留给真正挡门禁的那半句「· P0 n」：一行至多一处彩，扫一眼就知道
                           哪几个域卡着 check-coverage.sh。 */}
                       <span style={{ width: 96, textAlign: 'right', color: d.gap ? C.gray : C.faint }}>
-                        缺 {d.gap}{d.p0Gap ? <b style={{ color: C.red }}> · P0 {d.p0Gap}</b> : null}
+                        缺 {d.gap}{d.p0Gap ? <b style={{ color: C.ink }}> · P0 {d.p0Gap}</b> : null}
                       </span>
                       <DomainWhen d={d} now={renderedAt} anchor={activityAnchor} />
                       {/* 80 → 96。原来这一格里最宽的是「AI 评审」按钮（实测 62px），
@@ -1638,7 +1740,7 @@ export default function QaCatalog() {
                               border: 0, background: 'transparent', cursor: 'pointer',
                               color: C.gray, display: 'inline-flex', alignItems: 'center', gap: 4,
                             }}
-                            onMouseEnter={e => { e.currentTarget.style.color = C.blue }}
+                            onMouseEnter={e => { e.currentTarget.style.color = C.ink }}
                             onMouseLeave={e => { e.currentTarget.style.color = C.gray }}
                           ><RobotOutlined style={{ fontSize: 12 }} />AI 评审</button>
                         ) : null}
@@ -1761,7 +1863,7 @@ export default function QaCatalog() {
           ) : null,
         ]}
       >
-        <Alert
+        <PageAlert
           type="info" showIcon style={{ marginBottom: 16 }}
           message="平台对这个仓库永远只读"
           description="只做 clone --bare / fetch / git show，不写入、不建分支、也不要求对方仓库为我们加任何文件。"
@@ -1822,11 +1924,15 @@ export default function QaCatalog() {
               </Space>
             )}
             {file?.truncated && (
-              <Alert type="warning" showIcon style={{ marginBottom: 10 }}
+              <PageAlert type="warning" showIcon style={{ marginBottom: 10 }}
                      message="文件太大，只显示了前面一段" />
             )}
             <pre style={{
-              margin: 0, padding: 12, background: '#0f1720', color: '#d8e0ea', borderRadius: 6,
+              // 这块原来是 #0f1720 的近黑板 —— 整个应用最暗的一块，而且它跟下面
+              // 「判据」那个 pre 是同一个概念（从脚本原样抄来的字），按同一个东西
+              // 同一个颜色，就该跟它一样：白纱 + 发丝边 + 墨字。
+              margin: 0, padding: 12, background: VEIL, color: C.ink, borderRadius: 6,
+              border: `1px solid ${C.line}`,
               fontSize: 12, lineHeight: 1.7, overflow: 'auto', maxHeight: 'calc(100vh - 220px)',
               fontFamily: 'var(--font-mono)',
             }}>{file?.content}</pre>
@@ -1841,7 +1947,7 @@ export default function QaCatalog() {
         okText="开始评审" confirmLoading={starting} onOk={startReview}
         okButtonProps={{ disabled: !envs.length }} width={520}
       >
-        <Alert
+        <PageAlert
           type="info" showIcon style={{ marginBottom: 16 }}
           message="只读这个域的清单和脚本，不跑任何东西"
           description="平台不会在这个环境上执行 QA 的脚本，也不会往 QA 仓写任何内容。结论只存在本平台。"
@@ -1859,7 +1965,7 @@ export default function QaCatalog() {
             options={envs.map(e => ({ value: e.id, label: e.name }))}
           />
         ) : (
-          <Alert type="warning" showIcon message="这个项目还没配环境"
+          <PageAlert type="warning" showIcon message="这个项目还没配环境"
                  description="去「项目设置 → 环境」加一个再来，评审要拿环境的变量名跟脚本引用对账。" />
         )}
         <div style={{ fontSize: 12, color: C.gray, marginTop: 8 }}>
@@ -1891,12 +1997,12 @@ export default function QaCatalog() {
             <Spin /><div style={{ marginTop: 12 }}>正在读这个域的 {openReview.scriptCount} 份脚本…几十秒，可以关掉页面</div>
           </div>
         ) : openReview.status === 'failed' ? (
-          <Alert type="error" showIcon message="这次没评上" description={openReview.error} />
+          <PageAlert type="error" showIcon message="这次没评上" description={openReview.error} />
         ) : (
           <ReviewTabs r={openReview} onOpenFile={openFile} projectId={projectId} />
         )}
         {openReview && (
-          <div style={{ marginTop: 20, paddingTop: 10, borderTop: '1px solid rgba(0,0,0,0.06)', fontSize: 12, color: C.gray, lineHeight: 1.9 }}>
+          <div style={{ marginTop: 20, paddingTop: 10, borderTop: `1px solid ${C.line}`, fontSize: 12, color: C.gray, lineHeight: 1.9 }}>
             环境 <b>{openReview.environmentName || '—'}</b> · QA 仓 {openReview.branch} <code>{openReview.commitSha}</code>
             {' · '}{openReview.actor} 发起于 {openReview.createdAt && new Date(openReview.createdAt).toLocaleString('zh-CN')}
             <div>结论只存在本平台，QA 仓没有任何变化。</div>
@@ -1904,10 +2010,17 @@ export default function QaCatalog() {
         )}
       </Drawer>
     </div>
+    </ConfigProvider>
   )
 }
 
-const SEVERITY = { blocker: C.red, major: C.orange, minor: C.gray }
+// 严重度只描边不填底，所以**边**走图形档的鲜色（3:1 就够），标签里的**字**一律墨色。
+// 边已经说了轻重，字再上一遍色是同一件事说两遍，而且 12px 的彩字要过 4.5:1 就得压到
+// L*45 —— 那个亮度上的琥珀是深褐色，正是要消掉的暗沉。
+// minor 用 C.faint（不是 C.line）：白纱片的发丝边就是 C.line，两者会撞 ——
+// g3 那一行「清单口径要商量」和 minor 挨着排，都是浅边浅底，看着像同一个标签断成两截。
+// C.faint 是实实在在的灰环（3.09:1，装饰档够用），三档就成了 红／琥珀／灰 的干净三级。
+const SEVERITY_EDGE = { blocker: VIVID.red, major: VIVID.warn, minor: C.faint }
 
 // 判据回验（后端 `qa_evidence_check`：把模型给的 evidence 拿回脚本正文搜一遍）。
 // 三档都算搜到 —— 真实判据经常是「第 12 行的断言 + 第 40 行的清理」拼起来的，
@@ -1987,12 +2100,12 @@ function HowIRead({ res, r }) {
         {batches > 1 && `（分 ${batches} 批读完再合并）`}
         、{shown != null ? shown : total} 条场景，一份都没真跑。
         <a onClick={() => setOpen(v => !v)}
-           style={{ marginLeft: 8, color: C.teal, cursor: 'pointer' }}>
+           style={{ marginLeft: 8, color: C.gray, cursor: 'pointer' }}>
           {open ? '收起' : '怎么看的？'}
         </a>
       </div>
       {(missedS > 0 || missedF > 0 || cut > 0) && (
-        <div style={{ fontSize: 12, color: C.orange, lineHeight: 1.9 }}>
+        <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.9 }}>
           ⚠ 这个域共 {total} 条场景
           {missedS > 0 && `，其余 ${missedS} 条这次没进模型`}
           {missedF > 0 && `；还有 ${missedF} 份脚本没读进来`}
@@ -2003,14 +2116,14 @@ function HowIRead({ res, r }) {
       {/* 有批次没读成，这句必须露在外面：少读一批 = 少读十几份脚本，
           而"少读了"和"没问题"在页面上长得一模一样 */}
       {failed.length > 0 && (
-        <div style={{ fontSize: 12, color: C.red, lineHeight: 1.9 }}>
+        <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.9 }}>
           ⚠ {failed.map(i => `第 ${i} 批`).join('、')}没读成（网关限流或超时），
           那几批的脚本这一趟等于没看 —— 重跑一次这个域就补上了。
         </div>
       )}
       {open && (
         <div style={{
-          background: 'rgba(0,0,0,0.015)', border: `1px solid ${C.line}`,
+          background: VEIL, border: `1px solid ${C.line}`,
           borderRadius: 8, padding: '12px 14px', marginTop: 8, fontSize: 12.5,
           color: C.gray, lineHeight: 2,
         }}>
@@ -2092,7 +2205,7 @@ function DimUnavailable({ res }) {
   const keys = Object.keys(n).sort((a, b) => n[b] - n[a])
   return (
     <div style={{ marginBottom: 16, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
-      <div style={{ fontWeight: 600, color: C.orange }}>
+      <div style={{ fontWeight: 600, color: C.ink }}>
         ⚠ 还没拿到维度口径，分好组的那张表画不出来
       </div>
       <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.8, marginBottom: 6 }}>
@@ -2113,7 +2226,7 @@ function DimUnavailable({ res }) {
                          fontVariantNumeric: 'tabular-nums', color: C.ink }}>{n[k]}</span>
           <code style={{ fontSize: 12.5, color: C.gray }}>{k}</code>
         </div>
-      )) : <div style={{ fontSize: 12.5, color: C.hint }}>这一趟一条都没抓到</div>}
+      )) : <div style={{ fontSize: 12.5, color: C.gray }}>这一趟一条都没抓到</div>}
     </div>
   )
 }
@@ -2135,7 +2248,7 @@ function DimTable({ res, r }) {
         三个维度是固定的，24 个域横着比也是这三块。
         <b>某一格 0 条只说明这一趟没抓到，不等于那一块没问题。</b>
         {stale > 0 && (
-          <div style={{ color: C.orange }}>
+          <div style={{ color: C.ink }}>
             ⚠ 有 {stale} 项标着「这一趟没查」：这个域是加这几条判据之前评的，
             模型没被问过它们 —— <b>重评一次这个域就补上了</b>，在那之前别读成没问题。
           </div>
@@ -2147,10 +2260,10 @@ function DimTable({ res, r }) {
           <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
             <span style={{
               width: 26, flexShrink: 0, textAlign: 'right', fontWeight: 700, fontSize: 15,
-              fontVariantNumeric: 'tabular-nums', color: d.count ? C.red : C.teal,
+              fontVariantNumeric: 'tabular-nums', color: d.count ? C.ink : C.gray,
             }}>{d.count || '—'}</span>
             <span style={{ fontWeight: 600, color: d.count ? C.ink : C.gray }}>{d.name}</span>
-            <span style={{ fontSize: 12, color: C.hint }}>{d.why}</span>
+            <span style={{ fontSize: 12, color: C.gray }}>{d.why}</span>
           </div>
           {/* 子项 = 怎么判的。想细看的人才往下读，大维度那三个数已经够做决定 */}
           {d.items.map(it => (
@@ -2160,11 +2273,11 @@ function DimTable({ res, r }) {
               {/* 「没查」和「查了没抓到」都是 0，但意思正好相反 —— 混在一起就是假安心 */}
               <span style={{
                 width: 18, flexShrink: 0, textAlign: 'right',
-                fontVariantNumeric: 'tabular-nums', color: it.count ? C.orange : C.faint,
+                fontVariantNumeric: 'tabular-nums', color: it.count ? C.ink : C.faint,
               }}>{it.unavailable ? '?' : it.count || '—'}</span>
               <span style={{ width: 178, flexShrink: 0, fontSize: 12.5,
                              color: it.count ? C.ink : C.gray }}>{it.name}</span>
-              <span style={{ fontSize: 12, color: it.unavailable ? C.orange : C.hint,
+              <span style={{ fontSize: 12, color: it.unavailable ? C.ink : C.gray,
                              lineHeight: 1.8 }}>
                 {it.unavailable ? '这一趟没查 —— 这个域是加这条判据之前评的，重评一次就补上' : it.why}
               </span>
@@ -2199,7 +2312,7 @@ function ReviewBrief({ r }) {
     <div style={{ fontSize: 13 }}>
       <div style={{
         padding: '14px 16px', borderRadius: 8, marginBottom: 14,
-        background: 'rgba(0,0,0,0.02)', border: `1px solid ${C.line}`,
+        background: VEIL, border: `1px solid ${C.line}`,
       }}>
         <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.8, color: C.ink }}>
           {b.headline || res.summary || '这一轮没给出结论'}
@@ -2207,11 +2320,11 @@ function ReviewBrief({ r }) {
         {v && (
           <div style={{ fontSize: 12.5, color: C.gray, marginTop: 8, lineHeight: 1.9 }}>
             这次判「<b style={{
-              color: res.verdict === 'ok' ? C.teal : res.verdict === 'bad' ? C.red : C.orange,
+              color: C.ink,
             }}>{v.text}</b>」= {v.why}
             {/* 结论词的主语必须写出来。省掉主语，读的人会把它读成"评审只做了一半" */}
-            <div style={{ color: C.hint, marginTop: 2 }}>{VERDICT_SUBJECT}</div>
-            <div style={{ color: C.hint }}>{VERDICT_SOURCE}</div>
+            <div style={{ color: C.gray, marginTop: 2 }}>{VERDICT_SUBJECT}</div>
+            <div style={{ color: C.gray }}>{VERDICT_SOURCE}</div>
           </div>
         )}
         {/* 人话那段是拼接版时**必须当场说**。退回拼接之后 headline 是概述的前 120 字，
@@ -2220,7 +2333,7 @@ function ReviewBrief({ r }) {
             2026-08-29 跑 TEM 时真撞到：明细 14+6 条都在，人看的这页是白的。
             折起来不行，这句要的就是拦住"没重点 = 没问题"这个念头。 */}
         {res.briefSource === 'stitched' && (
-          <div style={{ fontSize: 12, color: C.red, marginTop: 8, lineHeight: 1.9 }}>
+          <div style={{ fontSize: 12, color: C.ink, marginTop: 8, lineHeight: 1.9 }}>
             ⚠ 上面这句是<b>拼接版</b>：把各批结论收成一段人话的那一趟没跑成（网关限流或超时），
             所以只剩一句概述，下面的重点和「下一步」是空的 ——
             <b>「没列重点」是这次没写出来，不是这个域没有重点</b>。
@@ -2230,7 +2343,7 @@ function ReviewBrief({ r }) {
         {/* 存量结论没这个键。**不许当成"收口跑成了"** —— 老记录里同样混着收口挂过的，
             折进去就是把「不知道」渲染成「跑成了」。 */}
         {!res.briefSource && (
-          <div style={{ fontSize: 12, color: C.hint, marginTop: 8, lineHeight: 1.9 }}>
+          <div style={{ fontSize: 12, color: C.gray, marginTop: 8, lineHeight: 1.9 }}>
             这一趟没记「上面这段是怎么来的」（旧口径评的，当时不区分「收口跑成了」和
             「收口挂了退回拼接」）—— 底下的重点要是空的，别读成这个域没有重点。
           </div>
@@ -2244,7 +2357,7 @@ function ReviewBrief({ r }) {
       {total > 0 && (
         <div style={{ fontSize: 12.5, color: C.gray, lineHeight: 2, marginBottom: 14 }}>
           这 <b style={{ color: C.ink }}>{total}</b> 条<b>按谁动手分</b>：
-          <b style={{ color: C.red }}>QA 改脚本 {n.script} 条</b>
+          <b style={{ color: C.ink }}>QA 改脚本 {n.script} 条</b>
           <span style={{ color: C.faint }}> · </span>
           我们这侧铺环境 {n.env} 条
           <span style={{ color: C.faint }}> · </span>
@@ -2252,7 +2365,7 @@ function ReviewBrief({ r }) {
           {/* 变量个数和场景条数是两码事，一屏之内并排出现过 10 和 7，得说清是哪个 */}
           {nEnvVar > 0 && `（环境那几条的根子：我们这条环境记录里缺 ${nEnvVar} 个变量名，
             值要在真正跑套件的地方注入，平台这边补上也不会让 QA 的脚本真跑起来。）`}
-          <div style={{ color: C.hint }}>
+          <div style={{ color: C.gray }}>
             要逐条看（哪个文件、哪一句、改成什么）—— 切到隔壁「给 AI / 整改」那一页。
           </div>
         </div>
@@ -2263,7 +2376,7 @@ function ReviewBrief({ r }) {
           <div style={{ fontWeight: 600, color: C.ink, marginBottom: 4 }}>撑得住的部分</div>
           {b.solid.map((x, i) => (
             <div key={i} style={{ display: 'flex', gap: 8, padding: '2px 0', lineHeight: 1.9 }}>
-              <span style={{ color: C.teal, flexShrink: 0 }}>✓</span>
+              <span style={{ color: VIVID.ok, flexShrink: 0 }}>✓</span>
               <span style={{ fontSize: 12.5, color: C.gray }}>{x}</span>
             </div>
           ))}
@@ -2271,7 +2384,7 @@ function ReviewBrief({ r }) {
       )}
 
       {b.nextStep && (
-        <Alert type="info" showIcon style={{ marginBottom: 12 }}
+        <PageAlert type="info" showIcon style={{ marginBottom: 12 }}
                message="下一步" description={b.nextStep} />
       )}
 
@@ -2303,7 +2416,7 @@ function Scanned({ res, r }) {
       {cut > 0 && `（其中 ${cut} 份正文太长被截断，截断的那几份不下结论）`}
       ，评了 {shown != null ? shown : total} 条场景。
       {(missedS > 0 || missedF > 0) && (
-        <div style={{ color: C.orange }}>
+        <div style={{ color: C.ink }}>
           ⚠ 这个域共 {total} 条场景
           {missedS > 0 && `，其余 ${missedS} 条这次没进模型`}
           {missedF > 0 && `；还有 ${missedF} 份脚本没读进来`}
@@ -2340,7 +2453,7 @@ function ReviewBody({ r, onOpenFile, projectId }) {
         {res.scriptGaps?.length ? [...res.scriptGaps]
           .sort((a, c) => BLAME_ORDER.indexOf(blameOf(a)) - BLAME_ORDER.indexOf(blameOf(c)))
           .map((g, i) => (
-          <div key={i} style={{ padding: '8px 0', borderTop: i ? '1px dashed rgba(0,0,0,0.06)' : 'none' }}>
+          <div key={i} style={{ padding: '8px 0', borderTop: i ? `1px dashed ${C.line}` : 'none' }}>
             <Space size={6} wrap style={{ marginBottom: 4 }}>
               {g.id && <Tag style={tagStyle('mute')}>{g.id}</Tag>}
               {/* 动手的人也要先知道这条归谁：改脚本解决不了的那些，别让他白改一遍 */}
@@ -2350,8 +2463,8 @@ function ReviewBody({ r, onOpenFile, projectId }) {
               {/* 严重度只描边不填底：它跟左边那颗「谁动手」说的是两件事，
                   两颗都实心会读成同一个标签被切成了两半。 */}
               {g.severity && <Tag style={{ margin: 0, background: 'transparent',
-                                           color: SEVERITY[g.severity] || C.gray,
-                                           borderColor: SEVERITY[g.severity] || C.line }}>
+                                           color: C.ink,
+                                           boxShadow: RING(SEVERITY_EDGE[g.severity] || C.faint) }}>
                 {g.severity}</Tag>}
               {g.path && (
                 <a onClick={() => onOpenFile(g.path)} style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: C.gray, textDecoration: 'underline dotted' }}>
@@ -2364,7 +2477,7 @@ function ReviewBody({ r, onOpenFile, projectId }) {
                 没有它，"这条断言不够"就只是一句评价，接手的人还得自己把整份脚本读一遍。 */}
             {g.evidence && (
               <pre style={{
-                margin: '6px 0', padding: '6px 10px', background: 'rgba(0,0,0,0.03)',
+                margin: '6px 0', padding: '6px 10px', background: VEIL,
                 // 跟 Rich 里的行内 code 同一个理由：#476582 是第五支蓝灰。
                 // 这里是从脚本正文原样抄来的判据，是这一段的主要内容，给足对比度。
                 borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 12,
@@ -2378,7 +2491,7 @@ function ReviewBody({ r, onOpenFile, projectId }) {
                 存量结论（没有这个键）不逐条标：顶上那句已经说了整份都没回验，
                 这里再标一遍就是给每一行都糊上噪音。 */}
             {g.evidenceCheck && !EV_PASS.includes(g.evidenceCheck) && (
-              <div style={{ fontSize: 12, color: C.orange, lineHeight: 1.8 }}>
+              <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.8 }}>
                 ⚠ <b>这条的判据平台没验上</b>（{EV_CN[g.evidenceCheck] || g.evidenceCheck}）
                 {g.evidenceFoundIn && <>，不过在 <code>{g.evidenceFoundIn}</code> 里搜到了</>}
                 {' '}—— 结论本身可能仍然成立，但<b>先回原文确认再动手</b>。
@@ -2396,7 +2509,7 @@ function ReviewBody({ r, onOpenFile, projectId }) {
             {/* 分母。「缺 2 个」既可能是 2/3 也可能是 2/40 —— 没分母读的人判不了
                 这一列有多严重，而判不了的结果通常是整列被当噪音略过。 */}
             {res.envSatisfied?.length > 0 && (
-              <div style={{ fontSize: 12, color: C.hint }}>
+              <div style={{ fontSize: 12, color: C.gray }}>
                 这个域要从外面拿 {res.envMissing.length + res.envSatisfied.length} 个变量，
                 其中 {res.envSatisfied.length} 个这个环境里有。
               </div>
@@ -2415,7 +2528,7 @@ function ReviewBody({ r, onOpenFile, projectId }) {
                 </Tooltip>
                 {v.state === 'ambiguous' && (
                   /* 降级要连**凭什么降**一起写出来，否则它就是一句无从复核的断言 */
-                  <div style={{ fontSize: 12, color: C.hint, marginLeft: 2 }}>
+                  <div style={{ fontSize: 12, color: C.gray, marginLeft: 2 }}>
                     名字对不上，<b>不是真缺</b>：环境里有{' '}
                     <span style={{ fontFamily: 'var(--font-mono)' }}>
                       {(v.family || []).join('、')}
@@ -2424,7 +2537,7 @@ function ReviewBody({ r, onOpenFile, projectId }) {
                 )}
               </div>
             ))}
-            <div style={{ fontSize: 12, color: C.hint }}>
+            <div style={{ fontSize: 12, color: C.gray }}>
               公共库里真赋过值的、自带兜底值的、shell 自带的、夹具运行时拼出来的都已经排掉。
               写成 <code>{'export X="${X:-}"'}</code> 的算缺 ——
               那是仓库在明说这个值得从环境来，没配就整条静默跳过。
@@ -2550,7 +2663,7 @@ function TakeAway({ r, projectId }) {
     <div style={{
       display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
       padding: '8px 12px', marginBottom: 14, borderRadius: 6,
-      background: WASH.cool, border: `1px solid ${C.line}`,
+      background: VEIL, border: `1px solid ${C.line}`,
     }}>
       <span style={{ fontSize: 12, color: C.ink }}>把这份结论交给 QA：</span>
       <Button size="small" icon={<CopyOutlined />} loading={busy} onClick={copy}>复制 Markdown</Button>
@@ -2585,4 +2698,4 @@ function Section({ title, hint, children }) {
   )
 }
 
-const Nothing = ({ text }) => <div style={{ fontSize: 12, color: C.hint }}>{text}</div>
+const Nothing = ({ text }) => <div style={{ fontSize: 12, color: C.gray }}>{text}</div>
