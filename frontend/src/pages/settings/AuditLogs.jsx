@@ -49,10 +49,14 @@ const ACTION_CONFIG = {
 // api_node 是 2026-08-27 补上的：接口库那张表以前的写入一个字都不记，
 // 于是「接口库还在被 MCP 写吗」这种问题只能靠猜。筛这一项就能直接看见
 // 是页面点的还是 MCP 写的（看「操作人」列那个 CC · xxx 来源标签）。
-const TARGET_TYPES = ['user', 'project', 'branch', 'case', 'api_node', 'plan', 'environment', 'channel']
+const TARGET_TYPES = ['user', 'project', 'branch', 'case', 'api_node', 'plan', 'environment', 'channel', 'cc_feedback']
 const TARGET_TYPE_LABELS = {
   user: '用户', project: '项目', branch: '分支配置', case: '用例',
   api_node: '接口库', plan: '计划', environment: '环境', channel: '通知渠道',
+  // 新增对象类型**两处都要加**：漏了 LABELS 就在页面上露出 target_type 的原始码，
+  // 漏了 TARGET_TYPES 则筛选下拉里根本选不到它 —— 两种都不报错，只是那类记录
+  // 看着像"没记账"。cc_feedback 是 CC 报回来的平台自身问题（系统管理 →「CC 反馈」）。
+  cc_feedback: 'CC 反馈',
 }
 
 /** 详情抽屉里的一行「标签 值」。标签定宽，值换行时不会跑到标签下面。 */
