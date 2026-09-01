@@ -27,7 +27,10 @@ import { usePermissions } from '../../utils/PermissionContext'
 //
 // 结论很硬：**「文字上色」和「不暗沉」在 4.5:1 这条线上是互斥的**，只能选一个。
 // 这一版选不暗沉：
-//     笔画（文字）→ 只有中性墨色三档 ink / gray / faint，外加一支红 crit
+//     笔画（文字）→ 中性墨色三档 ink / gray / faint，外加两支能读的彩：红 crit、绿 good
+//       两支彩字**按这个信号有多稀有定音量**，不是按它有多重要：红只给「挡着门禁的」
+//       （P0、风险 ≥9、会 BLOCK 的计数），绿只给「已经好了 / 还热着」。
+//       琥珀一支不做小字 —— 它在 4.5:1 上只能到 #aa5300，是褐，正是要消掉的那种暗。
 //     色块        → 颜色全在这里：标签底纹 WASH、进度条 BAR、图标与大数字 VIVID
 //
 // 色块有色彩空间，是因为门槛根本不同：
@@ -37,14 +40,14 @@ import { usePermissions } from '../../utils/PermissionContext'
 //     上一版底纹淡到 1.09:1，"底 + 字"那个标签形状根本没长出来，屏幕上只剩一串
 //     深色小字浮着 —— 那是暗沉的另一半原因：**不是底太深，是底没有、字太深**。
 //
-// 全页三支彩色相 + 一支冷灰。蓝**降级**成只有一块浅天蓝底纹（「不表态」）：
-// 原来更新时间那三级藏青（live #0f4266 / today #175785，两列合计重复 500+ 次，
-// 是全页最大的一片蓝）全部撤掉，改成中性三档配实心/空心点 ——
-// 那一列本来就写着"15 小时前"，颜色是同一件事说的第二遍。
+// 全页三支彩色相 + 一支冷灰。蓝**整支退役**：原来更新时间那三级藏青
+//（live #0f4266 / today #175785，两列合计重复 500+ 次，是全页最大的一片蓝）撤掉，
+// 改成「热的两档给绿、凉的两档退灰阶」—— 新鲜度在这一页跟覆盖率是同一种好，
+// 所以它跟条子、跟 ✓ 用同一支绿，不再自己占一支色相。
 //    25°  红   —— 挡住你的：P0、对不上、已知缺陷
 //    60°  琥珀 —— 要处理但不挡：P1、有缺口、待补、风险错配
 //   158°  绿   —— 好了：已覆盖、全认领、清单和脚本对得上
-//   265°  冷灰 —— 不表态：所有文字、P2/P3、新鲜度（浅天蓝底纹是这一支的有彩端）
+//   265°  冷灰 —— 不表态：身份与分类（ID、场景名、路径、执行层）、P2/P3、凉掉的那两档新鲜度
 //
 // 同一个语义在三种形态里仍然是**同一支色相**，只是深浅随形态走：
 //     P0     → 底纹 #fcc4c1 / 条子 #f18886 / 图标 #f73e52     全在 25°
@@ -70,10 +73,15 @@ const C = {
   faint: '#81878f', // L*56  3.09:1  **只许装饰**：分隔点、占位破折号、0 值、虚线边框、图标。
                     //   按非文字 3:1 定线 —— 够画图标，不够读一句话，这就是它的用途边界。
   line: '#e0e6ef',  // L*91  分隔线、空条
-  crit: '#ca1e3a',  // L*44  4.77:1  唯一的彩色文字，只给"挡着门禁"的数（风险 ≥9）。
-                    //   为什么只有红留得下来：L*44 是 4.5:1 的天花板，而在这个亮度上
-                    //   只有红还看得出是"红"，琥珀已经是褐、蓝已经是藏青。
+  crit: '#ca1e3a',  // L*44  4.77:1  彩字之一，只给「挡着门禁的」：风险 ≥9、P0、
+                    //   域行那半句「· P0 n」、以及 check-coverage.sh 真会 BLOCK 的那两个计数。
                     //   ⚠ 只许放在**纸**上，不许放到 WASH 上 —— 对 WASH.danger 只有 3.67:1。
+  good: '#007b4e',  // L*45  4.55:1  彩字之二，只给「已经好了 / 还热着」：缺 0、新鲜度前两档。
+                    //   H158 跟 VIVID.ok / BAR.ok / WASH.ok 同一支色相，彩度顶到 sRGB 边界
+                    //   （C*44）—— 同一件事在条子、图标、字上是同一支色，只是亮度各就各位。
+                    //   为什么只有红和绿有文字档：L*45 是 4.5:1 的天花板，在这个亮度上
+                    //   红还是红、绿还是绿，而**琥珀已经是褐**（H60 顶多到 #aa5300）——
+                    //   所以琥珀永远不做小字，只做条子、图标和淡底药丸。
 }
 
 // —— 图形档：图标、✓/⚠ 这类符号、以及 ≥24px 的英雄数字。
@@ -280,9 +288,14 @@ const PRIORITY_BAR = { P0: BAR.danger, P1: BAR.warn, P2: BAR.mute, P3: BAR.mute2
 // 白字要过 4.5:1，实底就必须 L*≤45，而那个亮度上的琥珀正是要消掉的深褐。
 // 一次只可能选中一个，筹码上又写着「P0 缺 70」，深浅分色在这里挣不到任何信息。
 const SELECTED_FILL = C.ink
-// 纯文字场合的优先级：跟 PRIORITY_TONE 一个口径（P0/P1 有底 = 挡门禁 = 墨色，
-// P2/P3 不表态 = 灰）。上一版这里是 PRIORITY_COLOR 的四支深色，四行字四个颜色。
-const PRIORITY_TEXT = { P0: C.ink, P1: C.ink, P2: C.gray, P3: C.gray }
+// 纯文字场合的优先级。**只有 P0 上色**，而且用的就是那支红：P0 是
+// check-coverage.sh 会 BLOCK 的那一档，跟风险 ≥9、跟域行那半句「· P0 n」、
+// 跟卡片上那颗「P0 缺 70」是同一件事，所以只能是同一支颜色。
+// P1 不给琥珀有两个理由，缺一个都不够：① 琥珀在 4.5:1 上是褐（见 C.good 的注）；
+// ② 这份清单 P0 占 47%、P1 占 44% —— 两档都上色等于全表都在响，
+// 而**满屏都在响等于没有响**。三档靠「红 / 墨 / 灰」+ 字重分开，不靠认色。
+const PRIORITY_TEXT = { P0: C.crit, P1: C.ink, P2: C.gray, P3: C.gray }
+const PRIORITY_WEIGHT = { P0: 600, P1: 500, P2: 400, P3: 400 }
 
 
 // 解析器认出来的列角色 → 页面上的说法。用的是这一页表头本来就用的词，
@@ -304,7 +317,10 @@ const tierText = t => TIER[t]?.text || t || '—'
 const HIGH_RISK = 6      // 与后端 qa_catalog.HIGH_RISK 同口径
 const URGENT_RISK = 9
 
-const riskColor = r => (r >= URGENT_RISK ? C.crit : C.ink)
+// 三档，但**只有最烫的那档上色**：这份清单 78% 的行风险 ≥6、30% ≥9 ——
+// 给 6~8 也上色就是五行里响四行，那不是强调，是底噪。
+// 所以 ≥9 判红（跟 P0 同一支红：都是「挡着门禁的」），6~8 留墨，<6 退灰。
+const riskColor = r => (r >= URGENT_RISK ? C.crit : r >= HIGH_RISK ? C.ink : C.gray)
 
 // 清单里一半的场景描述带 `反引号` 和 **加粗**，原样打出来是满屏符号
 //
@@ -461,13 +477,17 @@ const absWhen = iso => (iso ? new Date(iso).toLocaleString('zh-CN', { hour12: fa
 // 改档位之前先把分布拉出来看一眼，别照着"合理的时间单位"拍。
 const H = 3600 * 1000
 const D = 24 * H
+// 四档分成**两个色带**：热的两档给绿，凉的两档退回灰阶。
+// 用绿而不另开一支色相，是因为「还热着」在这一页跟「已覆盖」是同一种好 ——
+// 条子绿、✓ 绿、刚动过也绿，同一个意思全页只有一支颜色。
+// 凉的两档**不给琥珀/红**：搁置是元信息，不是错。一上暖色就等于替人下
+//「这个域该骂」的结论，而这一页没有任何依据这么说。
+// 每一档都另留一条不靠辨色的出口：圆点 实心●/空心○/没有 + 字重。
 const ACTIVITY_TIERS = [
-  // 四档只用「墨/灰 × 实心●/空心○/无点」表达，不上色。活跃度是元信息，不是好坏；
-  // 它在表里每行都出现一次，一上色就是几百个色点，本页最抢眼的杂色就是这个。
-  { key: 'live',  within: 6 * H,    label: '刚动过', note: '离本仓最后一次动静 6 小时内（同一轮）', dot: '●', color: C.ink,  weight: 600 },
-  { key: 'today', within: D,        label: '今天',   note: '24 小时内',        dot: '●', color: C.gray, weight: 400 },
-  { key: 'week',  within: 7 * D,    label: '本周',   note: '一周内 —— 别人今天动了，它没有', dot: '○', color: C.gray,  weight: 400 },
-  { key: 'cold',  within: Infinity, label: '搁置',   note: '一周以上没动过',   dot: '',  color: C.gray, weight: 400 },
+  { key: 'live',  within: 6 * H,    label: '刚动过', note: '离本仓最后一次动静 6 小时内（同一轮）', dot: '●', dotColor: VIVID.ok, color: C.good, weight: 600 },
+  { key: 'today', within: D,        label: '今天',   note: '24 小时内',        dot: '●', dotColor: C.good,  color: C.good, weight: 400 },
+  { key: 'week',  within: 7 * D,    label: '本周',   note: '一周内 —— 别人今天动了，它没有', dot: '○', dotColor: C.faint, color: C.gray,  weight: 400 },
+  { key: 'cold',  within: Infinity, label: '搁置',   note: '一周以上没动过',   dot: '',  dotColor: C.faint, color: C.gray, weight: 400 },
 ]
 
 // 锚点 = 本仓最后一次动静。四档量的都是"离它多远"，不是"离今天多远"。
@@ -478,6 +498,16 @@ function activityAnchorOf(domains) {
   return times.length ? Math.max(...times) : null
 }
 
+// ⚠ 一个会被当成 bug 的边界，别去"修"它：**档位按锚点算，格子里的文字按当下算。**
+// 两个参照点不同（锚点 = 本仓最后一次动静，文字 = 相对现在），所以域网格里可能出现
+// 「● 2 天前」是绿的、「○ 2 天前」是灰的 —— 同样的字，不同的色。
+// 实测（2026-09-01，锚点 08-31 18:22）：24 个域里只有「1 天前」（live/today，两档都绿，
+// 看不出来）和「2 天前」（today/week，绿↔灰）会跨档。
+// 想让色和字对上，只有两条路，两条都更坏：
+//   ① 档位改成按自然日算 —— 这正是上面那段注释否掉的方案（标记恒真）；
+//   ② 文字改成相对锚点 —— 那就答不了「这东西多久没人动了」这个真问题。
+// 所以留着，靠圆点（实心/空心）和悬浮层里的两个绝对时间兜底 —— 这个分歧在上一版
+// 就已经由圆点表达了，上色只是把它变响，不是把它造出来。
 function activityTierOf(iso, anchor) {
   if (!iso || anchor == null) return null
   const t = new Date(iso).getTime()
@@ -519,11 +549,12 @@ function DomainWhen({ d, now, anchor }) {
                   全标亮 = 恒真；反过来锚在最后一次动静上，仓库搁半年也还能指出
                   "最后在做的是这几个域" */}
             </div>
-            {/* 悬浮层是深底，档位色是照白底调的，直接拿来标会糊掉 ——
-                所以这儿只用圆点+字重复述结构，颜色留给格子本身 */}
+            {/* 悬浮层现在是白底（见 PAGE_THEME.components.Tooltip），而档位色本来就是
+                照白底调的 —— 所以图例可以跟格子里用同一支色。
+                图例和格子不同色，比没有图例更坏：它会教错人。 */}
             {ACTIVITY_TIERS.map(t => (
-              <div key={t.key} style={{ paddingLeft: 6, fontWeight: t.weight }}>
-                <span style={{ display: 'inline-block', width: 14 }}>{t.dot}</span>
+              <div key={t.key} style={{ paddingLeft: 6, fontWeight: t.weight, color: t.color }}>
+                <span style={{ display: 'inline-block', width: 14, color: t.dotColor }}>{t.dot}</span>
                 <b>{t.label}</b> · {t.note}
               </div>
             ))}
@@ -539,7 +570,7 @@ function DomainWhen({ d, now, anchor }) {
         }}
         onClick={e => e.stopPropagation()}
       >
-        {act?.dot && <span style={{ marginRight: 3 }}>{act.dot}</span>}
+        {act?.dot && <span style={{ marginRight: 3, color: act.dotColor }}>{act.dot}</span>}
         {onlyCatalog && d.updatedAt && <span style={{ color: C.gray, marginRight: 3 }}>清单</span>}
         {relWhen(d.updatedAt, now)}
       </span>
@@ -1056,9 +1087,10 @@ export default function QaCatalog() {
       sortOrder: sortOrderOf('priority'), key: 'priority',
       // 去掉了 antd 的 <Tag> 外壳：这一列 530 行每行一颗描边标签，等于在表里画了
       // 530 个彩色小方框，而「P0/P1」四个字符自己已经把档位说全了，框不增加任何信息。
-      // 颜色仍按「挡不挡」分（P0 红 / P1 琥珀 / P2·P3 中性），只是不再各自带一圈边。
+      // 颜色按「挡不挡」分，但只有 P0 真的上色（P0 红 / P1 墨 / P2·P3 灰，见 PRIORITY_TEXT），
+      // 只是不再各自带一圈边。
       render: v => v
-        ? <b style={{ color: PRIORITY_TEXT[v] || C.gray, fontWeight: v === 'P0' ? 600 : 500 }}>{v}</b>
+        ? <b style={{ color: PRIORITY_TEXT[v] || C.gray, fontWeight: PRIORITY_WEIGHT[v] || 400 }}>{v}</b>
         : <span style={{ color: C.faint }}>—</span>,
     },
     {
@@ -1075,7 +1107,7 @@ export default function QaCatalog() {
       // 拆掉的胶囊又贴回来，两列紧挨着一列裸一列带壳，看着像两套设计。
       // 阈值 6 是后端定的（`qa_catalog.HIGH_RISK`，不归这一页管），能改的只有画多响。
       //
-      // 分档还在，只是全交给数字自己：颜色分三段（<6 灰 / 6~8 琥珀 / ≥9 红），
+      // 分档还在，只是全交给数字自己：颜色分三段（<6 灰 / 6~8 墨 / ≥9 红），
       // 粗细再兜一道不靠颜色的出口（≥9 才 600），灰度打印和色弱也还分得出最烫的那批。
       // 敢只靠颜色分段，是因为**数字本身就在那儿** —— 色只是让人快一点，不是唯一出口。
       //
@@ -1212,12 +1244,21 @@ export default function QaCatalog() {
                 这张表 530 行，更新时间是附注。而这份数据的实情是 QA 仓常常一整轮
                 一起提交 —— 于是几乎每一行都落在最新那档，`weight 600` 一加，
                 整列同时变粗，成了全行最响的东西，比「状态」「优先级」还抢。
-                同一套颜色、不同的分量，才是同一件事在两个语境里该有的样子。 */}
+                同一套颜色、不同的分量，才是同一件事在两个语境里该有的样子。
+
+                **同一个理由，颜色也只上到圆点上，字退回中性**（`act.color` 在这里
+                也故意不用）。上面那句「一整轮一起提交」的后果在实拍里是这样的：
+                一屏 8 行的更新时间全是「● 23 小时前」，绿字连成一道竖条，
+                而它右边一格就是「已覆盖」的绿药丸 —— 一行里两处绿、整列又都绿，
+                绿就不再是「好了」的意思，只是「这一列的底色」。
+                一列里每行都一样的东西，本来就不需要颜色去区分。
+                所以这里：圆点带色（实心绿 = 这一轮动过、空心灰 = 没有），字用 C.gray。
+                域网格反过来 —— 那 24 行真的分成两半，颜色在那儿是有信息量的。 */}
             <span style={{
               fontSize: 12, whiteSpace: 'nowrap', cursor: 'help',
-              color: act ? act.color : C.faint,
+              color: act ? C.gray : C.faint,
             }}>
-              {act?.dot && <span style={{ marginRight: 3 }}>{act.dot}</span>}
+              {act?.dot && <span style={{ marginRight: 3, color: act.dotColor }}>{act.dot}</span>}
               {relWhen(v, renderedAt)}
             </span>
           </Tooltip>
@@ -1508,16 +1549,17 @@ export default function QaCatalog() {
                 ? <WarningFilled style={{ color: VIVID.red }} />
                 : <CheckCircleFilled style={{ color: VIVID.ok }} />}
               <span style={{ flex: 1 }}>标了「已覆盖」却没有任何脚本</span>
-              <b style={{ color: summary.claimedButUncovered ? C.ink : C.gray }}>{summary.claimedButUncovered}</b>
+              <b style={{ color: summary.claimedButUncovered ? C.crit : C.gray }}>{summary.claimedButUncovered}</b>
             </Hit>
             <Hit>
               {summary.orphanScripts
                 ? <WarningFilled style={{ color: VIVID.red }} />
                 : <CheckCircleFilled style={{ color: VIVID.ok }} />}
               <span style={{ flex: 1 }}>脚本声明了清单外的 ID</span>
-              <b style={{ color: summary.orphanScripts ? C.ink : C.gray }}>{summary.orphanScripts}</b>
+              <b style={{ color: summary.orphanScripts ? C.crit : C.gray }}>{summary.orphanScripts}</b>
             </Hit>
-            {/* 下面三行**不给红**。红在这一页是「挡住你的」，而这张卡自己的脚注写得很清楚：
+            {/* 上面两行的**计数判红**，下面三行**不给红**（计数留墨）。
+                红在这一页是「挡住你的」，而这张卡自己的脚注写得很清楚：
                 只有前两项是 check-coverage.sh 会直接 BLOCK 的，后三项一条都不阻断。
                 上一版这五行是 红/红/琥珀/红/红 —— 四行红把"会挡"和"不挡"混成一片，
                 于是**唯一真正要人现在动手的那两行，反倒没了重量**。
@@ -1703,10 +1745,11 @@ export default function QaCatalog() {
                       {/* 「缺 N」走中性：这一格左边那根条子已经用颜色说过一遍「缺的是什么」了
                           （见 COVER_STROKE），这里再上一次琥珀，是同一件事在同一行里第三次
                           上色 —— 24 行叠起来就是半屏橙字，而**满屏都在报警等于没有报警**。
-                          红只留给真正挡门禁的那半句「· P0 n」：一行至多一处彩，扫一眼就知道
-                          哪几个域卡着 check-coverage.sh。 */}
-                      <span style={{ width: 96, textAlign: 'right', color: d.gap ? C.gray : C.faint }}>
-                        缺 {d.gap}{d.p0Gap ? <b style={{ color: C.ink }}> · P0 {d.p0Gap}</b> : null}
+                          红只留给真正挡门禁的那半句「· P0 n」：扫一眼就知道哪几个域卡着
+                          check-coverage.sh。「缺 0」反过来判绿 —— 那一行的条子本来就是满格的绿，
+                          字跟着绿是同一件事在同一行里说得一致，不是多上一次色。 */}
+                      <span style={{ width: 96, textAlign: 'right', color: d.gap ? C.gray : C.good }}>
+                        缺 {d.gap}{d.p0Gap ? <b style={{ color: C.crit }}> · P0 {d.p0Gap}</b> : null}
                       </span>
                       <DomainWhen d={d} now={renderedAt} anchor={activityAnchor} />
                       {/* 80 → 96。原来这一格里最宽的是「AI 评审」按钮（实测 62px），
@@ -1723,7 +1766,11 @@ export default function QaCatalog() {
                           // 徽标是缩写版，长句和时间都在悬浮里补齐 —— 缩了字不等于可以不说全
                           <ReviewBadge d={d} rv={rv} now={renderedAt} onOpen={setOpenReview} />
                         ) : rv?.status === 'failed' ? (
-                          <Tag style={{ ...tagStyle('bad'), cursor: 'pointer' }}
+                          // **不给红**：「没评上」是这趟没跑成，不是这个域评出来很差。
+                          //   原来它跟「多数不实」同一支粉 —— 扫这一列会数出三个
+                          //   「结论很差」的域，实际只有两个，第三个是工具自己挂了。
+                          //   跟「评审中」同一支中性药丸：两个都是**还没有结论**。
+                          <Tag style={{ ...tagStyle('info'), cursor: 'pointer' }}
                                onClick={() => setOpenReview(rv)}>没评上</Tag>
                         ) : canGenerate ? (
                           // 同样躲开 .ant-btn 那套 !important（理由见上面「P0 待补」那颗筹码）。
