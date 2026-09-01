@@ -53,14 +53,41 @@ async def list_feedback(
     category: str | None = Query(default=None),
     project_id: str | None = Query(default=None, alias="projectId"),
     keyword: str | None = Query(default=None),
+    # 页面上真正要人动手的只有这一撮。**跨状态**（AI 说判不了的还挂在 new 上、
+    # AI 判的 wont_fix 被带新证据重报的挂在 wont_fix 上），所以是独立开关不是 status 值。
+    awaiting_human: bool = Query(default=False, alias="awaitingHuman"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100, alias="pageSize"),
 ):
     items, total, summary = await svc.list_feedback(
         session, status=status, pending_only=pending_only, category=category,
-        project_id=project_id, keyword=keyword, page=page, page_size=page_size)
+        project_id=project_id, keyword=keyword, awaiting_human=awaiting_human,
+        page=page, page_size=page_size)
     return {"data": {"items": items, "total": total, "page": page,
                      "pageSize": page_size, "summary": summary}}
+
+
+@router.get("/batch-status")
+async def batch_status(_: User = Depends(require_role("admin"))):
+    """当前批次跑到哪了。**这条必须声明在 `/{feedback_id}` 前面** —— 否则
+    "batch-status" 会被当成 id 塞进那条动态路由，然后炸在 uuid 解析上。"""
+    return {"data": svc.batch_status()}
+
+
+@router.post("/ai-handle")
+async def ai_handle_batch(
+    body: dict | None = None,
+    session: AsyncSession = Depends(get_db),
+    user: User = Depends(require_role("admin")),
+):
+    """勾一批（`ids`）丢给 AI；不传 ids = 全部还没判的。
+
+    立刻返回，判是后台顺序跑的 —— 一批 31 条按十几秒一条算是几分钟，
+    挂在 HTTP 上必超时。进度走 GET /batch-status。
+    """
+    ids = (body or {}).get("ids") or None
+    return {"data": _raise_if_err(
+        await svc.start_batch(session, ids, actor=user.username))}
 
 
 @router.get("/{feedback_id}")
@@ -81,7 +108,11 @@ async def create_feedback(
     session: AsyncSession = Depends(get_db),
     user: User = Depends(require_role("admin")),
 ):
-    """页面上手工建一条（source=human）。
+    """手工建一条（source=human）。
+
+    **页面上不再露这个入口**（2026-09-01）：这张表的正常来源是 CC 自己报，
+    人打开这一页是来看结论、或者拍板 AI 判不了的那几条的。接口留着是因为
+    导入/回填脚本和 API 测试都走它，而且它和 MCP 共用同一个 report()。
 
     走的是**和 MCP 完全同一个 report()**，所以证据闸门、归并、wont_fix 短路
     对人工录入一样生效 —— 两条路各写一套校验，迟早会漂成两种规矩。
@@ -106,7 +137,12 @@ async def triage_feedback(
     session: AsyncSession = Depends(get_db),
     user: User = Depends(require_role("admin")),
 ):
-    """分诊 / 处置。done 和 wont_fix 必须带回音（service 里硬校验）。"""
+    """**人**拍板。done 和 wont_fix 必须带回音（service 里硬校验）。
+
+    走到这条路上的只有两种情况：AI 说自己判不了（`needsHuman`），或者人改判
+    AI 的结论。所以这里写死 decided_by="human" —— 人判的 wont_fix 从此终局，
+    不再被带新证据的重报翻案。
+    """
     return {"data": _raise_if_err(await svc.triage(
         session, feedback_id,
         status=body.get("status") or "",
@@ -115,6 +151,7 @@ async def triage_feedback(
         resolution=body.get("resolution"),
         duplicate_of=body.get("duplicateOf"),
         actor=user.username,
+        decided_by="human",
     ))}
 
 
@@ -124,5 +161,10 @@ async def analyze_feedback(
     session: AsyncSession = Depends(get_db),
     _: User = Depends(require_role("admin")),
 ):
-    """AI 分诊建议。**只写建议不改状态** —— 采纳与否是人的动作。"""
-    return {"data": _raise_if_err(await svc.ai_triage(session, feedback_id))}
+    """AI 处置这一条：分析 + **直接落裁定**。
+
+    2026-09-01 改的口径（原来是「只写建议不改状态」）：AI 判得了的自己判，
+    人只兜底 —— 判不了的会落 needs_human，页面上「等人拍板」筛得到。
+    路径保留 `/analyze` 是为了不动已有的调用方，但它现在会改状态。
+    """
+    return {"data": _raise_if_err(await svc.ai_handle(session, feedback_id))}

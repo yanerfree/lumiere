@@ -331,6 +331,12 @@ Claude Code 里，用 Bash/Edit/Playwright 这些本地工具。平台只做存�
 # 避免再出现"前端硬编码 20 条、后端实际注册 32 条"的漂移。
 TOOL_CATALOG: list[dict] = []
 
+# 工具名 → 真实函数。**不放进 TOOL_CATALOG**：那个是要序列化给前端的，塞个函数进去
+# 直接炸在 JSON 序列化上。这份是给「AI 自己判反馈」用的 —— 判「CC 说这个工具坏了」
+# 得看得见它的实现，判「他其实没找对方法」得看得见别的工具有没有这个能力
+# （见 services/cc_feedback_service.py 的 _platform_facts）。
+TOOL_FUNCS: dict[str, object] = {}
+
 _current_category = "其它"
 
 
@@ -366,6 +372,8 @@ def _register(func, name: str, description: str):
         "category": _current_category,
         "params": ", ".join(p.name for p in new_params) or "无",
     })
+    # 登记原始函数（不是 wrapper）—— 要的是 inspect.getsource 能拿到真实现的那个
+    TOOL_FUNCS[name] = func
     mcp.tool(name=name)(wrapper)
 
 
@@ -538,7 +546,10 @@ _register(
                 "category=bug 时 expected 和 actual 都必填（「说好的是什么/实际是什么」想不清楚的，"
                 "多半不是缺陷是用法）；每把 Key 每天 40 条新指纹，**撞同一个坑再多次都不占配额**"
                 "（那走归并，只 +1，撞得越多排得越靠前）。同一件事被判过「不需要处理」的，"
-                "再报会当场把上次的理由甩回给你、不新建行。回音走 lum_list_my_feedback 和 "
+                "再报会当场把上次的理由甩回给你、不新建行 —— **但如果那条是 AI 判的**"
+                "（返回里的 decidedBy='ai'），带上**跟上次不同的现象**原标题再报一次会转给人拍板；"
+                "照原样复读不算新证据，不会翻案。**报完不用等人**：反馈一进来就自动交给 AI 分诊，"
+                "通常一会儿就有结论（判不了的才落到人手上）。回音走 lum_list_my_feedback 和 "
                 "lum_next_duty 的「平台反馈有回音」队列。参数: title(一句话说清是什么毛病), "
                 "body(三段：想干什么/平台实际怎么反应的-原始返回抄一段/期望它怎么反应), category, "
                 "tool_name(撞到的是哪个 lum_* 工具，强烈建议填 —— 它是指纹的一半), "
@@ -552,7 +563,9 @@ _register(
                 "**读到的回音当场算已读**，不会再出现在 lum_next_duty 里 —— 所以别只为了"
                 "「看一眼」调它，看了就要处理。判为「已处理」的会带一句提醒：平台后端不带 --reload，"
                 "验之前得先重启，不然你会得出「他没修」的结论而那是旧进程在跑。"
-                "判为「不需要处理」的会带**正确做法** —— 那种多半是你没找对方法，照着做别再报一遍。"
+                "判为「不需要处理」的会带**正确做法** —— 那种多半是你没找对方法，照着做别再报一遍；"
+                "回音里的 decidedBy 说这条是谁判的，**ai 判的那种带 canReopen** —— "
+                "真觉得判错了就带上跟上次不同的现象原标题重报一次，会转给人拍板（人判的是终局）。"
                 "参数: status(可选，按状态筛), unread_only(默认true，只看还没取走的回音), project_id(可选)",
 )
 

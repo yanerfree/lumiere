@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -20,11 +21,13 @@ from app.core.audit import write_audit_log
 from app.models.cc_feedback import (
     CATEGORIES,
     CATEGORY_LABEL,
+    DECIDERS,
     OPEN_STATUSES,
     PENDING_STATUSES,
     SEVERITIES,
     STATUS_LABEL,
     STATUSES,
+    WONT_FIX_SAMPLE_EVERY,
     CCFeedback,
 )
 from app.models.project import Project
@@ -42,6 +45,10 @@ MAX_BODY = 8000
 # 后者被正文 40 字 + bug 必须写 expected/actual 挡住了 —— 配额是第三道，不是第一道。
 QUOTA_PER_DAY = 40
 
+# 新反馈进来自动跑一次 AI 处置。**默认开** —— 人是来看结果的，不是来点每一条的。
+# 关掉的唯一用途是测试：单测里不该真打模型（打了会在没有网关的机器上变成偶发红）。
+AUTO_TRIAGE = os.getenv("CC_FEEDBACK_AUTO_TRIAGE", "1") != "0"
+
 _WS = re.compile(r"\s+")
 _PUNCT = re.compile(r"[，。、；：！？,.;:!?（）()「」【】\[\]“”\"'·\-—_/]+")
 
@@ -56,6 +63,15 @@ def fingerprint_of(tool_name: str | None, title: str) -> str:
     t = _PUNCT.sub("", _WS.sub("", (title or "").strip().lower()))
     k = f"{(tool_name or '').strip().lower()}|{t}"
     return hashlib.sha256(k.encode("utf-8")).hexdigest()[:32]
+
+
+def _body_key(text: str) -> str:
+    """正文归一化，只用来判「这次重报有没有新东西」。
+
+    去掉空白和标点再比：改个标点、换行重排不算新证据。**不做同义词/语义比较** ——
+    那种判错了没人看得出来，而这里判错的后果是一条裁定被复读推翻。
+    """
+    return _PUNCT.sub("", _WS.sub("", (text or "").strip().lower()))
 
 
 def _err(msg: str, **extra) -> dict:
@@ -91,6 +107,11 @@ def brief(f: CCFeedback, *, with_body: bool = False) -> dict:
         "resolution": f.resolution,
         "duplicateOf": str(f.duplicate_of) if f.duplicate_of else None,
         "reopenedFrom": str(f.reopened_from) if f.reopened_from else None,
+        # 谁落的这个裁定。页面上「来源」列旁边那个标就是它，
+        # CC 那边也要知道 —— AI 判的 wont_fix 是可以带新证据翻案的，人判的不行。
+        "decidedBy": f.decided_by,
+        "needsHuman": f.needs_human,
+        "sampled": f.sampled,
         "handledBy": f.handled_by,
         "handledAt": f.handled_at.isoformat() if f.handled_at else None,
         "ackAt": f.ack_at.isoformat() if f.ack_at else None,
@@ -189,15 +210,56 @@ async def report(
         # 挡不住的话，「回复原因」就只是一句客套 —— 下一轮它照样再来一遍。
         prev.occurrences += 1
         prev.last_seen_at = now
+
+        # **但 AI 判的挡不住带新证据的重报。** 这是「让 AI 自己落裁定」的代价里
+        # 唯一一个不可逆的：wont_fix 会永久短路同指纹，判错了不报错，只是安静地
+        # 少一批反馈。对不可逆性的正确处置是把它拆掉，不是拿一道人工闸围住每一条 ——
+        # 所以：换了说法再报一次，就转给人拍板；人判的才是终局。
+        renewed = _body_key(body) != _body_key(prev.body)
+        if prev.decided_by == "ai" and renewed and not prev.needs_human:
+            ev = dict(prev.evidence or {})
+            hist = list(ev.get("reReported") or [])
+            hist.append({"at": now.isoformat(), "reporter": reporter, "body": body[:2000]})
+            ev["reReported"] = hist[-5:]          # 整份重新赋值，JSONB 不认原地改
+            prev.evidence = ev
+            prev.needs_human = (
+                f"AI 判过「不需要处理」，CC 换了说法又报了一次（第 {prev.occurrences} 次）。"
+                "人来拍板：翻案（改成已认下）还是维持（维持就落成人判的，从此终局）。"
+                "新那段说法在证据里的 reReported。")
+            await session.flush()
+            await write_audit_log(
+                session, action="update", target_type="cc_feedback",
+                target_id=prev.id, target_name=prev.title, project_id=prev.project_id,
+                changes={"needsHuman": "AI 判的 wont_fix 被带新证据重报"})
+            await session.commit()
+            return {
+                "id": str(prev.id),
+                "alreadyDecided": "wont_fix",
+                "escalated": "needs_human",
+                "occurrences": prev.occurrences,
+                "resolution": prev.resolution,
+                "note": "上次这条是**AI** 判的「不需要处理」（理由见上）。你这次带了新的说法，"
+                        "已经转给人拍板，不用再报了 —— 结论会从回音里回来。",
+            }
+
         await session.commit()
+        note = ("这条上次已经判为「不需要处理」，没有新建记录。上面就是当时给的理由和做法 —— "
+                "如果你认为那个判断本身错了（不是同一件事、或者情况变了），"
+                "换一个标题重报，并在正文里写清楚**跟上次那条有什么不同**。")
+        if prev.needs_human:
+            note = ("这条已经在等人拍板了（上次是 AI 判的「不需要处理」，你之前带新证据重报过一次），"
+                    "这次只是次数 +1。结论会从回音里回来。")
+        elif prev.decided_by == "ai" and not renewed:
+            # 一个字没改地再报一遍 → 不翻案。翻案的判据是「有新东西」，
+            # 不是「又说了一遍」；否则复读就能推翻裁定，那道闸等于没有。
+            note += "（上次是 AI 判的，可以翻案 —— 但要写出**跟上次不同**的现象，照原样重报不算。）"
         return {
             "id": str(prev.id),
             "alreadyDecided": "wont_fix",
+            "decidedBy": prev.decided_by,
             "occurrences": prev.occurrences,
             "resolution": prev.resolution,
-            "note": "这条上次已经判为「不需要处理」，没有新建记录。上面就是当时给的理由和做法 —— "
-                    "如果你认为那个判断本身错了（不是同一件事、或者情况变了），"
-                    "换一个标题重报，并在正文里写清楚**跟上次那条有什么不同**。",
+            "note": note,
         }
 
     if prev is not None and prev.status == "duplicate" and prev.duplicate_of:
@@ -207,8 +269,11 @@ async def report(
             prev.last_seen_at = now
             await session.commit()
             return {"id": str(target.id), "alreadyDecided": "wont_fix",
+                    "decidedBy": target.decided_by,
                     "resolution": target.resolution,
-                    "note": "这条被并到另一条上，那条判的是「不需要处理」。"}
+                    "note": "这条被并到另一条上，那条判的是「不需要处理」。"
+                            + ("（那条是 AI 判的 —— 有新现象就换个标题报一条新的，"
+                               "会转给人。）" if target.decided_by == "ai" else "")}
 
     # ② 还开着的同指纹 → 并进去，不新建，也不占配额
     if prev is not None and prev.status in OPEN_STATUSES:
@@ -274,6 +339,12 @@ async def report(
         "note": "已收到。回音会出现在 lum_next_duty 的「平台反馈有回音」队列里，"
                 "也可以随时调 lum_list_my_feedback 查。",
     }
+    # **不等人点** —— 反馈一进来就自己跑一次分诊。丢后台是因为 CC 那边在等这次返回，
+    # 而一次模型调用是秒级到十几秒；让上报挂在模型上等于把分诊延迟摊到每一次上报。
+    if AUTO_TRIAGE:
+        _spawn_auto(str(row.id))
+        out["note"] += "（已自动交给 AI 分诊，通常一会儿就有结论。）"
+
     if reopened_from:
         out["reopenedFrom"] = str(reopened_from)
         out["note"] = ("已收到 —— 这个问题**之前修过一次又复现了**，按回归新开了一条"
@@ -291,11 +362,17 @@ async def list_feedback(
     category: str | None = None,
     project_id: str | None = None,
     keyword: str | None = None,
+    awaiting_human: bool = False,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[dict], int, dict]:
     q = select(CCFeedback)
-    if pending_only:
+    # 「等人拍板」是**跨状态**的一撮：AI 说自己判不了（还挂在 new 上）、
+    # 和 AI 判的 wont_fix 被带新证据重报（挂在 wont_fix 上）。所以它按
+    # needs_human 筛，不按 status —— 按状态筛会把后一种整个漏掉。
+    if awaiting_human:
+        q = q.where(CCFeedback.needs_human.isnot(None))
+    elif pending_only:
         q = q.where(CCFeedback.status.in_(PENDING_STATUSES))
     elif status:
         q = q.where(CCFeedback.status == status)
@@ -332,10 +409,16 @@ async def list_feedback(
     counts_rows = (await session.execute(
         select(CCFeedback.status, func.count()).group_by(CCFeedback.status))).all()
     counts = {s: n for s, n in counts_rows}
+    awaiting = (await session.execute(
+        select(func.count()).select_from(CCFeedback)
+        .where(CCFeedback.needs_human.isnot(None)))).scalar_one()
     summary = {
         "total": sum(counts.values()),
         "pending": sum(counts.get(s, 0) for s in PENDING_STATUSES),
+        # 页面上真正要人动手的只有这个数 —— 其余都是 AI 判完的，人是来看的
+        "awaitingHuman": awaiting,
         "byStatus": counts,
+        "batch": batch_status(),
     }
     return items, total, summary
 
@@ -363,8 +446,14 @@ async def triage(
     resolution: str | None = None,
     duplicate_of: str | None = None,
     actor: str | None = None,
+    decided_by: str = "human",
 ) -> dict:
-    """分诊 / 处置。**校验在这一层**，页面和脚本两条路走的是同一份规矩。"""
+    """分诊 / 处置。**校验在这一层**，页面和脚本两条路走的是同一份规矩。
+
+    走到这里就是**人在拍板**（默认 decided_by='human'）—— AI 那条路走
+    ai_handle()，它自己落裁定、自己记 decided_by='ai'。两者的区别不在权限，
+    在**可不可逆**：人判的 wont_fix 从此终局，AI 判的能被带新证据的重报翻案。
+    """
     row = await session.get(CCFeedback, uuid.UUID(feedback_id))
     if row is None:
         return _err("反馈不存在")
@@ -403,6 +492,11 @@ async def triage(
     row.status = status
     row.handled_by = actor
     row.handled_at = datetime.now(timezone.utc)
+    if decided_by in DECIDERS:
+        row.decided_by = decided_by
+    # 人拍完板，这条就不欠人什么了 —— 从「等人拍板」里消失
+    row.needs_human = None
+    row.sampled = False
     # 有了新回音 → 重新变成「未读」，CC 下一轮的 next_duty 才看得到
     if status in ("done", "wont_fix", "duplicate"):
         row.ack_at = None
@@ -411,6 +505,7 @@ async def triage(
                           target_id=row.id, target_name=row.title,
                           project_id=row.project_id,
                           changes={"status": status, "category": row.category,
+                                   "decidedBy": row.decided_by,
                                    "resolution": (resolution or "")[:200]})
     await session.commit()
     return brief(row, with_body=True)
@@ -428,8 +523,14 @@ def _echo_of(f: CCFeedback) -> dict:
         "categoryLabel": CATEGORY_LABEL.get(f.category or "", None),
         "resolution": f.resolution,
     }
+    d["decidedBy"] = f.decided_by
     if f.status == "done":
         d["beforeYouVerify"] = _restart_hint()
+    if f.status == "wont_fix" and f.decided_by == "ai":
+        # 不写这句，AI 的一次误判在 CC 那边看起来就是终局 —— 而它不是
+        d["canReopen"] = ("这条是 **AI** 判的。如果你认为判错了，"
+                          "**带上跟上次不同的现象**原标题再报一次，会转给人拍板。"
+                          "照原样复读不算新证据，不会翻案。")
     if f.category and f.reported_category and f.category != f.reported_category:
         d["categoryChanged"] = (
             f"你报的是「{CATEGORY_LABEL.get(f.reported_category)}」，"
@@ -520,30 +621,133 @@ async def list_mine(
     }
 
 
-# ── AI 分诊建议 ────────────────────────────────────────────────────
+# ── AI 处置：判得了的自己判 ─────────────────────────────────────────
+#
+# 这一节 2026-09-01 改过一次口径，改动本身比代码重要，所以写在这儿：
+#
+# **原来**：AI 只出建议存进 ai_analysis，状态只有人能落。理由是 wont_fix 的回音会
+# 永久短路后续同指纹上报，让 AI 单方面下这个判定等于给它一个「把一类反馈永久关死、
+# 以后没人再看得到」的开关，而这种错不报错。
+#
+# **现在**：AI 自己落。上面那个理由说的是**一个不可逆性**，而对不可逆性的正确处置
+# 是把它拆掉，不是拿一道人工闸围住它 —— 围住的代价是每条反馈都要等人，那和平台
+# 整体的分工反着来（人是来看结果、或者点一下执行的）。拆法两条，都在 report() 里：
+#   · AI 判的 wont_fix **挡不住带新证据的重报** → 转 needs_human 交人。人判的才终局。
+#   · AI 判的 wont_fix 每 WONT_FIX_SAMPLE_EVERY 条抽 1 给人复核（校准，不拦裁定）。
+#
+# 另一半是**判据**。原来的提示词只喂了标题+正文+证据 —— 那样「自己判」就是瞎判，
+# 尤其判不了最要紧的那一类：「平台其实有这个能力，是 CC 没找对方法」。所以现在喂
+# 三样平台自己的事实（_platform_facts）：撞到的那个工具的完整描述、它的**实现源码**、
+# 以及**全部工具的清单**（判「有没有别的工具已经能干这件事」只能靠它）。
 
-_TRIAGE_PROMPT = """你是 Lumiere 测试平台的维护者，正在分诊一条外部 Claude Code（CC）报回来的反馈。
+
+def _first_sentence(text: str, limit: int = 110) -> str:
+    """工具描述的第一句，用来铺全量清单。描述里有大量 ** 和括号补语，先摘掉。"""
+    t = re.sub(r"\*\*|【|】", "", (text or "").strip())
+    for sep in ("。", "；", "\n"):
+        if sep in t:
+            t = t.split(sep)[0]
+            break
+    return t[:limit]
+
+
+def _platform_facts(tool_name: str | None, *, max_src: int = 5000) -> str:
+    """喂给模型的**平台自身事实**。判据不足的「自己判」就是瞎判，这个函数就是那个判据。
+
+    故意不读 docs/*.md：那些是给人看的取舍记录，篇幅大、和某一条反馈的相关性只能靠
+    关键词猜。判得动的是**可执行的事实** —— 工具描述（平台「说了会做什么」，bug 的
+    定义就是它和实际不一致）、实现源码（实际做了什么）、全量工具清单（「他其实没找
+    对方法」唯一的判据）。
+    """
+    try:
+        import inspect
+
+        from app.mcp import TOOL_CATALOG, TOOL_FUNCS
+    except Exception:  # pragma: no cover - 只在 MCP 没装起来时走到
+        return "（取不到工具清单）"
+
+    parts: list[str] = []
+
+    hit = next((t for t in TOOL_CATALOG if t["name"] == tool_name), None)
+    if hit:
+        parts.append(
+            f"### 撞到的这个工具：{hit['name']}（分类：{hit['category']}）\n"
+            f"平台对外承诺的行为（工具描述原文，**bug 的判据就是它和实际不一致**）：\n"
+            f"{hit['description']}\n\n参数：{hit['params']}")
+        func = TOOL_FUNCS.get(tool_name)
+        if func is not None:
+            try:
+                src = inspect.getsource(func)  # type: ignore[arg-type]
+                where = f"{inspect.getsourcefile(func)}:{inspect.getsourcelines(func)[1]}"
+                if len(src) > max_src:
+                    src = src[:max_src] + "\n…（截断）"
+                parts.append(f"### 它的实现（{where}）\n```python\n{src}\n```")
+            except Exception:
+                pass
+    elif tool_name:
+        parts.append(f"### 注意：CC 报的工具名 `{tool_name}` **不在工具清单里**。"
+                     f"要么他记错了名字，要么这个能力真的不存在（那就是 requirement）。")
+
+    lines = [f"- {t['name']}（{t['category']}）：{_first_sentence(t['description'])}"
+             for t in TOOL_CATALOG]
+    parts.append("### 平台现有的全部工具（共 %d 个）—— 判「他其实没找对方法」就看这份\n%s"
+                 % (len(TOOL_CATALOG), "\n".join(lines)))
+    return "\n\n".join(parts)
+
+
+_HANDLE_PROMPT = """你是 Lumiere 测试平台的维护者，正在处置一条外部 Claude Code（CC）报回来的反馈。
 CC 是通过 MCP 调用平台工具来梳理用例的自动化使用者，它报的是**平台自己的问题**。
 
-请判断三件事：
-1. 这条属于 bug / improvement / requirement 中的哪一类。
-   · bug = 平台说了会做 A、实际做了 B（含静默失败：知道出错却返回语法上合法的结果）
-   · improvement = 行为没错，但代价不合理、或容易把使用者带错路（工具描述有歧义也算）
-   · requirement = 平台今天没有这个能力
-2. 严重度 high / medium / low。判据是**会不会导致假绿或让人做出错误决定**：
-   会 → high；只是费事、绕得过去 → medium；纯体验 → low。
-3. 建议怎么处置。特别注意第三种可能：**CC 判断错了 / 没找对方法** ——
-   平台其实已经有这个能力，只是他没找到，或者他理解反了。
-   这种要给 wont_fix，并且**必须把正确做法写出来**（只说「你错了」等于没回音）。
+**你的裁定直接生效，不经人复核。** 所以别写"建议"、别留待定 —— 判得了就判，
+判不了就明说（verdict=needs_human），那会转给人，而人的时间是稀缺的：
+**只有真判不了才用它**（缺需求出处、需要产品方向上的取舍、证据不足到无法判）。
 
-只输出 JSON，不要任何解释文字，形如：
-{{"category":"bug|improvement|requirement","severity":"high|medium|low",
- "suggestedStatus":"triaged|wont_fix","reasoning":"两三句话说清判据",
- "suggestedResolution":"给 CC 的回音正文；wont_fix 时必须写正确做法","risk":"如果不处理会怎样"}}
+## 先判 verdict，四选一
 
-── 反馈内容 ──
+· `triaged` —— 认下了，这是平台该改的。定类 + 严重度，接下来维护者去改代码。
+· `wont_fix` —— 不该改。**两种情况，回音写法不一样**：
+    ① 这件事本身不该做（例：给 mock 表加 project_id 是假隔离）→ 说清为什么。
+    ② **CC 判断错了 / 没找对方法** —— 平台其实已经有这个能力，他没找到，或者理解反了。
+       → **必须把正确做法写出来**（调哪个工具、传什么参数）。只说「你错了」等于没回音，
+       下一轮他照原样再撞一次。判这一条**看下面的全量工具清单**，别凭印象。
+· `duplicate` —— 和候选里某一条是同一件事。必须给出 duplicateOf（候选里的 id 原文）。
+· `needs_human` —— 你判不了。needsHuman 里写**判不了什么、缺的是什么**，别写"建议人工确认"。
+
+**不要输出 `done`。** done 的含义是「代码已经改完了」，而你没有改过代码。
+
+## 再定 category（平台的裁定，可以和 CC 自报的不一致 —— 不一致本身是有用的信号）
+
+· bug = 平台**说了会做 A、实际做了 B**（含静默失败：知道出错却返回语法上合法的结果）。
+  判它必须对着上面的「工具描述原文」和「实现源码」—— 描述里没承诺过的行为不算 bug。
+· improvement = 行为没错，但代价不合理、或容易把使用者带错路（工具描述有歧义也算）。
+· requirement = 平台今天没有这个能力。
+
+## severity：会不会导致**假绿**或让人做出错误决定
+
+会 → high；只是费事、绕得过去 → medium；纯体验 → low。
+
+## 只输出 JSON，不要任何解释文字
+
+{{"verdict":"triaged|wont_fix|duplicate|needs_human",
+  "category":"bug|improvement|requirement",
+  "severity":"high|medium|low",
+  "resolution":"给 CC 的回音正文。wont_fix 时必填，如果是他没找对方法，把正确做法写出来",
+  "duplicateOf":"verdict=duplicate 时必填，候选里的 id",
+  "needsHuman":"verdict=needs_human 时必填：判不了什么、缺什么",
+  "reasoning":"两三句话说清判据，引用工具描述或源码里的具体一句",
+  "fixHint":"如果要改，改哪个文件/哪一段（给维护者指路，不确定就留空）",
+  "risk":"不处理会怎样"}}
+
+═══════ 平台自身的事实（判据）═══════
+{facts}
+
+═══════ 已有的相近反馈（判 duplicate 用；不像就别硬并）═══════
+{siblings}
+
+═══════ 这条反馈 ═══════
 工具：{tool}
 CC 自报的类：{reported}
+撞到的次数：{occurrences}
 标题：{title}
 正文：
 {body}
@@ -552,13 +756,43 @@ CC 自报的类：{reported}
 """
 
 
-async def ai_triage(session: AsyncSession, feedback_id: str) -> dict:
-    """跑一次 AI 分诊，**只写建议不改状态**。
+async def _siblings_for(session: AsyncSession, row: CCFeedback, limit: int = 8) -> str:
+    """同工具名的其它反馈 —— 判 duplicate 的候选。
 
-    为什么不让它直接落状态：wont_fix 的回音会永久短路后续同指纹上报
-    （见 report() 第 ① 步）。让 AI 单方面下这个判定，等于给它一个
-    「把一类反馈永久关死、而且以后没人会再看到」的开关 —— 这类权力
-    出错时不报错，只是安静地少一批反馈。
+    **只给同工具的**：跨工具的「看起来像」并起来是有害的，那会把两个不同的缺陷合成
+    一条，修了一个就整条关掉，另一个从此没有家。
+    """
+    if not row.tool_name:
+        return "（这条没填工具名，不给候选 —— 没有工具名的「看起来像」不足以并条）"
+    rows = (await session.execute(
+        select(CCFeedback)
+        .where(CCFeedback.id != row.id, CCFeedback.tool_name == row.tool_name)
+        .order_by(CCFeedback.last_seen_at.desc()).limit(limit))).scalars().all()
+    if not rows:
+        return "（同一个工具下没有别的反馈）"
+    return "\n".join(
+        f"- id={r.id} 状态={STATUS_LABEL.get(r.status, r.status)} "
+        f"类={CATEGORY_LABEL.get(r.category or '', '未定')} 标题={r.title}"
+        for r in rows)
+
+
+async def _sample_this_wont_fix(session: AsyncSession) -> bool:
+    """这条 AI 判的 wont_fix 要不要抽给人复核。每 WONT_FIX_SAMPLE_EVERY 条抽 1。
+
+    按「已经判了几条」取模，**不掷骰子**：掷骰子会出现连续二十条一条没抽到的走运
+    区间，而抽检的全部意义就在于稳定的覆盖率。
+    """
+    n = (await session.execute(
+        select(func.count()).select_from(CCFeedback).where(
+            CCFeedback.status == "wont_fix", CCFeedback.decided_by == "ai"))).scalar_one()
+    return (n + 1) % WONT_FIX_SAMPLE_EVERY == 0
+
+
+async def ai_handle(session: AsyncSession, feedback_id: str) -> dict:
+    """跑一次 AI 处置：分析 + **直接落裁定**。判不了的落 needs_human 交人。
+
+    页面上那个按钮和新反馈进来时的自动触发走的是同一个这里 —— 两条路各写一套规矩，
+    迟早会漂成两种行为。
     """
     import json
 
@@ -574,14 +808,17 @@ async def ai_triage(session: AsyncSession, feedback_id: str) -> dict:
         return _err("没有可用的 AI 配置",
                     howTo="去「AI 服务配置 → AI 能力→模型」给「CC 反馈分诊」绑一个模型。")
 
-    prompt = _TRIAGE_PROMPT.format(
+    prompt = _HANDLE_PROMPT.format(
+        facts=_platform_facts(row.tool_name),
+        siblings=await _siblings_for(session, row),
         tool=row.tool_name or "（未填）",
         reported=CATEGORY_LABEL.get(row.reported_category or "", "（未填）"),
+        occurrences=row.occurrences,
         title=row.title,
         body=row.body,
         evidence=json.dumps(row.evidence or {}, ensure_ascii=False, indent=2),
     )
-    resp = await complete([{"role": "user", "content": prompt}], config=cfg, max_tokens=1500)
+    resp = await complete([{"role": "user", "content": prompt}], config=cfg, max_tokens=2500)
     text = (getattr(resp, "content", None) or "").strip()
     if not text:
         # 一个字都没回来 —— **报错，别落库**。落了就是页面上一块空的「AI 分析」，
@@ -590,33 +827,229 @@ async def ai_triage(session: AsyncSession, feedback_id: str) -> dict:
         # 实测成因（2026-09-01，dev 库真跑）：主路 429 → 降级到 CLI 通道
         # （claude-proxy :38210），那条通道后面是 Claude Code —— 反馈正文本身
         # 就长得像一件待办，它会去**做事**而不是作答，回给我们的 text 就是空的。
-        # 同一条提示词把「只输出 JSON」换成「先用一句话回答」，它回的是
-        # 「我先去看执行器实际怎么做的,再判。」—— 更能说明它在干活不是在答题。
+        # 这种情况这条反馈**留在 new 上**等下一次触发，也**不写 needs_human**：
+        # 模型没说过话，不能替它说「它判不了」（那把一次限流记成了一次判不动）。
         return _err(
             "模型没有返回内容",
             why="主路限流时会降级到 CLI 通道，那条通道拿到这种「像一件待办」的正文"
-                "会去做事而不是作答，回来是空的。",
+                "会去做事而不是作答，回来是空的。这条反馈仍留在「待处理」，没被改动。",
             howTo="过一会儿重试一次（主路不限流就不会降级）；一直空就去"
                   "「AI 服务配置 → AI 能力→模型」给「CC 反馈分诊」换一个模型。",
         )
 
-    # 模型经常裹一层 ```json —— 剥掉再解析。解析失败不算失败：
-    # 原文照样存进去给人看，总比「AI 分析失败」这四个字有用。
+    # 模型经常裹一层 ```json —— 剥掉再解析。
     m = re.search(r"\{.*\}", text, re.S)
     try:
         data = json.loads(m.group(0)) if m else {}
     except Exception:
         data = {}
-    if not data:
-        data = {"parseFailed": True, "raw": text[:2000]}
 
-    data["model"] = getattr(cfg, "model", None)
-    data["at"] = datetime.now(timezone.utc).isoformat()
+    model_name = getattr(cfg, "model", None)
+    now = datetime.now(timezone.utc)
+
+    # ── 落裁定。**校验不合格一律降级成 needs_human，不猜** ──
+    # 猜的代价不对称：猜错一个 wont_fix 会挡住后续上报（一类反馈就此消失且不报错），
+    # 而转给人的代价只是多等一会儿。
+    verdict = (data.get("verdict") or "").strip()
+    category = (data.get("category") or "").strip() or None
+    severity = (data.get("severity") or "").strip() or None
+    resolution = (data.get("resolution") or "").strip() or None
+    fallback: str | None = None
+
+    if not data:
+        fallback = "模型没输出可解析的 JSON（原文已存进 ai_analysis）—— 这条得人看一眼。"
+        data = {"parseFailed": True, "raw": text[:2000]}
+    elif verdict == "done":
+        # 它落不了 done（没改过代码），但既然判了「该改」，认下来是对的
+        verdict = "triaged"
+        data["coercedFromDone"] = "AI 给了 done，按 triaged 落 —— done 的含义是代码改完了。"
+
+    if fallback is None and verdict not in ("triaged", "wont_fix", "duplicate", "needs_human"):
+        fallback = f"模型给的 verdict 是 {verdict!r}，不在四选一里。"
+    if fallback is None and verdict != "needs_human" and category not in CATEGORIES:
+        fallback = f"模型没给出合法的 category（拿到 {category!r}）。"
+    if fallback is None and verdict == "wont_fix" and not resolution:
+        # 判「不做」却写不出理由 = 没判明白。这条不能放过去：wont_fix 的全部价值在回音上
+        fallback = "模型判了「不需要处理」但没写回音 —— 判不做而说不出正确做法，等于没判。"
+    dup_id = None
+    if fallback is None and verdict == "duplicate":
+        cand = (data.get("duplicateOf") or "").strip()
+        try:
+            dup_id = uuid.UUID(cand)
+        except Exception:
+            dup_id = None
+        if dup_id is None or (await session.get(CCFeedback, dup_id)) is None:
+            fallback = f"模型说这条和 {cand!r} 重复，但那个 id 找不到。"
+        elif dup_id == row.id:
+            fallback = "模型把这条并到了它自己身上。"
+
+    data["model"] = model_name
+    data["at"] = now.isoformat()
     row.ai_analysis = data
+
+    if fallback is not None or verdict == "needs_human":
+        row.needs_human = ((data.get("needsHuman") or "").strip()
+                           or fallback or "模型说它判不了")
+        row.decided_by = None          # 没落裁定，就不算「谁判的」
+        await session.flush()
+        await write_audit_log(session, action="update", target_type="cc_feedback",
+                              target_id=row.id, target_name=row.title,
+                              project_id=row.project_id,
+                              changes={"needsHuman": row.needs_human[:200]})
+        await session.commit()
+        return {"id": str(row.id), "verdict": "needs_human",
+                "needsHuman": row.needs_human, "aiAnalysis": data,
+                "note": "AI 说它判不了，这条留给人 —— 页面上「等人拍板」筛得到。"}
+
+    if category:
+        row.category = category
+    if severity in SEVERITIES:
+        row.severity = severity
+    if resolution:
+        row.resolution = resolution
+    if dup_id:
+        row.duplicate_of = dup_id
+    row.status = verdict
+    row.decided_by = "ai"
+    row.needs_human = None
+    row.handled_by = f"AI（{model_name or '未知模型'}）"
+    row.handled_at = now
+    if verdict in ("wont_fix", "duplicate"):
+        row.ack_at = None              # 有新回音 → CC 下一轮的 next_duty 看得到
+        if verdict == "wont_fix":
+            row.sampled = await _sample_this_wont_fix(session)
+    await session.flush()
+    await write_audit_log(session, action="update", target_type="cc_feedback",
+                          target_id=row.id, target_name=row.title,
+                          project_id=row.project_id,
+                          changes={"status": verdict, "category": row.category,
+                                   "decidedBy": "ai", "sampled": row.sampled,
+                                   "resolution": (resolution or "")[:200]})
     await session.commit()
-    return {
-        "id": str(row.id),
-        "aiAnalysis": data,
-        "note": "这是**建议**，不改状态。看过之后自己按「采纳」或直接改 —— "
-                "尤其 wont_fix：它会永久短路同指纹的后续上报，得人点头。",
-    }
+    out = brief(row, with_body=True)
+    out["verdict"] = verdict
+    out["note"] = f"AI 已落「{STATUS_LABEL.get(verdict, verdict)}」，不用再点确认。"
+    if row.sampled:
+        out["note"] += "这条被抽中复核（每 %d 条抽 1）—— 裁定已经生效，复核只为校准。" % (
+            WONT_FIX_SAMPLE_EVERY,)
+    return out
+
+
+async def auto_handle_later(feedback_id: str) -> None:
+    """新反馈进来后**自动**跑一次处置。开一个独立 session，别蹭调用方那个。
+
+    为什么不同步跑：CC 那边 `lum_report_feedback` 会等着，而一次模型调用是秒级到
+    十几秒。让上报挂在模型上，等于把平台的分诊延迟摊到 CC 的每一次上报上。
+    为什么整个包在 try 里：这是**旁路**，它失败不该动摇「反馈已收到」这个事实 ——
+    失败的结果只是这条留在 new 上，人在页面上点一下按钮就能重跑。
+    """
+    from app.deps.db import async_session_factory
+
+    try:
+        async with async_session_factory() as session:
+            await ai_handle(session, feedback_id)
+    except Exception:  # pragma: no cover - 旁路，不许把异常带回上报链路
+        import logging
+        logging.getLogger(__name__).warning(
+            "CC 反馈自动分诊失败：%s", feedback_id, exc_info=True)
+
+
+# ── 批量：勾一批丢给 AI，人不用一条条点 ──────────────────────────
+#
+# 为什么要有它：一轮汇总就是 31 条（2026-09-01 那份真实数据）。一条条点，人要点
+# 31 次、每次等十几秒 —— 那和「人是来看结果的」这个分工反着来。自动分诊之前建的
+# 存量、以及自动分诊那次失败留在「待处理」上的，都要靠这个入口一次推完。
+
+# 全局单批，不是每人一批。**故意的**：并发打模型只会一起撞 429 然后一起降级到
+# CLI 通道，而那条通道对这种正文会回空（见 ai_handle 里的实测记录）—— 结果是
+# 一批全废。宁可排队。
+_BATCH: dict = {
+    "running": False, "total": 0, "done": 0, "failed": 0, "needsHuman": 0,
+    "startedAt": None, "finishedAt": None, "current": None, "startedBy": None,
+}
+_BG: set = set()
+
+
+def batch_status() -> dict:
+    """当前批次的进度。页面靠它显示进度条 —— 没有进度的批量在人眼里等于卡死了。"""
+    return dict(_BATCH)
+
+
+def _spawn(coro) -> None:
+    """丢后台跑。存一份强引用：asyncio 只弱引用 task，不存会被 GC 掉在半路。"""
+    import asyncio
+
+    try:
+        t = asyncio.get_running_loop().create_task(coro)
+    except RuntimeError:  # 没有运行中的 loop（同步脚本里调到了）
+        coro.close()
+        return
+    _BG.add(t)
+    t.add_done_callback(_BG.discard)
+
+
+def _spawn_auto(feedback_id: str) -> None:
+    _spawn(auto_handle_later(feedback_id))
+
+
+async def start_batch(session: AsyncSession, ids: list[str] | None = None, *,
+                      actor: str | None = None) -> dict:
+    """勾一批（或不勾 = 全部还没判的）丢给 AI。立刻返回，进度走 batch_status()。
+
+    不勾就是「全部待处理」：页面上最常见的动作是「把积压的一次推完」，
+    而让人先全选 31 行再点，只是把同一件事变成两步。
+    """
+    if _BATCH["running"]:
+        return _err(
+            "已经有一批在跑了",
+            why="全局只跑一批 —— 并发打模型会一起撞限流然后一起降级，那条降级通道"
+                "对这种正文会回空，结果是一批全废。",
+            howTo="等这批跑完（页面上有进度），或者只挑几条单独处理。")
+
+    if ids:
+        pending = [str(uuid.UUID(i)) for i in ids]
+    else:
+        rows = (await session.execute(
+            select(CCFeedback.id).where(CCFeedback.status.in_(PENDING_STATUSES))
+            .order_by(CCFeedback.last_seen_at.desc()))).scalars().all()
+        pending = [str(i) for i in rows]
+
+    if not pending:
+        return _err("没有要处理的反馈", howTo="勾几条，或者先看看「待处理」里还有没有。")
+
+    _BATCH.update(running=True, total=len(pending), done=0, failed=0, needsHuman=0,
+                  startedAt=datetime.now(timezone.utc).isoformat(), finishedAt=None,
+                  current=None, startedBy=actor)
+    _spawn(_run_batch(pending))
+    return {"accepted": len(pending), "batch": batch_status(),
+            "note": "已经交给 AI 了，会一条条判完（顺序跑，避免一起撞限流）。"
+                    "页面上刷新就能看到状态在变；判不了的会落到「等人拍板」。"}
+
+
+async def _run_batch(ids: list[str]) -> None:
+    """顺序跑完一批。**每条一个独立 session**：一条炸了不该带走后面 30 条。"""
+    import logging
+
+    from app.deps.db import async_session_factory
+
+    log = logging.getLogger(__name__)
+    try:
+        for fid in ids:
+            _BATCH["current"] = fid
+            try:
+                async with async_session_factory() as session:
+                    out = await ai_handle(session, fid)
+                if out.get("error"):
+                    _BATCH["failed"] += 1
+                    log.warning("批量分诊这条没成：%s —— %s", fid, out.get("error"))
+                else:
+                    _BATCH["done"] += 1
+                    if out.get("verdict") == "needs_human":
+                        _BATCH["needsHuman"] += 1
+            except Exception:
+                _BATCH["failed"] += 1
+                log.warning("批量分诊这条炸了：%s", fid, exc_info=True)
+    finally:
+        # finally 里收尾：中途抛异常也得把 running 放掉，否则整个进程再也开不了第二批
+        _BATCH.update(running=False, current=None,
+                      finishedAt=datetime.now(timezone.utc).isoformat())

@@ -24,8 +24,26 @@
   · 命中**已 wont_fix** 的同指纹 → **不新建**，当场把上次的理由甩回去。
     这是这条通道最要紧的一个行为：「不需要处理」必须挡得住第二次上报，
     否则「回复原因」只是一句客套，下一轮照样再来一遍。
+    **但 AI 判的 wont_fix 挡不住带新证据的重报**（`decided_by='ai'` + 正文里出现了
+    上次没有的现象）→ 不短路、转 needs_human 交人。人判的才是终局。
+    少了这条口子，AI 一次误判就等于把一类反馈永久关死 —— 而那种错不报错。
   · 命中**已 done** 的同指纹 → **新建** + reopened_from。修好了又复现是**回归**，
     是新信息，并进老账里会把它埋掉。
+
+## 谁来判：**默认 AI 判，人只兜底**
+
+平台整体的设计就是这样 —— 人是来看结果、或者点一下执行的，只有少数 AI 判不了的
+才需要人接进来。所以这张表上：
+
+  · 反馈一进来就**自动**跑一次 AI 分诊，直接落 category / severity / status /
+    resolution，`decided_by='ai'`。**不等人点按钮**（等人点 = 又变成人驱动）。
+  · AI 只在三种时候把事情交回人手上，都写在 `needs_human` 里：
+      ① 它自己说判不了（缺需求出处、要产品方向上的取舍、证据不足到没法判）
+      ② 模型没产出（限流降级到 CLI 通道时会回空 —— 那种**不落库**，留在 new）
+      ③ `done` **AI 永远落不了**：那是「代码改完了」，它没动过代码，说了就是假的。
+        这不是留给人的权力，是一件它做不到的事。
+  · 两道兜底，都不拦裁定：AI 判的 wont_fix 每 WONT_FIX_SAMPLE_EVERY 条抽 1 给人复核
+    （校准准不准），以及上面归并那一条 —— AI 的 wont_fix 能被新证据撬开。
 
 ## 为什么 reported_category 和 category 分两列
 
@@ -39,7 +57,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -85,6 +103,18 @@ STATUS_LABEL = {
 # 一轮之后这一列就没有区分度了 —— 所以 lum_report_feedback 根本不收这个参数。
 SEVERITIES = ("high", "medium", "low")
 
+# 谁落的这个裁定。**常见值是 ai** —— 见模块 docstring 的「谁来判」。
+#   ai      AI 分诊自己落的（默认路径：反馈一进来就自动跑，不等人点）
+#   human   人在页面上落的（只有两种时候：AI 说自己判不了，或抽检复核改判）
+#   system  平台按规则落的（不经模型，例如导入时的占位）
+DECIDERS = ("ai", "human", "system")
+
+# AI 判的 wont_fix 每几条抽 1 条进人工复核。**只对 wont_fix 抽**，因为它是唯一一个
+# 会**挡住后续上报**的裁定 —— 判错了不报错，只是安静地少一批反馈。
+# 比平台自证抽检（lum_list_pending_confirm 的每 10 抽 1）更密，理由就是这个不可逆性。
+# 抽检**不拦裁定**：抽中的照样立即生效，人另外看一眼用来校准 AI 判得准不准。
+WONT_FIX_SAMPLE_EVERY = 5
+
 
 class CCFeedback(Base):
     __tablename__ = "cc_feedback"
@@ -96,7 +126,8 @@ class CCFeedback(Base):
     # ── 来源线索（不是边界，见模块 docstring）──
     project_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("projects.id", ondelete="SET NULL"), nullable=True)
-    # cc = 走 MCP 报的；import = 人工/脚本导入的历史反馈；human = 页面上手工建的
+    # cc = 走 MCP 报的；import = 人工/脚本导入的历史反馈；human = 走 POST /api/cc-feedback 建的
+    # （2026-09-01 起**页面上没有这个入口**了，接口留给导入/回填脚本和 API 测试）
     source: Mapped[str] = mapped_column(String(16), nullable=False, server_default="cc")
     # MCP Key 名 / 导入来源 —— 配额按它算，「这把 Key 报的 bug 有几成是用法问题」也按它统计
     reporter: Mapped[str | None] = mapped_column(String(100), nullable=True)
@@ -131,10 +162,22 @@ class CCFeedback(Base):
     handled_by: Mapped[str | None] = mapped_column(String(100), nullable=True)
     handled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    # AI 分诊建议。**只是建议** —— 它不改 status，人按「采纳」才生效。
-    # 理由：wont_fix 的回音会永久短路后续同指纹上报，让 AI 单方面下这个判定，
-    # 等于让它能把一类反馈关死，而且以后再也不会有人看到。
+    # AI 分诊的完整产出（判据、理由、风险、原始 JSON）。**它是裁定的依据，不是建议** ——
+    # 状态由同一次调用直接落，见 services/cc_feedback_service.py 的 ai_handle()。
     ai_analysis: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # ── 谁判的 / 什么还得人来 ──
+    # 这个状态是谁落的（ai / human / system）。页面上单独一列，因为「AI 判的」和
+    # 「人判的」在后续行为上**真的不一样**：AI 判的 wont_fix 能被新证据撬开，人判的是终局。
+    decided_by: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    # 非空 = **这条在等人拍板**，内容是 AI 自己说的「我判不了，缺的是什么」。
+    # 之所以存 AI 的原话而不是一个布尔：人打开它第一件事是问「为什么轮到我」，
+    # 一个 true 回答不了这个问题，而回答不了的话人就只能从头把这条重读一遍。
+    needs_human: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # AI 判的 wont_fix 抽检样本（WONT_FIX_SAMPLE_EVERY 条抽 1）。**不拦裁定**，
+    # 只是让人复核一次用来校准 —— 抽检是量抽样，不是逐条审批。
+    sampled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=text("false"))
 
     # 回音被 CC 取走的时间。next_duty 的「平台反馈有回音」队列靠它消下去 ——
     # 没有这一列的话那个队列会一直挂着同一条，几轮之后 CC 就学会无视它了。

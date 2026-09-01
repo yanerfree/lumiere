@@ -7,13 +7,20 @@
  * 这一页的重点不是"看"，是**回音**：done / wont_fix 必须写回复，后端硬校验。
  * 判「不需要处理」而不写正确做法，等于让 CC 下一轮照原样再撞一次 ——
  * 而平台这边只会静默 +1，两边都以为对方在动。
+ *
+ * **2026-09-01 起：判是 AI 的活，人只兜底。** 反馈一进来就自动分诊，页面上人做两件事：
+ * 看结论、和拍板 AI 说自己判不了的那几条（「等人拍板」筛得到）。所以
+ *   · 行内操作是「AI 处理」，不是「处理」；上面还有个「批量处理」把积压的一次推完；
+ *   · **手工录入的入口去掉了** —— 这张表的正常来源是 CC 自己报，人代录一条没有用途
+ *     （接口还留着，导入脚本和 API 测试走它）。
+ * 「人拍板」那一组按钮**没有删**：AI 判不了的、和人要改判 AI 的，都得从那儿走。
  */
 import { useCallback, useEffect, useState } from 'react'
 import {
   Table, Tag, Input, Select, Space, Button, Drawer, Modal, Form, message,
-  Tooltip, Empty, Alert, Spin, Badge,
+  Tooltip, Empty, Alert, Spin, Badge, Progress,
 } from 'antd'
-import { SearchOutlined, ReloadOutlined, PlusOutlined, RobotOutlined } from '@ant-design/icons'
+import { SearchOutlined, ReloadOutlined, RobotOutlined } from '@ant-design/icons'
 import { timeColumn, formatTimeFull } from '../../utils/timeCol'
 import { api } from '../../utils/request'
 
@@ -45,6 +52,18 @@ const SOURCE_META = {
   cc: { short: 'CC', full: '外部 Claude Code', color: '#7c5cbf', bg: 'rgba(124,92,191,0.08)' },
   import: { short: '导入', full: '通道开通前的存量（汇总文档导入）', color: '#0fa47f', bg: 'rgba(15,164,127,0.08)' },
   human: { short: '页面', full: '页面录入', color: '#86909c', bg: 'rgba(0,0,0,0.04)' },
+}
+
+// 谁落的这个裁定。**默认就是 ai** —— 人打开这一页是来看结论的。
+// 这一列要露出来的原因只有一个：AI 判的「不需要处理」能被带新证据的重报翻案，
+// 人判的不能。看不见是谁判的，就看不出这条还能不能翻。
+const DECIDER_META = {
+  ai: { label: 'AI', color: '#7c5cbf', bg: 'rgba(124,92,191,0.08)',
+        tip: 'AI 自己落的裁定。判「不需要处理」的话 CC 带新证据重报能翻案' },
+  human: { label: '人', color: '#0ea5a0', bg: 'rgba(14,165,160,0.08)',
+           tip: '人拍的板。判「不需要处理」从此终局，重报也不翻' },
+  system: { label: '平台', color: '#86909c', bg: 'rgba(0,0,0,0.04)',
+            tip: '平台按规则落的，不经模型' },
 }
 
 // 处置动作。每个动作**自己说清它要什么** —— 回音必填与否写在这儿，
@@ -124,9 +143,10 @@ export default function CCFeedback() {
   const [detailLoading, setDetailLoading] = useState(false)
   const [analyzing, setAnalyzing] = useState(false)
   const [action, setAction] = useState(null)   // 当前弹出的处置动作
-  const [creating, setCreating] = useState(false)
   const [form] = Form.useForm()
-  const [createForm] = Form.useForm()
+  const [selected, setSelected] = useState([])
+  const [batch, setBatch] = useState({})      // 后端那个全局单批的进度
+  const [rowBusy, setRowBusy] = useState(null) // 正在跑 AI 的那一行
 
   const fetchList = useCallback(async () => {
     setLoading(true)
@@ -135,6 +155,9 @@ export default function CCFeedback() {
       p.append('page', page)
       p.append('pageSize', pageSize)
       if (statusFilter === '__pending__') p.append('pendingOnly', 'true')
+      // 「等人拍板」是跨状态的一撮（AI 说判不了的挂在 new 上、AI 判的 wont_fix
+      // 被带新证据重报的挂在 wont_fix 上），所以走独立开关不是 status 值
+      else if (statusFilter === '__human__') p.append('awaitingHuman', 'true')
       else if (statusFilter) p.append('status', statusFilter)
       if (categoryFilter) p.append('category', categoryFilter)
       if (keyword) p.append('keyword', keyword)
@@ -142,6 +165,7 @@ export default function CCFeedback() {
       setItems(res.data.items || [])
       setTotal(res.data.total || 0)
       setSummary(res.data.summary || {})
+      setBatch(res.data.summary?.batch || {})
     } catch {
       // 读这一类的失败**不再自己弹** —— request() 已经弹过一次，而且弹的是
       // 服务端那句（「无权限执行此操作」/ 具体报错），比再叠一句「加载失败」
@@ -153,6 +177,49 @@ export default function CCFeedback() {
   }, [page, pageSize, statusFilter, categoryFilter, keyword])
 
   useEffect(() => { fetchList() }, [fetchList])
+
+  // 批次在跑的时候每 3 秒刷一次：状态会一条条变，看得见进度人才不会以为卡死了
+  useEffect(() => {
+    if (!batch?.running) return undefined
+    const t = setInterval(async () => {
+      try {
+        const res = await api.get('/cc-feedback/batch-status', { silent: true })
+        setBatch(res.data || {})
+        if (!res.data?.running) {
+          message.success(`批量处理跑完了：判了 ${res.data?.done ?? 0} 条`
+            + (res.data?.needsHuman ? `，其中 ${res.data.needsHuman} 条 AI 说判不了（在「等人拍板」里）` : '')
+            + (res.data?.failed ? `，${res.data.failed} 条没成（多半是限流，重新点一次即可）` : ''))
+        }
+        fetchList()
+      } catch { /* 轮询失败不弹 —— 弹了就是每 3 秒一条 toast */ }
+    }, 3000)
+    return () => clearInterval(t)
+  }, [batch?.running, fetchList])
+
+  const startBatch = async () => {
+    try {
+      const res = await api.post('/cc-feedback/ai-handle',
+        selected.length ? { ids: selected } : {}, { silent: true })
+      setSelected([])
+      setBatch(res.data?.batch || { running: true })
+      message.success(`已交给 AI：${res.data?.accepted ?? 0} 条，顺序判完（判不了的会落到「等人拍板」）`)
+    } catch (err) {
+      message.error(`${err?.message || '发起失败'}${err?.detail ? ` ${err.detail}` : ''}`)
+    }
+  }
+
+  // 行内「AI 处理」：单条，跑完当场把结果落到这一行上
+  const runRowAi = async (row) => {
+    setRowBusy(row.id)
+    try {
+      const res = await api.post(`/cc-feedback/${row.id}/analyze`, null, { silent: true })
+      message.success(res.data?.note || 'AI 判完了')
+      fetchList()
+      if (detail?.id === row.id) openDetail(row)
+    } catch (err) {
+      message.error(`${err?.message || 'AI 处理失败'}${err?.detail ? ` ${err.detail}` : ''}`)
+    } finally { setRowBusy(null) }
+  }
 
   const openDetail = async (row) => {
     setDetail(row); setDetailLoading(true)
@@ -170,8 +237,11 @@ export default function CCFeedback() {
     setAnalyzing(true)
     try {
       const res = await api.post(`/cc-feedback/${detail.id}/analyze`, null, { silent: true })
-      setDetail(d => ({ ...d, aiAnalysis: res.data.aiAnalysis }))
-      message.success('分析完成 —— 这是建议，采纳与否你定')
+      // 它现在**直接落裁定**，所以整条都要换掉（状态/类别/回音都可能变了），
+      // 不能只把 aiAnalysis 拼回去 —— 那样抽屉上的状态会停在旧值上
+      setDetail(d => ({ ...d, ...res.data }))
+      message.success(res.data?.note || 'AI 判完了')
+      fetchList()
     } catch (err) {
       // 后端把 why/howTo 拼进 error.detail（例：没绑模型时告诉你去哪绑）。
       // silent 是为了别叠两条 toast —— request() 默认已经弹过一次结论了。
@@ -208,35 +278,51 @@ export default function CCFeedback() {
     }
   }
 
-  const submitCreate = async () => {
-    const v = await createForm.validateFields()
-    try {
-      const res = await api.post('/cc-feedback', {
-        title: v.title, body: v.body, category: v.category, toolName: v.toolName,
-        evidence: (v.expected || v.actual) ? { expected: v.expected, actual: v.actual } : undefined,
-      }, { silent: true })
-      setCreating(false); createForm.resetFields()
-      message.success(res.data?.merged ? `并到已有的一条上（第 ${res.data.occurrences} 次）` : '已记录')
-      fetchList()
-    } catch (err) {
-      // 闸门的拒绝理由本身是设计的一部分，原样显示 —— 只说「失败」等于让人猜。
-      // err.detail 就是后端拼的 why + howTo（见 utils/request.js）。
-      message.error(`${err?.message || '提交失败'}${err?.detail ? ` ${err.detail}` : ''}`)
-    }
-  }
 
+  // 列顺序按「先看是什么事，再看要不要紧，最后看谁报的」排 —— 标题在最左，
+  // 来源（谁报的/哪个工具/哪个项目）挪到最后：它是查线索时才看的东西。
   const columns = [
     {
-      title: '状态', dataIndex: 'status', width: 110, align: 'center',
+      title: '标题', dataIndex: 'title', ellipsis: true,
+      render: (v, r) => (
+        <a style={{ color: '#1d2129', fontWeight: 500 }} onClick={() => openDetail(r)} title={v}>
+          {v}
+          {r.needsHuman && (
+            <Tooltip title={r.needsHuman}>
+              <Tag style={{ marginLeft: 6, fontSize: 11, color: '#ff7d00', background: 'rgba(255,125,0,0.1)', border: 'none' }}>等人拍板</Tag>
+            </Tooltip>
+          )}
+          {r.sampled && (
+            <Tooltip title="AI 判的「不需要处理」抽检样本（每 5 条抽 1）—— 裁定已经生效，复核只为校准它判得准不准">
+              <Tag style={{ marginLeft: 6, fontSize: 11, color: '#7c5cbf', background: 'rgba(124,92,191,0.08)', border: 'none' }}>抽检</Tag>
+            </Tooltip>
+          )}
+          {r.reopenedFrom && (
+            <Tooltip title="这条是同一件事再次发生 —— 上一条已经结掉了，复发另起一行（结论已经过一次，复发是新信息）">
+              <Tag style={{ marginLeft: 6, fontSize: 11, color: '#e8453c', background: 'rgba(232,69,60,0.1)', border: 'none' }}>复发</Tag>
+            </Tooltip>
+          )}
+        </a>
+      ),
+    },
+    {
+      // 判据是「会不会导致假绿」，不是「看着急不急」—— 写进 Tooltip，
+      // 否则这一列会退化成谁写得凶谁排前面
+      title: '优先级', dataIndex: 'severity', width: 90, align: 'center',
       render: v => {
-        const m = STATUS_META[v] || { label: v, color: '#86909c', bg: 'rgba(0,0,0,0.04)' }
-        return <Tag style={{ color: m.color, background: m.bg, border: 'none' }}>{m.label}</Tag>
+        const m = SEVERITY_META[v]
+        if (!m) return <Tooltip title="还没定 —— AI 判完就有了"><span style={{ color: '#c9cdd4' }}>待定</span></Tooltip>
+        return (
+          <Tooltip title="高=会导致假绿或让人做出错误决定；中=费事但绕得过去；低=纯体验">
+            <Tag style={{ color: m.color, background: `${m.color}14`, border: 'none' }}>{m.label}</Tag>
+          </Tooltip>
+        )
       },
     },
     {
       // CC 报的类和平台判的类不一致时并排显示 —— 这是「他判断错了」唯一可统计的形状，
       // 藏进详情就等于没有。
-      title: '类别', dataIndex: 'category', width: 150, align: 'center',
+      title: '类别', dataIndex: 'category', width: 140, align: 'center',
       render: (v, r) => {
         const m = CATEGORY_META[v]
         const rm = CATEGORY_META[r.reportedCategory]
@@ -256,20 +342,32 @@ export default function CCFeedback() {
       },
     },
     {
-      title: '标题', dataIndex: 'title', ellipsis: true,
-      render: (v, r) => (
-        <a style={{ color: '#1d2129', fontWeight: 500 }} onClick={() => openDetail(r)} title={v}>
-          {v}
-          {r.reopenedFrom && (
-            <Tooltip title="这条是同一件事再次发生 —— 上一条已经结掉了，复发另起一行（结论已经过一次，复发是新信息）">
-              <Tag style={{ marginLeft: 6, fontSize: 11, color: '#e8453c', background: 'rgba(232,69,60,0.1)', border: 'none' }}>复发</Tag>
-            </Tooltip>
-          )}
-        </a>
-      ),
+      title: '状态', dataIndex: 'status', width: 118, align: 'center',
+      render: (v, r) => {
+        const m = STATUS_META[v] || { label: v, color: '#86909c', bg: 'rgba(0,0,0,0.04)' }
+        const d = DECIDER_META[r.decidedBy]
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+            <Tag style={{ color: m.color, background: m.bg, border: 'none', margin: 0 }}>{m.label}</Tag>
+            {d && (
+              <Tooltip title={d.tip}>
+                <span style={{ fontSize: 11, color: '#86909c' }}>{d.label}判的</span>
+              </Tooltip>
+            )}
+          </div>
+        )
+      },
     },
     {
-      title: '来源', width: 260,
+      // 撞了几次 = 优先级最硬的信号（同一件事被不同会话反复撞到）
+      title: '撞了几次', dataIndex: 'occurrences', width: 96, align: 'center',
+      render: v => v > 1
+        ? <Badge count={v} style={{ backgroundColor: '#ff7d00' }} />
+        : <span style={{ color: '#c9cdd4' }}>1</span>,
+    },
+    timeColumn({ key: 'lastSeenAt', title: '最近一次', width: 120 }),
+    {
+      title: '来源', width: 230,
       render: (_, r) => (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 12 }}>
           <span style={{ color: '#4e5969' }}>
@@ -290,16 +388,16 @@ export default function CCFeedback() {
       ),
     },
     {
-      // 撞了几次 = 优先级最硬的信号（同一件事被不同会话反复撞到）
-      title: '撞了几次', dataIndex: 'occurrences', width: 100, align: 'center',
-      render: v => v > 1
-        ? <Badge count={v} style={{ backgroundColor: '#ff7d00' }} />
-        : <span style={{ color: '#c9cdd4' }}>1</span>,
-    },
-    timeColumn({ key: 'lastSeenAt', title: '最近一次', width: 120 }),
-    {
-      title: '操作', width: 90, align: 'center',
-      render: (_, r) => <a style={{ fontSize: 12, color: '#0ea5a0' }} onClick={() => openDetail(r)}>处理</a>,
+      // 行内动作是**跑 AI**，不是「打开去人工处理」—— 人打开这一页的常态是看结论。
+      // 要人动手的那几条自己带「等人拍板」标，点标题进抽屉走「人拍板」那一组按钮。
+      title: '操作', width: 96, align: 'center',
+      render: (_, r) => (
+        <Button
+          size="small" type="link" icon={<RobotOutlined />}
+          loading={rowBusy === r.id} disabled={batch?.running}
+          onClick={() => runRowAi(r)}
+        >AI 处理</Button>
+      ),
     },
   ]
 
@@ -328,6 +426,8 @@ export default function CCFeedback() {
           style={{ width: 150 }} allowClear placeholder="状态"
           options={[
             { value: '__pending__', label: `待处理（${summary.pending ?? 0}）` },
+            // 人真正要动手的只有这一撮，所以给它一个一等的位置
+            { value: '__human__', label: `等人拍板（${summary.awaitingHuman ?? 0}）` },
             ...Object.entries(STATUS_META).map(([k, m]) => ({
               value: k, label: `${m.label}（${summary.byStatus?.[k] ?? 0}）`,
             })),
@@ -340,14 +440,58 @@ export default function CCFeedback() {
         />
         <Button icon={<ReloadOutlined />} onClick={fetchList}>刷新</Button>
         <div style={{ flex: 1 }} />
-        <Tooltip title="人也可以代录一条（走的是和 MCP 同一套闸门和归并，规矩不会分叉）">
-          <Button icon={<PlusOutlined />} onClick={() => setCreating(true)}>手工录入</Button>
+        {selected.length > 0 && (
+          <span style={{ alignSelf: 'center', fontSize: 12, color: '#86909c' }}>
+            选了 {selected.length} 条
+            <a style={{ marginLeft: 6 }} onClick={() => setSelected([])}>清空</a>
+          </span>
+        )}
+        <Tooltip title={selected.length
+          ? `把勾选的 ${selected.length} 条交给 AI 判（顺序跑，判不了的落到「等人拍板」）`
+          : '不勾就是把「待处理」里全部交给 AI —— 最常见的动作是把积压一次推完'}>
+          <Button
+            type="primary" icon={<RobotOutlined />}
+            loading={!!batch?.running} onClick={startBatch}
+          >
+            {batch?.running ? '正在批量处理…' : (selected.length ? `批量处理（${selected.length}）` : '批量处理全部待处理')}
+          </Button>
         </Tooltip>
       </div>
+
+      {/* 进度：一条条判是几分钟的事，没有进度条人会以为它卡死了然后重复点 */}
+      {(batch?.running || batch?.finishedAt) && (
+        <Alert
+          type={batch?.running ? 'info' : 'success'}
+          style={{ marginBottom: 12 }} showIcon
+          message={batch?.running
+            ? `AI 正在批量处理：${batch.done + batch.failed} / ${batch.total}`
+            : `上一批处理完了：判了 ${batch.done ?? 0} 条`
+              + (batch.needsHuman ? `，${batch.needsHuman} 条 AI 说判不了` : '')
+              + (batch.failed ? `，${batch.failed} 条没成` : '')}
+          description={
+            <div>
+              <Progress
+                percent={batch.total ? Math.round(((batch.done + batch.failed) / batch.total) * 100) : 0}
+                size="small" status={batch?.running ? 'active' : 'normal'}
+              />
+              <span style={{ fontSize: 12, color: '#86909c' }}>
+                顺序跑，不并发 —— 并发打模型会一起撞限流然后一起降级，那条降级通道对这种正文会回空，结果是一批全废。
+                {batch.needsHuman ? '　判不了的在「等人拍板」里。' : ''}
+                {batch.failed ? '　没成的多半是限流，重新点一次即可（已经判过的不会重判）。' : ''}
+              </span>
+            </div>
+          }
+        />
+      )}
 
       <div style={{ borderRadius: 14, padding: 2 }}>
         <Table
           dataSource={items} columns={columns} rowKey="id" size="small" loading={loading}
+          rowSelection={{
+            selectedRowKeys: selected,
+            onChange: setSelected,
+            // 已经判过的也允许勾 —— 改了提示词想重判一批是正常需求
+          }}
           locale={{
             emptyText: (
               <Empty
@@ -360,8 +504,8 @@ export default function CCFeedback() {
                     被测系统的反直觉行为走 <code>lum_add_project_note</code>，各有各的家。
                     <div style={{ marginTop: 6 }}>
                       想确认通道是通的：在连着本平台的 Claude Code 里让它调一次
-                      <code> lum_report_feedback</code>，或者点右上角「手工录入」——
-                      两条路走的是同一个 <code>report()</code>。
+                      <code> lum_report_feedback</code> —— 报进来的会**自动**交给 AI 分诊，
+                      判不了的才会落到「等人拍板」等你。
                     </div>
                   </div>
                 }
@@ -384,10 +528,31 @@ export default function CCFeedback() {
         <Spin spinning={detailLoading}>
           {detail && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {detail.needsHuman && (
+                <Alert type="warning" showIcon
+                  message="AI 说它判不了这条 —— 要你拍板"
+                  description={
+                    <div>
+                      <div style={{ whiteSpace: 'pre-wrap' }}>{detail.needsHuman}</div>
+                      <div style={{ marginTop: 6, fontSize: 12, color: '#86909c' }}>
+                        下面「人拍板」那一组按钮就是出口：选一个动作、写回音、提交。
+                        提交完这条就不再欠人什么了。
+                      </div>
+                    </div>
+                  } />
+              )}
+              {detail.sampled && (
+                <Alert type="info" showIcon
+                  message="抽检样本（每 5 条抽 1）"
+                  description="AI 判的「不需要处理」抽出来给人看一眼 —— **裁定已经生效**，这里不拦它，
+                  复核只用来校准 AI 判得准不准。觉得判错了就直接改判。" />
+              )}
               {detail.status === 'wont_fix' && (
                 <Alert type="warning" showIcon
-                  message="这条是「不需要处理」"
-                  description="同指纹的后续上报会被这段回音当场短路 —— CC 再报同一件事，收到的就是它。改主意的话，把状态改回「已认下」。" />
+                  message={`这条是「不需要处理」${detail.decidedBy === 'ai' ? '（AI 判的）' : ''}`}
+                  description={detail.decidedBy === 'ai'
+                    ? '同指纹的后续上报会被这段回音当场短路。但这条是 AI 判的 —— CC 带上跟上次不同的现象重报一次会转成「等人拍板」，不会永久关死。'
+                    : '同指纹的后续上报会被这段回音当场短路，而且人判的是终局（重报也不翻）。改主意的话，把状态改回「已认下」。'} />
               )}
 
               <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -425,11 +590,22 @@ export default function CCFeedback() {
                 <Field label="撞了几次">
                   {detail.occurrences}
                   <span style={{ color: '#86909c', fontSize: 12 }}>
-                    {'　'}首次 {formatTimeFull(detail.createdAt)}　最近 {formatTimeFull(detail.lastSeenAt)}
+                    {'　'}首次 {formatTimeFull(detail.createdAt)}{'　'}最近 {formatTimeFull(detail.lastSeenAt)}
                   </span>
                 </Field>
                 {detail.handledBy && (
-                  <Field label="处置">{detail.handledBy} · {formatTimeFull(detail.handledAt)}</Field>
+                  <Field label="处置">
+                    {detail.handledBy} · {formatTimeFull(detail.handledAt)}
+                    {DECIDER_META[detail.decidedBy] && (
+                      <Tooltip title={DECIDER_META[detail.decidedBy].tip}>
+                        <Tag style={{
+                          marginLeft: 8, fontSize: 11, border: 'none',
+                          color: DECIDER_META[detail.decidedBy].color,
+                          background: DECIDER_META[detail.decidedBy].bg,
+                        }}>{DECIDER_META[detail.decidedBy].label}判的</Tag>
+                      </Tooltip>
+                    )}
+                  </Field>
                 )}
               </div>
 
@@ -453,50 +629,50 @@ export default function CCFeedback() {
               )}
 
               <Block
-                title="AI 分析（建议，不改状态）"
+                title="AI 处置（判据 + 裁定，直接生效）"
                 extra={
                   <Button size="small" icon={<RobotOutlined />} loading={analyzing} onClick={runAnalyze}>
-                    {ai ? '重新分析' : 'AI 分析'}
+                    {ai ? '重新判一次' : 'AI 处理'}
                   </Button>
                 }
               >
-                {!ai && <div style={{ fontSize: 12, color: '#c9cdd4' }}>还没跑过。它替你把这条读一遍并给出判类、严重度和回音草稿 —— 采纳与否你定</div>}
+                {!ai && (
+                  <div style={{ fontSize: 12, color: '#c9cdd4' }}>
+                    还没判过（自动分诊那次可能限流了）。点右上角让它判 —— 它看的是**这个工具的描述和实现源码 + 全部 63 个工具的清单**，
+                    所以能判出「平台其实有这个能力、是他没找对方法」这一类。判不了的会落成「等人拍板」。
+                  </div>
+                )}
                 {ai?.parseFailed && <pre style={preStyle}>{ai.raw}</pre>}
                 {ai && !ai.parseFailed && (
                   <div style={{ border: '1px solid rgba(0,0,0,0.04)', borderRadius: 12, padding: '10px 14px' }}>
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                       <Field label="判为">
                         {CATEGORY_META[ai.category]?.label || ai.category || '-'}
-                        {ai.severity && <span style={{ marginLeft: 8, color: SEVERITY_META[ai.severity]?.color }}>严重度 {SEVERITY_META[ai.severity]?.label}</span>}
-                        {ai.suggestedStatus && (
+                        {ai.severity && <span style={{ marginLeft: 8, color: SEVERITY_META[ai.severity]?.color }}>优先级 {SEVERITY_META[ai.severity]?.label}</span>}
+                        {ai.verdict && (
                           <span style={{ marginLeft: 8, color: '#86909c', fontSize: 12 }}>
-                            建议置为「{STATUS_META[ai.suggestedStatus]?.label || ai.suggestedStatus}」
+                            已置为「{STATUS_META[ai.verdict]?.label || ai.verdict}」
                           </span>
                         )}
                       </Field>
                       {ai.reasoning && <Field label="判据">{ai.reasoning}</Field>}
                       {ai.risk && <Field label="不处理会怎样">{ai.risk}</Field>}
-                      {ai.suggestedResolution && <Field label="回音草稿">{ai.suggestedResolution}</Field>}
+                      {ai.fixHint && <Field label="改哪儿">{ai.fixHint}</Field>}
+                      {ai.needsHuman && <Field label="它判不了什么">{ai.needsHuman}</Field>}
+                      {ai.coercedFromDone && <Field label="口径修正">{ai.coercedFromDone}</Field>}
                     </div>
-                    <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <Button
-                        size="small" type="primary" ghost
-                        disabled={!ai.suggestedStatus}
-                        onClick={() => {
-                          const a = ACTIONS.find(x => x.status === ai.suggestedStatus)
-                          if (!a) return message.warning('这条建议没给出可执行的状态')
-                          openAction(a, { category: ai.category, severity: ai.severity, resolution: ai.suggestedResolution })
-                        }}
-                      >采纳到表单</Button>
-                      <span style={{ fontSize: 11, color: '#c9cdd4' }}>
-                        采纳只是把建议填进处置表单，还要你自己按提交　{ai.model ? `· ${ai.model}` : ''}
-                      </span>
+                    <div style={{ marginTop: 10, fontSize: 11, color: '#c9cdd4' }}>
+                      回音在上面「回音」那一块（CC 那边看到的就是它）。
+                      {ai.model ? `\u3000· ${ai.model}` : ''}{ai.at ? `\u3000· ${formatTimeFull(ai.at)}` : ''}
                     </div>
                   </div>
                 )}
               </Block>
 
-              <Block title="处置">
+              {/* 人拍板：**不是主路**。留着是因为 AI 判不了的那几条得有出口，
+                  以及人要改判 AI 的时候。标题写清这件事，否则下一个人会以为
+                  每条都得从这儿走一遍。 */}
+              <Block title={detail.needsHuman ? '人拍板（这条在等你）' : '人拍板（AI 判不了、或你要改判时才用）'}>
                 <Space wrap>
                   {ACTIONS.map(a => (
                     <Tooltip key={a.status} title={a.tip}>
@@ -554,40 +730,6 @@ export default function CCFeedback() {
         </Form>
       </Modal>
 
-      <Modal
-        title="手工录入一条反馈"
-        open={creating} onCancel={() => setCreating(false)} onOk={submitCreate}
-        okText="提交" width={680} destroyOnHidden
-      >
-        <Alert
-          type="info" showIcon style={{ marginBottom: 12 }}
-          message="走的是和 MCP 完全同一个入口"
-          description="证据闸门、指纹归并、「不需要处理」短路对手工录入一样生效 —— 两条路各写一套校验，迟早会漂成两种规矩。"
-        />
-        <Form form={createForm} layout="vertical">
-          <Form.Item name="title" label="标题" rules={[{ required: true, message: '一句话说清是什么毛病' }]}>
-            <Input placeholder="例：lum_get_case 不返回 bugRefs" />
-          </Form.Item>
-          <Form.Item name="category" label="类别" rules={[{ required: true }]}>
-            <Select options={Object.entries(CATEGORY_META).map(([k, m]) => ({ value: k, label: m.label }))} />
-          </Form.Item>
-          <Form.Item name="toolName" label="涉及工具 / 模块">
-            <Input placeholder="例：lum_sync_orchestrated_scenario、审核队列、用例列表页" />
-          </Form.Item>
-          <Form.Item
-            name="body" label="正文" rules={[{ required: true, message: '至少 40 字' }]}
-            extra="写三段：①想干什么 ②平台实际怎么反应的（原始返回/报错抄一段）③期望它怎么反应"
-          >
-            <TextArea rows={8} />
-          </Form.Item>
-          <Form.Item name="expected" label="说好的是什么" extra="类别选「缺陷」时这两栏必填 —— 想不清楚的多半不是缺陷，是用法">
-            <TextArea rows={2} />
-          </Form.Item>
-          <Form.Item name="actual" label="实际是什么">
-            <TextArea rows={2} />
-          </Form.Item>
-        </Form>
-      </Modal>
     </div>
   )
 }

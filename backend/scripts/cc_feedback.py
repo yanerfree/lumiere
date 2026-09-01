@@ -147,13 +147,18 @@ async def cmd_show(args) -> None:
         if d.get("resolution"):
             读 = "已被取走" if d.get("ackAt") else "还没取走"
             print(f"\n{BOLD}回音{RST}（{读}）\n{d['resolution']}")
+        if d.get("needsHuman"):
+            print(f"\n{C['bug']}AI 说它判不了这条 —— 等人拍板{RST}\n{d['needsHuman']}")
         ai = d.get("aiAnalysis") or {}
         if ai and not ai.get("parseFailed"):
-            print(f"\n{BOLD}AI 分诊建议{RST}{DIM}（只是建议，状态还得自己改）{RST}")
+            who = "AI 已落的裁定" if d.get("decidedBy") == "ai" else "AI 的判据"
+            print(f"\n{BOLD}{who}{RST}{DIM}"
+                  + (f"（{ai.get('model')}）" if ai.get("model") else "") + RST)
             print(f"  判类 {CATEGORY_LABEL.get(ai.get('category', ''), ai.get('category'))}"
-                  f" · 严重度 {ai.get('severity')} · 建议 {ai.get('suggestedStatus')}")
+                  f" · 严重度 {ai.get('severity')} · 裁定 {ai.get('verdict')}")
             for k, label in (("reasoning", "判据"), ("risk", "不处理会怎样"),
-                             ("suggestedResolution", "建议回音")):
+                             ("fixHint", "怎么改"), ("resolution", "回音"),
+                             ("needsHuman", "为什么判不了")):
                 if ai.get(k):
                     print(f"  {label}：{ai[k]}")
 
@@ -201,22 +206,24 @@ async def cmd_analyze(args) -> None:
         if row is None:
             print(f"没找到 {args.id!r}")
             sys.exit(1)
-        res = await svc.ai_triage(session, str(row.id))
+        res = await svc.ai_handle(session, str(row.id))
         if res.get("error"):
             print(f"{C['bug']}{res['error']}{RST}")
             if res.get("howTo"):
                 print(f"  {res['howTo']}")
             sys.exit(1)
-        ai = res["aiAnalysis"]
+        ai = res.get("aiAnalysis") or {}
         if ai.get("parseFailed"):
-            print(f"{DIM}模型没吐出可解析的 JSON，原文：{RST}\n{ai.get('raw')}")
-            return
-        print(f"判类 {CATEGORY_LABEL.get(ai.get('category', ''), ai.get('category'))}"
-              f" · 严重度 {ai.get('severity')} · 建议 {ai.get('suggestedStatus')}")
-        for k, label in (("reasoning", "判据"), ("risk", "不处理会怎样"),
-                         ("suggestedResolution", "建议回音")):
-            if ai.get(k):
-                print(f"{label}：{ai[k]}")
+            print(f"{DIM}模型没吐出可解析的 JSON，转给人了。原文：{RST}\n{ai.get('raw')}")
+        elif res.get("verdict") == "needs_human":
+            print(f"{C['bug']}AI 判不了 → 等人拍板{RST}\n{res.get('needsHuman')}")
+        else:
+            print(f"判类 {CATEGORY_LABEL.get(ai.get('category', ''), ai.get('category'))}"
+                  f" · 严重度 {ai.get('severity')} · 裁定 {res.get('verdict')}")
+            for k, label in (("reasoning", "判据"), ("risk", "不处理会怎样"),
+                             ("fixHint", "怎么改"), ("resolution", "回音")):
+                if ai.get(k):
+                    print(f"{label}：{ai[k]}")
         print(f"\n{DIM}{res['note']}{RST}")
 
 
@@ -230,6 +237,12 @@ async def cmd_import(args) -> None:
     次数是排序依据（撞得越多越靠前），拿导入次数污染它，等于把队列顺序拧歪。
     """
     from scripts.cc_feedback_seed_20260901 import ITEMS, REPORTER, SOURCE, evidence_of
+
+    # **导入时把自动分诊关掉。** 它是丢后台的 task，而这个脚本 asyncio.run() 一返回
+    # 就把 loop 关了 —— 31 条会变成 31 个「Task was destroyed but it is pending」，
+    # 而且是判到一半的：有几条落了裁定、有几条没落，看不出是哪几条。
+    # 导完在页面上点一次「批量处理」把它们一起推完，进度看得见。
+    svc.AUTO_TRIAGE = False
 
     async with _sessionmaker()() as session:
         existing = set((await session.execute(select(CCFeedback.fingerprint))).scalars().all())
@@ -263,6 +276,9 @@ async def cmd_import(args) -> None:
 
         print(f"\n新增 {new} 条，跳过（已存在）{skipped} 条"
               + ("" if args.apply else "  ← 试运行，未写入；加 --apply 落库"))
+        if args.apply and new:
+            print(f"{DIM}导入的这些**没有**自动分诊（见 cmd_import 的注释）——"
+                  f"去「系统管理 → CC 反馈」点「批量处理全部待处理」一次推完{RST}")
         for ref, err in failed:
             print(f"{C['bug']}  ✗ {ref}: {err}{RST}")
         if failed:
@@ -294,7 +310,7 @@ def main() -> None:
     p_rep.add_argument("--actor", default="本机 CC（终端处理）")
     p_rep.set_defaults(fn=cmd_reply)
 
-    p_ai = sub.add_parser("analyze", help="跑一次 AI 分诊建议（不改状态）")
+    p_ai = sub.add_parser("analyze", help="让 AI 处置一条（会直接落裁定；判不了的转人）")
     p_ai.add_argument("id")
     p_ai.set_defaults(fn=cmd_analyze)
 

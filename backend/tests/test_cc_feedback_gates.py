@@ -174,3 +174,96 @@ def test_严重度只有平台填得了():
     sig = inspect.signature(fb.report_feedback)
     assert "severity" not in sig.parameters
     assert set(SEVERITIES) == {"high", "medium", "low"}
+
+
+# ── AI 自己落裁定：判据从哪来、翻案怎么翻 ─────────────────────────
+#
+# 2026-09-01 口径反转（原来是「AI 只出建议，处置只有人能落」）。反转的前提是
+# **把不可逆性拆掉**，不是把守卫拆掉 —— 下面这几条钉的就是那个前提。
+
+def test_四个裁定里没有已处理():
+    """AI 落不了 done —— done 的含义是**代码改完了**，而它没改过代码。
+    这不是「不给它权限」，是它在事实上判不了这件事。"""
+    from app.services.cc_feedback_service import _HANDLE_PROMPT
+    assert "needs_human" in _HANDLE_PROMPT
+    assert "不要输出 `done`" in _HANDLE_PROMPT
+
+
+def test_判据里必须有工具的契约和实现():
+    """「AI 判得了的自己判」只有在它真看得见判据时才成立。
+
+    这一类反馈的判据恰好只有三样：工具**说**它做什么（描述）、它**实际**做什么
+    （源码）、以及平台**有没有别的工具**能干这件事（全表）—— 最后那样是判
+    「他没找对方法」这一类的唯一依据。少任何一样，AI 就只能凭反馈正文本身猜，
+    而正文正是报的人自己的理解。
+    """
+    from app.services.cc_feedback_service import _platform_facts
+
+    facts = _platform_facts("lum_report_feedback")
+    assert "lum_report_feedback" in facts
+    assert "def " in facts                       # 源码进去了
+    assert ".py:" in facts                       # 而且指到了文件:行
+    assert facts.count("lum_") > 30              # 全表在（60+ 个工具）
+
+
+def test_不认识的工具名要说出来而不是装作没这回事():
+    """CC 可能写错工具名，也可能报的是页面上的毛病（没有工具名）。
+    这时候 AI 该知道「查不到这个工具」，否则它会拿全表去硬凑一个结论。"""
+    from app.services.cc_feedback_service import _platform_facts
+
+    facts = _platform_facts("lum_不存在的工具")
+    assert "lum_不存在的工具" in facts
+    assert "没有" in facts or "查不到" in facts or "不在" in facts
+
+
+def test_翻案的判据是有新东西不是又说了一遍():
+    """AI 判的 wont_fix 能翻案，靠的是「正文变了」。这个归一化函数就是那道判据：
+    松了（比如只比长度）→ 复读也能翻案，短路等于没有；
+    紧了（比如全字节相等）→ 多一个空格就算新证据，同样等于没有。
+    """
+    from app.services.cc_feedback_service import _body_key
+
+    a = "调 lum_get_case 想读回 bugRefs，返回里没有这个字段。"
+    assert _body_key(a) == _body_key("  调 lum_get_case 想读回 bugRefs； 返回里没有这个字段  ")
+    assert _body_key(a) != _body_key(a + "补一句：批量场景下也一样。")
+
+
+def test_抽检是取模不是掷骰子():
+    """掷骰子会出现连续二十条一条没抽到的走运区间，而抽检的全部意义就是
+    **稳定的覆盖率** —— 用来校准 AI 判得准不准，样本时有时无就校准不了。"""
+    import inspect
+
+    from app.services.cc_feedback_service import _sample_this_wont_fix
+    from app.models.cc_feedback import WONT_FIX_SAMPLE_EVERY
+
+    src = inspect.getsource(_sample_this_wont_fix)
+    assert "%" in src
+    assert "random" not in src
+    assert WONT_FIX_SAMPLE_EVERY >= 2
+
+
+def test_谁判的只有三种而且默认是ai():
+    """这一列不是装饰：它决定这条 wont_fix 还能不能被翻案。
+    人判的终局、AI 判的可翻 —— 存不下「谁判的」，这个区别就无处安放。"""
+    from app.models.cc_feedback import DECIDERS
+
+    assert set(DECIDERS) == {"ai", "human", "system"}
+
+
+def test_自动分诊默认开着():
+    """默认关掉的话，这套东西退化成「人还是得一条条点」—— 而这次改的就是那件事。
+    这个开关只为测试和批量导入留（真打模型会在没网关的机器上偶发红、
+    也会在 asyncio.run() 收尾时把判到一半的后台任务全毁掉）。
+
+    ⚠ 不用 importlib.reload 来验默认值：重载会把模块里的 `_BATCH` 和 `_BG`
+    换成新对象，同一进程里别的测试拿着旧引用，就变成「批量跑了但状态查不到」。
+    这里直接看它读的那个环境变量的默认值。
+    """
+    import inspect
+
+    import app.services.cc_feedback_service as svc
+
+    src = inspect.getsource(svc)
+    line = next(ln for ln in src.splitlines() if ln.startswith("AUTO_TRIAGE"))
+    assert "CC_FEEDBACK_AUTO_TRIAGE" in line
+    assert '"1"' in line or "'1'" in line          # 默认值是 1

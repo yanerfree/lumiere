@@ -6,10 +6,49 @@
 而那正是最容易在重构里被改坏、又最难被发现的部分 —— 改坏的表现不是报错，
 是**多出一行**，而没人会去数行数。
 """
+import pytest
+
 from tests.conftest import create_test_user, make_auth_headers
 
 BODY = ("调 lum_get_case 想读回 bugRefs，返回里没有这个字段。"
         "工具描述写的是「读一条用例的全部内容」，实际只有十来个字段。")
+
+
+@pytest.fixture(autouse=True)
+def _no_auto_triage(monkeypatch):
+    """**把新反馈进来时的自动分诊关掉。**
+
+    线上默认是开的（人是来看结果的，不是来点每一条的），但在测试里它会：
+    ① 真打模型 —— 在没有网关的机器上变成偶发红，而且慢；
+    ② 用一个**独立 session** 改同一行 —— 于是这一整个文件里「报完立刻查状态」
+       的断言全都变成竞态：查早了是 new，查晚了已经被 AI 判过了。
+    那种红看起来像归并/短路逻辑坏了，而实际一行代码都没错。
+    """
+    from app.services import cc_feedback_service as svc
+    monkeypatch.setattr(svc, "AUTO_TRIAGE", False)
+
+
+def _fake_model(monkeypatch, content, model="claude-opus-5"):
+    """把 AI 那两个依赖换成假的。**打 patch 的位置是定义处的模块**，
+    不是 cc_feedback_service —— 它在函数体里 import，所以属性查找发生在调用时。"""
+    class _Cfg:
+        pass
+
+    _Cfg.model = model
+
+    class _Resp:
+        pass
+
+    _Resp.content = content
+
+    async def _fake_cfg(*a, **kw):
+        return _Cfg()
+
+    async def _fake_complete(*a, **kw):
+        return _Resp()
+
+    monkeypatch.setattr("app.services.ai_config_resolver.resolve_ai_config", _fake_cfg)
+    monkeypatch.setattr("app.services.ai.llm_client.complete", _fake_complete)
 
 
 async def _admin(db_session, username="fb_admin"):
@@ -299,40 +338,97 @@ class TestEcho:
         assert "缺陷" in echo["categoryChanged"]
 
 
-# ── AI 分诊 ───────────────────────────────────────────────────────
+# ── AI 处置：判得了的自己落，判不了的才给人 ─────────────────────
 
-class TestAITriage:
-    async def test_ai只给建议不改状态(self, client, db_session, monkeypatch):
-        """wont_fix 会**永久短路**同指纹的后续上报。让 AI 单方面落这个状态，
-        等于给它一个「把一类反馈永久关死、而且以后没人会再看到」的开关 ——
-        这种错不报错，只是安静地少一批反馈。"""
+class TestAIHandle:
+    """2026-09-01 口径反转：原来 AI「只写建议不改状态」，现在**直接落裁定**。
+
+    反转的前提是把不可逆性拆掉，而不是把守卫拆掉 —— 原来那道人工闸的理由是
+    「wont_fix 会永久短路同指纹的后续上报」，现在 AI 判的 wont_fix 可以被带新
+    证据的重报翻案（转人），人判的才终局。这一节就是在验那个前提真的成立：
+    只要「AI 能自己落」而「翻不了案」，一类反馈就会安静地消失且不报错。
+    """
+
+    async def test_ai直接把裁定落下来(self, client, db_session, monkeypatch):
         h, _ = await _admin(db_session)
         d = await _first(client, h)
-
-        class _Cfg:
-            model = "claude-opus-5"
-
-        class _Resp:
-            content = ('{"category":"bug","severity":"high",'
-                       '"suggestedStatus":"wont_fix","reasoning":"r",'
-                       '"suggestedResolution":"用 lum_check_deliverable","risk":"x"}')
-
-        async def _fake_cfg(*a, **kw):
-            return _Cfg()
-
-        async def _fake_complete(*a, **kw):
-            return _Resp()
-
-        monkeypatch.setattr("app.services.ai_config_resolver.resolve_ai_config", _fake_cfg)
-        monkeypatch.setattr("app.services.ai.llm_client.complete", _fake_complete)
+        _fake_model(monkeypatch,
+                    '{"verdict":"wont_fix","category":"improvement","severity":"low",'
+                    '"resolution":"平台已经有：lum_check_deliverable 的 notes 会带出来。",'
+                    '"reasoning":"他没找对方法","risk":"x"}')
 
         r = await client.post(f"/api/cc-feedback/{d['id']}/analyze", headers=h)
         assert r.status_code == 200, r.text
-        assert r.json()["data"]["aiAnalysis"]["suggestedStatus"] == "wont_fix"
+        assert r.json()["data"]["verdict"] == "wont_fix"
 
         got = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
-        assert got["status"] == "new"          # 状态一个字没动
-        assert got["category"] is None
+        assert got["status"] == "wont_fix"          # 状态真的动了
+        assert got["category"] == "improvement"
+        assert got["decidedBy"] == "ai"             # 谁判的要留住 —— 它决定还能不能翻案
+        assert "lum_check_deliverable" in got["resolution"]
+        assert got["needsHuman"] is None
+        assert got["handledBy"].startswith("AI")
+
+    async def test_判不了的落到等人拍板而不是硬判一个(self, client, db_session, monkeypatch):
+        """猜的代价不对称：猜错一个 wont_fix 会挡掉后续上报（一类反馈就此消失、
+        而且不报错），转给人只是多等一会儿。所以任何拿不准都往人那边倒。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h)
+        _fake_model(monkeypatch,
+                    '{"verdict":"needs_human","needsHuman":"这条要产品定：到底该不该有这个字段",'
+                    '"reasoning":"需求没写"}')
+
+        r = await client.post(f"/api/cc-feedback/{d['id']}/analyze", headers=h)
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["verdict"] == "needs_human"
+
+        got = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
+        assert got["status"] == "new"               # 没落裁定 → 状态不动
+        assert got["decidedBy"] is None             # 也不算「AI 判的」
+        assert "产品定" in got["needsHuman"]
+
+    async def test_乱输出一律降级成等人拍板(self, client, db_session, monkeypatch):
+        """模型不按格式回是常态，不是异常。降级成 needs_human 而不是抛错：
+        抛错的话这条会静静地留在 new 上，谁也不知道它卡在哪儿。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h)
+        _fake_model(monkeypatch, "我觉得这条挺重要的，建议尽快处理。")
+
+        r = await client.post(f"/api/cc-feedback/{d['id']}/analyze", headers=h)
+        assert r.json()["data"]["verdict"] == "needs_human"
+        got = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
+        assert got["status"] == "new"
+        assert got["aiAnalysis"]["parseFailed"] is True   # 原文留着，人能看它到底说了啥
+
+    async def test_判不做却写不出理由不放过(self, client, db_session, monkeypatch):
+        """wont_fix 的全部价值在回音上。判了「不做」又说不出正确做法 = 没判明白，
+        放过去就是让 CC 下一轮照原样再撞一次，而平台这边只会静默 +1。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h)
+        _fake_model(monkeypatch,
+                    '{"verdict":"wont_fix","category":"improvement","reasoning":"没必要"}')
+
+        r = await client.post(f"/api/cc-feedback/{d['id']}/analyze", headers=h)
+        assert r.json()["data"]["verdict"] == "needs_human"
+        got = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
+        assert got["status"] == "new"
+        assert "回音" in got["needsHuman"]
+
+    async def test_ai给done按认下落(self, client, db_session, monkeypatch):
+        """done 的含义是**代码改完了**，AI 没改过代码。但它判「该改」是有用的，
+        所以折到 triaged，而不是丢掉或者转人。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h)
+        _fake_model(monkeypatch,
+                    '{"verdict":"done","category":"bug","severity":"high",'
+                    '"resolution":"已补上字段","reasoning":"确实少了"}')
+
+        r = await client.post(f"/api/cc-feedback/{d['id']}/analyze", headers=h)
+        data = r.json()["data"]
+        assert data["verdict"] == "triaged"
+        assert "coercedFromDone" in data["aiAnalysis"]
+        got = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
+        assert got["status"] == "triaged"
 
     async def test_模型回空不落库(self, client, db_session, monkeypatch):
         """空回复必须报错，不能存成一次「分析完了」。
@@ -341,24 +437,13 @@ class TestAITriage:
         实际是一个字都没回来；而且它还会把上一次真有内容的分析覆盖掉。
         这不是假想：主路 429 降级到 CLI 通道（那头是 Claude Code）时，
         反馈正文本身长得像一件待办，它会去做事而不作答，回来就是空的。
+
+        这种情况**也不写 needs_human** —— 模型没说过话，不能替它说「它判不了」，
+        那会把一次限流记成一次判不动，然后这条被扔到人手上白等。
         """
         h, _ = await _admin(db_session, username="fb_admin_empty")
         d = await _first(client, h, title="模型回空的那条")
-
-        class _Cfg:
-            model = "claude-opus-5"
-
-        class _Resp:
-            content = "   "
-
-        async def _fake_cfg(*a, **kw):
-            return _Cfg()
-
-        async def _fake_complete(*a, **kw):
-            return _Resp()
-
-        monkeypatch.setattr("app.services.ai_config_resolver.resolve_ai_config", _fake_cfg)
-        monkeypatch.setattr("app.services.ai.llm_client.complete", _fake_complete)
+        _fake_model(monkeypatch, "   ")
 
         r = await client.post(f"/api/cc-feedback/{d['id']}/analyze", headers=h)
         assert r.status_code == 400, r.text
@@ -368,3 +453,149 @@ class TestAITriage:
 
         got = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
         assert got["aiAnalysis"] is None       # 没留下空壳
+        assert got["status"] == "new"
+        assert got["needsHuman"] is None
+
+
+# ── AI 判的不需要处理：必须翻得动 ─────────────────────────────────
+
+class TestReopenAIWontFix:
+    """「AI 能自己落 wont_fix」这件事只有在能翻案的前提下才成立。
+
+    翻案的判据是**有新东西**，不是「又说了一遍」—— 否则复读就能推翻裁定，
+    那道短路等于没有；而人判的必须终局，否则永远翻下去，wont_fix 就没有意义了。
+    """
+
+    async def _ai_wont_fix(self, client, h, monkeypatch, title="读不回 bugRefs"):
+        d = await _first(client, h, title=title)
+        _fake_model(monkeypatch,
+                    '{"verdict":"wont_fix","category":"improvement","severity":"low",'
+                    '"resolution":"用 lum_check_deliverable 的 notes。","reasoning":"r"}')
+        await client.post(f"/api/cc-feedback/{d['id']}/analyze", headers=h)
+        return d
+
+    async def test_带新说法重报会转给人(self, client, db_session, monkeypatch):
+        h, _ = await _admin(db_session)
+        d = await self._ai_wont_fix(client, h, monkeypatch)
+
+        got = (await _report(client, h, title="读不回 bugRefs",
+                             body="上次说去用 lum_check_deliverable，但它只在交付门禁里出现，"
+                                  "我要的是读用例时就能看到。" + BODY)).json()["data"]
+        assert got["id"] == d["id"]                 # 不新建行
+        assert got["escalated"] == "needs_human"
+        assert "lum_check_deliverable" in got["resolution"]   # 上次的理由照旧甩回去
+
+        row = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
+        assert row["needsHuman"]
+        # 页面上「等人拍板」是跨状态筛的 —— 这条还挂在 wont_fix 上，按状态筛会漏掉
+        assert row["status"] == "wont_fix"
+        items = (await client.get("/api/cc-feedback?awaitingHuman=true",
+                                  headers=h)).json()["data"]["items"]
+        assert [i["id"] for i in items] == [d["id"]]
+
+    async def test_照原样复读不算新证据(self, client, db_session, monkeypatch):
+        h, _ = await _admin(db_session)
+        d = await self._ai_wont_fix(client, h, monkeypatch)
+
+        got = (await _report(client, h, title="读不回 bugRefs")).json()["data"]  # 正文一字不改
+        assert got.get("escalated") is None
+        assert got["decidedBy"] == "ai"
+        assert "跟上次不同" in got["note"]           # 要告诉它翻案的门槛是什么
+        row = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
+        assert row["needsHuman"] is None
+
+    async def test_人判的不需要处理是终局(self, client, db_session):
+        """人拍过板的不再被翻。翻得动的话，wont_fix 就成了一个可以无限重开的
+        建议框 —— 人这道兜底也就白设了。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h)
+        await _triage(client, h, d["id"], status="wont_fix", category="improvement",
+                      resolution="不做，理由 A。")
+
+        got = (await _report(client, h, title="读不回 bugRefs",
+                             body="换个说法再报一次，情况完全不同：" + BODY)).json()["data"]
+        assert got.get("escalated") is None
+        assert got["decidedBy"] == "human"
+        row = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
+        assert row["needsHuman"] is None
+
+    async def test_人拍板之后就不再欠人什么了(self, client, db_session, monkeypatch):
+        """人处理完，「等人拍板」那一撮必须清干净 —— 清不掉就是一个永远不消的
+        待办，几轮之后没人会再看那个筛选。"""
+        h, _ = await _admin(db_session)
+        d = await self._ai_wont_fix(client, h, monkeypatch)
+        await _report(client, h, title="读不回 bugRefs",
+                      body="新说法：" + BODY)                     # 转人
+
+        r = await _triage(client, h, d["id"], status="triaged", category="improvement")
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["decidedBy"] == "human"
+        assert (await client.get("/api/cc-feedback?awaitingHuman=true",
+                                 headers=h)).json()["data"]["total"] == 0
+
+
+# ── 批量：人不该一条条点 ──────────────────────────────────────────
+
+class TestBatch:
+    async def test_批量把待处理的一次推完(self, client, db_session, monkeypatch):
+        h, _ = await _admin(db_session)
+        a = await _first(client, h, title="甲问题")
+        b = await _first(client, h, title="乙问题")
+        _fake_model(monkeypatch,
+                    '{"verdict":"triaged","category":"bug","severity":"medium",'
+                    '"reasoning":"r","fixHint":"h"}')
+
+        r = await client.post("/api/cc-feedback/ai-handle", headers=h, json={})
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["accepted"] == 2
+
+        # 后台顺序跑 —— 等它跑完（一次假模型调用是即时的，给几个 tick 就够）
+        for _ in range(50):
+            st = (await client.get("/api/cc-feedback/batch-status",
+                                   headers=h)).json()["data"]
+            if not st["running"] and st["startedAt"]:
+                break
+            import asyncio
+            await asyncio.sleep(0.05)
+        assert st["running"] is False
+        assert st["done"] == 2 and st["failed"] == 0
+
+        for fid in (a["id"], b["id"]):
+            got = (await client.get(f"/api/cc-feedback/{fid}", headers=h)).json()["data"]
+            assert got["status"] == "triaged" and got["decidedBy"] == "ai"
+
+    async def test_进度查得到而且不会被当成id(self, client, db_session):
+        """`/batch-status` 必须声明在 `/{feedback_id}` 前面 —— 否则它会被那条
+        动态路由吃掉，然后炸在 uuid 解析上（500，而且报的是「反馈不存在」那类
+        看不出真因的错）。"""
+        h, _ = await _admin(db_session)
+        r = await client.get("/api/cc-feedback/batch-status", headers=h)
+        assert r.status_code == 200, r.text
+        assert set(("running", "total", "done", "failed")) <= set(r.json()["data"])
+
+    async def test_没东西可判就直说(self, client, db_session):
+        """空批次静默成功是最坏的一种：页面上什么都不动，人只会再点一次。"""
+        h, _ = await _admin(db_session)
+        r = await client.post("/api/cc-feedback/ai-handle", headers=h, json={})
+        assert r.status_code == 400
+        assert "没有要处理" in r.text
+
+    async def test_勾选的那几条才判(self, client, db_session, monkeypatch):
+        h, _ = await _admin(db_session)
+        a = await _first(client, h, title="甲问题")
+        b = await _first(client, h, title="乙问题")
+        _fake_model(monkeypatch,
+                    '{"verdict":"triaged","category":"bug","severity":"low","reasoning":"r"}')
+
+        r = await client.post("/api/cc-feedback/ai-handle", headers=h,
+                              json={"ids": [a["id"]]})
+        assert r.json()["data"]["accepted"] == 1
+        for _ in range(50):
+            st = (await client.get("/api/cc-feedback/batch-status",
+                                   headers=h)).json()["data"]
+            if not st["running"] and st["startedAt"]:
+                break
+            import asyncio
+            await asyncio.sleep(0.05)
+        got = (await client.get(f"/api/cc-feedback/{b['id']}", headers=h)).json()["data"]
+        assert got["status"] == "new"          # 没勾的那条一个字没动
