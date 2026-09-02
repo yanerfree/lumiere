@@ -459,19 +459,30 @@ async def _guess_env(session, case_id) -> str | None:
     except Exception:  # noqa: BLE001
         pass
 
-    # **退回默认环境。** 只认"计划/报告里跑过"的话，新用例一律找不到环境 ——
+    # **退回本项目的默认环境。** 只认"计划/报告里跑过"的话，新用例一律找不到环境 ——
     # 而新用例恰好是最需要真跑的那批。页面上「先跑一遍再审」不带 envId，
     # 于是这个按钮在多数情况下**静默降级成静态审**，两个按钮点出来一样的结果，
     # 而降级理由只是一条 minor finding，页面上看不见。
-    # 判据是"有 BASE_URL 的环境里 sort_order 最小的那个"：没有 BASE_URL 的环境
-    # 跑出来就是那种空地址的垃圾运行，跟不跑一样，还会被报成"这条挂了"。
+    # 判据是"本项目里有 BASE_URL 的环境中 sort_order 最小的那个"：没有 BASE_URL
+    # 的环境跑出来就是那种空地址的垃圾运行，跟不跑一样，还会被报成"这条挂了"。
+    #
+    # ⚠ **`project_id` 这个过滤条件不能省**。环境是项目级的（见 CLAUDE.md），
+    # 全库取 sort_order 最小的那条，永远返回同一个项目的环境 —— 实测库里
+    # 排第一的是网关的 `stoa`（sort_order=0），于是 UAG 那些没有历史执行的用例
+    # 会被拿去打网关的地址。**跑得起来、跑得出结果、结果全错**，而且报出来
+    # 长得像"这条用例写坏了"。单项目时这个 bug 完全看不出来。
     try:
         from app.models.environment import Environment, EnvironmentVariable
+        from app.models.case import Case
+        from app.models.project import Branch
         row = (await session.execute(
             select(Environment.id)
             .join(EnvironmentVariable,
                   EnvironmentVariable.environment_id == Environment.id)
-            .where(EnvironmentVariable.key == "BASE_URL",
+            .join(Branch, Branch.project_id == Environment.project_id)
+            .join(Case, Case.branch_id == Branch.id)
+            .where(Case.id == case_id,
+                   EnvironmentVariable.key == "BASE_URL",
                    EnvironmentVariable.value != "")
             .order_by(Environment.sort_order, Environment.created_at).limit(1)
         )).scalars().first()

@@ -626,3 +626,41 @@ async def test_只做中文的项目不报这条():
         assert f == []
     finally:
         h.load_locale_table = orig
+
+
+def test_自审默认真跑_不能退回静态审():
+    """`lum_review_case` 的 `run_first` 默认必须是 True。
+
+    默认 False 的原始理由是「躲调用方的同步超时」，而实测两种模式耗时差不多：
+    静态审 p50 175s / p90 244s（最长一次 601s），真跑 p50 202s / p90 294s ——
+    **静态审自己就已经在超时线上**，时间大头是 LLM 出结论，不是那一次执行。
+    于是那个默认值没换来"不超时"，只换来一半的自审是静态的
+    （实测网关 224 次自审里 99 次没真跑），丢掉最值钱的那类判据：
+    「接口场景验的端点页面根本不调」只有真跑才暴露得出来。
+
+    反例（这条判据什么时候会冤枉人）：真把它异步化了（返回 job id + 轮询），
+    那时默认值怎么定都行 —— 改的时候连这条测试一起改，并写明理由。
+    """
+    import inspect as _i
+
+    from app.mcp.tools import review as review_tool
+    sig = _i.signature(review_tool.review_case)
+    assert sig.parameters["run_first"].default is True, "CC 自审退回静态审了"
+
+
+def test_挑默认环境必须按项目过滤():
+    """`_guess_env` 的兜底不能跨项目挑环境。
+
+    环境是项目级的（CLAUDE.md）。全库取 `sort_order` 最小的那条，永远返回
+    同一个项目的环境 —— 实测排第一的是网关的 `stoa`（sort_order=0），于是
+    UAG 那些没有历史执行的用例会被拿去打网关的地址：**跑得起来、跑得出结果、
+    结果全错**，报出来还长得像"这条用例写坏了"。
+    **单项目时这个 bug 完全看不出来**，所以只能靠封样盯着。
+    """
+    import inspect as _i
+
+    from app.services.review import reviewer
+    src = _i.getsource(reviewer._guess_env)
+    assert "Branch.project_id == Environment.project_id" in src, \
+        "兜底挑环境时没按项目过滤，会跨项目挑到别人的 BASE_URL"
+    assert "Case.id == case_id" in src, "没把环境限定到这条用例自己的项目"

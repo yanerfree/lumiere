@@ -196,7 +196,7 @@ async def _close_single_batch(session: AsyncSession, batch_id, item_id,
 async def review_case(
     session: AsyncSession,
     case_id: str,
-    run_first: bool = False,
+    run_first: bool = True,
     env_id: str | None = None,
 ) -> dict:
     """按六个维度评审一条用例，回结论 + 每条 finding 指到具体位置。
@@ -211,8 +211,21 @@ async def review_case(
     blocker 的定义是"放进回归就是假绿或根本跑不了"：断言恒真、只断控制面状态就当生效、
     预期照着实现抄、UI 脚本必挂。
 
-    `run_first=True` 会先真跑一遍这条的接口场景再评（debug 模式，不进通过率口径）。
-    断言咬不咬得住静态看不出来 —— "改完读回来还是 200" 长得完全正常。
+    **`run_first` 默认 `True`** —— 先真跑一遍这条的接口场景/UI 脚本再评
+    （debug 模式，不进通过率口径）。断言咬不咬得住静态看不出来 ——
+    "改完读回来还是 200" 长得完全正常；「接口场景验的端点页面根本不调」
+    这一类更是只有真跑才暴露得出来。
+
+    **默认值 2026-09-01 从 False 改成 True**，理由是原来那个理由不成立：
+    默认 False 是为了躲调用方的同步超时，但实测两种模式的耗时差不了多少 ——
+    静态审 p50 175s / p90 244s（最长一次 601s），真跑 p50 202s / p90 294s。
+    **静态审自己就已经在超时线上了**，时间大头是 LLM 出结论，不是那一次执行。
+    于是这个默认值没换来"不超时"，只换来一半的自审是静态的
+    （实测网关 224 次自审里 99 次没真跑）——省 15% 的时间，丢掉最值钱的那类判据。
+    真要治超时得把它异步化（返回 job id + `lum_review_check` 轮询），不是靠少跑一遍。
+
+    传 `run_first=False` 仍然可以显式要静态审：**只在没有环境可用时才该这么做**
+    （那种情况下真跑也会被 `_run_and_diff` 跳掉，落一条 `review_run_skipped`）。
 
     结论会落库：审核标签（approved/rejected/inconclusive）、评分、findings、一轮记录。
     评完照着 findings 改，改完再评一次；rejected 的 blocker 一条都不许留着交上去。

@@ -73,7 +73,16 @@
   行上加归属不改变运行时冲突，两个项目配同一个 path 照样互相覆盖、还偶发。
   真正要做的是给 `path` 加 unique 约束 + 把「path 带前缀」变成服务端强制。
   实测数据和推理见下方文档「数据归属与隔离」的 §5。
-- **QA 仓永远只读**（项目上那份 `qa_repo` 配置）。那是别人维护的黑盒验收仓，
+- **QA 仓永远只读**（项目上那份 `qa_repo` 配置）。**只读的是「仓库」，不是「被测环境」** ——
+  分界线（2026-09-02 用户定）：**测试环境可以操作，代码仓库不许操作。**
+  这两件事被混过一次，`qa_survey_guard.py` 给页面枚举加的五层写守卫，理由写的是
+  「爬的是**别人的**测试环境」—— 守卫本身该留，那个理由是错的。被测环境是给我们
+  测试/审核用的，QA 自己的套件在上面有 408 处写调用（含 `DELETE /teams/{id}`），
+  我们自己跑 UI 脚本也零写守卫。真正该保留的区分是**无向 vs 有向**：无向枚举不点
+  不认识的控件（因为它不知道自己造了什么、也清理不掉，在自己环境上一样成立），
+  有向脚本照常写、自带清理。判据和三批计划见
+  [docs/qa-domain-live-verification-plan.md](docs/qa-domain-live-verification-plan.md) §1。
+  下面这段说的**仓库**那一半不变：那是别人维护的黑盒验收仓，
   清单文件是他自己门禁（`check-coverage.sh`）的判据来源，平台往里写一笔，他那边就会
   红在一个查不到原因的地方。`services/qa_catalog.py` 只允许
   `show`/`ls-tree`/`rev-parse`/`log`/`grep`/`blame` —— 全是只读；`blame` 是
@@ -146,10 +155,12 @@ cd /home/dreamer/lumiere && DATABASE_URL='postgresql+asyncpg://postgres:postgres
 | 下阶段做什么：生成效率 / 生成质量 / 失败优化（含现状实测盘点） | [docs/next-phase-gen-quality-and-failure.md](docs/next-phase-gen-quality-and-failure.md) |
 | **CC ↔ 平台闭环的边界规则、红线、Story 清单**（改这一块之前先读） | [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) |
 | **CC 反馈通道**（平台工具缺陷/规范冲突/卡住了往哪报、防倒灌三道闸、回音为什么不能砍、为什么是全局一张表而不是项目内） | [docs/cc-feedback-channel.md](docs/cc-feedback-channel.md) |
+| **两个待做需求**（反馈加「范围」列 / 建 Key 时选工具范围）：可行性、定好的方案、被否掉的省事写法、上线前必查的那条 SQL | [docs/next-plan-feedback-area-and-key-scope.md](docs/next-plan-feedback-area-and-key-scope.md) |
 | **版本升级怎么复用上一版用例**：分支对账（端点反查）、三堆分法、状态流转、废弃审核 | [docs/version-upgrade-branch-diff.md](docs/version-upgrade-branch-diff.md) |
 | **数据归属与隔离**：MCP Key 为什么管不住数据、环境改项目级、哪些表该留全局（含一条「假隔离」陷阱） | [docs/data-scoping-and-isolation.md](docs/data-scoping-and-isolation.md) |
 | **权限模型**：440 个端点各挂什么守卫、角色档位（系统 admin/user/guest + 项目 manager/member）、前端按权限藏入口的口径、**2026-08-29 为什么砍到这几档** | [docs/permission-audit-2026-08.md](docs/permission-audit-2026-08.md) + `backend/app/core/permissions.py`（权限点与角色映射的唯一出处） |
 | **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、页面为什么这么排（P/R 口径照抄对方定义）、脚本正文白名单、**域级 AI 评审**（环境缺口那一列的四个坑）、**每个域最近有人动吗**（为什么「近 7 天」这种判据在这份数据上必然恒真） | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
+| **QA 域评审升级：真跑页面对流量**（三批计划、为什么纯只读只有 60 分、被否掉的「倒推页面操作」、已建未接线的 2145 行清点） | [docs/qa-domain-live-verification-plan.md](docs/qa-domain-live-verification-plan.md) |
 
 ## 长驻服务
 
