@@ -6,6 +6,12 @@
 
 状态：**已实现**（2026-09-01）。实现清单见 §10 的 Story 表。
 
+> **待做**：页面上还看不出「问题出在哪一块」—— 56 条反馈里 32% 的 `tool_name`
+> 填的是自由文本（`AI 评审规则文案`、`接口场景执行器`），而最大的一撮
+> AI 评审（27%）今天散在 9 个不同的 `tool_name` 上。加 `area` 一列的方案、
+> 为什么不能复用 `TOOL_CATALOG.category`、以及「area 绝不能进指纹」这条坑，
+> 都在 [next-plan-feedback-area-and-key-scope.md](next-plan-feedback-area-and-key-scope.md) §1。
+
 ---
 
 ## 0. 仲裁规则：什么算「该走这条通道」

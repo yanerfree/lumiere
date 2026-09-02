@@ -908,6 +908,16 @@ raw = project_scope or legacy_scope                   # ❌ 项目明确设成�
 另外 antd v6 把 `.ant-collapse-content` 改成了 `.ant-collapse-panel`（展开中的是 `-panel-active`），
 收起的面板仍在 DOM 里，`.count()` 会把隐藏的一起数 —— 和之前 modal/tooltip 那两处是同一类改名。
 
+> **2026-09-02 补：这条要被"加一层"，不是被推翻。** 用户要「建 Key 时能选范围，
+> 一把 Key 干干净净只干一件活」。实测两个真实项目的范围都是 **59/63** ——
+> 项目那一层客观上没收窄任何东西，省上下文只能在 Key 这一层拿到
+> （只干归因的一把 ≈ 全量的 21%）。定的形态是**两层取交集**：项目范围仍是天花板
+> （「这个项目允许 CC 干哪些活」，本节这句一个字不动），Key 范围是可选的**收窄**，
+> NULL = 跟随项目。方案、`key_scope or project_scope` 为什么是同一个坑的镜像、
+> 以及上线前必查的那条 SQL，见
+> [next-plan-feedback-area-and-key-scope.md](next-plan-feedback-area-and-key-scope.md) §2。
+> 交互直接复用上面那套九张活卡片 —— 四次弯路不用再走一遍。
+
 ### ✅ 补：拿现有数据评「P0 两阶段」和「平台自动分类」（2026-08-09）
 
 原本挂在下面延后表里的两条，条件都是"等实测数据"。去查了一遍库，先说结论：
