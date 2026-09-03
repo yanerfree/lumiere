@@ -31,6 +31,7 @@ from app.services.qa_page_traffic import (
     merge_edges,
 )
 from app.services.qa_role_visibility import merge_shards
+from app.services.qa_selectors import PROBE_JS, merge_probe
 from app.services.ui_selector_render import anchor_selector, infer_kind
 from app.services.qa_survey_guard import (
     MAIN_CRAWL_ROLE,
@@ -225,6 +226,30 @@ def collect_items(page_path: str, page_title: str, raw_items, ledger: dict) -> l
     return out
 
 
+# ── 选择器活体命中 ────────────────────────────────────────────────────────
+
+async def _probe_selectors(page, path: str, payload, ledger: dict) -> None:
+    """在这一页上数一遍 QA 仓那张表的命中数。**只读，一个 DOM 都不动。**
+
+    失败**记账不抛**，跟这一页的其它步骤一个待遇：探测挂了只是少一页的命中数，
+    而抛出去会把整页（连带它的控件账和时窗）一起废掉 —— 那是拿一个附加产出
+    换掉主产出。
+
+    **不区分角色。** 命中是并集：任何一个角色在任何一页上看见过，就算"真实渲染里
+    存在"。角色维度那件事（谁看得见）有 `qa_role_visibility` 专门管，
+    在这里再分一次只会给出第二份口径不同的角色可见性数据。
+    """
+    if not payload:
+        return
+    try:
+        res = await page.evaluate(PROBE_JS, payload)
+    except Exception as e:                               # noqa: BLE001
+        ledger.setdefault("selectorProbeFailed", []).append(
+            {"path": path, "error": type(e).__name__})
+        return
+    merge_probe(ledger.setdefault("selectorProbe", {}), path, res)
+
+
 # ── 一个角色的一趟 ────────────────────────────────────────────────────────
 
 async def _login(page, base_url: str, role: str, ledger: dict) -> bool:
@@ -255,8 +280,14 @@ async def _login(page, base_url: str, role: str, ledger: dict) -> bool:
 
 
 async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
-                     ledger: dict, har_dir: Path) -> list[dict]:
-    """爬一个角色。返回账本行；**一页失败不拖垮整趟**，只记数。"""
+                     ledger: dict, har_dir: Path,
+                     selector_probe: list[dict] | None = None) -> list[dict]:
+    """爬一个角色。返回账本行；**一页失败不拖垮整趟**，只记数。
+
+    `selector_probe` 是 QA 仓那张公共选择器表（`qa_selectors.probe_payload`
+    给的清单）。传了就在每一页上**只读地**数一遍命中，账本落
+    `ledger["selectorProbe"]`。判档在 `qa_selectors.roll_up`，这里一个判断都不做。
+    """
     har_path = har_dir / f"{role}.har"
     context = await browser.new_context(record_har_path=str(har_path),
                                         record_har_content="omit")
@@ -301,6 +332,7 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                 ledger.setdefault("pagesEmptyState", []).append(path)
             title = await page.title()
             items.extend(collect_items(path, title, raw, ledger))
+            await _probe_selectors(page, path, selector_probe, ledger)
             win["endedAt"] = _now()
             ledger["pagesVisited"] = ledger.get("pagesVisited", 0) + 1
             # 走到了就记，**哪怕这一页一个控件都没有** —— 空页恰恰是
@@ -334,7 +366,7 @@ def sanitize_har(har_path: Path) -> dict | None:
 
 async def run_survey(*, base_url: str | None = None, roles: list[str],
                      page_paths: list[str], routes=None,
-                     totals_probe=None) -> dict:
+                     totals_probe=None, selector_probe=None) -> dict:
     """跑完一趟，返回 `{status, ledger, items, har, page_edges}`。
 
     分片：主爬角色深爬全部页面，其余角色**浅扫**（角色维度只问「看得见什么」）。
@@ -347,6 +379,12 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     `qa_page_traffic`。它**不写进 item 的 `endpoints`** —— 这一趟一个控件都没
     点过，写进去等于凭空造一条 `observed` 的控件→端点边。`routes` 只用来推
     API 前缀兜底分类（拿不到就只靠 `_resourceType`，会在 declarations 里说明）。
+
+    `selector_probe` 传了就顺路验一遍 QA 仓那张公共选择器表在真实渲染里指到东西
+    没有（`qa_selectors`）。**账本里必须能看出这一趟到底探没探** ——
+    `selectorProbe` 这个键在时说明探了（`pages` 是探过的页），不在时就是没探；
+    `roll_up(probed=...)` 靠它把「探了、都没见到」和「压根没探」分开，
+    混起来会让人去查 400 多条不存在的过期选择器。
     """
     from playwright.async_api import async_playwright
 
@@ -360,7 +398,11 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
                     # 让下游（`compute_gaps(controls_clicked=...)`）能把 G4
                     # 关掉 —— 缺这个数它会把每个 enabled 控件都报成
                     # 「点下去什么都没发生」。键名和那个参数是一对，别单改一边。
-                    "controlsClicked": 0}
+                    "controlsClicked": 0,
+                    # 这一趟拿了几条选择器去探。**0 也要写出来** —— 清单是空的
+                    # （QA 仓没拉到 / 解析全军覆没）和"探了但一条都没命中"在报告上
+                    # 长得一模一样，而前者是我们自己没跑成，不是他的选择器有问题。
+                    "selectorsProbed": len(selector_probe or [])}
 
     ledger["selfCheck"] = self_check_label(totals_probe)
     totals_before = await totals_probe() if totals_probe else None
@@ -382,7 +424,8 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
             async def _one(role: str, paths: list[str]):
                 async with sem:
                     return role, await crawl_role(browser, base_url, role, paths,
-                                                  ledger, har_dir)
+                                                  ledger, har_dir,
+                                                  selector_probe)
 
             results = await asyncio.gather(
                 *(_one(r, p) for r, p in shards), return_exceptions=True)
