@@ -23,7 +23,8 @@ async def run_page_survey(ctx: dict, task_id: str, project_id: str,
                           env_id: str | None = None, env_name: str = "",
                           build_fingerprint: str = "",
                           route_table_hash: str = "",
-                          qa_commit_sha: str = "") -> dict:
+                          qa_commit_sha: str = "", *,
+                          plan: dict | None = None) -> dict:
     """跑一趟页面枚举 —— **先判要不要跑**（架构 AD-8）。
 
     终态四选一：`done` / `partial` / `failed` / `dirty` —— 比 task_status 文档里那条
@@ -36,6 +37,15 @@ async def run_page_survey(ctx: dict, task_id: str, project_id: str,
     **复用那一支的终态是被复用那一趟的终态**（不是 `done`，也没有第五种状态）。
     判要不要跑的是 `qa_survey_cache.plan_reuse`，**这一层不重复它的判断**，
     只负责判完照做、并且把「用的是哪一趟」原样带出去（`cacheNote` / `provenance`）。
+
+    `plan` 是 `qa_live_survey.prepare` 在请求里算好的那一份（路由表、选择器清单、
+    这一趟的环境变量）。**它带着完整可用的账号密码，只能在进程内传**
+    （`qa_catalog_review.spawn`）—— arq 的 job 参数是要写进 redis 的，
+    那等于把凭证落在一个没人想到要去清的地方。封样在
+    `tests/test_qa_page_survey_task.py::test_活体计划不许走_arq_enqueue`。
+
+    不传 `plan` 就是**今天之前的那条路**：只爬、不探选择器、不对账。
+    缺的那几格一格都不猜（见 `_post_process`）。
     """
     from app.engine.surveys.qa_page_survey_crawl import run_survey
     from app.services.qa_survey_cache import (CRAWL, fresh_provenance, plan_reuse,
@@ -58,21 +68,30 @@ async def run_page_survey(ctx: dict, task_id: str, project_id: str,
         # 整站」—— 上一趟很可能是有的，我们只是没读到。把"没读到"写成"没有"，
         # 正是这个模块存在的意义要抓的那类错（洞四同形）。
         logger.exception("查上一趟枚举失败 task_id=%s project_id=%s", task_id, project_id)
-        plan = None
+        decision = None
         cache_note = (f"没能查到上一趟枚举（{type(e).__name__}: {e}）——"
                       f"这一轮**没有做过复用判断**，按重爬处理")
     else:
-        plan = plan_reuse(previous=prev, current={
+        decision = plan_reuse(previous=prev, current={
             "projectId": project_id, "envId": env_id,
             "buildFingerprint": build_fingerprint,
             "routeTableHash": route_table_hash, "qaCommitSha": qa_commit_sha})
-        cache_note = plan["summary"]
-        if plan["action"] != CRAWL:
-            return await _reuse(task_id, project_id, plan)
+        cache_note = decision["summary"]
+        if decision["action"] != CRAWL:
+            return await _reuse(task_id, project_id, decision)
 
+    # `plan`（活体计划，参数）和 `decision`（要不要复用，`plan_reuse` 算的）是两回事，
+    # 名字必须分开：混成一个的话这里会拿到复用判断，选择器探测和对账全部静默消失。
+    p = plan or {}
+    table = p.get("routeTable") or {}
     try:
         payload = await run_survey(base_url=base_url, roles=roles,
-                                   page_paths=page_paths)
+                                   page_paths=page_paths,
+                                   # 只用来推 API 前缀兜底分类；拉不到就是 None，
+                                   # 那边会在 declarations 里说明，别在这儿垫 `[]`
+                                   routes=table.get("routes"),
+                                   selector_probe=p.get("selectorProbe"),
+                                   env_vars=p.get("envVars"))
     except ValueError as e:
         # 配置不全（没有 BASE_URL、没有只读账号）——**不开爬**，并且把原因原样带出去。
         await set_task_status(task_id, "failed", message=str(e))
@@ -85,6 +104,7 @@ async def run_page_survey(ctx: dict, task_id: str, project_id: str,
                 "cacheNote": cache_note}
 
     ledger = payload["ledger"]
+    await _post_process(project_id=project_id, plan=p, payload=payload)
     result = {
         "status": payload["status"],
         "projectId": project_id,
@@ -94,7 +114,7 @@ async def run_page_survey(ctx: dict, task_id: str, project_id: str,
         # 重爬的那一轮也带这一句（内容是"为什么没复用"）。只在复用时才出现的字段，
         # 和"没记过"长得一模一样 —— 同 `_provenance` 的纪律。
         "cacheNote": cache_note,
-        "provenance": (plan or {}).get("provenance") or fresh_provenance(),
+        "provenance": (decision or {}).get("provenance") or fresh_provenance(),
     }
 
     try:
@@ -123,6 +143,95 @@ async def run_page_survey(ctx: dict, task_id: str, project_id: str,
                                    f"拦下 {ledger.get('writesBlocked', 0)} 个写请求"),
                           result={k: v for k, v in result.items() if k != "items"})
     return result
+
+
+async def _post_process(*, project_id: str, plan: dict, payload: dict) -> None:
+    """爬完之后往账本里补两格：选择器报告、三边对账。**没计划就一格都不补。**
+
+    「不补」和「补成 0」不是一回事：`plan` 空的那条路（今天之前的调用方）压根没算过
+    这两样，账本里就**不该有这两个键** —— 有了才是 CLAUDE.md 那条「新增字段渲染成
+    假的 0」的自造版本。
+
+    补进 `ledger` 而不是新开列：`qa_page_surveys.ledger` 本来就是 jsonb，
+    理由（"账本项会随实现增长"）写在模型里，这两格正是它说的那种增长。
+    """
+    from app.services.qa_live_survey import selector_report
+
+    if not plan:
+        return
+    ledger = payload["ledger"]
+
+    parsed = plan.get("selectorParsed")
+    if parsed:
+        # `probed` 由 `selector_report` 自己从账本里判（至少探成一页），
+        # 不在这儿按"我们打算探"写死。
+        ledger["selectorReport"] = selector_report(parsed, ledger)
+
+    try:
+        rec = await _reconcile(project_id=project_id, plan=plan, payload=payload)
+    except Exception as e:                                   # noqa: BLE001
+        # **对账崩了不算这一趟失败。** 爬取已经真的去访问过别人的环境了，那份结果
+        # 得留下；而对账是纯计算，照 `reconcile_key` 重算一次就有（架构 AD-8）。
+        # 但缺口数**不能落 0** —— 同 `routeTable` 的写法，用一个 `available` 开关
+        # 把"没算过"和"算过是 0"分开。
+        logger.exception("三边对账失败 project_id=%s", project_id)
+        ledger["reconcile"] = {
+            "available": False,
+            "reason": f"{type(e).__name__}: {e}",
+            "declarations": [
+                f"三边对账没跑成（{type(e).__name__}: {e}）—— 这一趟的缺口数"
+                "**不是 0，是没算**；页面枚举本身的结果是好的，重算一次即可"],
+        }
+    else:
+        ledger["reconcile"] = {"available": True, **rec}
+
+
+async def _reconcile(*, project_id: str, plan: dict, payload: dict) -> dict:
+    """三边对账。Q 边要读 QA 仓（阻塞的 git 调用），所以整段丢进线程。
+
+    两处刻意：
+
+    1. **`cfg` 在这里重新查库，不从请求那边当参数递过来。** QA 仓地址里可以带
+       token（`https://x:<token>@host/...`），递一次就多一个它会出现的地方 ——
+       多查一次库换少一处凭证副本，在这条路上（本来就要爬几十个页面）稳赚。
+    2. **递给 `reconcile` 的计划是重新拼的最小一份**（路由表 + 指纹 + 声明）。
+       原样把 `plan` 递进去也能跑，但那样 `envVars` 就跟着走到了产出结果的那个
+       函数旁边 —— 凭证离出网口越远越好。
+    """
+    import anyio
+
+    from app.deps.db import async_session_factory
+    from app.models.project import Project
+    from app.services import qa_catalog
+    from app.services.qa_live_survey import load_q_side, reconcile
+    from app.services.qa_survey_byproducts import USABLE_STATUSES
+
+    async with async_session_factory() as session:
+        project = await session.get(Project, uuid.UUID(str(project_id)))
+        cfg = (project.qa_repo if project else None) or {}
+    if not cfg.get("url"):
+        raise ValueError("这个项目没配 QA 仓，对不了账")
+
+    def _q_side():
+        catalog = qa_catalog.cached_read(str(project_id), cfg, False)
+        return load_q_side(str(project_id), cfg, catalog)
+
+    q = await anyio.to_thread.run_sync(_q_side)
+
+    status = payload["status"]
+    usable = status in USABLE_STATUSES
+    decl = list(plan.get("declarations") or [])
+    if not usable:
+        # `compute_gaps` 自己会声明"只剩 G2"，但不会说是**哪个**终态导致的。
+        decl.append(f"这一趟页面枚举的终态是 `{status}`，对账按「页面这边没有可用"
+                    f"信号」处理 —— 没验到的维度算没验，不算没缺口")
+    return reconcile(
+        plan={"routeTable": plan.get("routeTable"),
+              "buildFingerprint": plan.get("buildFingerprint"),
+              "declarations": decl},
+        ledger=payload["ledger"], items=payload["items"],
+        page_edges=payload.get("page_edges"), q=q,
+        page_survey_available=usable)
 
 
 async def _previous(*, project_id, env_id, qa_commit_sha):

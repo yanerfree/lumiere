@@ -135,7 +135,14 @@ def classify_control(label: str, role: str = "") -> str:
 
 # 主爬账号。**只读账号**——L1/L2 拦不住的东西，靠它在服务端被拒。
 # 三层是叠着的，不是三选一：前两层是我们自己的判断，这一层是对方系统的判断。
-MAIN_CRAWL_ROLE = "qa-auditor"
+#
+# 名字是 `auditor` 而不是 `qa-auditor`：**角色名必须跟环境变量的前缀同源**，
+# 因为取凭证只有这一条路（`<PREFIX>_USERNAME` / `_PASSWORD`）。实测那个环境里
+# 只读账号配在 `AUDITOR_USERNAME=qa-auditor` 上 —— `qa-auditor` 是**账号名**，
+# 前缀才是角色。用账号名当角色名的话，这里认得出"配了只读账号"，
+# 而爬取那边去找 `QA_AUDITOR_USERNAME` 找不到，于是它被静默跳过 ——
+# 报出来是「主爬账号没登上」，而不是「你这个常量取错了名字」。
+MAIN_CRAWL_ROLE = "auditor"
 
 
 def _role_names(roles) -> list[str]:

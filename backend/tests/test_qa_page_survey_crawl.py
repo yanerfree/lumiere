@@ -575,3 +575,77 @@ class Test导航时窗:
         assert 'ledger.get("pageWindows")' in src
         assert 'closed_at=(ledger.get("contextClosedAt") or {}).get(role)' in src
         assert 'ledger["traffic"] = ' in src
+
+
+class _LoginBrokenPage(_FakePage):
+    """登录表单填不进去 —— 最常见的一种：`LOGIN_PATH` 配成了登录**接口**。"""
+
+    async def fill(self, selector, value, **k):
+        raise TimeoutError(f"no element {selector}")
+
+
+class Test登录崩了要说清是登录崩的:
+    """登录失败的诊断信息。
+
+    这几条盯的是**归因**，不是行为：登录不成，那个分片本来就该失败（抛出去，
+    `run_survey` 记 `shardsFailed`，终态不会是 `done`）。问题在于账本上只留一个
+    `TimeoutError` —— 「登录表单的选择器对不上」和「那台机器打不开」于是长得一样，
+    而一个要改配置、一个要找运维。
+    """
+
+    @pytest.mark.asyncio
+    async def test_登录崩了照旧往上抛_分片不许算成功(self, tmp_path, _creds):
+        with pytest.raises(TimeoutError):
+            await c.crawl_role(_FakeBrowser(_LoginBrokenPage()), "http://h",
+                               "qa-auditor", ["/a"], {}, tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_账本上写明是登录哪一步崩的(self, tmp_path, _creds):
+        ledger = {}
+        with pytest.raises(TimeoutError):
+            await c.crawl_role(_FakeBrowser(_LoginBrokenPage()), "http://h",
+                               "qa-auditor", ["/a"], ledger, tmp_path)
+        row = ledger["loginFailed"][0]
+        assert row["role"] == "qa-auditor"
+        assert row["stage"] == "fill"          # goto 过了，是表单填不进去
+        assert row["error"] == "TimeoutError"
+        assert row["loginPath"] == "/login"
+        assert row["usedDefaultPath"] is True
+
+    @pytest.mark.asyncio
+    async def test_环境里只有LOGIN_URL时直接说出来(self, tmp_path, _creds):
+        """`LOGIN_URL=/api/auth/login` 是接口场景那个键。拿它当页面路径会打开一段
+        JSON，然后卡在"找不到用户名输入框" —— 报出来像选择器过期，实际是配错了键。
+        这一条要的就是那句话真的出现在账本里。
+        """
+        ledger = {}
+        env = {"LOGIN_URL": "/api/auth/login",
+               "QA_AUDITOR_USERNAME": "u", "QA_AUDITOR_PASSWORD": "p"}
+        with pytest.raises(TimeoutError):
+            await c.crawl_role(_FakeBrowser(_LoginBrokenPage()), "http://h",
+                               "qa-auditor", ["/a"], ledger, tmp_path, None, env)
+        assert "LOGIN_URL" in ledger["loginFailed"][0]["hint"]
+        assert "LOGIN_PATH" in ledger["loginFailed"][0]["hint"]
+
+    @pytest.mark.asyncio
+    async def test_配了LOGIN_PATH就不再怪那个键(self, tmp_path):
+        ledger = {}
+        env = {"LOGIN_PATH": "/signin", "LOGIN_URL": "/api/auth/login",
+               "QA_AUDITOR_USERNAME": "u", "QA_AUDITOR_PASSWORD": "p"}
+        with pytest.raises(TimeoutError):
+            await c.crawl_role(_FakeBrowser(_LoginBrokenPage()), "http://h",
+                               "qa-auditor", ["/a"], ledger, tmp_path, None, env)
+        row = ledger["loginFailed"][0]
+        assert row["usedDefaultPath"] is False
+        assert row["loginPath"] == "/signin"
+        assert "LOGIN_URL" not in row["hint"]
+
+    def test_崩掉的分片记得住是哪个角色(self):
+        """异常里没有角色，只能靠 `gather` 保序对回去。
+
+        主爬角色崩了 = 这一趟什么都没看到；浅扫角色崩了 = 少一列角色可见性。
+        只记一个异常类名的话，这两件事在报告上一模一样。
+        """
+        src = SRC.read_text(encoding="utf-8")
+        assert "zip(shards, results, strict=True)" in src
+        assert '"isMainRole": shard_role == main_role' in src

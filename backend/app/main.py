@@ -47,6 +47,7 @@ from app.api.scenario_gen import router as scenario_gen_router
 from app.api.mcp_keys import router as mcp_keys_router
 from app.api.mcp_keys import project_scope_router as mcp_scope_router
 from app.api.qa_catalog import router as qa_catalog_router
+from app.api.qa_page_survey import router as qa_page_survey_router
 from app.api.system_services import router as system_services_router
 from app.api.me import router as me_router
 from app.api.assistant import router as assistant_router
@@ -406,6 +407,7 @@ app.include_router(mcp_keys_router)
 app.include_router(mcp_scope_router)
 # QA 场景清单：只读别人的验收仓，成员校验挂在各 handler 上
 app.include_router(qa_catalog_router)
+app.include_router(qa_page_survey_router)
 app.include_router(system_services_router, dependencies=_AUTHED)
 app.include_router(me_router)
 # AI 助手：能力面按登录用户权限过滤，各端点自带 get_current_user + 执行前复检

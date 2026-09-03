@@ -112,16 +112,16 @@ class TestL3主爬账号:
         """
         with pytest.raises(ValueError) as e:
             g.pick_main_crawl_role(["admin", "tester"])
-        assert "qa-auditor" in str(e.value)
+        assert "auditor" in str(e.value)
         with pytest.raises(ValueError):
             g.pick_main_crawl_role([])
 
     def test_有只读账号就用它(self):
-        assert g.pick_main_crawl_role(["admin", "qa-auditor"]) == "qa-auditor"
+        assert g.pick_main_crawl_role(["admin", "auditor"]) == "auditor"
 
     def test_浅扫排掉主爬那个且不重复(self):
         assert g.shallow_scan_roles(
-            ["qa-auditor", "admin", "tester", "admin", "", None]) == ["admin", "tester"]
+            ["auditor", "admin", "tester", "admin", "", None]) == ["admin", "tester"]
 
 
 # ── L4 凭证 ──────────────────────────────────────────────────────────────

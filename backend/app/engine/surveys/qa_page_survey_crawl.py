@@ -74,13 +74,32 @@ def _env(name: str, default: str = "") -> str:
     return os.getenv(name, default)
 
 
-def _base_url() -> str:
+def _cfg(env_vars, name: str, default: str = "") -> str:
+    """取一个配置项：**先看传进来的那份环境变量，再退回进程环境。**
+
+    为什么不图省事在起爬之前 `os.environ.update(env_vars)`：进程环境**只有一份**，
+    而这个后端一个进程里可以同时跑两个项目的枚举。后进来的那趟会把前一趟的
+    `BASE_URL` 顶掉，于是就成了 `_base_url` 那句话说的事故 ——「打到了不该打的
+    那台机器上，而脚本照跑不误、不报任何错」，只不过这回是我们自己造的。
+    所以配置**必须跟着这一趟走**，不能挂在进程上。
+
+    退回进程环境是给「在 shell 里手动跑一趟」留的（`BASE_URL=… python -m …`），
+    不是主路：接口进来的那条一定带 `env_vars`。
+    """
+    if env_vars:
+        val = env_vars.get(name)
+        if val is not None and str(val).strip():
+            return str(val)
+    return _env(name, default)
+
+
+def _base_url(env_vars=None) -> str:
     """被测前端地址。**只能从变量取。**
 
     写死一个地址在这里，后果不是"换环境挂了"（那还看得见），是**打到了不该打的
     那台机器上**，而脚本照跑不误、不报任何错。
     """
-    base = _env("BASE_URL", "").strip().rstrip("/")
+    base = _cfg(env_vars, "BASE_URL", "").strip().rstrip("/")
     if not base:
         raise ValueError(
             "没有 BASE_URL —— 页面枚举必须知道爬哪个环境，不猜、不用默认值。"
@@ -88,13 +107,16 @@ def _base_url() -> str:
     return base
 
 
-def _role_credentials(role: str) -> tuple[str, str]:
+def _role_credentials(role: str, env_vars=None) -> tuple[str, str]:
     """角色账号。约定跟 `pw_conftest.py` 一致：`<ROLE>_USERNAME` / `<ROLE>_PASSWORD`。
 
-    角色名里的横线换成下划线再转大写（`qa-auditor` → `QA_AUDITOR_USERNAME`）。
+    角色名里的横线换成下划线再转大写（`auditor` → `AUDITOR_USERNAME`，
+    `teamb-admin` → `TEAMB_ADMIN_USERNAME`）。**角色名是变量前缀，不是账号名** ——
+    实测那个环境里 `AUDITOR_USERNAME` 的值是 `qa-auditor`，拿值当角色名会查不到凭证。
     """
     prefix = role.replace("-", "_").upper()
-    return _env(f"{prefix}_USERNAME"), _env(f"{prefix}_PASSWORD")
+    return (_cfg(env_vars, f"{prefix}_USERNAME"),
+            _cfg(env_vars, f"{prefix}_PASSWORD"))
 
 
 # ── L1：路由拦截 ──────────────────────────────────────────────────────────
@@ -252,12 +274,19 @@ async def _probe_selectors(page, path: str, payload, ledger: dict) -> None:
 
 # ── 一个角色的一趟 ────────────────────────────────────────────────────────
 
-async def _login(page, base_url: str, role: str, ledger: dict) -> bool:
+async def _login(page, base_url: str, role: str, ledger: dict,
+                 env_vars=None) -> bool:
     """登录。**唯一默认放行的写请求**（`qa_survey_guard.DEFAULT_WRITE_ALLOWLIST`）。
 
     放行次数记账：它是账本项不是免检项。
+
+    登录崩了要**在账本上说清是登录崩的**（`loginFailed`）再往上抛。不记的话
+    `run_survey` 那边收到的只有一个 `type(e).__name__` —— 于是「登录表单的选择器
+    对不上」和「那台机器打不开」在报告上都是一行 `TimeoutError`，而这两件事
+    一个改配置、一个找运维。抛出去这件事本身不改：登录不成这个角色什么都没看到，
+    那个分片必须算失败，不能带着一份空 items 混成 `done`。
     """
-    user, pwd = _role_credentials(role)
+    user, pwd = _role_credentials(role, env_vars)
     if not user or not pwd:
         ledger.setdefault("rolesSkipped", []).append(role)
         return False
@@ -265,15 +294,40 @@ async def _login(page, base_url: str, role: str, ledger: dict) -> bool:
     # **但它 `tail: False`（不许延长到下一次导航）**：提交之后浏览器会自己跳到
     # 落地页，延长就把落地页的流量记到 `/login` 名下了 —— 那种错归属在报告上
     # 和对的长得一样。中间这段宁可记进"归不了页"，也不归错页。
-    login_path = _env("LOGIN_PATH", "login")
+    #
+    # ⚠ 这里要的是**页面路径**，不是登录接口。环境里常见的是
+    # `LOGIN_URL=/api/auth/login`（接口场景用的那个），拿它去 goto 会打开一段
+    # JSON，然后卡在"找不到用户名输入框"——报出来是选择器的错，实际是配错了键。
+    # 所以只认 `LOGIN_PATH`，并在失败时把这件事写进账本。
+    login_path = _cfg(env_vars, "LOGIN_PATH", "login")
     win = {"path": "/" + login_path.lstrip("/"), "startedAt": _now(), "tail": False}
     ledger.setdefault("pageWindows", {}).setdefault(role, []).append(win)
-    await page.goto(urljoin(base_url + "/", login_path.lstrip("/")),
-                    timeout=PAGE_TIMEOUT_MS)
-    await page.fill(_env("LOGIN_USER_SELECTOR", "input[name=username]"), user)
-    await page.fill(_env("LOGIN_PASS_SELECTOR", "input[name=password]"), pwd)
-    await page.click(_env("LOGIN_SUBMIT_SELECTOR", "button[type=submit]"))
-    await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
+    stage = "goto"
+    try:
+        await page.goto(urljoin(base_url + "/", login_path.lstrip("/")),
+                        timeout=PAGE_TIMEOUT_MS)
+        stage = "fill"
+        await page.fill(_cfg(env_vars, "LOGIN_USER_SELECTOR", "input[name=username]"), user)
+        await page.fill(_cfg(env_vars, "LOGIN_PASS_SELECTOR", "input[name=password]"), pwd)
+        stage = "submit"
+        await page.click(_cfg(env_vars, "LOGIN_SUBMIT_SELECTOR", "button[type=submit]"))
+        stage = "settle"
+        await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
+    except Exception as e:                               # noqa: BLE001
+        ledger.setdefault("loginFailed", []).append({
+            "role": role, "stage": stage, "error": type(e).__name__,
+            "loginPath": "/" + login_path.lstrip("/"),
+            "usedDefaultPath": not _cfg(env_vars, "LOGIN_PATH"),
+            # 环境里只有接口地址、没有页面路径时，把这件事直接说出来 ——
+            # 这是这类失败里最常见的一种，而它长得像"选择器过期了"。
+            "hint": ("环境里只有 `LOGIN_URL`（那是登录**接口**，接口场景用的），"
+                     "浏览器登录要的是**页面路径** `LOGIN_PATH`。"
+                     if not _cfg(env_vars, "LOGIN_PATH")
+                     and _cfg(env_vars, "LOGIN_URL") else
+                     "改 `LOGIN_PATH` / `LOGIN_USER_SELECTOR` / "
+                     "`LOGIN_PASS_SELECTOR` / `LOGIN_SUBMIT_SELECTOR`。"),
+        })
+        raise
     ledger["loginCount"] = ledger.get("loginCount", 0) + 1
     win["endedAt"] = _now()
     return True
@@ -281,7 +335,8 @@ async def _login(page, base_url: str, role: str, ledger: dict) -> bool:
 
 async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                      ledger: dict, har_dir: Path,
-                     selector_probe: list[dict] | None = None) -> list[dict]:
+                     selector_probe: list[dict] | None = None,
+                     env_vars=None) -> list[dict]:
     """爬一个角色。返回账本行；**一页失败不拖垮整趟**，只记数。
 
     `selector_probe` 是 QA 仓那张公共选择器表（`qa_selectors.probe_payload`
@@ -295,7 +350,7 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
     items: list[dict] = []
     try:
         page = await context.new_page()
-        if not await _login(page, base_url, role, ledger):
+        if not await _login(page, base_url, role, ledger, env_vars):
             return items
         # 这个角色**真正走到**的页面，一页一记。矩阵那边靠它把「没探到」
         # 和「看不见」分开 —— 只有 `pagesVisited` 那个总数的话，
@@ -366,7 +421,8 @@ def sanitize_har(har_path: Path) -> dict | None:
 
 async def run_survey(*, base_url: str | None = None, roles: list[str],
                      page_paths: list[str], routes=None,
-                     totals_probe=None, selector_probe=None) -> dict:
+                     totals_probe=None, selector_probe=None,
+                     env_vars=None) -> dict:
     """跑完一趟，返回 `{status, ledger, items, har, page_edges}`。
 
     分片：主爬角色深爬全部页面，其余角色**浅扫**（角色维度只问「看得见什么」）。
@@ -380,6 +436,12 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     点过，写进去等于凭空造一条 `observed` 的控件→端点边。`routes` 只用来推
     API 前缀兜底分类（拿不到就只靠 `_resourceType`，会在 declarations 里说明）。
 
+    `env_vars` 是**这一趟**的配置（`BASE_URL` / `LOGIN_*` / `<ROLE>_USERNAME` …），
+    由接口层从项目环境合出来直接传进来。**不走 `os.environ`**，理由在 `_cfg`：
+    进程环境只有一份，两个项目同时爬会互相顶掉 `BASE_URL`。传空则退回进程环境
+    （手动跑一趟用）。它带着真凭证，**只在进程内传，一个字节都不落库** ——
+    survey 上存的是角色**名**。
+
     `selector_probe` 传了就顺路验一遍 QA 仓那张公共选择器表在真实渲染里指到东西
     没有（`qa_selectors`）。**账本里必须能看出这一趟到底探没探** ——
     `selectorProbe` 这个键在时说明探了（`pages` 是探过的页），不在时就是没探；
@@ -388,7 +450,7 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     """
     from playwright.async_api import async_playwright
 
-    base_url = (base_url or _base_url()).rstrip("/")
+    base_url = (base_url or _base_url(env_vars)).rstrip("/")
     main_role = pick_main_crawl_role(roles)          # 没有只读账号 → 这里就不许开爬
     others = shallow_scan_roles(roles)
     ledger: dict = {"writesBlocked": 0, "pagesVisited": 0, "controlsUnknown": 0,
@@ -425,15 +487,21 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
                 async with sem:
                     return role, await crawl_role(browser, base_url, role, paths,
                                                   ledger, har_dir,
-                                                  selector_probe)
+                                                  selector_probe, env_vars)
 
             results = await asyncio.gather(
                 *(_one(r, p) for r, p in shards), return_exceptions=True)
             await browser.close()
 
-        for res in results:
+        # `gather` 保序，所以第 i 个结果就是第 i 个分片 —— 崩掉那个的角色只能
+        # 从这里对回去（异常里没有角色）。**记角色不是为了好看**：主爬角色崩了
+        # 这一趟等于什么都没看到，浅扫角色崩了只是少一列角色可见性，
+        # 而只记一个 `TimeoutError` 的话这两件事在报告上一模一样。
+        for (shard_role, _paths), res in zip(shards, results, strict=True):
             if isinstance(res, BaseException):
-                ledger.setdefault("shardsFailed", []).append(type(res).__name__)
+                ledger.setdefault("shardsFailed", []).append({
+                    "role": shard_role, "error": type(res).__name__,
+                    "isMainRole": shard_role == main_role})
                 continue
             role, rows = res
             ok += 1
