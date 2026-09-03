@@ -354,7 +354,13 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     main_role = pick_main_crawl_role(roles)          # 没有只读账号 → 这里就不许开爬
     others = shallow_scan_roles(roles)
     ledger: dict = {"writesBlocked": 0, "pagesVisited": 0, "controlsUnknown": 0,
-                    "loginCount": 0, "rolesShallow": others}
+                    "loginCount": 0, "rolesShallow": others,
+                    # **点过几个控件 = 0，而且要明写出来。** 无向枚举一个控件都
+                    # 不点，这不是"这一趟碰巧没点"，是这一版的设计。写出来是为了
+                    # 让下游（`compute_gaps(controls_clicked=...)`）能把 G4
+                    # 关掉 —— 缺这个数它会把每个 enabled 控件都报成
+                    # 「点下去什么都没发生」。键名和那个参数是一对，别单改一边。
+                    "controlsClicked": 0}
 
     ledger["selfCheck"] = self_check_label(totals_probe)
     totals_before = await totals_probe() if totals_probe else None

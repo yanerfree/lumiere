@@ -69,9 +69,12 @@ _HELPER_LIB = {"lib/common.sh": 'api_get() {\n  local path="$1"\n'
 
 
 def _gaps(**kw):
+    # `controls_clicked` 显式给一个正数：G4（"点了没有请求"）的硬前提是**点过**，
+    # 缺省 `None` 时它一条都不产出。这份桩要造出"五类各一条"，所以这一趟得是
+    # "点过的"那种。今天的爬取一个控件都不点 —— 那条口径在 `TestG4要点过才算`。
     args = dict(page_items=_PAGE, routes=_ROUTES, scripts=_SCRIPTS,
                 index=build_group_index(_DOMAINS), claimed_domains={"TEM", "MCP"},
-                helper_lib=_HELPER_LIB)
+                helper_lib=_HELPER_LIB, controls_clicked=len(_PAGE))
     args.update(kw)
     return compute_gaps(**args)
 
@@ -331,7 +334,7 @@ class Test三条降级声明:
                                "method": "GET", "path": "/api/mcp/tools"}])
         assert g["declarations"] == []
         assert g["dimensions"] == {"page": "verified", "routeTable": "verified",
-                                   "g2": "verified"}
+                                   "g2": "verified", "g4": "verified"}
 
 
 class Test控件到端点那条边从哪来:
@@ -441,7 +444,12 @@ class Test计数为0也要渲染:
                                  "helpersUnparsed": 0,
                                  # 页面级 P 边的条数。0 和"这趟没算"要能分开，
                                  # 后者看 declarations，不是看这里少一个键。
-                                 "pageLoadEdges": 0}
+                                 "pageLoadEdges": 0,
+                                 # 点过几个控件 / 本来会落进 G4 的有几个。
+                                 # 两个都得在：G4 那张表空着有两种完全不同的
+                                 # 原因（没点过 vs 点了都有请求），只有这两个数
+                                 # 能分开。
+                                 "controlsClicked": 0, "controlsUnclicked": 0}
 
 
 class Test页面级的边:
@@ -582,3 +590,84 @@ class Test模板对真id:
                        table)
         assert slug["path"] == "/api/adapters/{}"
         assert _lookup("GET /api/teams", "GET", "/api/teams", table) is None
+
+
+class TestG4要点过才算:
+    """S8.2 · **G4 的字面意思是「点下去，什么请求都没发」。**
+
+    今天的页面枚举一个控件都不点（无向枚举：它不知道自己会造出什么，也清理不掉），
+    于是每个 enabled 控件的 `endpoints` 都是空的。照"空就是 G4"写，报告上会出现
+    一整页「这些按钮点下去什么都不发生」—— 一句假话乘以控件数，而且**读起来完全
+    像真的**：它有锚点、有页面、有控件类型，只是那件被断言的事从没发生过。
+
+    所以这里的方向是**宁可这一维空着**：没有点击证据就不产出，但要记数 + 声明。
+    反过来的错（G4 空着、还不说为什么）在下面也封了 —— 空表加沉默等于"没缺口"。
+    """
+
+    def test_没点过就一条G4都不许有(self):
+        g = _gaps(controls_clicked=0)
+        assert g["g4"] == []
+        # 但 G5 照旧：disabled 控件"没有请求"是看得见的事实，不需要点。
+        assert [x["label"] for x in g["g5"]] == ["导出"]
+
+    def test_没点过要记数并且说出来(self):
+        """空的 G4 有两种完全不同的原因，只有这两个数能分开。"""
+        g = _gaps(controls_clicked=0)
+        assert g["counters"]["controlsClicked"] == 0
+        assert g["counters"]["controlsUnclicked"] == 1      # "按名称排序"那个
+        assert g["dimensions"]["g4"] == "notVerified"
+        assert any("一个控件都没点" in d for d in g["declarations"])
+
+    def test_连点没点都没报比明说没点更坏(self):
+        """`None` = 这一趟连"点过几个"这件事都没报（老 survey / 调用方漏传）。
+        **fail-closed**：同样不产出 G4，但声明要说的是另一件事 —— 缺的是账本身。"""
+        g = _gaps(controls_clicked=None)
+        assert g["g4"] == []
+        assert g["dimensions"]["g4"] == "notVerified"
+        assert any("没报" in d for d in g["declarations"])
+        assert not any("一个控件都没点" in d for d in g["declarations"])
+
+    def test_点过了就照常报(self):
+        """反向锚点：这道闸门很容易滑成"G4 永远不产出"，那就等于把一类缺口删了。"""
+        g = _gaps(controls_clicked=3)
+        assert [x["label"] for x in g["g4"]] == ["按名称排序"]
+        assert g["dimensions"]["g4"] == "verified"
+        assert g["counters"]["controlsUnclicked"] == 0
+
+    def test_控件自己说没点过就压过run级的数(self):
+        """将来只点一部分控件的那一趟：没点的那些不能跟着 run 级的"点过"
+        一起被记成 G4。item 上的 `clicked` 更具体，优先它。"""
+        page = [dict(x) for x in _PAGE]
+        page[3]["clicked"] = False                          # "按名称排序"
+        g = _gaps(page_items=page, controls_clicked=3)
+        assert g["g4"] == []
+        assert g["counters"]["controlsUnclicked"] == 1
+
+    def test_控件自己说点过了就算(self):
+        page = [dict(x) for x in _PAGE]
+        page[3]["clicked"] = True
+        g = _gaps(page_items=page, controls_clicked=0)
+        assert [x["label"] for x in g["g4"]] == ["按名称排序"]
+
+    def test_没跑页面枚举时不许再多一条G4声明(self):
+        """没跑页面枚举的那一趟已经有一条"等同 route-drift"的总声明了，
+        再叠一条"没点过控件"是噪声 —— 而声明一多，读的人就不读了。"""
+        g = _gaps(page_items=[], page_survey_available=False, controls_clicked=None)
+        assert not any("控件" in d for d in g["declarations"])
+        assert g["dimensions"]["g4"] == "notVerified"
+
+
+class Test爬取那边报的数和这边收的参数是一对:
+    def test_爬取把controlsClicked明写成0(self):
+        """`compute_gaps(controls_clicked=...)` 的**唯一**上游事实。
+
+        缺这个键，下游只能拿 `None` 兜底 —— 结论一样（G4 不产出），但声明会变成
+        "连点没点都没报"，读的人会去查爬取是不是坏了。所以键名和参数是一对，
+        别单改一边。这里连名字一起封。
+        """
+        import inspect
+
+        from app.engine.surveys import qa_page_survey_crawl as crawl
+        src = inspect.getsource(crawl.run_survey)
+        assert '"controlsClicked": 0' in src
+        assert "controls_clicked" in inspect.signature(compute_gaps).parameters

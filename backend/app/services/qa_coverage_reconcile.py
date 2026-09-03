@@ -236,7 +236,9 @@ def covers(script_path: str, target_path: str) -> bool:
 # G1 ∈P ∧ ∈R ∧ ∉Q   页面点得到、清单一条场景都没有        blame catalog  最硬
 # G2 ∈R ∧ ∉P ∧ ∉Q   端点在、页面到不了、也没人测          blame catalog
 # G3 ∈P ∧ 清单认领了该域 ∧ 无脚本打过        认领了没兑现   blame script
-# G4 ∈P ∧ 控件无任何请求                   纯前端行为      需判断
+# G4 ∈P ∧ **点过** ∧ 控件无任何请求        纯前端行为      需判断
+#    ⚠ 「点过」是硬前提，不是修饰语。今天的无向枚举一个控件都不点，
+#      所以今天 G4 恒为空 + 一条声明（`controls_clicked`）。
 # G5 present 但 disabled，既无请求也无路由    死按钮/flag     情报，不是缺口
 #
 # **G1 和 G3 字面上会重叠**（都含 ∈P ∧ ∉Q）。按 blame 分开：
@@ -342,7 +344,8 @@ def compute_gaps(*, page_items: list[dict] | None,
                  page_survey_available: bool = True,
                  build_fingerprint: str | None = None,
                  helper_lib: dict[str, str] | None = None,
-                 page_edges: list[dict] | None = None) -> dict:
+                 page_edges: list[dict] | None = None,
+                 controls_clicked: int | None = None) -> dict:
     """三个账本 → 五类缺口。**纯集合运算，不问模型。**
 
     `scripts` 每条 `{domain, scenarioId, path, text}`。
@@ -352,6 +355,8 @@ def compute_gaps(*, page_items: list[dict] | None,
     归的页）。它和 `page_items[].endpoints` 那种**控件级**的边合进同一本 P 账，
     但锚点写「(页面加载)」—— 混着看会让人以为有人点过那个按钮。
     `None` = 这趟没算过（老 survey），`[]` = 算过了确实没有；两者的声明不一样。
+    `controls_clicked` = 这一趟**点过几个控件**。G4（"点了没有请求"）的唯一前提；
+    `None`/`0` ⇒ G4 一条不产出，只记数 + 声明。理由在 `_click_evidence` 上。
 
     两条降级声明是**一等公民**，不是附注：
       · 没有路由表 ⇒ `G2 notVerified`（S7.2 已经把这句话准备好了）
@@ -409,6 +414,24 @@ def compute_gaps(*, page_items: list[dict] | None,
     g4: list[dict] = []
     g5: list[dict] = []
     edges_unsourced: list[dict] = []
+    controls_unclicked = 0
+
+    def _click_evidence(it: dict) -> bool:
+        """这个控件**被点过没有**。G4 的唯一前提。
+
+        G4 的字面意思是「点下去，什么请求都没发」。而**今天的页面枚举一个控件都
+        不点**（无向枚举：它不知道自己会造出什么，也清理不掉）—— 于是每个
+        enabled 控件都是「没有端点」，照老写法会整页刷成 G4。那不是缺口清单，
+        那是一句假话乘以控件数：报告上写着「这些按钮点下去什么都不发生」，
+        而真相是「没人点过」。**没点过就判不了**，只能记数 + 声明。
+
+        item 上的 `clicked` 比 run 级那个数更具体，优先它：将来只点一部分控件的
+        那一趟里，没点的那些不能跟着 run 级的"点过"一起被记成 G4。
+        """
+        v = it.get("clicked")
+        if v is not None:
+            return bool(v)
+        return bool(controls_clicked)
     for it in page_items or []:
         anchor = f"{it.get('page_path') or ''} :: {it.get('anchor') or it.get('label') or ''}"
         raw_eps = it.get("endpoints") or []
@@ -438,10 +461,14 @@ def compute_gaps(*, page_items: list[dict] | None,
                 row["kind"], row["blame"] = "G5", "情报"
                 row["severity"] = _SEVERITY["G5"]
                 g5.append(row)
-            else:
+            elif _click_evidence(it):
                 row["kind"] = "G4"
                 row["severity"] = _SEVERITY["G4"]
                 g4.append(row)
+            else:
+                # 没点过 ⇒ 不产出，**但要留下数**。丢掉的话「这一趟没点控件」
+                # 和「点了，控件都有请求」在报告上一模一样：两边 G4 都是空的。
+                controls_unclicked += 1
             continue
         for ep in eps:
             k = _ep_key(ep.get("method") or "", ep.get("path") or "")
@@ -553,6 +580,15 @@ def compute_gaps(*, page_items: list[dict] | None,
                            "severity": _SEVERITY["G2"], "method": meta["method"],
                            "path": meta["path"], "anchor": k, "group": meta["group"]})
 
+    if page_survey_available and not controls_clicked:
+        # 「没点过」和「点了都有请求」在 G4 那张空表上长得一模一样。
+        # `None`（没报这件事）比 `0`（明说没点）更坏一点：连账都没有。
+        declarations.append(
+            ("这一趟没报「点过几个控件」这件事，G4（点了没有请求）判不了"
+             if controls_clicked is None else
+             "这一趟一个控件都没点（无向枚举不点控件），G4（点了没有请求）判不了")
+            + "；%d 个 enabled 控件因此没有端点账" % controls_unclicked)
+
     if not page_survey_available:
         # **这条声明是本模块的存在理由。** 只剩 G2 的话，这份报告做的事
         # 跟 QA 自己的 `check-route-drift.sh` 一模一样（路由表 vs 基线），
@@ -567,6 +603,10 @@ def compute_gaps(*, page_items: list[dict] | None,
             "page": "verified" if page_survey_available else "notVerified",
             "routeTable": "verified" if route_table_available else "notVerified",
             "g2": "verified" if route_table_available else "notVerified",
+            # G4 单独一档：它是这份报告里**唯一**需要"真点一下"才成立的维度，
+            # 页面枚举跑了不等于它验过了。
+            "g4": "verified" if (page_survey_available and controls_clicked)
+                  else "notVerified",
         },
         "counters": {
             # 0 也要渲染：只在非 0 时出现的计数，跟"没算过"长得一模一样
@@ -581,6 +621,13 @@ def compute_gaps(*, page_items: list[dict] | None,
             # 页面级边单独报一个数：它和控件级边混进同一本 P 账之后就分不出来了，
             # 而「P 账里全是页面加载」和「有人点出了这些边」在结论上差很远。
             "pageLoadEdges": p_edge_rows,
+            # 点过几个控件。0 也要渲染 —— 「没点」是 G4 那张表为什么空的原因，
+            # 而「没算过」（`None`）和 0 的区别在 declarations 里，不在这儿少个键。
+            "controlsClicked": int(controls_clicked or 0),
+            # enabled、没有任何端点、又没有点击证据的控件数：**本来会落进 G4
+            # 的那些**。它掉到 0 而 controlsClicked 还是 0，说明页面上一个
+            # enabled 控件都没枚举到 —— 那是枚举坏了，不是没缺口。
+            "controlsUnclicked": controls_unclicked,
             "routeEndpoints": len(r_eps),
             # Q 边分四本账，别只报一个总数：`helperHits` 一旦掉回 0，
             # 说明 helper 库没读到或对方改了签名 —— 那时候 G1/G3 会**暴涨**，
