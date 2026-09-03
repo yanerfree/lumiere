@@ -25,6 +25,7 @@
 """
 import re
 
+from app.services import qa_script_endpoints as qse
 from app.services.branch_diff_service import WILDCARD, normalize_path
 
 # 归一之后仍然保留原样的尾巴：`status` / `access` 剥成 `statu` / `acces`
@@ -148,8 +149,18 @@ def domains_for(path: str | None, group: str | None, index: dict) -> set[str]:
 #   · 误报（脚本没打，却算成打了）→ 一个**真缺口凭空消失** → 不会红，谁都发现不了。
 # 差几个数量级。所以拿不准一律不认，记进 `endpointsUnextracted`。
 
+# ⚠ 这里的 base 名单是**口径**，不是"多认几个总没坏处"：
+#   · 加 `AUTH` —— 实读他们 `config/env.sh`：`AUTH=${BFF}/api/auth`，
+#     登录/刷新那一批全走它，漏掉等于 `/api/auth/*` 整段没人测。
+#   · **去掉 `GW`** —— `GW` 是 Kong（`AI=${GW}/ai/v1` 也算），不是 BFF。
+#     而 `covers()` 的后缀匹配能吃掉 2 段前缀，于是 `${GW}/v1/chat/completions`
+#     会把 BFF 的 `/api/v1/chat/completions` **标成测过了**：
+#     一个网关调用抹掉一个 BFF 缺口，不会红，谁都发现不了。
+#     它们不是"读不出来"，是**口径外** —— 单独记账（`qOutOfScope`），绝不进 hits。
 _URL_TOKEN = re.compile(
-    r"\$\{?(?:API|BFF|BASE_URL|GW|BASE)\}?(?P<path>/[^\s\"'`)\\|;>]*)")
+    r"\$\{?(?:API|BFF|AUTH|BASE_URL|BASE)\}?(?P<path>/[^\s\"'`)\\|;>]*)")
+_OUT_OF_SCOPE_TOKEN = re.compile(
+    r"\$\{?(?:%s)\}?/" % "|".join(qse.OTHER_BASES))
 _METHOD_FLAG = re.compile(r"-X\s+([A-Za-z]+)")
 _CALL_HINT = re.compile(r"\bcurl\b|\bhttpx?\b|\bwget\b")
 # 部署前缀最多吃掉几段：`$API` 展开成 `http://host/api` 还是 `http://host`
@@ -159,7 +170,10 @@ _MAX_BASE_SEGMENTS = 2
 
 
 def extract_endpoints(text: str | None) -> tuple[list[dict], list[dict]]:
-    """脚本正文 → `([{method, path, line}], [抽不出来的行])`。
+    """脚本正文 → `([{method, path, line}], [抽不出来的行])`。**只认写在行里的 url。**
+
+    helper 封装的那一大半在 `qa_script_endpoints` 里（实测（`refs/remotes/origin/main`，369 个脚本）：
+    这个函数命中 136，连上 helper 之后 2943）—— 两个一起用，别只用这一个。
 
     第二个返回值是**账本**，不是错误列表：它要一路带到页面上，
     因为「这个端点没人打过」和「这一行我没读懂」是两回事，
@@ -180,10 +194,15 @@ def extract_endpoints(text: str | None) -> tuple[list[dict], list[dict]]:
             hits.append({"method": (mf.group(1).upper() if mf else ""),
                          "path": path, "line": line[:200]})
             found = True
-        if not found and _CALL_HINT.search(line):
+        if found or _OUT_OF_SCOPE_TOKEN.search(line):
+            # 口径外的行（`${GW}`/`${AI}`）不进 hits，也**不算"读不懂"** ——
+            # 它读懂了，只是打的不是 BFF。混进账本会让"抽取不完备"这个数虚高，
+            # 而那个数是 G3 的可信度指示器。
+            continue
+        if _CALL_HINT.search(line):
             # 这一行明显在发请求，但 url 拼不出来（变量套变量 / helper 封装）。
             # **不当成「没打过」** —— 那正是会凭空造出 G3 的地方。
-            misses.append({"line": line[:200]})
+            misses.append({"line": line[:200], "why": "url 拼不出来"})
     return hits, misses
 
 
@@ -275,10 +294,12 @@ def compute_gaps(*, page_items: list[dict] | None,
                  claimed_domains: set[str] | None = None,
                  route_table_available: bool = True,
                  page_survey_available: bool = True,
-                 build_fingerprint: str | None = None) -> dict:
+                 build_fingerprint: str | None = None,
+                 helper_lib: dict[str, str] | None = None) -> dict:
     """三个账本 → 五类缺口。**纯集合运算，不问模型。**
 
     `scripts` 每条 `{domain, scenarioId, path, text}`。
+    `helper_lib` = `{lib/xxx.sh: 正文}`，喂 `qa_script_endpoints.parse_helper_lib`。
     `claimed_domains` = 清单里有场景行的域码（G1/G3 的分界）。
 
     两条降级声明是**一等公民**，不是附注：
@@ -286,20 +307,43 @@ def compute_gaps(*, page_items: list[dict] | None,
       · **没有页面枚举 ⇒ 只剩 G2，那就等于一个更慢的 route-drift** ——
         必须明说，否则这份报告看起来"跑过了、只有 2 类缺口"，
         而它其实一个新维度都没验。
+      · **没读到 helper 库 ⇒ Q 边只剩写在行里的 url**（实测（`refs/remotes/origin/main`，369 个脚本） 136 vs 2943，
+        差 25 倍），G1/G3 会是一片假缺口。这一条跟上面两条同等，不是附注。
     """
     claimed = set(claimed_domains or ())
     declarations: list[str] = []
 
     # —— Q 侧 ——
+    parsed = qse.parse_helper_lib(helper_lib or {})
+    if not parsed["helpers"]:
+        declarations.append(
+            "没读到 QA 的 helper 库（lib/*.sh），Q 边只认写在行里的 url，"
+            "G1/G3 会虚高")
+    if parsed["unparsed"]:
+        declarations.append(
+            "%d 个 helper 的参数位置读不出来，它们的调用点一律记漏读：%s"
+            % (len(parsed["unparsed"]),
+               "、".join(sorted({u["helper"] for u in parsed["unparsed"]}))))
+
     q_paths: list[tuple[str, str, str]] = []   # (domain, method, path)
     unextracted: list[dict] = []
+    q_inline = q_helper = q_out_of_scope = q_infra = 0
     for sc in scripts or []:
-        hits, misses = extract_endpoints(sc.get("text"))
-        for h in hits:
-            q_paths.append((sc.get("domain") or "", h["method"], h["path"]))
-        for m in misses:
-            unextracted.append({"scenarioId": sc.get("scenarioId") or "",
-                                "domain": sc.get("domain") or "", "line": m["line"]})
+        text = sc.get("text")
+        dom, sid = sc.get("domain") or "", sc.get("scenarioId") or ""
+        hits, misses = extract_endpoints(text)
+        q_inline += len(hits)
+        # helper 封装的那一大半。**两个抽取器的命中合并进同一个 `q_paths`** ——
+        # 覆盖判定只看"有没有脚本打过这个端点"，跟它写成哪种形状无关。
+        hl = qse.extract_helper_calls(text, parsed)
+        q_helper += len(hl["hits"])
+        q_out_of_scope += len(hl["otherBase"]) + len(_OUT_OF_SCOPE_TOKEN.findall(text or ""))
+        q_infra += len(hl["infra"])
+        for h in hits + hl["hits"]:
+            q_paths.append((dom, h["method"], h["path"]))
+        for m in misses + hl["misses"]:
+            unextracted.append({"scenarioId": sid, "domain": dom,
+                                "line": m["line"], "why": m.get("why") or ""})
 
     def _covered(method: str, path: str) -> bool:
         for _d, qm, qp in q_paths:
@@ -445,6 +489,16 @@ def compute_gaps(*, page_items: list[dict] | None,
             "edgesUnsourced": len(edges_unsourced),
             "pageEndpoints": len(p_eps),
             "routeEndpoints": len(r_eps),
+            # Q 边分四本账，别只报一个总数：`helperHits` 一旦掉回 0，
+            # 说明 helper 库没读到或对方改了签名 —— 那时候 G1/G3 会**暴涨**，
+            # 而暴涨看起来完全像"他们真的少测了很多"。
+            "qInlineHits": q_inline,
+            "qHelperHits": q_helper,
+            "qOutOfScope": q_out_of_scope,
+            "qInfraCalls": q_infra,
+            "helpersParsed": len(parsed["helpers"]),
+            "helpersInfra": len(parsed["infra"]),
+            "helpersUnparsed": len(parsed["unparsed"]),
         },
         "endpointsUnextracted": unextracted,
         "endpointsUnattributed": unattributed,

@@ -57,9 +57,17 @@ _SCRIPTS = [
 ]
 
 
+# 一份**最小**的 helper 库：只为让「都跑到了」这个状态可造出来。
+# 故意不定义 `_SCRIPTS` 里出现的那个 `run_helper` —— 桩里那行是"漏读"的样本，
+# 让它突然变成命中会把 G1/G3 的桩一起改掉，那就不是在测降级声明了。
+_HELPER_LIB = {"lib/common.sh": 'api_get() {\n  local path="$1"\n'
+                               '  curl -s "${API}${path}"\n}\n'}
+
+
 def _gaps(**kw):
     args = dict(page_items=_PAGE, routes=_ROUTES, scripts=_SCRIPTS,
-                index=build_group_index(_DOMAINS), claimed_domains={"TEM", "MCP"})
+                index=build_group_index(_DOMAINS), claimed_domains={"TEM", "MCP"},
+                helper_lib=_HELPER_LIB)
     args.update(kw)
     return compute_gaps(**args)
 
@@ -158,6 +166,23 @@ class Test抽不出来不等于没打过:
         hits, _ = extract_endpoints('curl "$API/api/a" && curl "$BFF/api/b"')
         assert [h["path"] for h in hits] == ["/api/a", "/api/b"]
 
+    def test_网关的url绝不能算成BFF的(self):
+        """⚠ **这条是单向致命的那种。** `covers()` 容忍 2 段部署前缀，
+        所以 `${GW}/v1/chat/completions`（Kong）会跟 BFF 的
+        `/api/v1/chat/completions` 对上 —— 一个网关调用抹掉一个 BFF 缺口，
+        缺口凭空消失，没有任何测试会红。
+
+        所以 `GW` **不在** `_URL_TOKEN` 里；它走口径外那条路：不进命中、
+        也不算"读不懂"（读懂了，只是打的不是 BFF）。"""
+        hits, misses = extract_endpoints('curl -s "${GW}/v1/chat/completions"')
+        assert hits == [] and misses == []
+
+    def test_AUTH前缀要认(self):
+        """实读对方 `env.sh`：`AUTH=${BFF}/api/auth` —— 登录/刷新/登出那一批
+        全走它。漏掉这个前缀，那批端点会整批变成"没人测"。"""
+        hits, _ = extract_endpoints('curl -s -X POST "${AUTH}/login"')
+        assert [(h["method"], h["path"]) for h in hits] == [("POST", "/login")]
+
     def test_带query和主机名的都归一掉(self):
         """这份保证**不在本模块**，是 `normalize_path` 给的（它连 host 一起剥）。
         本地再 split 一次是死代码，删了 —— 留着会让人以为改 `normalize_path`
@@ -251,7 +276,30 @@ class Test归不了属的单独记账:
         assert _gaps(index=idx)["counters"]["domainsUnresolved"] == 1
 
 
-class Test两条降级声明:
+class Test三条降级声明:
+    def test_没读到helper库要说出来(self):
+        """Q 边**大头在 helper 里**：实测同一个仓库（`refs/remotes/origin/main`，
+        369 个脚本），只认写在行里的 url 是 136 条命中，把 `lib/*.sh` 的 helper
+        签名解出来是 2943 条 —— 差 20 倍。
+
+        所以"没读到 helper 库"不是个附注，是**这份报告的结论全反了**：
+        Q 边空掉 ⇒ G1/G3 一片假缺口 ⇒ 看起来像"他们真的少测了很多"。
+        这条声明跟另外两条同等，不许降级成注释或日志。"""
+        g = _gaps(helper_lib=None)
+        assert any("helper" in d for d in g["declarations"])
+        assert g["counters"]["helpersParsed"] == 0
+
+    def test_读不出参数位置的helper要点名(self):
+        """读失败的 helper 一律让它的调用点**记漏读**（宁可漏报不可误报），
+        但必须**点名**是哪几个 —— 不点名的话，"这个端点没人测"和
+        "这个 helper 我没读懂"在报告上长得一模一样。"""
+        # 路径来自另一个变量、不是位置参数 ⇒ 参数位置读不出来
+        lib = {"lib/x.sh": 'weird_get() {\n  local ep="$OTHER"\n'
+                           '  curl -s -X GET "${API}${ep}"\n}\n'}
+        g = _gaps(helper_lib=lib)
+        assert g["counters"]["helpersUnparsed"] == 1
+        assert any("weird_get" in d for d in g["declarations"])
+
     def test_没有路由表时G2未验证(self):
         """S7.2 已经把这句话准备好了。这里要保证 G2 **空着**的同时
         声明也在 —— 空的 G2 和「没有 G2 类缺口」长得一模一样。"""
@@ -374,4 +422,11 @@ class Test计数为0也要渲染:
         assert g["counters"] == {"endpointsUnextracted": 0, "endpointsUnattributed": 0,
                                  "domainsUnresolved": 0, "scriptsScanned": 0,
                                  "edgesUnsourced": 0,
-                                 "pageEndpoints": 0, "routeEndpoints": 0}
+                                 "pageEndpoints": 0, "routeEndpoints": 0,
+                                 # Q 边分四本账 + 三个解析计数：`qHelperHits` 掉回 0
+                                 # 是"helper 库没读到／对方改了签名"的唯一信号，
+                                 # 而那时候 G1/G3 会暴涨、且看起来完全正常。
+                                 "qInlineHits": 0, "qHelperHits": 0,
+                                 "qOutOfScope": 0, "qInfraCalls": 0,
+                                 "helpersParsed": 0, "helpersInfra": 0,
+                                 "helpersUnparsed": 0}
