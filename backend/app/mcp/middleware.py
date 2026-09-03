@@ -1,7 +1,9 @@
 """MCP 中间件 —— 按 API Key 限定该连接能看到什么工具、能碰哪个项目的数据。
 
 两层，各自独立：
-  · **工具范围**（哪些 lum_* 露出来）—— 由 Key 归属项目的 `mcp_allowed_tools` 决定。
+  · **工具范围**（哪些 lum_* 露出来）—— **项目范围 ∩ Key 范围**，见 `pick_scope`。
+    项目那份（`projects.mcp_allowed_tools`）是天花板，Key 那份
+    （`mcp_api_keys.allowed_tools`）只能在天花板内再收窄；NULL = 该层不限。
   · **数据范围**（能读写哪个项目）—— 由 Key 的 `project_id` 决定，见 `_OWNER_SQL`。
     这一层此前**整层不存在**：Key 上的 project_id 只用来查工具范围，
     工具入参里的 project_id/branch_id/case_id 是调用方随便填的，直接拿去查库。
@@ -57,19 +59,56 @@ _TTL_SECONDS = 30
 
 
 def pick_scope(
-    project_id, project_scope: list | None, legacy_scope: list | None
+    project_scope: list | None, key_scope: list | None
 ) -> list | None:
-    """一把 Key 到底按哪份范围跑。返回 None = 不限制。
+    """一把 Key 实际能看到哪些工具。返回 None = 不限制。
 
-    判据是**有没有归属项目**，不是"项目范围真不真"。
-    写成 `project_scope or legacy_scope` 是这里最自然也最错的写法：项目明确
-    设成不限制（NULL）时，那个写法会掉回 Key 上那份旧范围 —— 等于把人刚放开的
-    权限又悄悄收回去，而页面上完全看不出为什么。
+    生效范围 = **项目范围 ∩ Key 范围**：
+      · Key 范围 NULL  → 跟随项目（默认，也是今天所有 Key 的状态）
+      · 项目范围 NULL  → 天花板不限，生效范围就是 Key 范围
+      · 两个都 NULL    → 不限制
 
-    抽成纯函数是为了能直接测这条判据，不用去正则匹配源码。
+    两个坑都不报错，所以都钉在这儿：
+
+    ① **别写成 `key_scope or project_scope`**（或反过来）。它和这里原来那句
+       `project_scope if project_id else legacy_scope` 是同一类错：`or` 是"二选一"，
+       这里要的是"两个都得满足"。Key 上勾了项目范围外的工具时，`or` 会让 Key
+       **反向扩**出项目天花板 —— 范围是给人挑对工具用的，扩出去这道收窄就白做了。
+       交集只能收窄：Key 勾了、项目没给的，**丢掉**（丢掉哪几个由
+       `blocked_by_project` 回给页面，显示成「有 N 个被项目范围挡住了」，
+       否则人只会看到自己勾的东西莫名少了几个、且没有任何提示）。
+
+    ② **`[]` 不是"不限制"**。原来那句 `return [...] if raw else None` 里空列表是
+       falsy，于是"一个工具都不给"被解析成"全都给" —— 方向完全反了，而且一个字
+       都不报错。现在空就是空：tools/list 空着很显眼，比静默放开全部好查得多。
+
+    不再看 `project_id`：项目范围是 LEFT JOIN 出来的，没归属项目时它必然是 NULL，
+    走到"天花板不限 → 生效 = Key 范围"这条，和原来的遗留路径**结果完全一致**。
+    判据从"有没有归属项目"变成"两份范围各是什么"，是这次改动的核心。
     """
-    raw = project_scope if project_id else legacy_scope
-    return [str(t) for t in raw] if raw else None
+    if project_scope is None and key_scope is None:
+        return None
+    proj = None if project_scope is None else [str(t) for t in project_scope]
+    key = None if key_scope is None else [str(t) for t in key_scope]
+    if proj is None:
+        return key
+    if key is None:
+        return proj
+    ceiling = set(proj)
+    # 顺序按 Key 上勾的那份来 —— 页面显示的是人自己挑的东西
+    return [t for t in key if t in ceiling]
+
+
+def blocked_by_project(project_scope: list | None, key_scope: list | None) -> list[str]:
+    """Key 上勾了、却被项目范围挡在外面的工具。只给页面显示用。
+
+    和 `pick_scope` 放在同一处，是为了不让"生效范围"和"为什么少了几个"
+    两套算法各自漂 —— 漂了的表现是页面说"挡住 0 个"而工具确实少了。
+    """
+    if project_scope is None or key_scope is None:
+        return []
+    ceiling = {str(t) for t in project_scope}
+    return [str(t) for t in key_scope if str(t) not in ceiling]
 
 
 def invalidate_scope_cache(key_hash: str | None = None) -> None:
@@ -122,7 +161,8 @@ async def _lookup_key() -> (
         from app.models.user import User
 
         async with async_session_factory() as session:
-            # LEFT JOIN：Key 归属项目 → 用项目的范围；没归属（存量 Key）→ 用 Key 自己那份。
+            # LEFT JOIN：取项目那份天花板（没归属项目 → NULL = 不限）和 Key 自己那份
+            # 收窄，两份交给 pick_scope 求交集。
             # 一次查询取完，别拆成两次 —— 这条在连接热路径上。
             result = await session.execute(
                 select(
@@ -144,8 +184,8 @@ async def _lookup_key() -> (
             row = result.first()
             # 查不到（环境变量 key 等）→ 不限制；查到但范围为 NULL → 不限制
             if row:
-                project_scope, legacy_scope, uid, project_id, name, role = row
-                allowed = pick_scope(project_id, project_scope, legacy_scope)
+                project_scope, key_scope, uid, project_id, name, role = row
+                allowed = pick_scope(project_scope, key_scope)
                 if uid:
                     user_id = str(uid)
                 key_name = name or None

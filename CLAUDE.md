@@ -59,6 +59,14 @@
   （能读写哪个项目的用例/环境）。`project_id` 为 NULL 的 Key **不受数据范围限制** ——
   这是为存量 Key 留的口子，不是给新 Key 用的。发 Key 前用
   `select name,key_prefix,project_id from mcp_api_keys where is_active` 确认一遍。
+- **工具范围 = 项目范围 ∩ Key 范围**（2026-09-03，`app/mcp/middleware.py` 的
+  `pick_scope()` 是唯一决策点）。两个反直觉的地方：Key 的 `allowed_tools` 为
+  **NULL = 跟随项目**，而 **`[]` = 一个工具都不给**（不是"不限制"）；Key 选了项目范围
+  外的工具**直接丢掉**，接口返回里报 `blockedByProject`（既不静默丢也不拒绝建 Key）。
+  **它不是权限边界** —— 数据范围仍然只由 `project_id` 决定，收窄一把 Key 的收益是
+  「少挑错 + 省上下文」，别在页面上把它写成安全特性，那会让人以为发窄 Key 等于降权。
+  改这块之前先跑一遍 `docs/next-plan-feedback-area-and-key-scope.md` §2.6 那条 SQL
+  （遗留范围今天被忽略、新口径下会突然生效 —— 那是一次**静默**的权限变更）。
 - **环境和全局变量都是项目级的**（2026-08-21，迁移 `zzo0envproj` / `zzp0gvarproj`）。
   页面在 `/projects/:projectId/settings/env`，不在全局设置里；唯一约束是
   `(project_id, name)` / `(project_id, key)`，所以两个项目各有一个 `staging`、
@@ -118,6 +126,14 @@
   实测（2026-09-01）：主路 429 → 降级到 CLI 通道（claude-proxy :38210，那头是 Claude Code），
   反馈正文本身长得像一件待办，它会去**做事**而不是作答，回来就是空的 —— 所以那里 `_err` 报错，
   不落库；换个没被限流的模型（.env 默认的 haiku）走主路，同一条提示词稳定出 JSON。
+- **反馈的「范围」（`area`）绝不能进指纹**（2026-09-03 加的那一列）。指纹只有
+  `(tool_name, 归一化标题)` 两样 —— 掺进 `area` 会让同一件事改了域之后变成两行
+  （归并失效），还会让 `wont_fix` 的**永久短路失效**；而后者失效的表现是
+  「反馈变多了」，看起来完全正常。封样在 `backend/tests/test_cc_feedback_gates.py`。
+  另外两条口径：`area` 为 **NULL = 还没人判**，和 `other`（判过了、确实归不进任何
+  一档）**不是一回事** —— 一把回填成 `other` 会让 AI 分诊永远不再碰它们（它只填空的）；
+  一条只留**一个**主域，别做成多选，否则顶部那排计数加起来 ≠ 总数、点进去和数字对不上。
+  14 个值和**顺序**的唯一出处是 `app/models/cc_feedback.py` 的 `AREAS`。
 - **别把项目 skill 放进 `app/skills/preset/`**。那个目录只放平台侧执行的 `lum-*`（会被当 prompt 喂后端 LLM、要绑模型档位）；客户端侧执行的 skill 走 DB，见下方文档。混了会让「AI 能力→模型」页冒出绑不上模型的空档位。
 
 ## 测试：**两套，都要跑**
@@ -155,7 +171,7 @@ cd /home/dreamer/lumiere && DATABASE_URL='postgresql+asyncpg://postgres:postgres
 | 下阶段做什么：生成效率 / 生成质量 / 失败优化（含现状实测盘点） | [docs/next-phase-gen-quality-and-failure.md](docs/next-phase-gen-quality-and-failure.md) |
 | **CC ↔ 平台闭环的边界规则、红线、Story 清单**（改这一块之前先读） | [docs/cc-platform-loop-spec.md](docs/cc-platform-loop-spec.md) |
 | **CC 反馈通道**（平台工具缺陷/规范冲突/卡住了往哪报、防倒灌三道闸、回音为什么不能砍、为什么是全局一张表而不是项目内） | [docs/cc-feedback-channel.md](docs/cc-feedback-channel.md) |
-| **两个待做需求**（反馈加「范围」列 / 建 Key 时选工具范围）：可行性、定好的方案、被否掉的省事写法、上线前必查的那条 SQL | [docs/next-plan-feedback-area-and-key-scope.md](docs/next-plan-feedback-area-and-key-scope.md) |
+| **反馈「范围」列 + Key 级工具范围**（2026-09-03 已落地）：14 个故障域怎么分、`NULL`≠`other`、`area` 为什么不能进指纹、项目 ∩ Key 的取交集口径、上线前必查的那条 SQL、被否掉的省事写法 | [docs/next-plan-feedback-area-and-key-scope.md](docs/next-plan-feedback-area-and-key-scope.md) |
 | **版本升级怎么复用上一版用例**：分支对账（端点反查）、三堆分法、状态流转、废弃审核 | [docs/version-upgrade-branch-diff.md](docs/version-upgrade-branch-diff.md) |
 | **数据归属与隔离**：MCP Key 为什么管不住数据、环境改项目级、哪些表该留全局（含一条「假隔离」陷阱） | [docs/data-scoping-and-isolation.md](docs/data-scoping-and-isolation.md) |
 | **权限模型**：440 个端点各挂什么守卫、角色档位（系统 admin/user/guest + 项目 manager/member）、前端按权限藏入口的口径、**2026-08-29 为什么砍到这几档** | [docs/permission-audit-2026-08.md](docs/permission-audit-2026-08.md) + `backend/app/core/permissions.py`（权限点与角色映射的唯一出处） |

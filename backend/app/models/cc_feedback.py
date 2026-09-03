@@ -99,6 +99,56 @@ STATUS_LABEL = {
     "duplicate": "重复",
 }
 
+# 故障域 —— 「坏掉的是哪一块子系统」。页面上「范围」那一列、顶部那排计数块都按它分。
+#
+# **和 TOOL_CATALOG.category 不是一回事**，别拿那个来省事：那是**货架分类**
+# （「这个工具该摆在哪一格、我去哪儿找它」），这是**故障域**（「坏掉的是哪个子系统」）。
+# 两者最大的一处错位正好落在最大的一撮反馈上：`lum_review_case` 的货架分类是
+# 「用例·手工步骤」，而它名下那 6 条反馈说的全是 **AI 评审判据/文案**的毛病 ——
+# 按 category 归类，ai_review 这一整块（27%，最大的一块）会被塞进 case。
+# **这种错不报错**：页面照样有一列、照样有计数，只是指错了地方。
+#
+# 另一条也别做：纯派生（不落库、按 tool_name 现场映射）。56 条反馈里有 18 条（32%）的
+# tool_name 是**自由文本**（「AI 评审规则文案」「接口场景执行器」「覆盖统计」…），
+# 现场映射只能把它们落进「其它」—— 而它们恰恰是含金量最高的一撮：一个人肯手写
+# 「AI 评审规则文案」，说明他很清楚自己在说哪一块。
+AREAS = (
+    "ai_review",   # AI 评审：六维判据、mustFix 文案、评分口径
+    "sync",        # 回推入库与校验：orchestrated_scenario / ui_script / 硬编码校验 / 场景变量
+    "case",        # 用例读写：增删改查、目录归属、废弃申请
+    "gate",        # 交付门禁与体检：check_deliverable / assertion_bite / env_hygiene / checkup
+    "api_run",     # 接口场景执行：执行器、断言执行、变量解析
+    "report",      # 执行报告与覆盖统计
+    "note",        # 项目须知
+    "spec",        # 接入规范与工具描述（get_sync_spec，以及工具描述本身写得不对）
+    "apidoc",      # 接口库（api_nodes 那一层，文档不是可执行场景）
+    "diff",        # 版本对账：端点反查、三堆分法、废弃审核
+    "qa_review",   # QA 仓对账结论
+    "ui_script",   # UI 脚本执行 / 渲染（**区别于 sync 的入库**）
+    "env",         # 环境、变量、全局数据、共享自动化资源
+    "other",       # 判过了，确实不属于任何一块 —— **和 NULL 不是一回事**，见下面那一列
+)
+
+# 后三个非 other 的域（qa_review / ui_script / env）今天 0 条，但**要一起建**：
+# 它们是这条通道明确覆盖的范围，**0 条本身是信息** ——
+# 「这块没人报过」和「这块不在范围里」不是一回事。
+AREA_LABEL = {
+    "ai_review": "AI 评审",
+    "sync": "回推入库与校验",
+    "case": "用例读写",
+    "gate": "交付门禁与体检",
+    "api_run": "接口场景执行",
+    "report": "执行报告与覆盖",
+    "note": "项目须知",
+    "spec": "接入规范与工具描述",
+    "apidoc": "接口库",
+    "diff": "版本对账",
+    "qa_review": "QA 仓对账",
+    "ui_script": "UI 脚本执行",
+    "env": "环境与变量",
+    "other": "其它",
+}
+
 # 严重度**只有平台填得了**。CC 自评会单调通胀（每个报的人都觉得自己那条最急），
 # 一轮之后这一列就没有区分度了 —— 所以 lum_report_feedback 根本不收这个参数。
 SEVERITIES = ("high", "medium", "low")
@@ -146,6 +196,21 @@ class CCFeedback(Base):
     reported_category: Mapped[str | None] = mapped_column(String(16), nullable=True)
     category: Mapped[str | None] = mapped_column(String(16), nullable=True)
     severity: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    # 故障域，取值见上面的 AREAS。**NULL 和 other 必须分开**，和 decided_by 的 NULL
+    # 同一个口径：NULL = 还没人判过它属于哪块；other = 判过了，确实不属于任何一块。
+    # 合成一个的话，「没判」会永久伪装成「判过了没归属」，而这一列的价值全在能筛。
+    # 落值分三层（AI 判、人兜底，和这张表既有的分工一致）：上报时按 _TOOL_AREA 给默认
+    # （命中注册工具名才落，**不做关键词猜测**，不中留 NULL）→ AI 分诊落最终值（判不出
+    # 回 null，别硬凑）→ 人在抽屉里改。回填历史数据时匹配不上的**留 NULL 别塞 other**，
+    # 塞了 AI 那一层就永远不会再碰它们（它只填空的）。
+    #
+    # ⚠ **绝不能进 fingerprint_of()**（那个函数的 docstring 里也写了）：掺进去会让同一件事
+    # 在改了域之后变成两行（归并失效），更要紧的是 **wont_fix 短路失效** ——
+    # 而它失效的表现是「反馈变多了」，看起来完全正常。
+    # ⚠ 一条只留**一个主域**，不做多选：跨块的按「坏在哪」选主域。多选之后各域计数加起来
+    # ≠ 总数，顶部那排计数块就不能拿来当筛选（点进去看到的和数字对不上）。
+    area: Mapped[str | None] = mapped_column(String(24), nullable=True, index=True)
 
     # ── 归并 ──
     occurrences: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")

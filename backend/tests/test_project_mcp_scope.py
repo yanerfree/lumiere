@@ -1,8 +1,12 @@
-"""项目级 MCP 工具范围的封样。
+"""项目级 + Key 级 MCP 工具范围的封样。
 
-范围从 Key 级挪到项目级之后，解析路径变成两条（项目 / 遗留），
-最容易写错的就是**用什么判据在两条路之间选**。这里把那条判据钉死，
+生效范围 = **项目范围 ∩ Key 范围**（NULL = 该层不限）。最容易写错的两处
+——「用 `or` 二选一」和「`[]` 当成不限制」——在这里钉死，
 外加档位反查和路由的角色校验。
+
+2026-09-03 之前判据是"有没有归属项目"：归属了就只看项目范围，Key 上那份整个
+忽略。改成交集是因为一个项目里的两台 CC 常常各自只该看一小半工具（一台专做
+回推、一台专做归因），而项目范围是共用的。
 """
 import inspect
 
@@ -12,42 +16,77 @@ from fastapi.routing import APIRoute
 from app.api.mcp_keys import _match_profile, project_scope_router
 from app.main import app
 from app.mcp import TOOL_CATALOG
+from app.mcp.middleware import blocked_by_project, pick_scope
 from app.mcp.profiles import PROFILES
 
 
-PROJ = "11111111-1111-1111-1111-111111111111"
-A, B = ["lum_list_projects"], ["lum_get_case", "lum_list_cases"]
+A = ["lum_list_projects"]
+B = ["lum_get_case", "lum_list_cases"]
+# A ⊂ AB，用来验"交集只收窄"：Key 勾的比项目给的多时，多出来的那些要被丢掉
+AB = ["lum_list_projects", "lum_get_case"]
 
 
-@pytest.mark.parametrize("project_id,project_scope,legacy,expect,why", [
-    (PROJ,  A,    B,    A,    "归属了项目 → 用项目范围，不看 Key 上那份"),
-    (PROJ,  None, B,    None, "★项目明确设成不限制 → 就是不限制，不许掉回 Key 的旧范围"),
-    (PROJ,  None, None, None, "都没设 → 不限制"),
-    (None,  A,    B,    B,    "没归属项目 → 走遗留那条，存量 Key 行为不变"),
-    (None,  A,    None, None, "没归属项目且 Key 自己没范围 → 不限制"),
-    (PROJ,  [],   B,    None, "空列表和 NULL 一样当不限制（别让空数组静默锁死所有工具）"),
+@pytest.mark.parametrize("project_scope,key_scope,expect,why", [
+    (None, None, None, "两层都没设 → 不限制"),
+    (A,    None, A,    "Key 跟随项目（NULL）→ 就是项目那份，也是今天所有 Key 的状态"),
+    (None, B,    B,    "项目是天花板不限 → 生效就是 Key 那份，不许反过来变成不限制"),
+    (AB,   A,    A,    "两层都设 → 交集"),
+    (A,    AB,   A,    "★Key 勾了项目天花板外的 → 丢掉，不许反向扩出天花板"),
+    (A,    B,    [],   "★交集为空就是空。这种 Key 连上来一个工具都没有，是真的没有"),
+    (A,    [],   [],   "★`[]` 是「一个都不给」，不是「不限制」—— 方向反了还不报错"),
+    (None, [],   [],   "★同上：项目不限也不能让空列表滑成不限制"),
 ])
-def test_解析判据是有没有归属项目(project_id, project_scope, legacy, expect, why):
-    """`project_scope or legacy_scope` 是这里最自然也最错的写法 —— 第 2 行就是它会挂的地方。
+def test_生效范围是两层的交集(project_scope, key_scope, expect, why):
+    """`key_scope or project_scope`（或反过来）是这里最自然也最错的写法。
 
-    项目明确设成不限制时，那个写法会掉回 Key 上那份旧范围，
-    等于把人刚放开的权限又悄悄收回去，页面上完全看不出为什么。
+    `or` 是"二选一"，这里要的是"两个都得满足"。写成 `or` 时，Key 上勾了项目范围
+    外的工具会让它**反向扩**出项目天花板 —— 范围是给人挑对工具用的，扩出去这道
+    收窄就白做了；而且第 6、7 行那种空列表会直接被解析成"全都给"，方向完全反。
     """
-    from app.mcp.middleware import pick_scope
-
-    assert pick_scope(project_id, project_scope, legacy) == expect, why
+    assert pick_scope(project_scope, key_scope) == expect, why
 
 
-def test_归属项目后立刻只认项目范围():
-    """PATCH 把 Key 归到项目时，必须把 Key 上那份遗留范围一起清掉。
+def test_被项目挡掉的工具要能报出来():
+    """页面只显示"我勾了什么"是不够的：生效是交集，勾了天花板外的会被丢掉。
 
-    留着的话就有两份来源：页面显示项目范围、实际生效的可能是另一份。
+    不把丢掉的那几个说出来，人看到的就是"自己勾的东西莫名少了几个"，
+    而少工具在 CC 那边只表现为"平台没有这个工具"。
+    """
+    assert blocked_by_project(A, AB) == ["lum_get_case"]
+    assert blocked_by_project(A, A) == []
+    # 任一层不限制 → 无所谓"被挡"
+    assert blocked_by_project(None, AB) == []
+    assert blocked_by_project(A, None) == []
+
+
+def test_绑项目不再清掉Key那份收窄():
+    """PATCH 把 Key 归到项目时，**不能**顺手把 Key 上那份范围清成 NULL。
+
+    2026-09-03 之前那行 `key.allowed_tools = None` 是故意的，理由是"两份来源只
+    留一个"。改成交集之后它的代价变成：换个项目就把人挑好的工具悄悄清空。
+    一个来源的诉求现在由呈现解决（接口回生效范围 + 被挡掉的），不靠删数据。
     """
     from app.api import mcp_keys
 
     src = inspect.getsource(mcp_keys.update_api_key)
-    body = src[src.index("if body.project_id is not None:"):]
-    assert "key.allowed_tools = None" in body.split("if body.reset_tools")[0]
+    # 只看代码行 —— 注释里会**提到**那行历史代码（说明为什么删掉的），
+    # 连注释一起 grep 的话，把理由写清楚反而会让这条封样红。
+    code = "\n".join(
+        ln for ln in src.splitlines() if not ln.strip().startswith("#"))
+    body = code[code.index("if body.project_id is not None:"):]
+    bind_branch = body.split("if body.reset_tools")[0]
+    assert "key.allowed_tools = None" not in bind_branch, "绑项目不该清 Key 范围"
+    # reset_tools 那条路仍然要能显式清成"跟随项目"
+    assert "key.allowed_tools = None" in body
+
+
+def test_接口把生效范围回给页面():
+    """列表/新建/改 三个出口都得带 scope —— 少一个，那个页面就只能显示"我勾了什么"。"""
+    from app.api import mcp_keys
+
+    for fn in (mcp_keys.list_api_keys, mcp_keys.create_api_key, mcp_keys.update_api_key):
+        src = inspect.getsource(fn)
+        assert "_scope_views" in src, f"{fn.__name__} 没回生效范围"
 
 
 def test_改项目范围要清缓存_而且是全清():
@@ -60,6 +99,17 @@ def test_改项目范围要清缓存_而且是全清():
     src = inspect.getsource(mcp_keys.set_project_scope)
     assert "invalidate_scope_cache()" in src, "改项目范围必须清缓存"
 
+
+def test_改Key范围也要清缓存_而且只清这一把():
+    """Key 级范围现在会真的生效，改完同样得让缓存失效。
+
+    这里要的是**按 key_hash 清**：全清会把同时连着的其它 Key 一起打回查库，
+    而改一把 Key 的范围本来只该影响它自己。
+    """
+    from app.api import mcp_keys
+
+    src = inspect.getsource(mcp_keys.update_api_key)
+    assert "invalidate_scope_cache(key.key_hash)" in src
 
 def test_档位反查认得出每一档():
     """页面靠它把「当前生效」标出来。每个档位的工具列表都得能反查回自己。"""

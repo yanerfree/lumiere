@@ -51,6 +51,10 @@ async def list_feedback(
     status: str | None = Query(default=None),
     pending_only: bool = Query(default=False, alias="pendingOnly"),
     category: str | None = Query(default=None),
+    # 故障域（「坏在哪一块」）。特殊值 **"__none__" = 还没判过域的那些** ——
+    # 它和 "other"（判过了、不属于任何一块）不是一回事，混起来的话
+    # 「还有几条没归位」这个欠账就永远看不见了。
+    area: str | None = Query(default=None),
     project_id: str | None = Query(default=None, alias="projectId"),
     keyword: str | None = Query(default=None),
     # 页面上真正要人动手的只有这一撮。**跨状态**（AI 说判不了的还挂在 new 上、
@@ -61,7 +65,8 @@ async def list_feedback(
 ):
     items, total, summary = await svc.list_feedback(
         session, status=status, pending_only=pending_only, category=category,
-        project_id=project_id, keyword=keyword, awaiting_human=awaiting_human,
+        area=area, project_id=project_id, keyword=keyword,
+        awaiting_human=awaiting_human,
         page=page, page_size=page_size)
     return {"data": {"items": items, "total": total, "page": page,
                      "pageSize": page_size, "summary": summary}}
@@ -123,6 +128,7 @@ async def create_feedback(
         body=body.get("body") or "",
         category=body.get("category") or "",
         tool_name=body.get("toolName"),
+        area=body.get("area"),
         evidence=body.get("evidence"),
         project_id=body.get("projectId"),
         reporter=body.get("reporter") or user.username,
@@ -148,6 +154,7 @@ async def triage_feedback(
         status=body.get("status") or "",
         category=body.get("category"),
         severity=body.get("severity"),
+        area=body.get("area"),
         resolution=body.get("resolution"),
         duplicate_of=body.get("duplicateOf"),
         actor=user.username,

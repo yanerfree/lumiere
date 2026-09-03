@@ -34,6 +34,12 @@ _OPAQUE_KEYS = frozenset({
     "captured_requests", "capturedRequests",
     # 键即变量名 / 键即环境变量名
     "variables_extract", "variablesExtract", "env_variables", "envVariables",
+    # **键即枚举值**：byStatus / byArea 这类分组计数，键是 `wont_fix`、`api_run`、
+    # `__none__` 这些**值**，不是我们的字段名。驼峰化会把它们改成 `wontFix`、
+    # `apiRun`、`None` —— 而前端是拿同一份枚举常量去查表的，查不到就渲染成 0。
+    # 那是**假的 0**：状态筛选下拉里「不需要处理（0）」和真的一条都没有长得一模一样。
+    # （2026-09-03 实测：byStatus 一直就是这么坏的，加 byArea 那排块时才撞出来。）
+    "by_status", "byStatus", "by_area", "byArea",
 })
 
 

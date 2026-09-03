@@ -50,6 +50,7 @@ async def report_feedback(
     body: str,
     category: str,
     tool_name: str | None = None,
+    area: str | None = None,
     expected: str | None = None,
     actual: str | None = None,
     repro: str | None = None,
@@ -60,6 +61,15 @@ async def report_feedback(
 
     只报 Lumiere 的毛病 —— 被测系统的缺陷走 lum_submit_analysis，
     被测系统的反直觉行为走 lum_add_project_note。
+
+    `area` = **坏在哪一块**（选填，14 档见工具描述）。它和 `tool_name` 是两件事：
+    工具名是「我调的是哪个」，域是「坏的是哪个子系统」，撞到的常常不是某一个工具而是
+    一整块（存量反馈里 32% 的 tool_name 是「AI 评审规则文案」这类自由文本）。
+    **不填也行**：平台会按工具名兜一个默认，兜不到就交给 AI 分诊判。
+    填错一个不认识的值**不会拒收**这条反馈（返回里会说一声按什么落的）。
+
+    ⚠ `area` **不进指纹** —— 指纹只有 (tool_name, 标题) 两样。所以改域不会让
+    同一件事变成两行，也不会让已经判过「不需要处理」的那条失去短路能力。
     """
     from app.mcp.middleware import current_caller_key_name, current_caller_project_id
 
@@ -80,6 +90,7 @@ async def report_feedback(
         body=body,
         category=category,
         tool_name=tool_name,
+        area=area,
         evidence=evidence or None,
         project_id=project_id,
         reporter=reporter,

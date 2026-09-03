@@ -553,6 +553,15 @@ _register(
                 "lum_next_duty 的「平台反馈有回音」队列。参数: title(一句话说清是什么毛病), "
                 "body(三段：想干什么/平台实际怎么反应的-原始返回抄一段/期望它怎么反应), category, "
                 "tool_name(撞到的是哪个 lum_* 工具，强烈建议填 —— 它是指纹的一半), "
+                "**area(坏掉的是哪一块子系统，选填)**：ai_review 评审 / sync 回推入库与校验 / "
+                "case 用例读写 / gate 交付门禁与体检 / api_run 接口场景执行 / report 执行报告与覆盖 / "
+                "note 项目须知 / spec 接入规范与工具描述 / apidoc 接口库 / diff 版本对账 / "
+                "qa_review QA 仓对账 / ui_script UI 脚本执行 / env 环境与变量 / other 其它。"
+                "**跟 tool_name 不是一回事**：tool_name 是你手按在哪个工具上，area 是坏的那块 —— "
+                "在 lum_create_case 上撞到「评审判据自相矛盾」，工具是 create_case、域是 ai_review。"
+                "**不填也行**：平台先按工具名落一个默认域，落不出来的交给 AI 分诊判；"
+                "填了不在清单里的值**不会退回你这条反馈**，只是被忽略并在 note 里告诉你。"
+                "⚠ area **不进指纹** —— 改域不影响归并，同一个坑还是同一行。), "
                 "expected, actual, repro(怎么复现), refs(用例编号/场景id/运行id 列表), project_id(可选，默认取本 Key 的项目)",
 )
 

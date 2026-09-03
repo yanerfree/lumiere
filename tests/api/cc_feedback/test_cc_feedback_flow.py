@@ -599,3 +599,135 @@ class TestBatch:
             await asyncio.sleep(0.05)
         got = (await client.get(f"/api/cc-feedback/{b['id']}", headers=h)).json()["data"]
         assert got["status"] == "new"          # 没勾的那条一个字没动
+
+
+# ── 范围：默认落域 / 筛 / 计数 / 不影响归并 ────────────────────────
+
+class TestArea:
+    async def test_上报按工具名落默认域(self, client, db_session):
+        """CC 不填也得有域，否则这一列在真实数据上永远是空的 ——
+        它上报时手里只有工具名，那就是唯一能不猜就用的判据。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h)                       # tool=lum_get_case
+        assert d["area"] == "case"
+        got = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
+        assert got["area"] == "case"
+        assert got["areaLabel"] == "用例读写"
+
+    async def test_自由文本工具名留空不猜(self, client, db_session):
+        """库里三成 tool_name 是自由文本（「AI 评审规则文案」这类）。
+        猜错的那半没有任何地方会报错，所以这一层宁可留空，交给后面两层。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h, title="规则文案有歧义", tool="AI 评审规则文案")
+        assert d["area"] is None
+
+    async def test_CC填的域优先于工具名默认(self, client, db_session):
+        h, _ = await _admin(db_session)
+        r = await client.post("/api/cc-feedback", headers=h, json={
+            "title": "评审判据自相矛盾", "body": BODY, "category": "improvement",
+            "toolName": "lum_get_case", "area": "ai_review",
+        })
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["area"] == "ai_review"
+
+    async def test_域填错不退回反馈只是告诉他(self, client, db_session):
+        """一条写齐了证据的反馈，不该因为域名打错一个字就被拒 ——
+        拒了他得重写一遍，下次就干脆不填了。所以退化成「忽略 + 说一句」。"""
+        h, _ = await _admin(db_session)
+        r = await client.post("/api/cc-feedback", headers=h, json={
+            "title": "某个毛病", "body": BODY, "category": "improvement",
+            "toolName": "lum_get_case", "area": "评审",
+        })
+        assert r.status_code == 200, r.text
+        d = r.json()["data"]
+        assert d["areaIgnored"] == "评审"
+        assert d["area"] == "case"                        # 退回按工具名落的那个
+        assert "ai_review" in (d.get("note") or "")       # 可用值摆出来
+
+    async def test_人能改域而且非法值当场拒(self, client, db_session):
+        """页面上这一格是下拉框，出现非法值只可能是脚本在调 ——
+        悄悄修好等于让那个脚本一直错着。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h)
+        ok = await _triage(client, h, d["id"], status="triaged",
+                           category="bug", area="ai_review")
+        assert ok.status_code == 200, ok.text
+        assert ok.json()["data"]["area"] == "ai_review"
+        bad = await _triage(client, h, d["id"], status="triaged",
+                            category="bug", area="不存在的域")
+        assert bad.status_code == 400
+
+    async def test_改了域还是同一行(self, client, db_session):
+        """域不进指纹。进了的话同一件事改完域会分裂成两行，
+        wont_fix 的短路也跟着失效 —— 表现是「反馈变多了」，看着很正常。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h)
+        await _triage(client, h, d["id"], status="triaged",
+                      category="bug", area="ai_review")
+        again = await _first(client, h)                   # 同工具 + 同标题
+        assert again["id"] == d["id"]
+        assert again["occurrences"] == 2
+        assert again["area"] == "ai_review"               # 判过的不被上报的默认值盖掉
+
+    async def test_按域筛和计数(self, client, db_session):
+        h, _ = await _admin(db_session)
+        await _first(client, h, title="甲问题", tool="lum_get_case")
+        await _first(client, h, title="乙问题", tool="lum_run_api_test")
+        await _first(client, h, title="丙问题", tool="执行报告说不清")
+        r = await client.get("/api/cc-feedback?area=case", headers=h)
+        assert r.status_code == 200, r.text
+        assert [x["title"] for x in r.json()["data"]["items"]] == ["甲问题"]
+        by = r.json()["data"]["summary"]["byArea"]
+        assert by.get("case") == 1 and by.get("api_run") == 1 and by.get("__none__") == 1, by
+
+    async def test_待判域筛得出来(self, client, db_session):
+        """NULL 不是 other。没有这个筛法，「该我填的」那批就没法一次捞出来。"""
+        h, _ = await _admin(db_session)
+        await _first(client, h, title="甲问题", tool="lum_get_case")
+        await _first(client, h, title="丙问题", tool="执行报告说不清")
+        r = await client.get("/api/cc-feedback?area=__none__", headers=h)
+        assert r.status_code == 200, r.text
+        assert [x["title"] for x in r.json()["data"]["items"]] == ["丙问题"]
+
+    async def test_AI判域只填空的(self, client, db_session, monkeypatch):
+        """AI 只填空白。盖掉人判过的域，人就没法用这一列做长期归类了 ——
+        改一次被 AI 改回去一次，而且不报错。"""
+        h, _ = await _admin(db_session)
+        blank = await _first(client, h, title="丙问题", tool="执行报告说不清")
+        assert blank["area"] is None
+        judged = await _first(client, h, title="丁问题", tool="覆盖统计不对")
+        await _triage(client, h, judged["id"], status="triaged",
+                      category="bug", area="ai_review")
+        _fake_model(monkeypatch,
+                    '{"verdict":"triaged","category":"bug","severity":"low",'
+                    '"area":"report","reasoning":"报告那侧的统计口径不对"}')
+        for fid, want in ((blank["id"], "report"), (judged["id"], "ai_review")):
+            r = await client.post(f"/api/cc-feedback/{fid}/analyze", headers=h)
+            assert r.status_code == 200, r.text
+            got = (await client.get(f"/api/cc-feedback/{fid}", headers=h)).json()["data"]
+            assert got["area"] == want
+
+    async def test_AI判不了裁定也照样落域(self, client, db_session, monkeypatch):
+        """域和裁定是两件事：人打开一条「等人拍板」时，知道它坏在哪一块有用。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h, title="丙问题", tool="执行报告说不清")
+        _fake_model(monkeypatch,
+                    '{"verdict":"needs_human","area":"report",'
+                    '"needsHuman":"这条要产品定","reasoning":"需求没写"}')
+        r = await client.post(f"/api/cc-feedback/{d['id']}/analyze", headers=h)
+        assert r.json()["data"]["verdict"] == "needs_human"
+        got = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
+        assert got["status"] == "new"                     # 裁定没落
+        assert got["area"] == "report"                    # 域落了
+
+    async def test_AI回null不落其它(self, client, db_session, monkeypatch):
+        """判不出来就留空等人，别拿 other 假装判过了 —— other 是终局，空的能被补上。"""
+        h, _ = await _admin(db_session)
+        d = await _first(client, h, title="丙问题", tool="执行报告说不清")
+        _fake_model(monkeypatch,
+                    '{"verdict":"triaged","category":"bug","area":null,'
+                    '"reasoning":"说不清是哪一块"}')
+        r = await client.post(f"/api/cc-feedback/{d['id']}/analyze", headers=h)
+        assert r.status_code == 200, r.text
+        got = (await client.get(f"/api/cc-feedback/{d['id']}", headers=h)).json()["data"]
+        assert got["area"] is None

@@ -45,6 +45,33 @@ const SEVERITY_META = {
   low: { label: '低', color: '#86909c' },
 }
 
+// 范围 = **坏掉的是哪一块子系统**，不是「手按在哪个工具上」（那个是 toolName，
+// 留在「来源」列里，两列不互相替代）。也**不是**工具货架分类的复制：
+// 按货架分类，AI 评审那一整块会挂在「用例·手工步骤」名下，整块隐形。
+// 值和顺序跟后端 `models/cc_feedback.py` 的 AREAS 对齐（那边是唯一出处），
+// 这里只补中文名 —— 顺序按「离 CC 干活最近」排，不按字典序。
+// **故意不给 14 个域配 14 种颜色**：这一列是分类不是信号，上了色就等于
+// 让最刺眼的那个域看着最要紧，而「要紧」已经有优先级列在说了。
+const AREA_META = {
+  ai_review: { label: 'AI 评审' },
+  sync: { label: '回推入库与校验' },
+  case: { label: '用例读写' },
+  gate: { label: '交付门禁与体检' },
+  api_run: { label: '接口场景执行' },
+  report: { label: '执行报告与覆盖' },
+  ui_script: { label: 'UI 脚本执行' },
+  diff: { label: '版本对账' },
+  qa_review: { label: 'QA 仓对账' },
+  apidoc: { label: '接口库' },
+  note: { label: '项目须知' },
+  spec: { label: '接入规范与工具描述' },
+  env: { label: '环境与变量' },
+  other: { label: '其它' },
+}
+// 「还没判过域」。**和 other 是两件事**：other = 判过了、确实归不进任何一档；
+// 这个 = 还没人判。混成一个值，「没判」会永久伪装成「判过了没归属」。
+const AREA_NONE = '__none__'
+
 // 来源三分，**别把 import 并进「页面录入」**：这三个数的比例回答的是
 // 「通道到底有没有替掉人肉搬运」—— import 是通道开通前攒的存量，
 // 并进页面那一档，这个问题就永远查不出来了。
@@ -137,6 +164,7 @@ export default function CCFeedback() {
   // 默认只看待处理 —— 这一页的用途是"还欠 CC 什么"，不是流水账
   const [statusFilter, setStatusFilter] = useState('__pending__')
   const [categoryFilter, setCategoryFilter] = useState(null)
+  const [areaFilter, setAreaFilter] = useState(null)
   const [keyword, setKeyword] = useState('')
 
   const [detail, setDetail] = useState(null)
@@ -160,6 +188,9 @@ export default function CCFeedback() {
       else if (statusFilter === '__human__') p.append('awaitingHuman', 'true')
       else if (statusFilter) p.append('status', statusFilter)
       if (categoryFilter) p.append('category', categoryFilter)
+      // AREA_NONE 直接透传：后端把它读作「area is null」，
+      // 不能在这里翻译成空字符串 —— 那等于不筛
+      if (areaFilter) p.append('area', areaFilter)
       if (keyword) p.append('keyword', keyword)
       const res = await api.get(`/cc-feedback?${p.toString()}`)
       setItems(res.data.items || [])
@@ -174,7 +205,7 @@ export default function CCFeedback() {
     } finally {
       setLoading(false)
     }
-  }, [page, pageSize, statusFilter, categoryFilter, keyword])
+  }, [page, pageSize, statusFilter, categoryFilter, areaFilter, keyword])
 
   useEffect(() => { fetchList() }, [fetchList])
 
@@ -254,6 +285,7 @@ export default function CCFeedback() {
     form.setFieldsValue({
       category: prefill?.category ?? detail?.category ?? detail?.reportedCategory ?? undefined,
       severity: prefill?.severity ?? detail?.severity ?? undefined,
+      area: prefill?.area ?? detail?.area ?? undefined,
       resolution: prefill?.resolution ?? '',
       duplicateOf: '',
     })
@@ -266,6 +298,7 @@ export default function CCFeedback() {
         status: action.status,
         category: v.category || undefined,
         severity: v.severity || undefined,
+        area: v.area || undefined,
         resolution: v.resolution || undefined,
         duplicateOf: v.duplicateOf || undefined,
       }, { silent: true })
@@ -304,6 +337,28 @@ export default function CCFeedback() {
           )}
         </a>
       ),
+    },
+    {
+      // 排在标题右边而不是最右：读一行的顺序是「哪一块坏了 → 什么事」，
+      // 挪到最后就退化成查线索时才看的东西（toolName 就在那儿）。
+      title: '范围', dataIndex: 'area', width: 132, align: 'center',
+      render: (v, r) => {
+        const m = AREA_META[v]
+        if (!m) {
+          return (
+            <Tooltip title="还没判过属于哪一块 —— AI 处理一遍就有了。注意它和「其它」不是一回事：「其它」是判过了、确实归不进任何一档">
+              <span style={{ color: '#c9cdd4' }}>待判</span>
+            </Tooltip>
+          )
+        }
+        return (
+          <Tooltip title={`坏在这一块：${r.areaLabel || m.label}（涉及工具见「来源」列）`}>
+            <Tag style={{ color: '#4e5969', background: 'rgba(0,0,0,0.04)', border: 'none', margin: 0 }}>
+              {r.areaLabel || m.label}
+            </Tag>
+          </Tooltip>
+        )
+      },
     },
     {
       // 判据是「会不会导致假绿」，不是「看着急不急」—— 写进 Tooltip，
@@ -458,6 +513,62 @@ export default function CCFeedback() {
         </Tooltip>
       </div>
 
+      {/* 按域的计数块。需求要的是「一眼看出哪一块问题最多」，而一列 Tag 只做到
+          「能查」—— 得把数摊开摆在这儿才看得出比例。
+          只摆有数的：14 个域里今天有 3 个是 0 条，摆成 3 个点不动的按钮是噪声。
+          但 **0 条本身是信息**（UI 脚本执行 / 环境与变量 / QA 仓对账 一条没有，
+          说明那几块 CC 还没真用起来，不是"它们没问题"），所以尾巴上用一句灰字带过，
+          不做成能点的东西。 */}
+      {(() => {
+        const by = summary.byArea || {}
+        const hit = Object.keys(AREA_META)
+          .filter(k => (by[k] || 0) > 0)
+          .sort((a, b) => (by[b] || 0) - (by[a] || 0))
+        const zero = Object.keys(AREA_META).filter(k => !(by[k] > 0))
+        const none = by[AREA_NONE] || 0
+        const chips = [
+          // 「全部」故意不带数：它等于"不按域筛"，而当前列表的条数还受状态/类别/
+          // 关键词影响，摆一个数上去就会和右边那些块加起来对不上
+          { key: null, label: '全部', count: null },
+          ...hit.map(k => ({ key: k, label: AREA_META[k].label, count: by[k] })),
+          ...(none > 0 ? [{
+            key: AREA_NONE, label: '待判域', count: none,
+            tip: '还没判过属于哪一块。点「批量处理」交给 AI 就会填上 —— 它只填空的，不会盖掉人判过的',
+          }] : []),
+        ]
+        if (!hit.length && !none) return null
+        return (
+          <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+            {chips.map(c => {
+              const on = areaFilter === c.key || (c.key === null && !areaFilter)
+              const chip = (
+                <a
+                  key={c.key ?? '__all__'}
+                  onClick={() => { setAreaFilter(c.key); setPage(1) }}
+                  style={{
+                    fontSize: 12, lineHeight: '22px', padding: '0 10px', borderRadius: 11,
+                    color: on ? '#1d2129' : '#4e5969',
+                    background: on ? 'rgba(78,138,240,0.12)' : 'transparent',
+                    border: `1px solid ${on ? 'rgba(78,138,240,0.35)' : 'rgba(0,0,0,0.06)'}`,
+                  }}
+                >
+                  {c.label}
+                  {c.count != null && (
+                    <span style={{ marginLeft: 5, color: on ? '#4e8af0' : '#86909c' }}>{c.count}</span>
+                  )}
+                </a>
+              )
+              return c.tip ? <Tooltip key={c.key} title={c.tip}>{chip}</Tooltip> : chip
+            })}
+            {zero.length > 0 && (
+              <span style={{ fontSize: 12, color: '#c9cdd4', marginLeft: 4 }}>
+                · 0 条：{zero.map(k => AREA_META[k].label).join(' / ')}
+              </span>
+            )}
+          </div>
+        )
+      })()}
+
       {/* 进度：一条条判是几分钟的事，没有进度条人会以为它卡死了然后重复点 */}
       {(batch?.running || batch?.finishedAt) && (
         <Alert
@@ -579,6 +690,16 @@ export default function CCFeedback() {
                   {detail.categoryMismatch && (
                     <span style={{ marginLeft: 8, fontSize: 12, color: '#ff7d00' }}>
                       （CC 报的是「{detail.reportedCategoryLabel}」）
+                    </span>
+                  )}
+                </Field>
+                <Field label="范围">
+                  {detail.areaLabel || AREA_META[detail.area]?.label || (
+                    <span style={{ color: '#c9cdd4' }}>
+                      还没判过属于哪一块
+                      <span style={{ marginLeft: 6, fontSize: 12 }}>
+                        （和「其它」不是一回事：那个是判过了、确实归不进任何一档）
+                      </span>
                     </span>
                   )}
                 </Field>
@@ -713,6 +834,18 @@ export default function CCFeedback() {
                 <Select allowClear options={Object.entries(SEVERITY_META).map(([k, m]) => ({ value: k, label: m.label }))} />
               </Form.Item>
             </>
+          )}
+          {!action?.needsDuplicate && (
+            <Form.Item
+              name="area" label="范围（坏的是哪一块）"
+              extra="和「涉及工具」不是一回事：工具是他手按在哪儿，范围是坏的那一块。留空 = 不改动现有值"
+            >
+              <Select
+                allowClear showSearch optionFilterProp="label"
+                placeholder="不改"
+                options={Object.entries(AREA_META).map(([k, m]) => ({ value: k, label: m.label }))}
+              />
+            </Form.Item>
           )}
           {action?.needsResolution && (
             <Form.Item

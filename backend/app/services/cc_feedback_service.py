@@ -14,11 +14,13 @@ import re
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.audit import write_audit_log
 from app.models.cc_feedback import (
+    AREA_LABEL,
+    AREAS,
     CATEGORIES,
     CATEGORY_LABEL,
     DECIDERS,
@@ -48,6 +50,92 @@ QUOTA_PER_DAY = 40
 # 新反馈进来自动跑一次 AI 处置。**默认开** —— 人是来看结果的，不是来点每一条的。
 # 关掉的唯一用途是测试：单测里不该真打模型（打了会在没有网关的机器上变成偶发红）。
 AUTO_TRIAGE = os.getenv("CC_FEEDBACK_AUTO_TRIAGE", "1") != "0"
+
+# 工具名 → 故障域的静态映射。**只对注册工具名生效，命中就落，不中留 NULL。**
+#
+# **这里不做关键词猜测。** 「AI 评审规则文案」猜得中，「执行结果状态」猜不中，
+# 而猜错的那半没有任何地方会报错 —— 一列悄悄指错地方的分类，比没有这一列更坏。
+# 猜不中的交给 AI 分诊那一层（它读工具描述和实现源码，判据比关键词硬得多）。
+#
+# 域是**故障域**不是货架分类，所以这张表和 TOOL_CATALOG.category **故意不一致**，
+# 几处刻意的错位（改之前先想清楚，它们不是笔误）：
+#   · lum_review_* 的货架分类是「用例·手工步骤」，这里归 ai_review —— 名下的反馈
+#     说的全是评审判据/文案，和用例增删改无关。
+#   · lum_check_env_hygiene 的货架分类是「接口场景」，这里归 gate（它是体检）。
+#   · lum_request_deprecate 的货架分类是「版本对账」，这里归 case（废弃是用例生命周期）。
+#   · 选择器/词条/场景变量那几个 upsert 归 sync（入库那一层），
+#     而 ui_script 只留**执行/渲染** —— 两者坏起来要看的地方不一样。
+#
+# **故意没有映射的 14 个工具**（不是漏了）：mock 与观测 5 个、Skill 共享 3 个、
+# 失败归因 2 个、定位项目/分支 2 个、平台反馈自己 2 个。AREAS 那 14 档是按存量反馈
+# 定的，这几块子系统今天没有对应的域；硬塞一个（比如一律 other）等于替 AI 那一层
+# 把答案钉死 —— 它只填空的（见模型里 area 那一列的注释）。真有人报了再加档。
+_TOOL_AREA = {
+    # ai_review —— AI 评审判据、文案、评分口径
+    "lum_review_case": "ai_review",
+    "lum_review_batch": "ai_review",
+    "lum_review_batch_status": "ai_review",
+    "lum_review_check": "ai_review",
+    # sync —— 回推入库与入库校验
+    "lum_sync_orchestrated_scenario": "sync",
+    "lum_sync_ui_script": "sync",
+    "lum_upsert_scenario_variables": "sync",
+    "lum_list_scenario_variables": "sync",
+    "lum_upsert_selectors": "sync",
+    "lum_list_selectors": "sync",
+    "lum_upsert_i18n_terms": "sync",
+    # case —— 用例读写、目录、废弃申请
+    "lum_create_case": "case",
+    "lum_update_case": "case",
+    "lum_get_case": "case",
+    "lum_list_cases": "case",
+    "lum_get_folder_tree": "case",
+    "lum_request_deprecate": "case",
+    # gate —— 交付门禁与体检
+    "lum_check_deliverable": "gate",
+    "lum_check_assertion_bite": "gate",
+    "lum_check_env_hygiene": "gate",
+    "lum_check_branch": "gate",
+    "lum_module_checkup": "gate",
+    "lum_next_duty": "gate",
+    # api_run —— 接口场景执行
+    "lum_run_api_test": "api_run",
+    "lum_get_api_test": "api_run",
+    "lum_list_api_tests": "api_run",
+    # report —— 执行报告与覆盖统计
+    "lum_create_plan": "report",
+    "lum_run_plan": "report",
+    "lum_list_plans": "report",
+    "lum_list_reports": "report",
+    "lum_get_report_summary": "report",
+    "lum_get_failed_scenarios": "report",
+    # note / spec / apidoc / diff / qa_review
+    "lum_add_project_note": "note",
+    "lum_list_project_notes": "note",
+    "lum_get_sync_spec": "spec",
+    "lum_create_api_node": "apidoc",
+    "lum_get_api_node": "apidoc",
+    "lum_list_api_tree": "apidoc",
+    "lum_apply_endpoint_diff": "diff",
+    "lum_list_branch_endpoints": "diff",
+    "lum_get_qa_review": "qa_review",
+    # ui_script —— 执行 / 渲染（入库在 sync）
+    "lum_render_ui_script": "ui_script",
+    "lum_run_ui_script": "ui_script",
+    "lum_run_ui_scripts_batch": "ui_script",
+    "lum_get_ui_script_result": "ui_script",
+    # env —— 环境、变量、全局数据、共享资源
+    "lum_list_environments": "env",
+    "lum_get_merged_variables": "env",
+    "lum_list_global_data": "env",
+    "lum_upsert_automation_resource": "env",
+}
+
+
+def area_for_tool(tool_name: str | None) -> str | None:
+    """按工具名给一个默认域。不认识的一律 None（**不猜**），交给 AI 分诊那一层。"""
+    return _TOOL_AREA.get((tool_name or "").strip())
+
 
 _WS = re.compile(r"\s+")
 _PUNCT = re.compile(r"[，。、；：！？,.;:!?（）()「」【】\[\]“”\"'·\-—_/]+")
@@ -99,6 +187,13 @@ def brief(f: CCFeedback, *, with_body: bool = False) -> dict:
         "categoryMismatch": bool(
             f.category and f.reported_category and f.category != f.reported_category),
         "severity": f.severity,
+        # 故障域 —— 「坏掉的是哪一块」。和 toolName 是两件事，不互相替代：
+        # 56 条存量反馈里有 18 条的 toolName 是自由文本（「AI 评审规则文案」之类），
+        # 那种恰恰最清楚自己在说哪一块，但工具名这一列承载不了它。
+        # areaLabel 为 None 有两种含义，页面/CC 都要分得清：area 是 None = 还没判过；
+        # area="other" = 判过了不属于任何一块（那时 areaLabel 是「其它」）。
+        "area": f.area,
+        "areaLabel": AREA_LABEL.get(f.area or "", None),
         "toolName": f.tool_name,
         "reporter": f.reporter,
         "source": f.source,
@@ -182,6 +277,7 @@ async def report(
     body: str,
     category: str,
     tool_name: str | None = None,
+    area: str | None = None,
     evidence: dict | None = None,
     project_id: str | None = None,
     reporter: str | None = None,
@@ -194,7 +290,19 @@ async def report(
 
     title = title.strip()
     body = body.strip()
+    # ⚠ 指纹**只有 (tool_name, 标题)** 两样，area 绝不能掺进来。掺了的后果：
+    # 同一件事改了域就变成两行（归并失效），更要紧的是 wont_fix 短路失效 ——
+    # 而那件事失效的表现是「反馈变多了」，看起来完全正常。
     fp = fingerprint_of(tool_name, title)
+
+    # 故障域：报的人给了就用，没给（或给了个不认识的）就按工具名兜一个默认。
+    # **给错不拒收整条反馈** —— 一条写满了现象的反馈不该因为一个分类词打错而丢掉；
+    # 兜完在 note 里说一声，比静默改掉好（静默的话下一轮还会写错同一个词）。
+    area_in = (area or "").strip() or None
+    area_bad = area_in if (area_in and area_in not in AREAS) else None
+    resolved_area = None if area_bad else area_in
+    if resolved_area is None:
+        resolved_area = area_for_tool(tool_name)
 
     # ① 先看这个指纹有没有已经了结过 —— **短路优先于建行**。
     #    最近一条同指纹的记录说了算（reopened 之后老的那条不该再挡新的）。
@@ -281,11 +389,17 @@ async def report(
         prev.last_seen_at = now
         if prev.project_id is None and project_id:
             prev.project_id = uuid.UUID(project_id)
+        # 只**填空**，不改已经判过的域（同 AI 分诊那一层的口径）
+        if prev.area is None and resolved_area:
+            prev.area = resolved_area
         await session.commit()
         return {
             "id": str(prev.id),
             "merged": True,
             "occurrences": prev.occurrences,
+            # 并进去之后的域是**这一行现在的**域（可能是人/AI 判过的，
+            # 不是这次上报按工具名算出来的那个）—— 回的就得是生效的那个值
+            "area": prev.area,
             "currentStatus": prev.status,
             "statusLabel": STATUS_LABEL.get(prev.status, prev.status),
             "note": "同一件事已经报过了，这次只是次数 +1（撞得越多越靠前）。"
@@ -315,6 +429,7 @@ async def report(
         source=source,
         reporter=reporter,
         tool_name=(tool_name or None),
+        area=resolved_area,
         fingerprint=fp,
         title=title,
         body=body,
@@ -331,11 +446,15 @@ async def report(
     await write_audit_log(session, action="create", target_type="cc_feedback",
                           target_id=row.id, target_name=title,
                           project_id=row.project_id,
-                          changes={"category": category, "toolName": tool_name})
+                          changes={"category": category, "toolName": tool_name,
+                                   "area": resolved_area})
     await session.commit()
     out = {
         "id": str(row.id),
         "status": "new",
+        # 落成哪个域也回给他 —— 不填 area 时平台按工具名替他落了一个，
+        # 不回的话他无从知道落成了什么，也就永远不会来纠正一个落错的域。
+        "area": resolved_area,
         "note": "已收到。回音会出现在 lum_next_duty 的「平台反馈有回音」队列里，"
                 "也可以随时调 lum_list_my_feedback 查。",
     }
@@ -344,6 +463,11 @@ async def report(
     if AUTO_TRIAGE:
         _spawn_auto(str(row.id))
         out["note"] += "（已自动交给 AI 分诊，通常一会儿就有结论。）"
+
+    if area_bad:
+        out["areaIgnored"] = area_bad
+        out["note"] += (f"（area={area_bad!r} 不在清单里，已按工具名落成 "
+                        f"{resolved_area!r}；可用值：{' / '.join(AREAS)}。）")
 
     if reopened_from:
         out["reopenedFrom"] = str(reopened_from)
@@ -360,6 +484,7 @@ async def list_feedback(
     status: str | None = None,
     pending_only: bool = False,
     category: str | None = None,
+    area: str | None = None,
     project_id: str | None = None,
     keyword: str | None = None,
     awaiting_human: bool = False,
@@ -378,6 +503,11 @@ async def list_feedback(
         q = q.where(CCFeedback.status == status)
     if category:
         q = q.where(CCFeedback.category == category)
+    if area:
+        # "__none__" = 还没判过域的那些。**必须能单独筛出来**：这一列的价值全在
+        # 「哪一块」，而「还没判」是一个要清掉的欠账，混在 other 里就看不见了。
+        q = (q.where(CCFeedback.area.is_(None)) if area == "__none__"
+             else q.where(CCFeedback.area == area))
     if project_id:
         q = q.where(CCFeedback.project_id == uuid.UUID(project_id))
     if keyword:
@@ -412,12 +542,19 @@ async def list_feedback(
     awaiting = (await session.execute(
         select(func.count()).select_from(CCFeedback)
         .where(CCFeedback.needs_human.isnot(None)))).scalar_one()
+    # 按域计数。**没判过的那些用 "__none__" 这个键**，不并进 other ——
+    # 页面顶上那排块要能一眼看出「还有几条没归位」。各域相加 == total（一条只有一个主域，
+    # 不做多选，就是为了让这排数字能当筛选用）。
+    area_rows = (await session.execute(
+        select(CCFeedback.area, func.count()).group_by(CCFeedback.area))).all()
+    by_area = {(a or "__none__"): n for a, n in area_rows}
     summary = {
         "total": sum(counts.values()),
         "pending": sum(counts.get(s, 0) for s in PENDING_STATUSES),
         # 页面上真正要人动手的只有这个数 —— 其余都是 AI 判完的，人是来看的
         "awaitingHuman": awaiting,
         "byStatus": counts,
+        "byArea": by_area,
         "batch": batch_status(),
     }
     return items, total, summary
@@ -443,6 +580,7 @@ async def triage(
     status: str,
     category: str | None = None,
     severity: str | None = None,
+    area: str | None = None,
     resolution: str | None = None,
     duplicate_of: str | None = None,
     actor: str | None = None,
@@ -463,6 +601,10 @@ async def triage(
         return _err(f"category 只能是 {' / '.join(CATEGORIES)}")
     if severity is not None and severity not in SEVERITIES:
         return _err(f"severity 只能是 {' / '.join(SEVERITIES)}")
+    # 人拍板这一层**是硬校验**（和上报那一层不一样）：页面上是个下拉，选不出非法值来，
+    # 收到非法值说明是脚本在调，静默改掉会让那个脚本一直错着。
+    if area is not None and area not in AREAS:
+        return _err(f"area 只能是 {' / '.join(AREAS)}")
 
     resolution = (resolution or "").strip() or None
 
@@ -485,6 +627,9 @@ async def triage(
         row.category = category
     if severity:
         row.severity = severity
+    if area:
+        # 人能改**已经判过**的域（AI 那一层只填空的，人这一层可以覆盖）
+        row.area = area
     if duplicate_of:
         row.duplicate_of = uuid.UUID(duplicate_of)
     if resolution:
@@ -505,7 +650,7 @@ async def triage(
                           target_id=row.id, target_name=row.title,
                           project_id=row.project_id,
                           changes={"status": status, "category": row.category,
-                                   "decidedBy": row.decided_by,
+                                   "area": row.area, "decidedBy": row.decided_by,
                                    "resolution": (resolution or "")[:200]})
     await session.commit()
     return brief(row, with_body=True)
@@ -521,6 +666,10 @@ def _echo_of(f: CCFeedback) -> dict:
         "statusLabel": STATUS_LABEL.get(f.status, f.status),
         "category": f.category,
         "categoryLabel": CATEGORY_LABEL.get(f.category or "", None),
+        # 平台判的域 —— CC 那边按块看自己报了些什么（也能顺带发现「我以为在说 A、
+        # 平台判成 B」这种错位，那多半意味着正文没说清坏在哪一块）
+        "area": f.area,
+        "areaLabel": AREA_LABEL.get(f.area or "", None),
         "resolution": f.resolution,
     }
     d["decidedBy"] = f.decided_by
@@ -726,11 +875,26 @@ CC 是通过 MCP 调用平台工具来梳理用例的自动化使用者，它报
 
 会 → high；只是费事、绕得过去 → medium；纯体验 → low。
 
+## area：**坏掉的是哪一块子系统**（页面上「范围」那一列）
+
+十四选一，**判不出来就回 null，别硬凑**（回 null 这条会留空等人判，那没关系；
+硬凑一个错的没有任何地方会报错，而这一列的价值全在能按块筛）：
+
+{areas}
+
+注意三件事：
+· 判的是**坏在哪**，不是「调的是哪个工具」。`lum_review_case` 报的多半是 ai_review
+  （评审判据/文案），不是 case —— 工具的货架分类在这里不作数。
+· 工具名是自由文本时（「AI 评审规则文案」「接口场景执行器」这种）**照样要判** ——
+  那种恰恰最清楚自己在说哪一块。
+· 跨两块的按「**坏在哪**」选一个主域，只能给一个。
+
 ## 只输出 JSON，不要任何解释文字
 
 {{"verdict":"triaged|wont_fix|duplicate|needs_human",
   "category":"bug|improvement|requirement",
   "severity":"high|medium|low",
+  "area":"上面十四档之一，判不出来给 null",
   "resolution":"给 CC 的回音正文。wont_fix 时必填，如果是他没找对方法，把正确做法写出来",
   "duplicateOf":"verdict=duplicate 时必填，候选里的 id",
   "needsHuman":"verdict=needs_human 时必填：判不了什么、缺什么",
@@ -742,6 +906,8 @@ CC 是通过 MCP 调用平台工具来梳理用例的自动化使用者，它报
 {facts}
 
 ═══════ 已有的相近反馈（判 duplicate 用；不像就别硬并）═══════
+候选是「同一个工具的」加「同域同类的」两拨，**可能跨工具** —— 每行都写了工具和域。
+跨工具的更要小心：两个不同的缺陷并成一条，修了一个就整条关掉，另一个从此没有家。
 {siblings}
 
 ═══════ 这条反馈 ═══════
@@ -757,22 +923,38 @@ CC 自报的类：{reported}
 
 
 async def _siblings_for(session: AsyncSession, row: CCFeedback, limit: int = 8) -> str:
-    """同工具名的其它反馈 —— 判 duplicate 的候选。
+    """判 duplicate 的候选：**同工具名** ∪ **同域同类**。
 
-    **只给同工具的**：跨工具的「看起来像」并起来是有害的，那会把两个不同的缺陷合成
-    一条，修了一个就整条关掉，另一个从此没有家。
+    起初只给同工具的，理由是「跨工具的『看起来像』并起来有害」—— 那条理由仍然对，
+    但它有个盲区：工具名精确相等的话，那 8 条 `AI 评审规则 xxx`（名字个个不同、
+    说的是同一块的事）**互相都不是候选** —— 最该判重的一撮，恰好判重能力为零。
+    有了 area 之后放宽成「同域 + 同类」补上这一块：域相同意味着坏的是同一个子系统，
+    比「标题看起来像」硬得多；同时**限定同一个 category**，避免把一条 bug 和一条
+    requirement 并成一件事。
+
+    候选行里带上工具名，因为现在候选可能跨工具 —— 不写的话模型会以为都是同一个工具的。
     """
-    if not row.tool_name:
-        return "（这条没填工具名，不给候选 —— 没有工具名的「看起来像」不足以并条）"
+    conds = []
+    if row.tool_name:
+        conds.append(CCFeedback.tool_name == row.tool_name)
+    if row.area:
+        conds.append(and_(CCFeedback.area == row.area,
+                          CCFeedback.category == row.category)
+                     if row.category else CCFeedback.area == row.area)
+    if not conds:
+        return ("（这条既没填工具名、也还没判域，不给候选 —— "
+                "只靠「看起来像」不足以并条）")
     rows = (await session.execute(
         select(CCFeedback)
-        .where(CCFeedback.id != row.id, CCFeedback.tool_name == row.tool_name)
+        .where(CCFeedback.id != row.id, or_(*conds))
         .order_by(CCFeedback.last_seen_at.desc()).limit(limit))).scalars().all()
     if not rows:
-        return "（同一个工具下没有别的反馈）"
+        return "（同工具 / 同域下没有别的反馈）"
     return "\n".join(
         f"- id={r.id} 状态={STATUS_LABEL.get(r.status, r.status)} "
-        f"类={CATEGORY_LABEL.get(r.category or '', '未定')} 标题={r.title}"
+        f"类={CATEGORY_LABEL.get(r.category or '', '未定')} "
+        f"工具={r.tool_name or '未填'} 域={AREA_LABEL.get(r.area or '', '未判')} "
+        f"标题={r.title}"
         for r in rows)
 
 
@@ -809,6 +991,7 @@ async def ai_handle(session: AsyncSession, feedback_id: str) -> dict:
                     howTo="去「AI 服务配置 → AI 能力→模型」给「CC 反馈分诊」绑一个模型。")
 
     prompt = _HANDLE_PROMPT.format(
+        areas="\n".join(f"· `{a}` —— {AREA_LABEL[a]}" for a in AREAS),
         facts=_platform_facts(row.tool_name),
         siblings=await _siblings_for(session, row),
         tool=row.tool_name or "（未填）",
@@ -851,6 +1034,7 @@ async def ai_handle(session: AsyncSession, feedback_id: str) -> dict:
     # 猜的代价不对称：猜错一个 wont_fix 会挡住后续上报（一类反馈就此消失且不报错），
     # 而转给人的代价只是多等一会儿。
     verdict = (data.get("verdict") or "").strip()
+    area = (data.get("area") or "").strip() or None
     category = (data.get("category") or "").strip() or None
     severity = (data.get("severity") or "").strip() or None
     resolution = (data.get("resolution") or "").strip() or None
@@ -886,6 +1070,16 @@ async def ai_handle(session: AsyncSession, feedback_id: str) -> dict:
     data["model"] = model_name
     data["at"] = now.isoformat()
     row.ai_analysis = data
+
+    # 故障域：**只填空的，而且不合法/为 null 时什么都不落**（别落 other）。
+    #   · 只填空 —— 人在抽屉里改过的域，不该被下一次「AI 处理」按钮悄悄改回去。
+    #     这也是回填历史数据时「匹配不上留 NULL 别塞 other」那条的另一半：
+    #     塞了 other 这里就永远不会再碰它，等于把一批数据钉死在错误值上。
+    #   · 判不出来留空 —— 空的能被下一轮填上，硬凑的 other 是终局。
+    # 域和裁定是两件事，所以**判不了 verdict 的那条路上也照样落域**（写在这里，
+    # 在 needs_human 分支之前）：人打开一条「等人拍板」时，知道它是哪一块有用。
+    if row.area is None and area in AREAS:
+        row.area = area
 
     if fallback is not None or verdict == "needs_human":
         row.needs_human = ((data.get("needsHuman") or "").strip()

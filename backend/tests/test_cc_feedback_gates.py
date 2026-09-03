@@ -267,3 +267,122 @@ def test_自动分诊默认开着():
     line = next(ln for ln in src.splitlines() if ln.startswith("AUTO_TRIAGE"))
     assert "CC_FEEDBACK_AUTO_TRIAGE" in line
     assert '"1"' in line or "'1'" in line          # 默认值是 1
+
+
+# ── 范围（area = 坏掉的是哪一块子系统）─────────────────────────────
+#
+# 这一列的三个坑全属于「写错了不报错」那一类：指纹掺了它 → 归并和 wont_fix
+# 短路一起失效，而表现是「反馈变多了」，看着完全正常；NULL 塞成 other → AI
+# 那一层再也不会碰它们（它只填空的），一次性回填把数据钉死在错值上。
+
+def test_域不进指纹():
+    """指纹只有 (tool_name, 归一化标题) 两样。掺 area 的后果有两个，
+    而且都不报错：① 同一件事改了域之后变成两行（归并失效）；
+    ② **wont_fix 短路失效** —— 那是这条通道最要紧的行为。
+
+    签名本身就是封样：fingerprint_of 根本没有可以传域的位置。
+    """
+    import inspect
+
+    from app.services.cc_feedback_service import fingerprint_of
+
+    assert set(inspect.signature(fingerprint_of).parameters) == {"tool_name", "title"}
+    src = inspect.getsource(fingerprint_of)
+    assert "area" not in src
+
+
+def test_域是可空的而且NULL不等于其它():
+    """NULL = 还没判过；other = 判过了、确实归不进任何一档。
+    合成一个值，「没判」就永久伪装成「判过了没归属」，而这一列的价值全在能筛。"""
+    from app.models.cc_feedback import AREAS, CCFeedback
+
+    assert "other" in AREAS
+    col = CCFeedback.__table__.c.area
+    assert col.nullable is True
+    assert col.default is None and col.server_default is None   # 没有默认值可落
+    assert col.index is True                                    # 页面要按它筛 + 出计数
+
+
+def test_每个域都有中文标签():
+    """漏一个，页面上就露出一个英文枚举值 —— 而这一页是给人读的。"""
+    from app.models.cc_feedback import AREA_LABEL, AREAS
+
+    assert set(AREA_LABEL) == set(AREAS)
+    assert all(AREA_LABEL[a] for a in AREAS)
+
+
+def test_默认域只认注册工具名不做关键词猜测():
+    """「AI 评审规则文案」靠关键词猜得中，「执行结果状态」猜不中 ——
+    而猜错的那半没有任何地方会报错。所以这一层只做精确查表。"""
+    import inspect
+
+    from app.services.cc_feedback_service import _TOOL_AREA, area_for_tool
+
+    assert area_for_tool("lum_review_case") == "ai_review"
+    assert area_for_tool("lum_不存在的工具") is None
+    assert area_for_tool("AI 评审规则文案") is None      # 自由文本一律不猜
+    assert area_for_tool(None) is None
+    assert area_for_tool("  lum_review_case  ") == "ai_review"
+
+    src = inspect.getsource(area_for_tool)
+    assert "in " not in src.split("return")[-1]          # 没有子串匹配
+    assert len(_TOOL_AREA) > 40
+
+
+def test_默认域那张表里全是真工具名和合法域():
+    """表里写错一个工具名，那个工具报上来的反馈就永远落不到域上 ——
+    而「落不到域」和「还没判域」在库里长得一模一样，查不出来。"""
+    from app.mcp import TOOL_CATALOG
+    from app.models.cc_feedback import AREAS
+    from app.services.cc_feedback_service import _TOOL_AREA
+
+    names = {t["name"] for t in TOOL_CATALOG}
+    assert names, "TOOL_CATALOG 空了，这条测试就变成恒真"
+    assert not (set(_TOOL_AREA) - names), set(_TOOL_AREA) - names
+    assert not (set(_TOOL_AREA.values()) - set(AREAS))
+
+
+def test_上报工具收域但不强制():
+    """填了当默认、不填交给后面两层。**收了这个参数不等于要求它填** ——
+    要求填的话，CC 就得先学会这 14 档才能报第一条反馈。"""
+    import inspect
+
+    from app.mcp.tools import feedback as fb
+
+    prm = inspect.signature(fb.report_feedback).parameters
+    assert "area" in prm
+    assert prm["area"].default is None
+
+
+def test_域出现在提示词和回音里():
+    """AI 那一层要判它，就得先在 schema 里有它；CC 那边要按块看自己报了些什么，
+    回音里就得带上。少任何一头，这一列都只有页面自己看得见。"""
+    from app.services.cc_feedback_service import _HANDLE_PROMPT, _echo_of
+    import inspect
+
+    assert '"area"' in _HANDLE_PROMPT
+    assert "{areas}" in _HANDLE_PROMPT
+    assert "area" in inspect.getsource(_echo_of)
+
+
+def test_AI只填空的不盖人判过的():
+    """人在抽屉里改过域之后，下一次点「AI 处理」不许把它悄悄改回去 ——
+    这也是「回填留 NULL 别塞 other」那条规则的另一半：塞了 other，
+    这个 `is None` 就永远不成立，AI 这一层等于没接上。"""
+    import inspect
+
+    from app.services.cc_feedback_service import ai_handle
+
+    src = inspect.getsource(ai_handle)
+    assert "row.area is None" in src
+
+
+def test_人改域时非法值当场拒而不是悄悄修():
+    """页面上是个下拉，出不了非法值 —— 出了就说明是脚本在调，
+    而悄悄纠正会让那个脚本一直错下去（下一个版本加了新档它照样填错）。"""
+    import inspect
+
+    from app.services.cc_feedback_service import triage
+
+    src = inspect.getsource(triage)
+    assert "area not in AREAS" in src
