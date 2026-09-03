@@ -21,9 +21,15 @@ import json
 import logging
 import os
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlsplit
 
+from app.services.qa_page_traffic import (
+    api_prefixes_from_routes,
+    bucket_entries,
+    merge_edges,
+)
 from app.services.qa_role_visibility import merge_shards
 from app.services.ui_selector_render import anchor_selector, infer_kind
 from app.services.qa_survey_guard import (
@@ -50,6 +56,17 @@ PAGE_TIMEOUT_MS = 15_000
 # 浅扫每个角色只看菜单和落地页：角色维度要的是「这个角色**看得见**什么」，
 # 不需要把每个页面再点一遍。深爬只做主爬那一个角色。
 SHALLOW_MAX_PAGES = 40
+
+
+def _now() -> str:
+    """时窗用的时刻。**必须和 HAR 里的 `startedDateTime` 同一把时钟。**
+
+    现在两边都是本机：chromium 是 `pw.chromium.launch()` 起在本地的。哪天改成
+    连远端浏览器（CDP），两把时钟就会差出去，表现是 `edgesUnwindowed` 一片 ——
+    **那是看得见的**，比按最近的页面猜一个归属好得多（后者会把边归到错的页上，
+    而错的归属在报告上和对的长得一模一样）。
+    """
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _env(name: str, default: str = "") -> str:
@@ -219,13 +236,21 @@ async def _login(page, base_url: str, role: str, ledger: dict) -> bool:
     if not user or not pwd:
         ledger.setdefault("rolesSkipped", []).append(role)
         return False
-    await page.goto(urljoin(base_url + "/", _env("LOGIN_PATH", "login").lstrip("/")),
+    # 登录页也是一格时窗，否则登录那几个请求会整个落进 `edgesUnwindowed`。
+    # **但它 `tail: False`（不许延长到下一次导航）**：提交之后浏览器会自己跳到
+    # 落地页，延长就把落地页的流量记到 `/login` 名下了 —— 那种错归属在报告上
+    # 和对的长得一样。中间这段宁可记进"归不了页"，也不归错页。
+    login_path = _env("LOGIN_PATH", "login")
+    win = {"path": "/" + login_path.lstrip("/"), "startedAt": _now(), "tail": False}
+    ledger.setdefault("pageWindows", {}).setdefault(role, []).append(win)
+    await page.goto(urljoin(base_url + "/", login_path.lstrip("/")),
                     timeout=PAGE_TIMEOUT_MS)
     await page.fill(_env("LOGIN_USER_SELECTOR", "input[name=username]"), user)
     await page.fill(_env("LOGIN_PASS_SELECTOR", "input[name=password]"), pwd)
     await page.click(_env("LOGIN_SUBMIT_SELECTOR", "button[type=submit]"))
     await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
     ledger["loginCount"] = ledger.get("loginCount", 0) + 1
+    win["endedAt"] = _now()
     return True
 
 
@@ -245,7 +270,17 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
         # 和「看不见」分开 —— 只有 `pagesVisited` 那个总数的话，
         # 一个浅扫角色在第 41 页什么都没看见，会被算成「它被禁掉了」。
         probed = ledger.setdefault("pagesProbed", {}).setdefault(role, [])
+        # P 边的锚：HAR 里没有「这条请求属于哪次导航」这种字段，只能靠时间。
+        # 时窗记在账本上（而不是当返回值），一是 `pagesProbed` 已经是这个先例，
+        # 二是归页这件事**要能复查** —— 边归错了页的时候，得看得出当时的边界。
+        windows = ledger.setdefault("pageWindows", {}).setdefault(role, [])
         for path in page_paths:
+            # 先记 startedAt 再 goto：反了的话 goto 期间的请求就落在窗外了。
+            # **失败的页也记一格** —— 那一页确实发过请求（它们属于它），
+            # 而且这一格还兼作上一页的右边界：不记的话上一页会一路延长过来，
+            # 把这一页的流量吃进自己名下。
+            win = {"path": path, "startedAt": _now()}
+            windows.append(win)
             try:
                 await page.goto(urljoin(base_url + "/", path.lstrip("/")),
                                 timeout=PAGE_TIMEOUT_MS)
@@ -260,11 +295,13 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                 # 它的 item 立刻变成 `removed` —— 正是这条规则要防的那个假缺口。
                 ledger.setdefault("pagesFailed", []).append(
                     {"path": path, "error": type(e).__name__})
+                win["endedAt"] = _now()
                 continue
             if not raw:
                 ledger.setdefault("pagesEmptyState", []).append(path)
             title = await page.title()
             items.extend(collect_items(path, title, raw, ledger))
+            win["endedAt"] = _now()
             ledger["pagesVisited"] = ledger.get("pagesVisited", 0) + 1
             # 走到了就记，**哪怕这一页一个控件都没有** —— 空页恰恰是
             # 「探过了，确实看不见」，那是可比的格子，不是未探测。
@@ -272,6 +309,9 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
     finally:
         # HAR 只在 close 时落盘 —— 不 close 就是一个空文件。
         await context.close()
+        # 最后一格的右边界。少了它，最后一页的尾巴无处可延，那一页
+        # `networkidle` 之后的轮询会全部记进「归不了页」。
+        ledger.setdefault("contextClosedAt", {})[role] = _now()
     return items
 
 
@@ -293,15 +333,20 @@ def sanitize_har(har_path: Path) -> dict | None:
 # ── 编排 ─────────────────────────────────────────────────────────────────
 
 async def run_survey(*, base_url: str | None = None, roles: list[str],
-                     page_paths: list[str],
+                     page_paths: list[str], routes=None,
                      totals_probe=None) -> dict:
-    """跑完一趟，返回 `{status, ledger, items, har}`。
+    """跑完一趟，返回 `{status, ledger, items, har, page_edges}`。
 
     分片：主爬角色深爬全部页面，其余角色**浅扫**（角色维度只问「看得见什么」）。
     并发 `MAX_PARALLEL_SHARDS`，对方是测试环境不是压测靶子。
 
     终态由 `resolve_terminal_status` 定，**`dirty` 压过 `failed`**：
     一趟全片失败但环境里的数变了，要看的是"我们动了什么"。
+
+    `page_edges` 是**页面级**的 P 边（打开这一页浏览器发了什么），归页规则在
+    `qa_page_traffic`。它**不写进 item 的 `endpoints`** —— 这一趟一个控件都没
+    点过，写进去等于凭空造一条 `observed` 的控件→端点边。`routes` 只用来推
+    API 前缀兜底分类（拿不到就只靠 `_resourceType`，会在 declarations 里说明）。
     """
     from playwright.async_api import async_playwright
 
@@ -318,6 +363,8 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     ledger["shardsTotal"] = len(shards)
     shard_rows: list[dict] = []
     hars: dict[str, dict] = {}
+    buckets: list[dict] = []
+    api_prefixes = api_prefixes_from_routes(routes)
     ok = 0
 
     with tempfile.TemporaryDirectory(prefix="qa-survey-") as tmp:
@@ -349,8 +396,18 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
             har = sanitize_har(har_dir / f"{role}.har")
             if har is not None:
                 hars[role] = har
+            # 归页就在这儿做完：HAR 本身**不落库**（它是凭证的原产地，
+            # `sanitize_har` 之后也只是"扔干净了"，不是"该存"），
+            # 沙箱目录一出 `with` 就没了。边和账要在这之前拿出来。
+            buckets.append(bucket_entries(
+                har, (ledger.get("pageWindows") or {}).get(role) or [],
+                role=role,
+                closed_at=(ledger.get("contextClosedAt") or {}).get(role),
+                api_prefixes=api_prefixes))
 
     items = merge_shards(shard_rows, main_role=main_role)
+    traffic = merge_edges(buckets)
+    ledger["traffic"] = {k: v for k, v in traffic.items() if k != "edges"}
 
     totals_after = await totals_probe() if totals_probe else None
     status = resolve_terminal_status(shards_total=len(shards), shards_ok=ok,
@@ -360,4 +417,5 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     ledger["shardsOk"] = ok
     ledger["safeToClick"] = list(SAFE_TO_CLICK)
     ledger["mainRole"] = MAIN_CRAWL_ROLE
-    return {"status": status, "ledger": ledger, "items": items, "har": hars}
+    return {"status": status, "ledger": ledger, "items": items, "har": hars,
+            "page_edges": traffic["edges"]}

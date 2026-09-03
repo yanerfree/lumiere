@@ -287,6 +287,52 @@ def edge_ok(ep: dict, build_fingerprint: str | None = None) -> bool:
     return src in EDGE_SOURCES
 
 
+def _same_endpoint(am: str, ap: str, bm: str, bp: str) -> bool:
+    """P 侧观测到的路径和 R 侧自报的路由**是不是同一个端点**。
+
+    为什么不能直接比字符串：R 自报的是路由模板（`/api/v1/adapters/:adapter_id`
+    → 归一成 `/api/v1/adapters/{}`），而 P 侧是浏览器真发的、带真 id 的路径。
+    id 是 uuid 或纯数字时 `normalize_path` 会压成 `{}`，**但 slug 型 id 压不动**
+    （`/api/v1/adapters/kong-prod`）。字符串比一次就漏一次，后果是双向的假：
+    R 那条被报成「页面上没有」（多一条 G2），P 那条查不到 `group`（域可能归错）。
+
+    规矩三条，都是往"别乱连"的方向收的：
+      · **段数必须相等** —— 这里不吃部署前缀（`covers()` 那两段容忍是给 Q 侧
+        脚本用的，那边的路径来自别人的仓库）。P 和 R 都是同一个 BFF 的路径。
+      · 段级「相等，或有一边是 `{}`」。
+      · 方法为空算通配（R 偶尔不报 method），两边都写了就必须一致。
+
+    `{}` 容忍是有代价的：R 上同时有 `/adapters/{}` 和 `/adapters/health` 时，
+    P 侧的 `/adapters/health` 对两条都成立。所以**调用方必须先试精确命中、
+    不中才走这里**（`_lookup`），否则字面量路由会被通配路由抢走。
+    """
+    if am and bm and am.upper() != bm.upper():
+        return False
+    a = [x for x in (ap or "").split("/") if x]
+    b = [x for x in (bp or "").split("/") if x]
+    if len(a) != len(b) or not a:
+        return False
+    return all(x == y or x == WILDCARD or y == WILDCARD for x, y in zip(a, b))
+
+
+def _lookup(key: str, method: str, path: str, table: dict) -> dict | None:
+    """在 `p_eps` / `r_eps` 里找同一个端点。**精确优先，通配兜底。**
+
+    次序不是风格问题：反过来的话 `/adapters/health` 会先撞上 `/adapters/{}`，
+    于是一条真存在的字面量路由被当成"页面上有了"，G2 少一条 —— 少一条缺口
+    是**看不见**的那个方向。通配兜底里多个都命中时按 key 排序取第一个，
+    只为让同一份输入每次得到同一份报告。
+    """
+    hit = table.get(key)
+    if hit is not None:
+        return hit
+    for k in sorted(table):
+        m = table[k]
+        if _same_endpoint(method, path, m.get("method") or "", m.get("path") or ""):
+            return m
+    return None
+
+
 def compute_gaps(*, page_items: list[dict] | None,
                  routes: list[dict] | None,
                  scripts: list[dict] | None,
@@ -295,12 +341,17 @@ def compute_gaps(*, page_items: list[dict] | None,
                  route_table_available: bool = True,
                  page_survey_available: bool = True,
                  build_fingerprint: str | None = None,
-                 helper_lib: dict[str, str] | None = None) -> dict:
+                 helper_lib: dict[str, str] | None = None,
+                 page_edges: list[dict] | None = None) -> dict:
     """三个账本 → 五类缺口。**纯集合运算，不问模型。**
 
     `scripts` 每条 `{domain, scenarioId, path, text}`。
     `helper_lib` = `{lib/xxx.sh: 正文}`，喂 `qa_script_endpoints.parse_helper_lib`。
     `claimed_domains` = 清单里有场景行的域码（G1/G3 的分界）。
+    `page_edges` = **页面级** P 边（打开这一页浏览器发了什么，`qa_page_traffic`
+    归的页）。它和 `page_items[].endpoints` 那种**控件级**的边合进同一本 P 账，
+    但锚点写「(页面加载)」—— 混着看会让人以为有人点过那个按钮。
+    `None` = 这趟没算过（老 survey），`[]` = 算过了确实没有；两者的声明不一样。
 
     两条降级声明是**一等公民**，不是附注：
       · 没有路由表 ⇒ `G2 notVerified`（S7.2 已经把这句话准备好了）
@@ -400,6 +451,39 @@ def compute_gaps(*, page_items: list[dict] | None,
                                  "label": it.get("label") or "",
                                  "anchor": anchor})
 
+    # 页面级的边**后进**，`setdefault` 让控件级的边压过它：同一个端点既有人
+    # 点出来、又在页面加载时打过，报告上该显示那个控件，那是更具体的事实。
+    p_edge_rows = 0
+    for e in page_edges or []:
+        page_path = e.get("pagePath") or ""
+        anchor = f"{page_path} :: (页面加载)"
+        if not edge_ok(e, build_fingerprint):
+            # 和控件边同一本账、同一个理由：说不清出处的边不采信，但**记数**。
+            edges_unsourced.append(
+                {"anchor": anchor, "pagePath": page_path,
+                 "method": (e.get("method") or "").upper(),
+                 "path": normalize_path(e.get("path") or ""),
+                 "source": str(e.get("source") or "")})
+            continue
+        p_edge_rows += 1
+        k = _ep_key(e.get("method") or "", e.get("path") or "")
+        p_eps.setdefault(k, {"method": (e.get("method") or "").upper(),
+                             "path": normalize_path(e.get("path") or ""),
+                             "pagePath": page_path,
+                             "label": "(页面加载)",
+                             "anchor": anchor, "origin": "page"})
+
+    if page_survey_available and page_edges is None:
+        # **这条和「本轮无页面枚举」同等重要。** 没有页面级边的时候 P 账几乎是
+        # 空的 —— 无向枚举一个控件都不点，控件级的边本来就没有 —— 于是 G1/G3
+        # 双双接近 0。那在页面上长得像「这个域没缺口」。
+        declarations.append("本轮没有页面级 P 边（页面加载时的流量），而无向枚举"
+                            "不点控件、控件级的边本来就是空的 —— G1/G3 会接近 0，"
+                            "那不是「没缺口」，是这一维没验")
+    elif page_survey_available and page_edges == []:
+        declarations.append("页面级 P 边算出来是 0 条 —— 页面加载不打任何接口"
+                            "不正常，先看账本里的 edgesUnwindowed / edgesUnusable")
+
     # —— R 侧 ——
     r_eps: dict[str, dict] = {}
     for r in routes or []:
@@ -419,7 +503,7 @@ def compute_gaps(*, page_items: list[dict] | None,
 
     # G1 / G3：从页面出发
     for k, meta in p_eps.items():
-        group = (r_eps.get(k) or {}).get("group") or ""
+        group = (_lookup(k, meta["method"], meta["path"], r_eps) or {}).get("group") or ""
         doms = _domains(meta["path"], group)
         if _covered(meta["method"], meta["path"]):
             # 测到了 ⇒ 不是缺口，但**这个域在页面上有面**这件事照样成立，
@@ -431,12 +515,15 @@ def compute_gaps(*, page_items: list[dict] | None,
             # 塞进 G1 是误报（可能压根不该这个域管），丢掉是漏报（更坏）。
             unattributed.append({"anchor": k, "pagePath": meta["pagePath"]})
             continue
-        in_r = k in r_eps
         page_domains |= doms
         for d in sorted(doms):
             row = {"domain": d, "method": meta["method"], "path": meta["path"],
                    "anchor": k, "pagePath": meta["pagePath"], "label": meta["label"],
-                   "controlAnchor": meta["anchor"]}
+                   "controlAnchor": meta["anchor"],
+                   # 这条边是点出来的还是打开页面就发的。**必须带**：
+                   # 「页面加载会调它、没人测」和「有个按钮会调它、没人测」
+                   # 是两种不同的活儿，混在一张表里没法排优先级。
+                   "origin": meta.get("origin") or "control"}
             if d in claimed:
                 row.update(kind="G3", blame="script", severity=_SEVERITY["G3"],
                            # G3 必带这个数：脚本 url 抽取必然不完备，不带它
@@ -452,7 +539,10 @@ def compute_gaps(*, page_items: list[dict] | None,
         declarations.append("本轮无路由表，G2 未验证")
     else:
         for k, meta in r_eps.items():
-            if k in p_eps or _covered(meta["method"], meta["path"]):
+            # `k in p_eps` 那种字符串相等会漏掉「R 是模板、P 带真 id」那一整类
+            # （slug 型 id 归一化压不动），于是每个这样的端点都报一条假 G2。
+            if _lookup(k, meta["method"], meta["path"], p_eps) is not None \
+                    or _covered(meta["method"], meta["path"]):
                 continue
             doms = _domains(meta["path"], meta["group"])
             if not doms:
@@ -488,6 +578,9 @@ def compute_gaps(*, page_items: list[dict] | None,
             # 它就变成了自己要防的那个东西。
             "edgesUnsourced": len(edges_unsourced),
             "pageEndpoints": len(p_eps),
+            # 页面级边单独报一个数：它和控件级边混进同一本 P 账之后就分不出来了，
+            # 而「P 账里全是页面加载」和「有人点出了这些边」在结论上差很远。
+            "pageLoadEdges": p_edge_rows,
             "routeEndpoints": len(r_eps),
             # Q 边分四本账，别只报一个总数：`helperHits` 一旦掉回 0，
             # 说明 helper 库没读到或对方改了签名 —— 那时候 G1/G3 会**暴涨**，

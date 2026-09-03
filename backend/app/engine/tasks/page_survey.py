@@ -185,6 +185,11 @@ async def _persist(*, project_id, env_id, env_name, build_fingerprint,
             env_id=uuid.UUID(str(env_id)) if env_id else None, env_name=env_name,
             build_fingerprint=build_fingerprint, route_table_hash=route_table_hash,
             roles=roles, status=payload["status"], ledger=payload["ledger"],
-            items=payload["items"])
+            items=payload["items"],
+            # `.get` 而不是 `["page_edges"]`：跑崩的那趟 payload 里没有这一键，
+            # 而 KeyError 会把「P 边没算出来」升级成「整趟没落库」—— 账本、
+            # 失败页、脏数据信号一起丢，那些比 P 边要紧。
+            # 拿不到就是 NULL = 没算过（≠ 算过了没有边，见 `save_survey`）。
+            page_edges=payload.get("page_edges"))
         await session.commit()
         return survey.id

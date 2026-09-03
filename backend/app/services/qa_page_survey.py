@@ -157,7 +157,7 @@ async def save_survey(session, *, project_id: uuid.UUID, env_id=None,
                       env_name: str = "", build_fingerprint: str = "",
                       route_table_hash: str = "", roles: list | None = None,
                       status: str, ledger: dict | None = None,
-                      items: list | None = None,
+                      items: list | None = None, page_edges: list | None = None,
                       error: str | None = None) -> QaPageSurvey:
     """把一趟爬取落库。**不 commit**，由调用方决定事务边界。
 
@@ -165,11 +165,16 @@ async def save_survey(session, *, project_id: uuid.UUID, env_id=None,
     `(survey_id, key)` 撞了意味着锚点推断塌了（整页退化成文案锚点、两个按钮同名），
     那时候 diff 会变成噪声源。让它**在写入时就炸**，比在 diff 结果里表现成
     「新增 40 项」好查得多 —— 后者没人查得出源头，只会被当成前端改版。
+
+    `page_edges` **不传 = NULL = 这趟没算过 P 边**（跑崩的那几趟就是这样），
+    传空列表 = 算过了确实一条都没有。别把默认值改成 `[]` 把两者揉平：
+    「没算过」被读成「没有边」，对账那边会凭空多出一批 G1。
     """
     survey = QaPageSurvey(
         project_id=project_id, env_id=env_id, env_name=env_name or "",
         build_fingerprint=build_fingerprint or "", route_table_hash=route_table_hash or "",
         roles=list(roles or []), status=status, ledger=ledger or {},
+        page_edges=page_edges,
         finished_at=datetime.now(timezone.utc), error=error)
     session.add(survey)
     await session.flush()

@@ -471,3 +471,107 @@ class Test模块纪律:
     def test_并发对测试环境是克制的(self):
         """对方是测试环境不是压测靶子。"""
         assert 1 <= c.MAX_PARALLEL_SHARDS <= 3
+
+
+# ── 导航时窗 ─────────────────────────────────────────────────────────────
+
+class Test导航时窗:
+    """S8.2 · HAR 是**一整份**（`record_har_path` 单文件），里面没有"这条属于哪次
+    导航"这种字段。所以时间是唯一的锚 —— 时窗记错了，`qa_page_traffic` 那边
+    再对也没用，而且**错法是看不见的**：边照样生成，只是挂在别的页面名下。
+    """
+
+    @pytest.mark.asyncio
+    async def test_每一页都记一格并且按顺序(self, tmp_path, _creds):
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(_FakePage()), "http://h", "qa-auditor",
+                           ["/a", "/b"], ledger, tmp_path)
+        wins = ledger["pageWindows"]["qa-auditor"]
+        # 第一格是登录 —— 它也发请求，不记就整片落到 `edgesUnwindowed` 里
+        assert [w["path"] for w in wins] == ["/login", "/a", "/b"]
+        assert all(w.get("startedAt") and w.get("endedAt") for w in wins)
+
+    @pytest.mark.asyncio
+    async def test_起点必须记在_goto_之前(self, tmp_path, _creds):
+        """**这条是本类的第一纪律。** 记在 `goto` 之后的话，这一页自己的加载流量
+        全落在窗外 —— 而那恰好是页面级 P 边**唯一**的来源。表现是 P 账几乎全空，
+        在报告上长得像「这些页面不打接口」。
+        """
+        page = _FakePage()
+        seen = {}
+        real_goto = page.goto
+
+        async def goto(url, timeout=None):
+            # 按 url 记，别用 setdefault 记"第一次" —— 第一次是登录那一跳
+            seen[url] = c._now()
+            return await real_goto(url, timeout=timeout)
+
+        page.goto = goto
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(page), "http://h", "qa-auditor",
+                           ["/a"], ledger, tmp_path)
+        win = [w for w in ledger["pageWindows"]["qa-auditor"] if w["path"] == "/a"][0]
+        at = [v for k, v in seen.items() if k.endswith("/a")][0]
+        assert win["startedAt"] <= at <= win["endedAt"]
+
+    @pytest.mark.asyncio
+    async def test_登录那格不许延长(self, tmp_path, _creds):
+        """提交完浏览器自己跳到落地页。延长会把落地页的流量记到 `/login` 名下，
+        而报告上看不出这是错的。`tail: False` 是那一格唯一的防线。
+        """
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(_FakePage()), "http://h", "qa-auditor",
+                           ["/a"], ledger, tmp_path)
+        wins = ledger["pageWindows"]["qa-auditor"]
+        assert wins[0]["tail"] is False
+        assert "tail" not in wins[1]           # 普通页缺省就是可延长
+
+    @pytest.mark.asyncio
+    async def test_打不开的页也要有一格(self, tmp_path, _creds):
+        """超时那一页照样发过请求（发了才超时）。少这一格，那些请求会顺着
+        延长规则记到**上一页**名下 —— 凭空给上一页添几条它不打的端点。
+        """
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(_FakePage(fail_paths=["/bad"])), "http://h",
+                           "qa-auditor", ["/ok", "/bad"], ledger, tmp_path)
+        wins = ledger["pageWindows"]["qa-auditor"]
+        assert [w["path"] for w in wins] == ["/login", "/ok", "/bad"]
+        assert wins[-1].get("endedAt")
+
+    @pytest.mark.asyncio
+    async def test_关闭时刻要记下来(self, tmp_path, _creds):
+        """最后一页的尾巴延到 `context.close()`。没有这个时刻，
+        `effective_windows` **不延长**（宁可记不了账也不归错页），
+        于是最后一页的轮询流量整片丢进 `edgesUnwindowed`。
+        """
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(_FakePage()), "http://h", "qa-auditor",
+                           ["/a"], ledger, tmp_path)
+        assert ledger["contextClosedAt"]["qa-auditor"]
+
+    @pytest.mark.asyncio
+    async def test_角色各记一本(self, tmp_path, monkeypatch):
+        """两个角色跑在两个 shard 里、各有一份 HAR。混成一本的话
+        A 角色的时窗会去归 B 角色的流量。
+        """
+        for r in ("QA_AUDITOR", "TESTER"):
+            monkeypatch.setenv(f"{r}_USERNAME", "u")
+            monkeypatch.setenv(f"{r}_PASSWORD", "p")
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(_FakePage()), "http://h", "qa-auditor",
+                           ["/a"], ledger, tmp_path)
+        await c.crawl_role(_FakeBrowser(_FakePage()), "http://h", "tester",
+                           ["/b"], ledger, tmp_path)
+        assert set(ledger["pageWindows"]) == {"qa-auditor", "tester"}
+        assert [w["path"] for w in ledger["pageWindows"]["tester"]] == ["/login", "/b"]
+
+    @pytest.mark.asyncio
+    async def test_时窗真的喂给了归页那一步(self, tmp_path, _creds):
+        """上面几条只证明账本记对了。`run_survey` 不把它传下去的话，
+        `page_edges` 会稳定是 `[]` —— 而那在 `compute_gaps` 里只换来一句声明，
+        不报错。
+        """
+        src = SRC.read_text(encoding="utf-8")
+        assert 'ledger.get("pageWindows")' in src
+        assert 'closed_at=(ledger.get("contextClosedAt") or {}).get(role)' in src
+        assert 'ledger["traffic"] = ' in src

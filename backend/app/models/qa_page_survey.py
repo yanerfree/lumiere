@@ -89,6 +89,16 @@ class QaPageSurvey(Base):
     # 每加一项一次迁移不现实 —— 所以是 jsonb 不是列。
     ledger: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # P 边：**页面级**的「打开这一页浏览器发了哪些请求」（归页规则在
+    # `qa_page_traffic`）。**不是** item 那一列 `endpoints` 的「点这个控件会打
+    # 哪些端点」—— 这一趟一个控件都没点，把页面流量写进那一列等于凭空造一条
+    # `observed` 的控件→端点边（`EDGE_SOURCES` 白名单防的就是它）。
+    #
+    # **NULL 读作「这趟还没算过 P 边」，`[]` 读作「算过了，没有边」。**
+    # 所以没有 server_default —— 默认值一填，「没算过」就会被读成「没有」，
+    # 而那正是 G1 假缺口的来源。
+    page_edges: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

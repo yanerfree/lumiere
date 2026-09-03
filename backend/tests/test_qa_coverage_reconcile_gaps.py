@@ -19,6 +19,10 @@ from app.services.qa_coverage_reconcile import (
     edge_ok,
     extract_endpoints,
 )
+from app.services.qa_coverage_reconcile import (  # noqa: E402  私有的两个：join 的判据本身要能单独封样
+    _lookup,
+    _same_endpoint,
+)
 
 _DOMAINS = {
     "POL": {"name": "策略", "groups": ["Policies"], "groupsRaw": "Policies"},
@@ -318,8 +322,13 @@ class Test三条降级声明:
         assert any("route-drift" in d for d in g["declarations"])
 
     def test_都跑到了就不许有声明(self):
-        """降级声明的**反向锚点**：常驻的免责声明等于没有声明。"""
-        g = _gaps()
+        """降级声明的**反向锚点**：常驻的免责声明等于没有声明。
+
+        这里要显式喂一条页面级 P 边 —— `page_edges` 缺省是 `None`（"这趟没算过"），
+        而那也是一条声明。桩里挑的是脚本已经打过的那个端点，免得顺手多造一条缺口。
+        """
+        g = _gaps(page_edges=[{"source": "observed", "pagePath": "/mcp",
+                               "method": "GET", "path": "/api/mcp/tools"}])
         assert g["declarations"] == []
         assert g["dimensions"] == {"page": "verified", "routeTable": "verified",
                                    "g2": "verified"}
@@ -429,4 +438,147 @@ class Test计数为0也要渲染:
                                  "qInlineHits": 0, "qHelperHits": 0,
                                  "qOutOfScope": 0, "qInfraCalls": 0,
                                  "helpersParsed": 0, "helpersInfra": 0,
-                                 "helpersUnparsed": 0}
+                                 "helpersUnparsed": 0,
+                                 # 页面级 P 边的条数。0 和"这趟没算"要能分开，
+                                 # 后者看 declarations，不是看这里少一个键。
+                                 "pageLoadEdges": 0}
+
+
+class Test页面级的边:
+    """S8.2 · 无向枚举**一个控件都不点**，所以控件级的边天生接近空。
+
+    页面加载时的流量是这一维唯一的真实来源。它和控件级的边合进同一本 P 账，
+    但绝不能长成同一种东西 —— 「有人点了这个按钮」和「打开这一页浏览器自己
+    发的」是两个事实，混起来读的人会去页面上找一个不存在的控件。
+    """
+
+    _EDGE = {"source": "observed", "pagePath": "/policies",
+             "method": "POST", "path": "/api/policies/27/reject"}
+
+    def test_页面级的边照样进P账(self):
+        g = _gaps(page_items=[], page_edges=[dict(self._EDGE)])
+        assert [x["path"] for x in g["g1"]] == ["/api/policies/{}/reject"]
+        assert g["counters"]["pageEndpoints"] == 1
+        assert g["counters"]["pageLoadEdges"] == 1
+
+    def test_页面级的边要标出自己是页面级的(self):
+        """报告上要能一眼分开。`origin` 缺省是 `control` —— 没有这个字段的话
+        「打开页面就打了这个端点」会被读成「有人点了什么」，然后照着锚点
+        去页面上找那个控件，找不到。
+        """
+        g = _gaps(page_items=[], page_edges=[dict(self._EDGE)])
+        assert [x["origin"] for x in g["g1"]] == ["page"]
+        assert g["g1"][0]["controlAnchor"] == "/policies :: (页面加载)"
+        assert g["g1"][0]["label"] == "(页面加载)"
+
+    def test_控件级的边压过页面级的(self):
+        """同一个端点两边都有时，报告该指那个控件 —— 那是更具体的事实。"""
+        g = _gaps(page_edges=[dict(self._EDGE)])
+        assert [x["origin"] for x in g["g1"]] == ["control"]
+        assert "bulk-reject" in g["g1"][0]["controlAnchor"]
+
+    def test_说不清出处的页面级边也不采信但要记数(self):
+        """和控件边同一个理由：`edge_ok` 拒掉的边一条都不许进账，
+        但**扔掉多少条**必须看得见 —— 否则 P 账变空长得像「没缺口」。
+        """
+        g = _gaps(page_items=[],
+                  page_edges=[{"source": "guessed", "pagePath": "/policies",
+                               "method": "GET", "path": "/api/x"}])
+        assert g["counters"]["pageEndpoints"] == 0
+        assert g["counters"]["pageLoadEdges"] == 0
+        assert g["counters"]["edgesUnsourced"] == 1
+        assert g["edgesUnsourced"][0]["source"] == "guessed"
+        assert g["edgesUnsourced"][0]["anchor"] == "/policies :: (页面加载)"
+
+    def test_没算过页面级边要明说(self):
+        """`None` = 老 survey / 这趟没算。不说的话 G1/G3 双双接近 0，
+        在页面上长得像「这个域没缺口」。
+        """
+        g = _gaps(page_edges=None)
+        assert any("这一维没验" in d for d in g["declarations"])
+
+    def test_算出来是0条也要明说(self):
+        """`[]` ≠ `None`：算过了、确实一条都没有。页面加载不打任何接口不正常，
+        真相通常在账本的 `edgesUnwindowed` / `edgesUnusable` 里。
+        """
+        g = _gaps(page_edges=[])
+        assert any("edgesUnwindowed" in d for d in g["declarations"])
+        assert not any("这一维没验" in d for d in g["declarations"])
+
+    def test_没跑页面枚举时不许拿页面级边硬撑(self):
+        """`page_survey_available=False` 那条声明不能被这条盖掉 ——
+        「这一维压根没跑」比「跑了但一条边都没算出来」严重得多。
+        """
+        g = _gaps(page_items=[], page_survey_available=False, page_edges=[])
+        assert any("route-drift" in d for d in g["declarations"])
+        assert not any("edgesUnwindowed" in d for d in g["declarations"])
+
+
+class Test模板对真id:
+    """S8.2 · P 侧是浏览器真发的路径，R 侧是路由模板。**这个 join 错了两边都假。**
+
+    `normalize_path` 只压得动 uuid 和纯数字，slug 型 id（`kong-prod`）压不动。
+    """
+
+    _R = [{"group": "Policies", "method": "GET", "path": "/api/adapters/{}"},
+          {"group": "Policies", "method": "GET", "path": "/api/adapters/health"}]
+    _P = [{"page_path": "/adapters", "anchor": "tr.row", "label": "适配器",
+           "control_type": "row", "state": "enabled",
+           "endpoints": [{"source": "observed", "method": "GET",
+                          "path": "/api/adapters/kong-prod"}]}]
+
+    def test_slug型id不许报成页面上没有(self):
+        """**反向锚点**：换回 `k in p_eps` 那种字面量比较，这条立刻红。
+        它当时的表现是「多一条 G2」—— 报告说 R 有这个路由而页面上没有，
+        而页面上明明刚打过。
+        """
+        g = _gaps(routes=self._R[:1], scripts=[], claimed_domains=set(),
+                  page_items=self._P)
+        assert g["g2"] == []
+
+    def test_精确的不许被通配的抢走(self):
+        """`/api/adapters/health` 真存在，页面上没打过就该报 G2。通配兜底排在
+        精确命中后面才成立 —— 反过来它会被 `/api/adapters/{}` 吃掉，
+        而**少一条缺口是看不见的那一侧**。
+        """
+        g = _gaps(routes=self._R, scripts=[], claimed_domains=set(),
+                  page_items=self._P)
+        assert [x["path"] for x in g["g2"]] == ["/api/adapters/health"]
+
+    def test_域也要能查到(self):
+        """join 断了的另一面：P 那条查不到 `group`，域就归错 —— 要么挂进
+        「归属规则没读懂」，要么归到别的域名下。
+        """
+        g = _gaps(routes=self._R[:1], scripts=[], claimed_domains=set(),
+                  page_items=self._P)
+        assert [x["domain"] for x in g["g1"]] == ["POL"]
+        assert g["counters"]["endpointsUnattributed"] == 0
+
+    def test_段数不等不算同一个端点(self):
+        """`covers()` 那两段部署前缀容忍是给 Q 侧（别人仓库里的路径）用的。
+        P 和 R 都是同一个 BFF 自报的，多一段就是另一个端点。
+        """
+        assert not _same_endpoint("GET", "/api/adapters", "GET", "/api/adapters/{}")
+        assert _same_endpoint("GET", "/api/adapters/x", "GET", "/api/adapters/{}")
+        assert not _same_endpoint("GET", "/api/adapters/x", "POST", "/api/adapters/{}")
+        assert not _same_endpoint("GET", "", "GET", "")
+
+    def test_方法空着算通配(self):
+        """R 偶尔不报 method。空着当"对不上"会让那条路由永远报 G2。"""
+        assert _same_endpoint("", "/api/adapters/x", "GET", "/api/adapters/{}")
+        assert _same_endpoint("GET", "/api/adapters/x", "", "/api/adapters/{}")
+
+    def test_查表精确优先通配兜底(self):
+        """`_lookup` 的次序封样。`{}` 容忍是有代价的：`/adapters/health` 对
+        `/adapters/{}` 也成立。次序反过来的话字面量路由被通配路由抢走，
+        G2 少一条 —— **少一条缺口是看不见的那一侧**。
+        """
+        table = {"GET /api/adapters/{}": {"method": "GET", "path": "/api/adapters/{}"},
+                 "GET /api/adapters/health": {"method": "GET",
+                                              "path": "/api/adapters/health"}}
+        exact = _lookup("GET /api/adapters/health", "GET", "/api/adapters/health", table)
+        assert exact["path"] == "/api/adapters/health"
+        slug = _lookup("GET /api/adapters/kong-prod", "GET", "/api/adapters/kong-prod",
+                       table)
+        assert slug["path"] == "/api/adapters/{}"
+        assert _lookup("GET /api/teams", "GET", "/api/teams", table) is None
