@@ -1600,10 +1600,20 @@ export default function QaCatalog() {
             title="覆盖到哪了"
             extra={<span style={{ fontSize: 11, color: C.gray }}>不含 {summary.deprecated} 条已废弃</span>}
           >
+            {/* 「221 / 284」这两个数原来跟后面那句散文同字号同灰色（12px gray），
+                于是整行只有 78% 那个大字看得见 —— 被当面点名"只看到进度条"。
+                百分比是**结论**，分子分母才是**能核对的事实**（284 是清单总行数，
+                221 是有脚本认领的行数），一起被压成小灰字就等于藏了。
+                现在分成两档写：数字 18px 墨色，量词和散文留在 12px 灰 ——
+                一行里"能读的数"和"解释它的话"轻重分开，而不是整行一起抬字号
+                （整行抬会顶到 78% 的位置，两个大字并排就没有主次了）。 */}
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
               <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.ok, lineHeight: 1 }}>{coverRate}%</span>
               <span style={{ fontSize: 12, color: C.gray }}>
-                {summary.covered} / {summary.total} 条清单里有脚本认领
+                <b style={{ fontSize: 18, fontWeight: 600, color: C.ink }}>{summary.covered}</b>
+                <span style={{ margin: '0 3px' }}>/</span>
+                <b style={{ fontSize: 18, fontWeight: 600, color: C.ink }}>{summary.total}</b>
+                <span style={{ marginLeft: 5 }}>条清单里有脚本认领</span>
               </span>
             </div>
             {['P0', 'P1', 'P2', 'P3'].filter(p => summary.byPriority?.[p]).map(p => {
@@ -1619,7 +1629,13 @@ export default function QaCatalog() {
                     size="small" strokeColor={PRIORITY_BAR[p]} trailColor={BAR_TRAIL}
                     style={{ flex: 1, margin: 0 }} showInfo={false}
                   />
-                  <span style={{ color: C.gray, width: 60, textAlign: 'right' }}>{s.covered}/{s.total}</span>
+                  {/* 每档的分子分母同理：条子只说"大概多少"，具体差几条要靠这两个数。
+                      13px 墨色 —— 比总数那对小一档（它们是明细，不是头条），
+                      但不再是 12px 灰的"说明小字"。宽度跟着字号从 60 放到 66，
+                      不然 P1 的 101/145 会贴到右边沿。 */}
+                  <span style={{ color: C.ink, fontSize: 13, width: 66, textAlign: 'right' }}>
+                    {s.covered}/{s.total}
+                  </span>
                 </Hit>
               )
             })}

@@ -251,9 +251,13 @@ export default function CaseManagement() {
   }, [splits.length])
 
   // ---- 数据加载 ----
+  // 依赖必须是 [projectId]：切项目时这个组件**不会重挂**（路由 element 没变，只是
+  // 参数变了），空依赖的话环境下拉里会一直是上一个项目的环境 —— 而环境是项目级的，
+  // 拿着别人项目的 env_id 去执行就是 404「环境不存在」，而且不报在下拉这一步。
   useEffect(() => {
+    if (!projectId) return
     api.get(`/projects/${projectId}/environments`).then(res => setEnvironments(res.data || [])).catch(() => {})
-  }, [])
+  }, [projectId])
 
   const fetchFolders = useCallback(async () => {
     if (!projectId || !globalBranchId) return
