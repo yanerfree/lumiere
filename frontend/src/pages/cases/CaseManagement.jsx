@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react'
 import { timeColumn } from '../../utils/timeCol'
 import { Card, Input, Table, Tag, Button, Tree, Radio, Space, Pagination, Select, Modal, Upload, message, Form, Popconfirm, Tooltip, Empty, Spin, TreeSelect, Checkbox, Dropdown, Alert, Progress } from 'antd'
 import { SearchOutlined, UploadOutlined, DownloadOutlined, PlusOutlined, InboxOutlined, SettingOutlined, EditOutlined, DeleteOutlined, CopyOutlined, StarFilled, LoadingOutlined, ApiOutlined, MenuFoldOutlined, MenuUnfoldOutlined, PlayCircleOutlined, ReloadOutlined, ClearOutlined } from '@ant-design/icons'
@@ -179,6 +179,46 @@ export default function CaseManagement() {
   const resizingRef = useRef(false)
   const startXRef = useRef(0)
   const startWidthRef = useRef(220)
+
+  // 表格体高度。`scroll.y` 在 antd 里落成 `.ant-table-body` 的 **max-height**，
+  // 不是高度 —— 卡片被 flex 撑满时表体撑不到底，最后一行和分页栏之间就空一大块。
+  // 写死 `calc(100vh - 330px)` 同样不行：上面工具栏筛选项会换行、勾选后还会多出
+  // 一条批量栏，那个 330 只在某一种窗口宽度下对。所以量出来算：
+  // 页面根的底边 - 表体顶边 - 表头 - 分页栏。卡片不再 flex 撑满，行少时就跟 QA 页
+  // 一样贴着最后一行收口。
+  const pageRootRef = useRef(null)
+  const toolbarRef = useRef(null)
+  const tableWrapRef = useRef(null)
+  const pagerRef = useRef(null)
+  const [tableBodyH, setTableBodyH] = useState(420)
+  const measureRef = useRef(null)
+  useLayoutEffect(() => {
+    const measure = () => {
+      const root = pageRootRef.current
+      const wrap = tableWrapRef.current
+      if (!root || !wrap) return
+      const bottom = root.getBoundingClientRect().bottom
+      const top = wrap.getBoundingClientRect().top
+      const head = wrap.querySelector('.ant-table-header') || wrap.querySelector('.ant-table-thead')
+      const headH = head ? head.getBoundingClientRect().height : 39
+      const pagerH = pagerRef.current ? pagerRef.current.getBoundingClientRect().height : 53
+      setTableBodyH(Math.max(160, Math.floor(bottom - top - headH - pagerH)))
+    }
+    measureRef.current = measure
+    measure()
+    window.addEventListener('resize', measure)
+    // 工具栏高度会变（筛选项换行 / 勾选后多一条批量栏），高度一变就重量一次
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null
+    if (ro && toolbarRef.current) ro.observe(toolbarRef.current)
+    return () => {
+      window.removeEventListener('resize', measure)
+      if (ro) ro.disconnect()
+    }
+  }, [])
+
+  // 表头要等表格真渲染出来才量得到（首屏还在转圈时表格根本不在，量到的是兜底的 39）。
+  // 所以数据一到、行数一变就重量一次，别让首屏那次的兜底值一直用下去。
+  useLayoutEffect(() => { if (measureRef.current) measureRef.current() }, [loading, cases.length])
 
   const onResizeStart = useCallback((e) => {
     e.preventDefault()
@@ -1478,7 +1518,7 @@ export default function CaseManagement() {
   ]
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 70px)' }}>
+    <div ref={pageRootRef} style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 70px)' }}>
       <div style={{ flex: 1, display: 'flex', gap: 0, minHeight: 0 }}>
         {/* 左侧树 */}
         {!navCollapsed && (
@@ -1614,7 +1654,8 @@ export default function CaseManagement() {
         {/* 右侧列表 */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
           {/* 工具栏 */}
-          <Card styles={{ body: { padding: '8px 16px' } }} style={{ flexShrink: 0 }}>
+          <div ref={toolbarRef} style={{ flexShrink: 0 }}>
+          <Card styles={{ body: { padding: '8px 16px' } }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px 12px', alignItems: 'center' }}>
               <Input prefix={<SearchOutlined style={{ color: '#c9cdd4' }} />} placeholder="搜索用例ID或标题" value={keyword}
                 onChange={e => { setKeyword(e.target.value); setPage(1) }} allowClear style={{ width: 220 }}
@@ -1854,9 +1895,11 @@ export default function CaseManagement() {
               </div>
             )}
           </Card>
+          </div>
 
           {/* 表格 */}
-          <Card style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }} styles={{ body: { padding: 0, flex: 1, display: 'flex', flexDirection: 'column' } }}>
+          <Card style={{ overflow: 'hidden' }} styles={{ body: { padding: 0 } }}>
+            <div ref={tableWrapRef}>
             <Table
               dataSource={cases}
               columns={columns}
@@ -1868,15 +1911,15 @@ export default function CaseManagement() {
               // = 1230）。原来写死 1142、而列宽之和是 1208 —— 对不上时 antd 仍按列宽之和
               // 排版，但"要不要画固定列阴影"是拿这个数判的，于是会出现"没滚动也画阴影"
               // 或反过来。改列宽记得回来改这里。
-              scroll={{ x: 1230, y: 'calc(100vh - 330px)' }}
+              scroll={{ x: 1230, y: tableBodyH }}
               rowSelection={{ selectedRowKeys: selectedRowKeys, onChange: setSelectedRowKeys }}
-              style={{ flex: 1 }}
               locale={{ emptyText: (
                 <CaseEmpty filtersActive={filtersActive} hint={branchHint} onSwitch={switchBranch} />
               ) }}
               onRow={(record) => ({ style: { cursor: 'pointer' }, onClick: (e) => { if (e.target.closest('.ant-checkbox-wrapper, .ant-btn, .ant-popconfirm, a')) return; navigate(`/projects/${projectId}/cases/${record.id}?branchId=${globalBranchId}`) } })}
             />
-            <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(0,0,0,0.04)', display: 'flex', justifyContent: 'flex-end' }}>
+            </div>
+            <div ref={pagerRef} style={{ padding: '12px 16px', borderTop: '1px solid rgba(0,0,0,0.04)', display: 'flex', justifyContent: 'flex-end' }}>
               <Pagination current={page} pageSize={pageSize} total={total}
                 showSizeChanger pageSizeOptions={[20, 50, 100]} size="small" showTotal={t => `共 ${t} 条`}
                 onChange={(p, s) => { setPage(p); setPageSize(s) }} />

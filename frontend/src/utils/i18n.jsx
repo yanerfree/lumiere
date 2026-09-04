@@ -86,7 +86,7 @@ const MESSAGES = {
     'login.success': '登录成功',
 
     // Header
-    'header.platformName': 'Lumiere 测试管理平台',
+    'header.platformName': 'Lumiere',
     'header.changePassword': '修改密码',
     'header.logout': '退出登录',
   },

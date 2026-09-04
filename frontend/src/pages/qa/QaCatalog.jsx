@@ -1048,13 +1048,30 @@ export default function QaCatalog() {
     } catch { /* request.js 已展示错误 */ } finally { setStarting(false) }
   }
 
+  // 「拉取最新」的提示语。**三种情况必须说得不一样**，不能一律"已拉取最新"：
+  //   · 没有 diff（后端刚重启、这次是第一次读）→ 只说拉到了，不报 0 条 ——
+  //     报"新增 0 条"会被当成"仓库确实没动"，而事实是"没得比"。
+  //   · commit 没变 → 直接说清单没有变化。此前提示成功而数字一动不动，
+  //     查了半天才发现是后端没重启（CLAUDE.md 记着这一笔），根因之一就是这句话
+  //     从来不区分"拉到了新东西"和"拉了但什么都没变"。
+  //   · 有增有改 → 报数。删除的也报，那一列没人会主动去数。
+  const refreshText = (d) => {
+    if (!d) return '已从 QA 仓拉取最新清单'
+    const parts = []
+    if (d.added) parts.push(`新增 ${d.added} 条`)
+    if (d.updated) parts.push(`更新 ${d.updated} 条`)
+    if (d.removed) parts.push(`移除 ${d.removed} 条`)
+    if (parts.length) return `已拉取最新：${parts.join('，')}`
+    return d.commitChanged ? '已拉到新 commit，场景清单没有变化' : '已是最新，清单没有变化'
+  }
+
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
       const res = await api.post(`/projects/${projectId}/qa-catalog/refresh`)
       setData(res.data)
       if (res.data?.error) message.warning(res.data.error)
-      else message.success('已从 QA 仓拉取最新清单')
+      else message.success(refreshText(res.data?.refreshDiff))
     } catch { /* request.js 已展示错误 */ } finally { setRefreshing(false) }
   }
 
@@ -1524,6 +1541,16 @@ export default function QaCatalog() {
                   一行整条是彩的，而它说的只是"这份数字是什么时候拉的"这件中性的事。
                   现在只有「（14 小时前）」那半句表态，时间戳和 commit 一律中性。 */}
               <div style={{ fontSize: 12, color: C.gray, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {/* 分支必须显式写「QA 仓分支」：顶栏那个分支选择器是**平台自己的用例分支**
+                    （v2.2.0 之类），跟这份清单读的分支是两回事，只写「分支 main」会被
+                    当成同一个东西。 */}
+                {repo.branch && (
+                  <>
+                    QA 仓分支 <code style={{ color: C.gray }}>{repo.branch}</code>
+                    {repo.branchAuto && '（自动识别）'}
+                    {' · '}
+                  </>
+                )}
                 {repo.fetchedAt ? (
                   <>
                     拉取于 {new Date(repo.fetchedAt).toLocaleString('zh-CN')}

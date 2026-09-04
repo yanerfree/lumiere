@@ -1150,6 +1150,46 @@ def _assemble(scenarios: list[dict], domain_meta: dict[str, dict], cases: list[d
 _CACHE: dict[str, tuple[str, dict]] = {}
 
 
+def _sig_by_id(data: dict) -> dict[str, tuple]:
+    """按场景号取一份"内容指纹",用来算「拉取最新」到底带来了什么变化。
+
+    指纹只放页面上真的显示出来的那几项 —— 标题/优先级/风险/档位/状态 + 覆盖它的脚本
+    路径。**不要**把 `updatedAt`、`rowUpdatedAt` 这类时间戳放进来:那几个字段跟着
+    commit 走,放进去等于每次 fetch 都报"全部更新",数字就永远等于总条数,失去意义。
+    """
+    out: dict[str, tuple] = {}
+    for sc in data.get("scenarios") or []:
+        sid = sc.get("id")
+        if not sid:
+            continue
+        out[str(sid)] = (
+            sc.get("title") or "",
+            sc.get("priority") or "",
+            sc.get("risk") or "",
+            sc.get("tier") or "",
+            sc.get("state") or "",
+            tuple(sorted((c.get("path") or "") for c in (sc.get("scripts") or []))),
+        )
+    return out
+
+
+def _diff_snapshots(prev: tuple[str, dict] | None, data: dict) -> dict | None:
+    """跟上一次解析结果比一比。**没有上一份就返回 None,不要报 0** ——
+    进程刚起来时缓存是空的,报"新增 0 条更新 0 条"会被当成"仓库没动",
+    而实际情况是"这次是第一次读,没得比"。这两件事在页面上必须说得不一样。
+    """
+    if prev is None:
+        return None
+    old_sha, old_data = prev
+    a, b = _sig_by_id(old_data), _sig_by_id(data)
+    return {
+        "added": len(set(b) - set(a)),
+        "removed": len(set(a) - set(b)),
+        "updated": len([k for k in (set(a) & set(b)) if a[k] != b[k]]),
+        "commitChanged": (old_sha or "") != (data.get("repo") or {}).get("commitSha", ""),
+    }
+
+
 def cached_read(project_id: str, cfg: dict, refresh: bool) -> dict:
     """refresh=True 才打远端；否则本地缓存有就直接用。"""
     # glob 也进 key：只改脚本范围时 commit 没变，不进 key 的话缓存会原样顶回旧结果
@@ -1168,8 +1208,15 @@ def cached_read(project_id: str, cfg: dict, refresh: bool) -> dict:
         except GitError:
             pass
 
+    prev = _CACHE.get(key)
     data = sync_and_read(project_id, cfg, do_fetch=refresh)
     _CACHE[key] = (data["repo"]["commitSha"], data)
+    if refresh:
+        diff = _diff_snapshots(prev, data)
+        if diff is not None:
+            # 浅拷一层再挂 diff:**别写回 _CACHE**,否则后面每次 GET 都会带着
+            # 上一次拉取的增改条数,页面刷新一下就把旧数字当成刚发生的事。
+            return {**data, "refreshDiff": diff}
     return data
 
 
