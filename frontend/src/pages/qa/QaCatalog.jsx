@@ -3077,10 +3077,16 @@ const gapLine = r => (
     {r.origin === 'page-load' && <span style={{ color: C.faint }}>（页面加载）</span>}
   </>
 )
+// G4/G5 这两类**没有自己的域**（它们的定义就是「没发请求」，而域是从请求算的），
+// 所以末尾挂的是「这一页归谁」——同一页别的请求归哪个域，这个死按钮就找谁看。
+// 空着说明这一页一条请求都没观测到，那是另一件事，不写成"归不了属"。
 const controlLine = r => (
   <>
     <span style={{ color: C.ink }}>{r.label || r.anchor || '（没有名字）'}</span>
     <span style={{ color: C.faint }}> · {r.pagePath}{r.controlType ? ` · ${r.controlType}` : ''}</span>
+    {r.pageDomains?.length ? (
+      <span style={{ color: C.faint }}> · 找 {r.pageDomains.join('/')} 看</span>
+    ) : null}
   </>
 )
 
@@ -3296,6 +3302,9 @@ function LiveSurvey({ projectId, envs, canRun }) {
 
   const s = data?.survey
   const led = s?.ledger || {}
+  const menuFound = led.menuDiscovered
+    ? new Set(led.menuDiscovered).size
+    : undefined
   const st = SURVEY_STATUS[s?.status] || { text: s?.status || '', tone: 'mute' }
   const running = !!task && SURVEY_RUNNING.has(task.status)
 
@@ -3408,14 +3417,24 @@ function LiveSurvey({ projectId, envs, canRun }) {
                    hint="只点「新建/编辑」这类开层按钮各一次；删除/停用/退出一个都不点" />
               <Num label="点开的层" n={led.dialogsOpened}
                    hint="写操作的表单都在层里 —— 不点开，整个系统的输入框一个都枚举不到" />
+              <Num label="层·按标准认出" n={led.layersBy?.role}
+                   hint="层上写了 role=dialog / aria-modal —— 这是标准写法，脚本也好定位" />
+              <Num label="层·靠形状认出" n={led.layersBy?.geometry}
+                   hint="层上没有任何标准属性，只能靠「点完新冒出来、悬浮、够大」认出来。这一格是大头就该去问前端补 role=dialog：我们认得出，但别人写脚本会很难定位" />
+              <Num label="点了跳走的" n={led.dialogsNavigated}
+                   hint="「新建」不弹层、跳一页的产品占多数。跳到的那一页会接着爬 —— 表单就在那儿" />
               <Num label="表单字段" n={led.fieldsSeen} />
-              <Num label="菜单里发现的页" n={led.menuDiscovered?.length}
-                   hint="清单里没写、页面自己的菜单里有的页（详情页就是这么进去的）" />
+              {/* 去重：账本里每个角色发现一次记一条，同一页会重复出现好几遍。
+                  这一格问的是「多了几页」，重复计数会把它虚报成好几倍。 */}
+              <Num label="菜单里发现的页" n={menuFound}
+                   hint="清单里没写、页面自己的菜单里有的页（详情页就是这么进去的）。同一页被几个角色发现只算一页" />
               <Num label="发现了没去看的页" n={led.menuExtraCapped}
                    hint="超出每个角色的额外页预算。不是 0 就说明「这个域只有这些页」这句话还差一截" />
               <Num label="探过的选择器" n={led.selectorsProbed} />
               <Num label="只走了一半的角色" n={led.rolesShallow?.length} />
               <Num label="认不出锚点的控件" n={led.controlsAnchorless} />
+              <Num label="锚点撞车的控件" n={led.anchorCollisions}
+                   hint="同一页上多个控件用了同一个 data-testid（表格每行一个是常见写法）。不是 0 就说明脚本拿这个锚点定位时，抓到哪个由 DOM 顺序说了算" />
               {s.buildFingerprint ? (
                 <Tooltip title="前端构建指纹 —— 换了它，上一趟的边就不能跟这一趟混着算">
                   <span style={{ fontSize: 12, color: C.gray }}>

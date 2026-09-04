@@ -270,3 +270,46 @@ class TestPure:
         bad = mods & {"sqlalchemy", "httpx", "requests", "aiohttp", "app",
                       "anthropic", "openai", "playwright", "redis", "arq"}
         assert not bad, f"判定模块里出现了 IO/模型依赖：{sorted(bad)}"
+
+
+class TestL2词表按词边界匹配:
+    """ASCII 词按词边界匹配，中文按子串。
+
+    2026-09-04 实测那一趟量出来的账：`dialogsOpened` **恒为 0**，而
+    `controlsClicked` 是 255 —— 因为表头 `Created At` 里的 `create` 被子串
+    命中判成了「开层按钮」，一页三个名额全被表头和导航占掉。
+    子串匹配同时还把 `Address`（含 `add`）判成写、`Preset`（含 `reset`）判成禁点。
+    """
+
+    def test_created_at_不是新建(self):
+        assert g.classify_control("Created At", "columnheader") == "unknown"
+        assert g.click_intent("Created At", "columnheader") == "never"
+        assert g.click_intent("Updated", "button") == "never"
+
+    def test_address_不是添加(self):
+        assert g.classify_control("Address", "textbox") == "unknown"
+
+    def test_preset_不是重置(self):
+        # 判成 `unknown` 就够了 —— `unknown` 本来就不点。要紧的是它不再被
+        # 当成**禁点词命中**：那会让"认不出来所以不点"和"认出来是删除所以不点"
+        # 混成同一格，而这两件事的下一步完全不同（一个该补词表，一个不该动）。
+        assert g.classify_control("Preset", "button") == "unknown"
+        assert not any(g._word_hit("preset", w) for w in g._NEVER_CLICK_WORDS)
+
+    def test_真的新建照旧认得出(self):
+        assert g.classify_control("Create Team", "button") == "write"
+        assert g.click_intent("Create Team", "button") == "opener"
+        assert g.click_intent("New Adapter", "button") == "opener"
+        assert g.click_intent("Add", "button") == "opener"
+
+    def test_中文照旧走子串(self):
+        # 汉字在 Python 的 `\w` 里也是词字符，`\b新建\b` 在「新建团队」里
+        # 两边都不是边界 —— 中文必须留子串，不然整张中文词表一条都不命中。
+        assert g.classify_control("新建团队", "button") == "write"
+        assert g.click_intent("新建团队", "button") == "opener"
+        assert g.click_intent("删除成员", "button") == "never"
+
+    def test_复数和ing照旧命中(self):
+        assert g.classify_control("Details", "button") == "read"
+        assert g.classify_control("Filters", "button") == "read"
+        assert g.click_intent("Previous", "button") == "safe"

@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import re
+import time
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -239,7 +240,100 @@ _MENU_JS = r"""async () => {
 
 # 弹层长什么样。`[role="dialog"]` 是 ARIA 标准，antd / element-plus / MUI 都带；
 # 后面两条是框架兜底 —— **兜底放在最后**，标准命中时就用不上它们。
-DIALOG_SEL = '[role="dialog"], [role="alertdialog"], .ant-modal-content, .ant-drawer-content'
+# 这几类点下去是**换页/排序**，不是开层。它们照旧被采集、照旧算「页面上有」，
+# 只是不占开层预算 —— 2026-09-04 那一趟 255 次点击里 234 次是跳转、0 次开层，
+# 预算全被左侧导航和表头吃光，真正的「新建」按钮一个都没轮到。
+# 走的是**角色**不是文案：换个产品文案全变，角色不变。
+NON_OPENER_ROLES = ("a", "link", "tab", "menuitem", "treeitem",
+                    "columnheader", "th", "option")
+
+# 层长什么样。**两条路，标准优先、几何兜底。**
+#
+# 旧写法是一串 CSS：`[role=dialog]` 加 antd 的两个类名。2026-09-04 真跑之后
+# 发现它在这个产品上**恒为 0** —— 层开了，但那是 `div.fixed.inset-0.z-50`
+# 加一块 `sm:w-[480px]` 的面板，既没 role 也不是 antd 的类。
+# 而「一个都没开出来」在报告上和「这个产品没有弹窗」长得一模一样。
+#
+# 所以判据换成**它表现得像不像一个层**，不是**它叫什么名字**：
+#   · 标准路：`role=dialog|alertdialog` 或 `aria-modal=true` —— 有就直接算；
+#   · 兜底路：点完之后**新冒出来的**、`position` 是 fixed/absolute、
+#     `z-index ≥ 20`、面积 ≥ 240×160 的可见块。
+# 「新冒出来的」是关键：点之前先给现有的候选盖一个 `data-qa-pre`，
+# 点完只看**没盖章的**。否则页面上常驻的吸顶栏、抽屉式侧边导航
+# 都会被当成"刚开的层"，而那种误判会把整页控件挂到某个按钮名下 ——
+# 不是少一条账，是**一条错的账**。
+#
+# ⚠ 别退回写类名。类名是某个 UI 库的实现细节，这套东西要能换产品用。
+DIALOG_SEL = '[role="dialog"], [role="alertdialog"], [aria-modal="true"]'
+# 认出来之后就地盖一个章，后面枚举/关闭都认这个章 —— 这样"层的范围"
+# 只判定一次，不会枚举的时候按 A 算、关闭的时候按 B 算。
+LAYER_SEL = '[data-qa-layer="1"]'
+
+# 判「像不像一个层」。两处 JS 共用同一份，别抄成两份 ——
+# 抄两份之后盖章的和找章的会慢慢长歪，而长歪了不报错。
+_LAYER_CAND_JS = """
+  const _cand = (el) => {
+    const cs = getComputedStyle(el);
+    if (cs.display === 'none' || cs.visibility === 'hidden' || cs.opacity === '0')
+      return false;
+    const r = (el.getAttribute('role') || '').toLowerCase();
+    if (r === 'dialog' || r === 'alertdialog') return true;
+    if (el.getAttribute('aria-modal') === 'true') return true;
+    const pos = cs.position;
+    if (pos !== 'fixed' && pos !== 'absolute') return false;
+    const z = parseInt(cs.zIndex || '0', 10) || 0;
+    if (z < 20) return false;
+    const b = el.getBoundingClientRect();
+    return b.width >= 240 && b.height >= 160;
+  };
+"""
+
+# 点之前：给**现在就在**的候选盖 `data-qa-pre`。顺手清掉上一轮的章。
+_MARK_PRE_JS = """() => {
+""" + _LAYER_CAND_JS + """
+  document.querySelectorAll('[data-qa-layer]').forEach(
+    e => e.removeAttribute('data-qa-layer'));
+  document.querySelectorAll('[data-qa-pre]').forEach(
+    e => e.removeAttribute('data-qa-pre'));
+  let n = 0;
+  document.querySelectorAll('body *').forEach(el => {
+    if (_cand(el)) { el.setAttribute('data-qa-pre', '1'); n++; }
+  });
+  return n;
+}"""
+
+# 点之后：只看**没盖过章**的候选。挑「装着表单控件最多」的那个 ——
+# 遮罩层（那块半透明的黑）控件数是 0，面板才是我们要枚举的东西。
+_FIND_LAYER_JS = """() => {
+""" + _LAYER_CAND_JS + """
+  const fresh = [];
+  document.querySelectorAll('body *').forEach(el => {
+    if (!el.hasAttribute('data-qa-pre') && _cand(el)) fresh.push(el);
+  });
+  if (!fresh.length) return null;
+  const tops = fresh.filter(el => !fresh.some(o => o !== el && o.contains(el)));
+  const pool = tops.length ? tops : fresh;
+  const score = el => el.querySelectorAll(
+    'input,select,textarea,button,[role="combobox"],[role="switch"],' +
+    '[role="radio"],[role="checkbox"]').length;
+  const area = el => {
+    const b = el.getBoundingClientRect();
+    return b.width * b.height;
+  };
+  let best = pool[0];
+  for (const el of pool) {
+    const d = score(el) - score(best);
+    if (d > 0 || (d === 0 && area(el) > area(best))) best = el;
+  }
+  best.setAttribute('data-qa-layer', '1');
+  const r = (best.getAttribute('role') || '').toLowerCase();
+  const std = r === 'dialog' || r === 'alertdialog' ||
+              best.getAttribute('aria-modal') === 'true';
+  const b = best.getBoundingClientRect();
+  return {how: std ? 'role' : 'geometry', tag: best.tagName.toLowerCase(),
+          role: r, fields: score(best),
+          w: Math.round(b.width), h: Math.round(b.height)};
+}"""
 
 # 一个角色一趟最多点开几个层。**是预算不是过滤**：用完了要在账本上留一格
 # （`dialogBudgetExhausted` 记下是哪个角色），不然"这一页没有表单"和
@@ -373,6 +467,51 @@ def collect_items(page_path: str, page_title: str, raw_items, ledger: dict,
     return out
 
 
+def dedupe_items(rows: list[dict], ledger: dict) -> list[dict]:
+    """同一趟里 `key` 撞了的行**合成一行，并把撞了几次记成明账**。
+
+    撞 key 的真实成因（2026-09-04 实测）：产品在**表格每一行**上用了同一个
+    `data-testid`（`expand-row-button` 之类）。那不是 bug，是常见写法 ——
+    `key = page_path + anchor` 于是一页出现 6 个一模一样的 key。
+
+    为什么不让它撞库炸掉：`(survey_id, key)` 那条唯一约束确实是"锚点塌了"的
+    探测器，但**探测器不该把病人打死** —— 一条撞库让整趟 214 页、7 个角色的
+    产物一格都落不下来，报出来是 `status=failed`，而页面上和"这一趟没跑"
+    长得一模一样。现在改成：**这里合并 + 记 `anchorCollisions`**，
+    落库路径一个字不改（仍然不许 `on_conflict`，封样照旧盯着）。
+    探测器没被拆掉，它从"炸库"挪成了"账本上的一个数"，反而查得到是哪一页哪个锚点。
+
+    ⚠ 合并只在**采集处**做 —— 这里看得见它们是同一页上并排的兄弟节点。
+    `merge_shards` 那边**照旧不许合**：跨分片它分不清"撞了"和"两个角色都看见了"。
+    """
+    # **先把格子建出来再数。** 缺键和 0 在页面上长得一样，而这个数现在是
+    # 「锚点塌没塌」唯一的出口（此前那个出口是撞库炸掉整趟）——
+    # 渲染成"没算过"等于把探测器拆了还没人知道。
+    ledger["anchorCollisions"] = ledger.get("anchorCollisions", 0)
+    out: list[dict] = []
+    first: dict[str, dict] = {}
+    for row in rows:
+        k = row.get("key") or ""
+        prev = first.get(k)
+        if prev is None:
+            first[k] = row
+            out.append(row)
+            continue
+        ledger["anchorCollisions"] = ledger.get("anchorCollisions", 0) + 1
+        hits = ledger.setdefault("anchorCollisionKeys", [])
+        if k not in hits and len(hits) < 50:
+            hits.append(k)
+        # 合并的是**事实**，不是取第一条了事：后来那份点过 / 有反应的话，
+        # 证据得留下来，否则 G4 会凭空多一条"点了没反应"。
+        if row.get("clicked"):
+            prev["clicked"] = True
+        if row.get("effect") and not prev.get("effect"):
+            prev["effect"] = row["effect"]
+        if row.get("label") and not prev.get("label"):
+            prev["label"] = row["label"]
+    return out
+
+
 # ── 页面里的 JS：必须自己带闸 ─────────────────────────────────────────────
 
 async def _eval(page, js, arg=None):
@@ -407,19 +546,23 @@ async def _close_dialog(page) -> bool:
     关不掉却当关掉了，后面几次探测全在同一个层上点，枚举出来的东西会挂到
     别的按钮名下 —— 那不是少一条账，是**一条错的账**。
     """
+    # 认的是**刚才盖的那个章**，不是"页面上还有没有长得像层的东西"。
+    # 后者会被常驻的吸顶栏/侧边抽屉一直判成"还开着"，于是每次都走整页重载。
     for _ in range(2):
         try:
             await page.keyboard.press("Escape")
-            await page.wait_for_selector(DIALOG_SEL, state="hidden",
+            await page.wait_for_selector(LAYER_SEL, state="hidden",
                                          timeout=DIALOG_CLOSE_MS)
             return True
         except Exception:                                # noqa: BLE001
             continue
+    # 兜底点关闭按钮。`aria-label` 两条是标准，后面两条是 antd 的类名 ——
+    # **只在这里留类名**：这是"再试一下"，不是判定层在不在。
     for sel in ('[aria-label="Close"]', '[aria-label="close"]',
                 ".ant-modal-close", ".ant-drawer-close"):
         try:
             await page.locator(sel).first.click(timeout=CLICK_TIMEOUT_MS)
-            await page.wait_for_selector(DIALOG_SEL, state="hidden",
+            await page.wait_for_selector(LAYER_SEL, state="hidden",
                                          timeout=DIALOG_CLOSE_MS)
             return True
         except Exception:                                # noqa: BLE001
@@ -428,10 +571,11 @@ async def _close_dialog(page) -> bool:
 
 
 async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str,
-                         raw_items, ledger: dict, budget: int) -> tuple[list, dict, int]:
+                         raw_items, ledger: dict, budget: int,
+                         seen_openers: set) -> tuple[list, dict, int, list]:
     """把这一页的「开层」按钮点开几个，**枚举层里的东西**，再关掉。
 
-    返回 `(层里的账本行, {anchor: 反应}, 用掉几次预算)`。
+    返回 `(层里的账本行, {anchor: 反应}, 用掉几次预算, 点出来的新页面)`。
 
     为什么非做不可：不点开，整个系统的表单一条都枚举不到 —— 上一趟 1266 个
     可操作项里**一个输入框都没有**，而那不是"这系统没表单"，是表单都在层里。
@@ -444,20 +588,43 @@ async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str
        L1 确实拦住了，但那说明这个按钮不只是开层，下次改判据要看这条。
     3. **关不掉就整页重载并停止这一页的探测**。宁可少探两个层，
        也不要把 B 层里的控件记到 A 按钮名下。
+    4. **链接和表头不占预算**（`NON_OPENER_ROLES` / 带 `href`）。
+       2026-09-04 实测：255 次点击里 234 次是跳转、开层 **0 次** ——
+       名额全被左侧导航和 `Created At` 这种表头吃掉，真正的「新建」
+       一个都没轮到。账本那时显示「点了 255 下」，看着非常健康。
     """
     out: list = []
     marks: dict = {}
     picked: list = []
+    # 点「新建」跳到了一个新地址 —— **那个地址就是表单所在的页**。
+    # 2026-09-04 实测：22 次开层点击里 11 次是跳转、弹层 0 次 ——
+    # 这个产品的「新建」大多是**跳一页**而不是弹一层。跳走了就 goto 回来、
+    # 把地址丢掉的话，表单字段一个也枚举不到，而账本上
+    # 「点了 22 下」看着一切正常。**跳出来的页跟菜单发现来的同一个待遇。**
+    found_paths: list[str] = []
     for raw in raw_items or []:
         if raw.get("isField") or raw.get("disabled"):
             continue
         label = (raw.get("label") or "").strip()
-        if not label or click_intent(label, raw.get("role") or "") != "opener":
+        role = (raw.get("role") or "").strip().lower()
+        if not label or click_intent(label, role) != "opener":
+            continue
+        # 链接和表头不占预算：点它们是跳走/排序，层里的表单一个都看不到。
+        # 带 `href` 的一律算链接 —— 有的产品用 `<a role="button">` 当导航。
+        if role in NON_OPENER_ROLES or (raw.get("href") or "").strip():
             continue
         sel = anchor_selector(testid=raw.get("testid") or "",
                               elem_id=raw.get("id") or "", text=label)
         if not sel:
             continue                     # 锚不住的按钮不点：下一趟找不回同一个
+        # 去重的粒度：**有 testid/id 的按同一性去重、只认文案的按页去重**。
+        # 顶栏那个每页都在的齿轮按钮，`data-testid` 每页一样 —— 一次就够；
+        # 而 `新建` 在「团队」和「智能体」两页背后是**两张不同的表单**，
+        # 只按文案去重会把第二张整个丢掉，而这一版加开层就是为了看表单。
+        memo = sel if not sel.startswith("text=") else f"{page_path}\x00{sel}"
+        if memo in seen_openers:
+            continue
+        seen_openers.add(memo)
         picked.append((raw.get("testid") or raw.get("id") or label, label, sel))
         if len(picked) >= min(DIALOG_PROBE_PER_PAGE, max(budget, 0)):
             break
@@ -465,6 +632,11 @@ async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str
     used = 0
     for anchor, label, sel in picked:
         before = ledger.get("writesBlocked", 0)
+        try:
+            # 点之前把「现在就在的层状物」盖上章 —— 点完只认没盖章的。
+            await _eval(page, _MARK_PRE_JS)
+        except Exception:                                # noqa: BLE001
+            pass
         try:
             await page.locator(sel).first.click(timeout=CLICK_TIMEOUT_MS)
         except Exception as e:                           # noqa: BLE001
@@ -477,17 +649,32 @@ async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str
         used += 1
         ledger["controlsClicked"] = ledger.get("controlsClicked", 0) + 1
         effect = ""
-        try:
-            await page.wait_for_selector(DIALOG_SEL, state="visible",
-                                         timeout=DIALOG_WAIT_MS)
-            opened = True
-        except Exception:                                # noqa: BLE001
-            opened = False
-        if opened:
+        # 轮询而不是一次 `wait_for_selector`：判据是"新冒出来的"，
+        # 这件事只有对比之后才知道，没有哪个 CSS 选择器能等它。
+        shape = None
+        deadline = time.monotonic() + DIALOG_WAIT_MS / 1000
+        while True:
+            try:
+                shape = await _eval(page, _FIND_LAYER_JS)
+            except Exception:                            # noqa: BLE001
+                shape = None
+            if shape or time.monotonic() >= deadline:
+                break
+            await page.wait_for_timeout(150)
+        if shape:
             effect = "dialog"
             ledger["dialogsOpened"] = ledger.get("dialogsOpened", 0) + 1
+            # 是靠标准属性认出来的，还是靠几何兜底认出来的 —— **两格都 0 也渲染**。
+            # 兜底那一格常年为 0，说明产品守 ARIA；它一旦变成大头，
+            # 就该去问前端为什么层上没有 `role="dialog"`（脚本定位也会跟着难写）。
+            by = ledger.setdefault("layersBy", {"role": 0, "geometry": 0})
+            by[shape.get("how") or "geometry"] = by.get(
+                shape.get("how") or "geometry", 0) + 1
+            if len(ledger.setdefault("layerShapes", [])) < 20:
+                ledger["layerShapes"].append(
+                    {"page": page_path, "label": label, **shape})
             try:
-                inner = await _eval(page, _COLLECT_JS, DIALOG_SEL)
+                inner = await _eval(page, _COLLECT_JS, LAYER_SEL)
             except Exception:                            # noqa: BLE001
                 inner = []
                 ledger.setdefault("dialogCollectFailed", []).append(
@@ -509,6 +696,7 @@ async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str
             # 没弹层，但**跳走了** —— 也是"有反应"，同样不是死按钮。
             effect = "navigate"
             ledger["dialogsNavigated"] = ledger.get("dialogsNavigated", 0) + 1
+            found_paths.append(urlsplit(page.url).path)
             try:
                 await page.goto(page_url, timeout=PAGE_TIMEOUT_MS)
                 await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
@@ -521,7 +709,7 @@ async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str
             ledger.setdefault("openerBlockedWrite", []).append(
                 {"page": page_path, "label": label})
         marks[anchor] = effect
-    return out, marks, used
+    return out, marks, used, found_paths
 
 
 # ── 选择器活体命中 ────────────────────────────────────────────────────────
@@ -693,6 +881,7 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
         extras = 0
         idx = 0
         dialog_budget = DIALOG_PROBE_BUDGET
+        seen_openers: set = set()   # 这一趟已经探过的开层按钮（角色内去重）
         while idx < len(queue):
             path = queue[idx]
             idx += 1
@@ -732,9 +921,10 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
             await _probe_selectors(page, path, selector_probe, ledger)
             # ③ 弹层：写按钮背后的表单在这里才第一次被看见。
             if dialog_budget > 0:
-                inner, marks, used = await _probe_dialogs(
+                inner, marks, used, jumped = await _probe_dialogs(
                     page, page_path=record, page_title=title, page_url=page_url,
-                    raw_items=raw, ledger=ledger, budget=dialog_budget)
+                    raw_items=raw, ledger=ledger, budget=dialog_budget,
+                    seen_openers=seen_openers)
                 dialog_budget -= used
                 items.extend(inner)
                 # 把「点过 / 有反应」回填到**这一页自己那几行**上。
@@ -744,6 +934,8 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                     if row["anchor"] in marks:
                         row["clicked"] = True
                         row["effect"] = marks[row["anchor"]]
+            else:
+                jumped = []
             # ① 菜单树：让页面**自己说**它还能去哪儿。
             try:
                 menu = await _eval(page, _MENU_JS)
@@ -755,7 +947,9 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
             if not isinstance(menu, dict):
                 ledger.setdefault("menuScanFailed", []).append(record)
                 menu = {}
-            for found in menu.get("paths") or []:
+            # 菜单里读到的 + 点「新建」跳出来的，走**同一条**队列和预算：
+            # 两者都是"页面自己说它还能去哪儿"，分两套只会让预算算两遍。
+            for found in list(menu.get("paths") or []) + jumped:
                 tmpl = route_template(found)
                 if tmpl in seen_tmpl or found in seen_tmpl:
                     continue
@@ -788,7 +982,9 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
         # 最后一格的右边界。少了它，最后一页的尾巴无处可延，那一页
         # `networkidle` 之后的轮询会全部记进「归不了页」。
         ledger.setdefault("contextClosedAt", {})[role] = _now()
-    return items
+    # 同页撞 key 的（表格每行同一个 testid）合成一行 —— 见 `dedupe_items`。
+    # 放在**最后**做：前面那些 `page_rows` 的回填还得按原样一行一行改。
+    return dedupe_items(items, ledger)
 
 
 def sanitize_har(har_path: Path) -> dict | None:
@@ -856,6 +1052,18 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
                     # 下面这几格都是「0 也要渲染」：没弹层和没去探在报告上
                     # 长得一模一样，而前者是结论、后者是欠账。
                     "dialogsOpened": 0, "dialogsNoEffect": 0, "fieldsSeen": 0,
+                    # 「点了跳走的」和「认不出锚点的」同理：只在发生时 +1 的话，
+                    # 一次都没发生的那一趟这两格根本不存在，页面上渲染成
+                    # 「没记过」——而它们的真值是一个有意义的 0。
+                    "dialogsNavigated": 0, "controlsAnchorless": 0,
+                    # 层是靠标准属性（`role=dialog`/`aria-modal`）认出来的，
+                    # 还是靠几何兜底认出来的。**两格都得先摆在这儿** ——
+                    # 只在认出来的时候 `setdefault`，那么"一个层都没开"这一趟
+                    # 连这两个格子都不存在，页面上只能什么都不显示，
+                    # 于是「产品没有弹层」和「我们的判据认不出它的弹层」
+                    # 又长回一模一样。2026-09-04 踩的就是这个坑（判据照 antd 写，
+                    # 换个 UI 库整维恒 0，报告上一点痕迹都没有）。
+                    "layersBy": {"role": 0, "geometry": 0},
                     # 这一趟拿了几条选择器去探。**0 也要写出来** —— 清单是空的
                     # （QA 仓没拉到 / 解析全军覆没）和"探了但一条都没命中"在报告上
                     # 长得一模一样，而前者是我们自己没跑成，不是他的选择器有问题。

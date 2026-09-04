@@ -47,10 +47,12 @@ def merge_shards(shards, *, main_role: str) -> list[dict]:
     2. **只有浅扫角色看见的 key 要留下来。** 拿主爬那份当底、其余只做"标注"的话，
        这些行整个消失 —— 而「低权角色看得见、主爬（只读账号）看不见」
        恰恰是角色维度**唯一有价值的那个信号**。
-    3. **同一个分片里重复的 key 不许合并。** `(survey_id, key)` 撞库是故意的
-       （见 `models/qa_page_survey.py`）：它是锚点推断塌掉的探测器。
-       在这里顺手去个重，那个探测器就永远不会响了，而 diff 会开始
-       无缘无故地报「新增 40 项」。跨分片的同 key 才是并集要合的。
+    3. **同一个分片里重复的 key 不许合并。** 跨分片的同 key 才是并集要合的；
+       在这里顺手去个重，「撞了」和「两个角色都看得见」就再也分不开 ——
+       这一层看不见它们是不是同一页上并排的兄弟节点，分不清就不该替它做主。
+       同页撞 key 该在**采集处**合（`qa_page_survey_crawl.dedupe_items`：
+       那里看得见，而且合了会记 `anchorCollisions`）。真漏到这里的会撞
+       `(survey_id, key)` 那条唯一约束 —— 那是最后一道，不是第一道。
     """
     ordered = ([s for s in shards or [] if (s.get("role") or "") == main_role]
                + [s for s in shards or [] if (s.get("role") or "") != main_role])

@@ -536,6 +536,11 @@ def compute_gaps(*, page_items: list[dict] | None,
                              "group": r.get("group") or ""})
 
     page_domains: set[str] = set()
+    # 这一页上**真发出去的请求**分别归哪些域。G4/G5 那两类自己没有请求，
+    # 所以它们的 `domain` 只能是空 —— 但「这个死按钮在谁的地盘上」是查得出来的：
+    # 同一页别的请求归谁，这条就该找谁看。**不写进 `domain`**：那一格的含义是
+    # 「这条边归哪个域」，拿页面的域去填等于把"猜的"和"算出来的"混成一格。
+    doms_by_page: dict[str, set[str]] = {}
     g1: list[dict] = []
     g2: list[dict] = []
     g3: list[dict] = []
@@ -552,6 +557,7 @@ def compute_gaps(*, page_items: list[dict] | None,
             # 测到了 ⇒ 不是缺口，但**这个域在页面上有面**这件事照样成立，
             # 而且是最有力的正面证据。S7.5 靠它把域挡在 `notApplicable` 之外。
             page_domains |= doms
+            doms_by_page.setdefault(meta["pagePath"] or "", set()).update(doms)
             continue
         if not doms:
             # 归不了属 ≠ 没缺口。单独记账，**不塞进任何一类** ——
@@ -559,6 +565,7 @@ def compute_gaps(*, page_items: list[dict] | None,
             unattributed.append({"anchor": k, "pagePath": meta["pagePath"]})
             continue
         page_domains |= doms
+        doms_by_page.setdefault(meta["pagePath"] or "", set()).update(doms)
         for d in sorted(doms):
             row = {"domain": d, "method": meta["method"], "path": meta["path"],
                    "anchor": k, "pagePath": meta["pagePath"], "label": meta["label"],
@@ -611,6 +618,11 @@ def compute_gaps(*, page_items: list[dict] | None,
         # 只是更慢。不明说的话它看起来像"跑过了，缺口不多"。
         declarations.append("本轮无页面枚举，只有路由表维度 —— 等同 route-drift，"
                             "G1/G3/G4/G5 未验证")
+
+    # G4/G5 补一格「这一页归谁」。空列表 = 这一页一条请求都没观测到，
+    # 那是**另一件事**（整页没流量），不是"归不了属"——别把两者写成同一格。
+    for row in g4 + g5:
+        row["pageDomains"] = sorted(doms_by_page.get(row.get("pagePath") or "", ()))
 
     return {
         "g1": g1, "g2": g2, "g3": g3, "g4": g4, "g5": g5,

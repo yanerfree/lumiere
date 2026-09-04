@@ -115,6 +115,12 @@ class QaPageSurveyItem(Base):
         # 比在 diff 结果里表现成「新增 40 项」好查得多。
         # ⇒ 写入路径**不许** on_conflict_do_nothing / do_update，
         #   `test_重复_key_必须炸不许静默去重` 盯着。
+        # 2026-09-04 补一句边界：**采集处**（`qa_page_survey_crawl.dedupe_items`）
+        # 会把同一页上撞 key 的行合成一行，并把撞了几次记进账本
+        # （`anchorCollisions` / `anchorCollisionKeys`）。那不是"绕开这条约束"——
+        # 表格每行同一个 `data-testid` 是常见写法，让它撞库的代价是
+        # **整趟 200+ 页一格都落不下来**，报出来的 `status=failed` 和"这一趟没跑"
+        # 长得一模一样。探测器留着，只是从"炸库"挪到了账本上一个查得到的数。
         UniqueConstraint("survey_id", "key", name="uq_qa_page_survey_items_key"),
         Index("ix_qa_page_survey_items_project_page", "project_id", "page_path"),
         Index("ix_qa_page_survey_items_key", "key"),

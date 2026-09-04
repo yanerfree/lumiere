@@ -100,7 +100,8 @@ _READ_WORDS = (
     "查看", "详情", "搜索", "查询", "筛选", "过滤", "导出", "下载", "刷新", "展开",
     "收起", "全部", "更多", "返回", "取消", "关闭", "上一页", "下一页", "排序",
     "view", "detail", "search", "filter", "export", "download", "refresh", "expand",
-    "collapse", "more", "back", "cancel", "close", "next", "prev", "sort",
+    "collapse", "more", "back", "cancel", "close", "next", "prev",
+    "previous", "sort",
 )
 
 # 角色本身就说明了会不会改状态。`switch` / `checkbox` / `radio` 点一下就是改，
@@ -108,6 +109,33 @@ _READ_WORDS = (
 _WRITE_ROLES = ("switch", "checkbox", "radio", "slider", "spinbutton")
 # 导航类：点了只是换个页面。爬虫要靠它走完站点。
 _READ_ROLES = ("link", "tab", "menuitem", "treeitem")
+
+
+# ── 词表怎么匹配：ASCII 认词边界，中文认子串 ───────────────────────────────
+#
+# 2026-09-04 实测：表头 `Created At` 被 `create` 子串命中判成「开层按钮」，
+# 于是整页的预算被表头和左侧导航吃光，`dialogsOpened` **恒为 0** ——
+# 而账本上「点了 255 下」看着非常健康。子串匹配还顺带把 `Address` 判成写
+# （含 `add`）、`Preset` 判成禁点（含 `reset`）。
+#
+# 词边界只对 ASCII 有意义：Python 的 `\w` 把汉字也算词字符，
+# `\b新建\b` 在「新建服务」里两边都不是边界，一律不命中 —— 所以中文走子串。
+#
+# 尾巴只放 `s/es/ing`（`Details`、`Adding`），**不放 `d/ed`**：
+# 放了 `Created`/`Updated` 就又回到原样。代价是 `Running`、`Stopped`
+# 这类分词判成 unknown —— unknown 是**不点**的那一档，宁可少点。
+_ASCII_RE_CACHE: dict[str, "re.Pattern"] = {}
+
+
+def _word_hit(text: str, word: str) -> bool:
+    """`word` 在 `text` 里算不算命中。text/word 都应已 `lower()`。"""
+    if not word.isascii():
+        return word in text
+    rx = _ASCII_RE_CACHE.get(word)
+    if rx is None:
+        rx = re.compile(r"\b" + re.escape(word) + r"(?:s|es|ing)?\b")
+        _ASCII_RE_CACHE[word] = rx
+    return bool(rx.search(text))
 
 
 def classify_control(label: str, role: str = "") -> str:
@@ -123,10 +151,10 @@ def classify_control(label: str, role: str = "") -> str:
     if not text:
         return "read" if r in _READ_ROLES else "unknown"
     for w in _WRITE_WORDS:
-        if w in text:
+        if _word_hit(text, w):
             return "write"
     for w in _READ_WORDS:
-        if w in text:
+        if _word_hit(text, w):
             return "read"
     return "read" if r in _READ_ROLES else "unknown"
 
@@ -174,7 +202,7 @@ def click_intent(label: str, role: str = "") -> str:
     """
     text = (label or "").strip().lower()
     for w in _NEVER_CLICK_WORDS:
-        if w in text:
+        if _word_hit(text, w):
             return "never"
     # 角色照旧**先于**文案：一个文案叫「新增」的开关，点下去就是打开一个开关，
     # 不是弹一个层。少了这一句，`_OPENER_WORDS` 会把整档 switch/checkbox
@@ -184,7 +212,7 @@ def click_intent(label: str, role: str = "") -> str:
     if classify_control(label, role) in SAFE_TO_CLICK:
         return "safe"
     for w in _OPENER_WORDS:
-        if w in text:
+        if _word_hit(text, w):
             return "opener"
     return "never"
 

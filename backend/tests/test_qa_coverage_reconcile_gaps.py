@@ -677,3 +677,32 @@ class Test爬取那边报的数和这边收的参数是一对:
         src = inspect.getsource(crawl.run_survey)
         assert '"controlsClicked": 0' in src
         assert "controls_clicked" in inspect.signature(compute_gaps).parameters
+
+
+class TestG4G5带得出这一页归谁:
+    """G4/G5 自己没有请求，`domain` 只能是空 —— 但「找谁看」查得出来。
+
+    2026-09-04 实测：34 条 G5 里**带域的 0 条**，于是那一列在页面上永远是空的，
+    看着像"算不出来"。真相是这两类的定义就是「没有请求」，而域是从请求算的。
+    所以补的是**另一格** `pageDomains`：同一页别的请求归谁，这个死按钮就该
+    找谁看。`domain` 保持空 —— 拿页面的域去填那一格，等于把"猜的"写成"算出来的"。
+    """
+
+    def test_g5_带上这一页观测到的域(self):
+        g = _gaps()
+        row = g["g5"][0]
+        assert row["domain"] == ""          # 这一格照旧是空：它没有自己的边
+        assert row["pageDomains"]           # 但这一页上别的请求归得了属
+
+    def test_g4_也带(self):
+        assert "pageDomains" in _gaps()["g4"][0]
+
+    def test_整页没流量就是空列表(self):
+        """空列表 = 这一页一条请求都没观测到 —— 那是另一件事，别和"归不了属"混。"""
+        lonely = {"page_path": "/lonely", "anchor": "[data-testid=x]", "label": "孤零零",
+                  "control_type": "button", "state": "present", "endpoints": []}
+        g = _gaps(page_items=list(_PAGE) + [lonely])
+        row = next(x for x in g["g5"] if x["label"] == "孤零零")
+        assert row["pageDomains"] == []
+        # 同一趟里有流量的那一页照旧带得出来 —— 空不是因为这一格没实现
+        assert next(x for x in g["g5"] if x["label"] == "导出")["pageDomains"]

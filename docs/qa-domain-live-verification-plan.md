@@ -629,3 +629,172 @@ shardsOk 7/7 · loginCount 7 · pagesVisited 181 · P 边 232 —— 全绿
   要它就得等批 2 的有向脚本。
 * **`selfCheck notConfigured`** —— 自检那一路还没接。
 
+
+## §11 批 2 活体实测（2026-09-04，同一套环境）
+
+批 1 只做到「每一页都开一遍、把 load 时发的请求收下来」。批 2 补的是三件
+**跟域无关、换个产品照样成立**的事：**顺着页面自己的菜单往下走**、
+**点开层之后把表单字段枚举出来**、**把「点了没反应」和「点了有反应」分开记账**。
+没有一行按域/按产品写的适配 —— 判据全在**角色**（ARIA role）和
+**中英动词表**上，这两样是浏览器和人类语言给的，不是这个产品给的。
+
+下面五条都是**真跑之后才暴露、静态读代码一条都看不出来**的。
+
+### 11.1 「开层按钮」的词表是子串匹配 —— 表头 `Created At` 被当成了「新建」
+
+第一趟量出来：`controlsClicked` 255，`dialogsOpened` **0**。
+255 次点击里 234 次是**跳转**（`dialogsNavigated`），一层都没开出来。
+
+原因是 ASCII 词按**子串**匹配：表头 `Created At` 含 `create`、
+`Address` 含 `add`、`Preset` 含 `reset`。于是每页三个点击名额，
+全被左侧导航和表格表头吃光，真正的「新建」按钮**一个都没轮到**。
+
+改成 ASCII 走**词边界**、中文继续走子串（汉字在正则里也是词字符，
+`\b新建\b` 在「新建团队」里两边都不是边界 —— 中文一走词边界，整张中文词表
+一条都不命中）。封样在 `tests/test_qa_survey_guard.py::TestL2词表按词边界匹配`。
+
+### 11.2 链接和表头**不该占开层预算**
+
+词表修好之后仍然是 `dialogsOpened 0`。因为预算（每页 3 次）是**先到先得**，
+而链接、标签页、表头在 DOM 里排在按钮前面。它们点下去是**换页/排序**，
+不是开层 —— 照旧采集、照旧算「页面上有这个控件」，只是**不占开层名额**。
+判据走 `NON_OPENER_ROLES`（`a`/`link`/`tab`/`menuitem`/`treeitem`/`columnheader`…）
+加「带 `href` 的一律不算」，**没有一个词是产品名词**。
+
+### 11.3 这个产品的「新建」大多**跳一页**，不是弹一层 —— 跳走的那页此前被丢掉
+
+22 次开层点击里 **11 次是跳转、弹层 0 次**。原先跳走了就 `goto` 回来，
+**把落地地址扔了**。而表单就在那一页上 —— 于是「点了 22 下」在账本上
+一切正常，表单字段却一个都枚举不到。
+
+改成：跳到的地址进**同一条**菜单发现队列（两者都是「页面自己说它还能去哪儿」，
+分两套只会让预算算两遍），跟菜单读到的页同等待遇。
+
+### 11.4 表格每行同一个 `data-testid` → 整趟 200+ 页一格都落不下来
+
+第二趟跑完落库时炸了：`duplicate key … uq_qa_page_survey_items_key`，
+撞的是 `/monitoring/request-logs::expand-row-button`。
+成因不是 bug，是**常见写法**：产品在表格每一行上放了同一个 `data-testid`，
+一页于是出现 6 个一模一样的 key。
+
+**探测器该留，但不该把病人打死。** 一条撞库让 214 页 × 7 角色的产物
+全部落不下来，报出来是 `status=failed` —— 那和「这一趟根本没跑」
+在页面上长得一模一样。改成在**采集处**合成一行（那里看得见它们是同一页上
+并排的兄弟节点），并把撞了几次记成明账 `anchorCollisions` / `anchorCollisionKeys`。
+落库路径一个字没改，跨分片仍然**不许**合（那一层分不清「撞了」和
+「两个角色都看得见」）。这个数**0 也渲染** —— 缺键在页面上显示成「没算过」，
+等于把刚挪过来的探测器悄悄拆了。
+
+
+
+### 11.5 「弹层」的判据是照 antd 写的 —— 换个 UI 库整维恒 0，报告上一点痕迹都没有
+
+前面三条修完，`dialogsOpened` **还是 0**。到这一步已经不能再猜了：
+「层没开」和「层开了但我们认不出来」在账本上是同一个 0。
+
+于是单独写了一个只读探针：用 `admin` 登进去，点 `/adapters` 的「新建」，
+把点前点后的 DOM 快照做差集。**层是开了的** ——
+
+```
+＋ div|role=|cls=fixed inset-0 z-50 bg-black/80        ← 遮罩
+＋ div|role=|cls=relative flex h-full w-full sm:w-[480px] … bg-background shadow-lg   ← 面板
+＋ button|role=combobox / div|role=radiogroup / button|role=radio                     ← 层里的控件
+```
+
+面板上**既没有 `role="dialog"`，也不是 `.ant-modal-content`**。
+而我们的判据当时就是那一串：`[role=dialog], [role=alertdialog],
+.ant-modal-content, .ant-drawer-content` —— 照 antd 写的。
+换一个 UI 库（这里是 Radix/shadcn 那一路），**整个弹层维度静默归零**，
+而报告上它和「这个产品没有弹窗」长得一模一样。
+
+顺带查清了另一半：主爬用的是只读账号 `auditor`，它看到的「新建」是
+**灰的**（`disabled`）—— 那是产品的正确行为，本来就已经进了 G5。
+所以两个原因叠在一起，把一个"判据写死了"的 bug 藏得严严实实。
+
+**改法是把判据从「它叫什么名字」换成「它表现得像不像一个层」**，两条路：
+
+- **标准路**：`role=dialog` / `role=alertdialog` / `aria-modal=true` —— 有就直接算。
+- **兜底路**：点完之后**新冒出来的**、`position` 是 fixed/absolute、
+  `z-index ≥ 20`、面积 ≥ 240×160 的可见块；同一时刻有好几个就挑
+  **装着表单控件最多**的那个（遮罩层控件数是 0，面板才是要枚举的东西）。
+
+「新冒出来的」是这条兜底路能不能用的关键：点之前先给现有的候选盖一个
+`data-qa-pre`，点完只看**没盖章的**。不这么做的话，页面常驻的吸顶栏、
+侧边抽屉也满足 fixed + 高 z-index + 够大，随便点一下都会「开出一个层」，
+整页控件挂到那个按钮名下 —— **不是少一条账，是一条错的账，而且比真相好看**。
+
+认出来之后就地盖 `data-qa-layer="1"`，后面枚举和关闭都认这个章。
+"层的范围"只判定一次，不会枚举时按 A 算、关闭时按 B 算
+（关不掉却以为关掉了，后面几次探测就全在同一个层上点）。
+
+两条路**分开记账**（`layersBy: {role, geometry}`，**两格都 0 也渲染**）：
+兜底那一格常年为 0 说明产品守 ARIA；它一旦变成大头，就该去问前端为什么
+层上没有 `role="dialog"` —— 我们认得出，但别人写脚本会很难定位。
+再留 20 条 `layerShapes` 样本（哪一页、哪个按钮、多大、里面几个控件），
+否则「判错了」和「真是那样」事后没法回看。
+
+⚠ **别退回写类名。** 类名是某个 UI 库的实现细节，这套东西要能换产品跑。
+封样在 `tests/test_qa_survey_click_and_menu.py::Test层怎么认出来的`，
+其中一条直接拿判据正文去搜 `ant-` / `MuiDialog` / `chakra` / `el-dialog`。
+
+### 11.6 这一趟的完整数字
+
+同一套环境、同一个项目、同一个 `mainRole=auditor`（29 页 × 7 角色），
+和批 1 那趟**登录成功**的基线（`e3fb0989…`）对着看：
+
+| 指标 | 批 1 基线 | 批 2（第 5 趟） | 说明 |
+|---|---|---|---|
+| status | done | **done** | 中间第 2 趟撞唯一约束 failed，见 §11.4 |
+| pagesVisited | 203 | **216** | 多出来的是菜单/跳转发现的页 |
+| menuDiscovered | 0 | **13**（去重 3） | 账本按角色记，页面上显示去重后的 3 |
+| controlsClicked | **0** | **23** | 批 1 是无向枚举，一下都不点 |
+| dialogsOpened | – | **6** | 前四趟都是 0，见 §11.1–11.5 |
+| layersBy | – | **{role: 0, geometry: 6}** | 这个产品的层**一个都没写 ARIA** |
+| dialogsNavigated | – | **11** | 「新建」跳一页，不是弹一层 |
+| dialogsNoEffect | – | **6** | 点了没反应 → 进 G4 候选 |
+| fieldsSeen（账本 / 去重后行数） | 0 / 0 | **392 / 27** | |
+| anchorCollisions | – | **0** | 合并挪到采集处之后归零 |
+| controlsAnchorless | – | **236** | 没有 testid、只能靠文本定位 |
+| controlsUnknown | 6128 | **6754** | 判不出读写的，一律不点 |
+| **writesBlocked** | 0 | **0** | 三层闸门一次都没被触发 |
+| G1 / G2 / G3 / G4 / G5 | 0 / 120 / 21 / **0** | 0 / 120 / 21 / **1** / 35 | G4 批 1 判不了（不点就没有） |
+| itemCount | – | **1361** | |
+
+```
+计划：pages 29 · roles 7 · mainRole auditor · loginCount 7 · shards 7/7
+点击：clicked 23 · unclicked 1296 · withEffect 2 · unknown 6754 · anchorless 236
+层  ：opened 6（role 0 / geometry 6）· navigated 11 · noEffect 6
+      stuck 无 · clickFailed 无 · collectFailed 无
+字段：fieldsSeen 392（去重 27 行）
+流量：entriesTotal 5705 · apiEntries 3938 · pageLoadEdges 668 · pageEndpoints 92
+选择器：hitOne 175 · hitMany 13 · invalid 0 · notSeen 271 · notProbed 98 · keys 557
+对账：G1 0 · G2 120 · G3 21 · G4 1 · G5 35
+```
+
+**最能说明问题的一格是 `fieldsSeen` 去重后那 27 行。** 第 4 趟是 21 行，
+逐条看下来**全是搜索框和登录框** —— 也就是说「表单字段」这一维在层打开之前，
+量到的只有「页面上本来就摆着的输入框」。第 5 趟多出来的 6 行，
+一条不多一条不少，正好落在开出层的那两页上：
+
+```
+/adapters          e.g. Internal vLLM cluster · my-adapter
+/prompt-templates  Enter template name · Optional. Describe the template's purpose.
+                   Prompt content editor · Type a tag and press Enter to add
+```
+
+**这就是「点开层→枚举表单」整条链真的通了的证据**，而不是某个计数器自己涨了。
+
+还有一格值得单独说：`layersBy = {role: 0, geometry: 6}` ——
+**六个层全靠形状认出来的，标准路一个都没命中**。这正是把两条路分开记账的理由：
+它不是我们的 bug，是**这个产品的层上没有 `role="dialog"`**。
+我们靠几何兜底认得出来，但别人写自动化脚本会很难定位到这些层 ——
+这是一条该反馈给前端的事实，而不是一个该被平均掉的数字。
+（页面上「层·按标准认出 / 层·靠形状认出」两格就是给这件事看的，**两格都 0 也渲染**。）
+
+`writesBlocked 0` 也要读对：不是「闸门没起作用」，是**判据本身就没往写操作上点** ——
+6754 个控件判不出读写，一个都没点。闸门是最后一道，不是第一道。
+
+顺带修掉一格**虚报**：`menuDiscovered` 是**按角色**记的，同一页被 7 个角色各发现一次
+就是 7 条。页面上那格问的是「比清单多了几页」，直接拿长度显示会虚报成好几倍
+（这一趟 13 vs 真实的 3）。去重放在**呈现处**，账本原样保留 ——
+重复条目本身不带角色信息，去重不丢东西；但账本是原始记录，不该在写入时就被加工。
