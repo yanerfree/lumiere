@@ -3210,9 +3210,13 @@ function Reconcile({ rec }) {
                hint="P 账里「打开页面就发的」那部分。混进控件级边会让人以为有人点过那个按钮" />
           <Num label="R·端点" n={c.routeEndpoints} />
           <Num label="点过的控件" n={c.controlsClicked}
-               hint="无向枚举不点控件，所以这个数今天就该是 0；它是 G4 成立的唯一前提" />
+               hint="只点「新建/编辑」这类开层按钮，删除和退出一个都不点；它是 G4 成立的唯一前提" />
           <Num label="没点、也没端点账的控件" n={c.controlsUnclicked}
                hint="本来会落进 G4 的那些。它掉到 0 而「点过的控件」还是 0，说明枚举坏了，不是没缺口" />
+          <Num label="点了有反应的控件" n={c.controlsWithEffect}
+               hint="点开了一个层、或者跳走了 —— 没发请求但确实做了事，所以不算「死按钮」。少了这个数，G4 变少会被读成缺口变少" />
+          <Num label="表单字段" n={c.fieldsSeen}
+               hint="输入框/下拉/多行文本的条数。它是「表单覆盖了没」的分母 —— 掉回 0 的时候任何覆盖率都成立" />
           <Num label="脚本里抽不出 url" n={c.endpointsUnextracted} />
           <Num label="归不了属的端点" n={c.endpointsUnattributed}
                hint="归不了属 ≠ 没缺口：塞进 G1 是误报，丢掉是漏报，所以单独记一笔" />
@@ -3401,7 +3405,14 @@ function LiveSurvey({ projectId, envs, canRun }) {
                    hint="只读守卫真拦到的次数。不是 0 是正常的 —— 页面自己会发心跳/埋点" />
               <Num label="登录次数" n={led.loginCount} />
               <Num label="点过的控件" n={led.controlsClicked}
-                   hint="无向枚举不点控件，今天就该是 0" />
+                   hint="只点「新建/编辑」这类开层按钮各一次；删除/停用/退出一个都不点" />
+              <Num label="点开的层" n={led.dialogsOpened}
+                   hint="写操作的表单都在层里 —— 不点开，整个系统的输入框一个都枚举不到" />
+              <Num label="表单字段" n={led.fieldsSeen} />
+              <Num label="菜单里发现的页" n={led.menuDiscovered?.length}
+                   hint="清单里没写、页面自己的菜单里有的页（详情页就是这么进去的）" />
+              <Num label="发现了没去看的页" n={led.menuExtraCapped}
+                   hint="超出每个角色的额外页预算。不是 0 就说明「这个域只有这些页」这句话还差一截" />
               <Num label="探过的选择器" n={led.selectorsProbed} />
               <Num label="只走了一半的角色" n={led.rolesShallow?.length} />
               <Num label="认不出锚点的控件" n={led.controlsAnchorless} />

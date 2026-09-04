@@ -20,6 +20,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +38,7 @@ from app.services.qa_survey_guard import (
     MAIN_CRAWL_ROLE,
     SAFE_TO_CLICK,
     classify_control,
+    click_intent,
     drop_credentials,
     is_write_request,
     pick_main_crawl_role,
@@ -153,24 +155,114 @@ def make_readonly_guard(ledger: dict):
 
 # 在页面里跑的那段 JS：只读 DOM，什么都不点。
 # 抽 `data-testid` 是为了让 anchor 优先落在稳定标识上（S6.4 接着用）。
-_COLLECT_JS = """() => {
+_COLLECT_JS = """(rootSel) => {
+  // `rootSel` 传了就只枚举那个层里的东西（弹窗/抽屉），不传就是整页。
+  // **同一段 JS 两处用**：层里的输入框和页面上的输入框判据必须一模一样，
+  // 各写一份的话两边迟早分叉，而分叉出来的差异会被 diff 报成「功能变了」。
+  const root = rootSel ? document.querySelector(rootSel) : document;
+  if (!root) return [];
   const out = [];
-  const sel = 'button, a[href], [role="button"], [role="switch"], [role="tab"],'
-            + ' [role="menuitem"], input[type="checkbox"], input[type="radio"]';
-  for (const el of document.querySelectorAll(sel)) {
+  const CTRL = 'button, a[href], [role="button"], [role="switch"], [role="tab"],'
+             + ' [role="menuitem"], input[type="checkbox"], input[type="radio"]';
+  // 表单字段。**它不是「点」的对象，是「这一页要填什么」的账** ——
+  // 少了它，「表单功能覆盖了没」这个问题连问都问不出来：
+  // 上一趟 1266 个控件里一个输入框都没有，看着像这个系统根本没有表单。
+  const FIELD = 'input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]),'
+              + ' select, textarea, [role="combobox"], [role="textbox"],'
+              + ' [contenteditable="true"]';
+  const sel = CTRL + ', ' + FIELD;
+  for (const el of root.querySelectorAll(sel)) {
     const r = el.getBoundingClientRect();
     if (r.width === 0 && r.height === 0) continue;   // 藏起来的不算「页面上有」
+    const isField = el.matches(FIELD);
+    // ⚠ 字段的文案**绝不能取 `value`** —— 那是用户填进去的东西（用户名、密钥、
+    // 备注），取了就等于把被测环境的数据抄进我们的账本，还会顺着 diff 一路留档。
+    // HAR 那边凭据是**丢掉不是打码**，这里同一条纪律。
+    const label = isField
+      ? (el.getAttribute('aria-label') || el.getAttribute('placeholder')
+         || el.getAttribute('name') || el.id || '').trim().slice(0, 120)
+      : (el.getAttribute('aria-label') || el.innerText || el.value || '').trim().slice(0, 120);
     out.push({
-      label: (el.getAttribute('aria-label') || el.innerText || el.value || '').trim().slice(0, 120),
+      label: label,
       role: el.getAttribute('role') || el.tagName.toLowerCase(),
       testid: el.getAttribute('data-testid') || '',
       id: el.id || '',
       href: el.getAttribute('href') || '',
       disabled: el.disabled === true || el.getAttribute('aria-disabled') === 'true',
+      isField: isField,
+      // 必填/只读是**表单规则**，不是控件状态：QA 脚本有没有验「空提交报错」
+      // 要靠它对账。抽不到就是 false，不当成「不必填」。
+      required: el.required === true || el.getAttribute('aria-required') === 'true',
+      readonly: el.readOnly === true || el.getAttribute('aria-readonly') === 'true',
+      fieldType: isField ? (el.getAttribute('type') || el.tagName.toLowerCase()) : '',
     });
   }
   return out;
 }"""
+
+
+# 站内链接。**页面清单原来只有 QA 清单里那些静态字符串** —— 带参数的详情页
+# （`routes.teamDetail` 这一类）在解析时就被丢进 `skipped`，一次都没爬过，
+# 而"这个域的子菜单覆盖了没"问的正是它们。
+#
+# 做法是让页面**自己说**它能去哪儿：先把导航里折叠着的子菜单展开（那是纯读操作），
+# 再把所有站内 `href` 收上来。**零业务词** —— 换一个项目、换一个域照样成立。
+_MENU_JS = r"""async () => {
+  // 折叠的子菜单先展开。限定在导航容器里：页面正文里的可折叠面板也带
+  // `aria-expanded`，那些不是菜单，展开它们只会把无关内容点开。
+  const NAV = 'nav, aside, [role="navigation"], [role="menubar"], .ant-menu, .ant-layout-sider';
+  let expanded = 0;
+  for (const box of document.querySelectorAll(NAV)) {
+    for (const el of box.querySelectorAll('[aria-expanded="false"]')) {
+      if (expanded >= 20) break;                     // 上限，别在一页上耗着
+      const r = el.getBoundingClientRect();
+      if (r.width === 0 && r.height === 0) continue;
+      try { el.click(); expanded++; } catch (e) { /* 展不开就算了 */ }
+    }
+  }
+  if (expanded) await new Promise(r => setTimeout(r, 400));   // 等展开动画
+  const seen = new Set();
+  const out = [];
+  for (const a of document.querySelectorAll('a[href]')) {
+    let p = a.getAttribute('href') || '';
+    if (p.startsWith('#/')) p = p.slice(1);          // hash 路由
+    if (!p.startsWith('/') || p.startsWith('//')) continue;   // 站外/协议相对
+    p = p.split('?')[0].split('#')[0].replace(/\/+$/, '') || '/';
+    if (seen.has(p)) continue;
+    const r = a.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;   // 藏起来的不算"能去"
+    seen.add(p);
+    out.push(p);
+  }
+  return {paths: out, expanded: expanded};
+}"""
+
+# 弹层长什么样。`[role="dialog"]` 是 ARIA 标准，antd / element-plus / MUI 都带；
+# 后面两条是框架兜底 —— **兜底放在最后**，标准命中时就用不上它们。
+DIALOG_SEL = '[role="dialog"], [role="alertdialog"], .ant-modal-content, .ant-drawer-content'
+
+# 一个角色一趟最多点开几个层。**是预算不是过滤**：用完了要在账本上留一格
+# （`dialogBudgetExhausted` 记下是哪个角色），不然"这一页没有表单"和
+# "预算用完了没去看"在报告上长得一模一样。
+DIALOG_PROBE_BUDGET = 40
+DIALOG_PROBE_PER_PAGE = 3
+# 每个角色额外爬几个**菜单里发现、清单里没有**的页面。同样是预算。
+MENU_EXTRA_MAX_PAGES = 25
+
+_ID_SEG = re.compile(r"^(?:\d+|[0-9a-fA-F]{8,}|[0-9a-fA-F-]{16,})$")
+
+
+def route_template(path: str) -> str:
+    """`/teams/9f3a-…/members` → `/teams/:id/members`。
+
+    详情页的 id 每一趟都不一样。拿**具体路径**当账本键的话，下一趟同一个页面
+    会整批报成「新增」+「功能没了」—— 一次改版都没发生，报告却全是缺口。
+    所以：**导航用具体路径，记账用模板。**
+    """
+    segs = []
+    for s in (path or "").split("/"):
+        segs.append(":id" if s and _ID_SEG.match(s) else s)
+    return "/".join(segs)
 
 
 def self_check_label(totals_probe) -> str:
@@ -207,10 +299,11 @@ def _state_of(raw: dict) -> str:
     **宁可少一档，也不要把 `enabled` 当成 `reachable` 写进去** ——
     那是把没验证过的事记成验证过了。
     """
-    return "present" if raw.get("disabled") else "enabled"
+    return "present" if (raw.get("disabled") or raw.get("readonly")) else "enabled"
 
 
-def collect_items(page_path: str, page_title: str, raw_items, ledger: dict) -> list[dict]:
+def collect_items(page_path: str, page_title: str, raw_items, ledger: dict,
+                  scope: str = "") -> list[dict]:
     """把一页的原始控件整理成账本行。**认不出的照记不漏，只是不点。**
 
     `anchor_kind` 走 `ui_selector_render.infer_kind`，**不在这里另写一套**：
@@ -228,9 +321,22 @@ def collect_items(page_path: str, page_title: str, raw_items, ledger: dict) -> l
     for raw in raw_items or []:
         label = (raw.get("label") or "").strip()
         role = (raw.get("role") or "").strip()
-        kind = classify_control(label, role)
-        if kind == "unknown":
-            ledger["controlsUnknown"] = ledger.get("controlsUnknown", 0) + 1
+        if raw.get("isField"):
+            # 字段**不过 `classify_control`**：那套词表判的是「点下去会不会写」，
+            # 而字段不是拿来点的。硬塞进去只会污染 `controlsUnknown` ——
+            # 一个 placeholder 叫「请输入名称」的输入框会被记成「认不出的控件」,
+            # 而它其实认得很清楚，只是不属于那个问题。
+            kind = "field"
+            ledger["fieldsSeen"] = ledger.get("fieldsSeen", 0) + 1
+            if raw.get("required"):
+                # 必填是**表单规则**：QA 脚本有没有验「空提交报错」靠它对账。
+                # 这一版只进账本不进行（没有列），**记着比丢了强** ——
+                # 丢了的话下次想问「必填项覆盖率」得重爬一趟。
+                ledger["fieldsRequired"] = ledger.get("fieldsRequired", 0) + 1
+        else:
+            kind = classify_control(label, role)
+            if kind == "unknown":
+                ledger["controlsUnknown"] = ledger.get("controlsUnknown", 0) + 1
         selector = anchor_selector(testid=raw.get("testid") or "",
                                    elem_id=raw.get("id") or "", text=label)
         if not selector:
@@ -241,16 +347,28 @@ def collect_items(page_path: str, page_title: str, raw_items, ledger: dict) -> l
             continue
         anchor = raw.get("testid") or raw.get("id") or label
         anchor_kind = infer_kind(selector)
+        # `scope` = 这一行是在哪个弹层里看见的。**只进 key 和标题，不进
+        # `anchor`** —— anchor 是拿去还原选择器的原值（S6.5 要用），
+        # 掺一个层名进去，登记表那边就再也对不上了。
         out.append({
-            "key": f"{page_path}::{anchor}",
+            "key": f"{page_path}::{scope}{anchor}",
             "page_path": page_path,
-            "page_title": page_title,
+            "page_title": (f"{page_title} · 「{scope.strip('[]')}」层内"
+                           if scope else page_title),
             "anchor": anchor,
             "anchor_kind": anchor_kind,
             "label": label,
             "control_type": kind,
             "state": _state_of(raw),
             "endpoints": [],
+            # 点击证据。**默认 False，一行不漏地写出来** —— 缺这个键的行会
+            # 退回 run 级的 `controlsClicked`，而那个数从这一版起不再是 0：
+            # 于是 1200 多个**没点过**的控件会跟着被记成「点了什么都没发生」。
+            # （判据在 `qa_coverage_reconcile._click_evidence`，两边是一对。）
+            "clicked": False,
+            # 点下去有没有**可见反应**（弹层/跳转）。有反应就不是死按钮，
+            # 哪怕它一个请求都没发 —— 「点开一个表单」本来就不该发请求。
+            "effect": "",
         })
     return out
 
@@ -274,6 +392,136 @@ async def _eval(page, js, arg=None):
     """
     coro = page.evaluate(js) if arg is None else page.evaluate(js, arg)
     return await asyncio.wait_for(coro, timeout=PAGE_TIMEOUT_MS / 1000)
+
+
+# ── 弹层：点开、枚举、关掉 ────────────────────────────────────────────────
+
+CLICK_TIMEOUT_MS = 3_000
+DIALOG_WAIT_MS = 1_500
+DIALOG_CLOSE_MS = 1_500
+
+
+async def _close_dialog(page) -> bool:
+    """把层关掉。**关不掉要如实返回 False** —— 调用方会整页重载。
+
+    关不掉却当关掉了，后面几次探测全在同一个层上点，枚举出来的东西会挂到
+    别的按钮名下 —— 那不是少一条账，是**一条错的账**。
+    """
+    for _ in range(2):
+        try:
+            await page.keyboard.press("Escape")
+            await page.wait_for_selector(DIALOG_SEL, state="hidden",
+                                         timeout=DIALOG_CLOSE_MS)
+            return True
+        except Exception:                                # noqa: BLE001
+            continue
+    for sel in ('[aria-label="Close"]', '[aria-label="close"]',
+                ".ant-modal-close", ".ant-drawer-close"):
+        try:
+            await page.locator(sel).first.click(timeout=CLICK_TIMEOUT_MS)
+            await page.wait_for_selector(DIALOG_SEL, state="hidden",
+                                         timeout=DIALOG_CLOSE_MS)
+            return True
+        except Exception:                                # noqa: BLE001
+            continue
+    return False
+
+
+async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str,
+                         raw_items, ledger: dict, budget: int) -> tuple[list, dict, int]:
+    """把这一页的「开层」按钮点开几个，**枚举层里的东西**，再关掉。
+
+    返回 `(层里的账本行, {anchor: 反应}, 用掉几次预算)`。
+
+    为什么非做不可：不点开，整个系统的表单一条都枚举不到 —— 上一趟 1266 个
+    可操作项里**一个输入框都没有**，而那不是"这系统没表单"，是表单都在层里。
+
+    三条纪律：
+
+    1. **只点 `opener`**（`click_intent`）。删除/退出那一档一个都不点，
+       理由在那个词表上，不是"L1 会拦所以随便点"。
+    2. **点开的那一下如果发了写请求，要单独记一格**（`openerBlockedWrite`）——
+       L1 确实拦住了，但那说明这个按钮不只是开层，下次改判据要看这条。
+    3. **关不掉就整页重载并停止这一页的探测**。宁可少探两个层，
+       也不要把 B 层里的控件记到 A 按钮名下。
+    """
+    out: list = []
+    marks: dict = {}
+    picked: list = []
+    for raw in raw_items or []:
+        if raw.get("isField") or raw.get("disabled"):
+            continue
+        label = (raw.get("label") or "").strip()
+        if not label or click_intent(label, raw.get("role") or "") != "opener":
+            continue
+        sel = anchor_selector(testid=raw.get("testid") or "",
+                              elem_id=raw.get("id") or "", text=label)
+        if not sel:
+            continue                     # 锚不住的按钮不点：下一趟找不回同一个
+        picked.append((raw.get("testid") or raw.get("id") or label, label, sel))
+        if len(picked) >= min(DIALOG_PROBE_PER_PAGE, max(budget, 0)):
+            break
+
+    used = 0
+    for anchor, label, sel in picked:
+        before = ledger.get("writesBlocked", 0)
+        try:
+            await page.locator(sel).first.click(timeout=CLICK_TIMEOUT_MS)
+        except Exception as e:                           # noqa: BLE001
+            # 点不着（被遮住、瞬间消失、多个同名）。**不算点过** ——
+            # 算了的话它会以「点了什么都没发生」的名义进 G4，
+            # 而真相是我们根本没碰到它。
+            ledger.setdefault("dialogClickFailed", []).append(
+                {"page": page_path, "label": label, "error": type(e).__name__})
+            continue
+        used += 1
+        ledger["controlsClicked"] = ledger.get("controlsClicked", 0) + 1
+        effect = ""
+        try:
+            await page.wait_for_selector(DIALOG_SEL, state="visible",
+                                         timeout=DIALOG_WAIT_MS)
+            opened = True
+        except Exception:                                # noqa: BLE001
+            opened = False
+        if opened:
+            effect = "dialog"
+            ledger["dialogsOpened"] = ledger.get("dialogsOpened", 0) + 1
+            try:
+                inner = await _eval(page, _COLLECT_JS, DIALOG_SEL)
+            except Exception:                            # noqa: BLE001
+                inner = []
+                ledger.setdefault("dialogCollectFailed", []).append(
+                    {"page": page_path, "label": label})
+            out.extend(collect_items(page_path, page_title, inner, ledger,
+                                     scope=f"[{label}]"))
+            if not await _close_dialog(page):
+                ledger.setdefault("dialogsStuck", []).append(
+                    {"page": page_path, "label": label})
+                marks[anchor] = effect
+                try:
+                    await page.goto(page_url, timeout=PAGE_TIMEOUT_MS)
+                    await page.wait_for_load_state("networkidle",
+                                                   timeout=PAGE_TIMEOUT_MS)
+                except Exception:                        # noqa: BLE001
+                    pass
+                break
+        elif urlsplit(page.url).path != urlsplit(page_url).path:
+            # 没弹层，但**跳走了** —— 也是"有反应"，同样不是死按钮。
+            effect = "navigate"
+            ledger["dialogsNavigated"] = ledger.get("dialogsNavigated", 0) + 1
+            try:
+                await page.goto(page_url, timeout=PAGE_TIMEOUT_MS)
+                await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
+            except Exception:                            # noqa: BLE001
+                pass
+        else:
+            # 点了、没弹层、没跳转、也没发请求 —— **这才是 G4 要找的东西**。
+            ledger["dialogsNoEffect"] = ledger.get("dialogsNoEffect", 0) + 1
+        if ledger.get("writesBlocked", 0) > before:
+            ledger.setdefault("openerBlockedWrite", []).append(
+                {"page": page_path, "label": label})
+        marks[anchor] = effect
+    return out, marks, used
 
 
 # ── 选择器活体命中 ────────────────────────────────────────────────────────
@@ -435,16 +683,32 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
         # 时窗记在账本上（而不是当返回值），一是 `pagesProbed` 已经是这个先例，
         # 二是归页这件事**要能复查** —— 边归错了页的时候，得看得出当时的边界。
         windows = ledger.setdefault("pageWindows", {}).setdefault(role, [])
-        for path in page_paths:
+        # 页面清单是**一条队列**，不是一个 for：菜单里发现的页要能接到后面去。
+        # 清单里那些（QA 仓声明的）永远排在前面且一页不少 —— 发现来的排在后面、
+        # 受预算约束，**两者的账要分得开**，不然"他没声明这一页"和
+        # "我们多爬了一页"会混成同一条。
+        queue = list(page_paths)
+        planned = set(queue)
+        seen_tmpl = {route_template(p) for p in queue} | planned
+        extras = 0
+        idx = 0
+        dialog_budget = DIALOG_PROBE_BUDGET
+        while idx < len(queue):
+            path = queue[idx]
+            idx += 1
+            # 记账用的路径：清单里那些**原样**（换写法会让整批 item 的 key 变，
+            # diff 立刻报一片"功能没了"），菜单发现来的用模板（详情页的 id
+            # 每趟都不一样，拿具体路径记账等于每趟全是新增）。
+            record = path if path in planned else route_template(path)
             # 先记 startedAt 再 goto：反了的话 goto 期间的请求就落在窗外了。
             # **失败的页也记一格** —— 那一页确实发过请求（它们属于它），
             # 而且这一格还兼作上一页的右边界：不记的话上一页会一路延长过来，
             # 把这一页的流量吃进自己名下。
-            win = {"path": path, "startedAt": _now()}
+            win = {"path": record, "startedAt": _now()}
             windows.append(win)
+            page_url = urljoin(base_url + "/", path.lstrip("/"))
             try:
-                await page.goto(urljoin(base_url + "/", path.lstrip("/")),
-                                timeout=PAGE_TIMEOUT_MS)
+                await page.goto(page_url, timeout=PAGE_TIMEOUT_MS)
                 await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
                 raw = await _eval(page, _COLLECT_JS)
                 # `title()` 原来在 try 外面 —— 它一抛就会连带废掉**整个分片**
@@ -458,18 +722,59 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                 # 而路径里本来就可能带 ": "，解析一歪那一页就不算失败页，
                 # 它的 item 立刻变成 `removed` —— 正是这条规则要防的那个假缺口。
                 ledger.setdefault("pagesFailed", []).append(
-                    {"path": path, "error": type(e).__name__})
+                    {"path": record, "error": type(e).__name__})
                 win["endedAt"] = _now()
                 continue
             if not raw:
-                ledger.setdefault("pagesEmptyState", []).append(path)
-            items.extend(collect_items(path, title, raw, ledger))
+                ledger.setdefault("pagesEmptyState", []).append(record)
+            page_rows = collect_items(record, title, raw, ledger)
+            items.extend(page_rows)
             await _probe_selectors(page, path, selector_probe, ledger)
+            # ③ 弹层：写按钮背后的表单在这里才第一次被看见。
+            if dialog_budget > 0:
+                inner, marks, used = await _probe_dialogs(
+                    page, page_path=record, page_title=title, page_url=page_url,
+                    raw_items=raw, ledger=ledger, budget=dialog_budget)
+                dialog_budget -= used
+                items.extend(inner)
+                # 把「点过 / 有反应」回填到**这一页自己那几行**上。
+                # 不回填的话，刚点开过的按钮照旧是 `clicked=False`，
+                # G4 那边永远看不到这一趟真点过东西。
+                for row in page_rows:
+                    if row["anchor"] in marks:
+                        row["clicked"] = True
+                        row["effect"] = marks[row["anchor"]]
+            # ① 菜单树：让页面**自己说**它还能去哪儿。
+            try:
+                menu = await _eval(page, _MENU_JS)
+            except Exception:                            # noqa: BLE001
+                menu = None
+            # 形状不对**也算没扫成**（页面塞了个别的东西回来、脚本被 CSP 掐了）。
+            # 当成"这一页没有菜单"会安静地少爬一片，而少爬的表现是
+            # 「这个域就这么几页」—— 和真的只有几页分不开。
+            if not isinstance(menu, dict):
+                ledger.setdefault("menuScanFailed", []).append(record)
+                menu = {}
+            for found in menu.get("paths") or []:
+                tmpl = route_template(found)
+                if tmpl in seen_tmpl or found in seen_tmpl:
+                    continue
+                seen_tmpl.add(tmpl)
+                ledger.setdefault("menuDiscovered", []).append(tmpl)
+                if extras < MENU_EXTRA_MAX_PAGES:
+                    queue.append(found)
+                    extras += 1
+                else:
+                    # **预算用完不是"没发现"。** 记数，否则报告上
+                    # 「这个域只有这些页」和「还有 30 页没去看」长得一样。
+                    ledger["menuExtraCapped"] = ledger.get("menuExtraCapped", 0) + 1
             win["endedAt"] = _now()
             ledger["pagesVisited"] = ledger.get("pagesVisited", 0) + 1
             # 走到了就记，**哪怕这一页一个控件都没有** —— 空页恰恰是
             # 「探过了，确实看不见」，那是可比的格子，不是未探测。
-            probed.append(path)
+            probed.append(record)
+        if dialog_budget <= 0:
+            ledger.setdefault("dialogBudgetExhausted", []).append(role)
     finally:
         # HAR 只在 close 时落盘 —— 不 close 就是一个空文件。
         # **也得上闸**：渲染进程还在转 JS 的时候 close 一样会等下去，
@@ -539,12 +844,18 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     others = shallow_scan_roles(roles)
     ledger: dict = {"writesBlocked": 0, "pagesVisited": 0, "controlsUnknown": 0,
                     "loginCount": 0, "rolesShallow": others,
-                    # **点过几个控件 = 0，而且要明写出来。** 无向枚举一个控件都
-                    # 不点，这不是"这一趟碰巧没点"，是这一版的设计。写出来是为了
-                    # 让下游（`compute_gaps(controls_clicked=...)`）能把 G4
-                    # 关掉 —— 缺这个数它会把每个 enabled 控件都报成
-                    # 「点下去什么都没发生」。键名和那个参数是一对，别单改一边。
+                    # **点过几个控件。0 也要明写出来**，它是 G4 那张表为什么
+                    # 空的唯一解释（`compute_gaps(controls_clicked=...)`，
+                    # 键名和那个参数是一对，别单改一边）。
+                    # 这一版起它不再恒为 0：开层按钮会被点开一次（`_probe_dialogs`），
+                    # **但也只有那一档** —— 删除/退出那些一个都不点。
+                    # ⚠ 与之配套的是每一行 item 上的 `clicked`：run 级这个数
+                    # 一旦 > 0，没有 `clicked` 键的行会**全部**被当成点过，
+                    # 1200 多个没碰过的控件会一起变成假的 G4。
                     "controlsClicked": 0,
+                    # 下面这几格都是「0 也要渲染」：没弹层和没去探在报告上
+                    # 长得一模一样，而前者是结论、后者是欠账。
+                    "dialogsOpened": 0, "dialogsNoEffect": 0, "fieldsSeen": 0,
                     # 这一趟拿了几条选择器去探。**0 也要写出来** —— 清单是空的
                     # （QA 仓没拉到 / 解析全军覆没）和"探了但一条都没命中"在报告上
                     # 长得一模一样，而前者是我们自己没跑成，不是他的选择器有问题。
@@ -554,6 +865,13 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     totals_before = await totals_probe() if totals_probe else None
 
     shards = [(main_role, page_paths)] + [(r, page_paths[:SHALLOW_MAX_PAGES]) for r in others]
+    if len(page_paths) > SHALLOW_MAX_PAGES and others:
+        # 这道闸**从来没响过**（计划一直不到 40 页），于是"保护"和"没触发过的
+        # 常量"长得一样。真截断的时候留一行：浅扫角色在第 41 页看不见任何东西
+        # 是**必然**的，不写出来会被读成「这个角色被禁掉了」。
+        ledger["rolePagesCapped"] = {"cap": SHALLOW_MAX_PAGES,
+                                     "planned": len(page_paths),
+                                     "roles": list(others)}
     ledger["shardsTotal"] = len(shards)
     shard_rows: list[dict] = []
     hars: dict[str, dict] = {}

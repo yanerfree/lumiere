@@ -415,6 +415,7 @@ def compute_gaps(*, page_items: list[dict] | None,
     g5: list[dict] = []
     edges_unsourced: list[dict] = []
     controls_unclicked = 0
+    controls_with_effect = 0
 
     def _click_evidence(it: dict) -> bool:
         """这个控件**被点过没有**。G4 的唯一前提。
@@ -432,7 +433,16 @@ def compute_gaps(*, page_items: list[dict] | None,
         if v is not None:
             return bool(v)
         return bool(controls_clicked)
+    fields_seen = 0
     for it in page_items or []:
+        if (it.get("control_type") or "") == "field":
+            # 表单字段**不进 G4/G5**。G4 问的是「点了没有请求」、G5 问的是
+            # 「控件在但点不动」—— 对一个输入框这两个问题都不成立：
+            # 它不是拿来点的，一个 readonly 的输入框也不是「死按钮」。
+            # 不挡的话每个只读字段都会变成一条 G5「情报」，把真正的死按钮淹掉。
+            # **但要留数**：字段有多少条，是「表单覆盖了没」这个问题的分母。
+            fields_seen += 1
+            continue
         anchor = f"{it.get('page_path') or ''} :: {it.get('anchor') or it.get('label') or ''}"
         raw_eps = it.get("endpoints") or []
         eps: list[dict] = []
@@ -461,6 +471,12 @@ def compute_gaps(*, page_items: list[dict] | None,
                 row["kind"], row["blame"] = "G5", "情报"
                 row["severity"] = _SEVERITY["G5"]
                 g5.append(row)
+            elif it.get("effect"):
+                # 点了、没发请求，**但页面有反应**（弹出一个层 / 跳走了）。
+                # 那不是死按钮 —— "点开一个新建表单"本来就不该发请求。
+                # 记成 G4 的话，每探一个弹层就白送一条「这按钮点下去什么都没
+                # 发生」，而它明明当着我们的面弹出来了。
+                controls_with_effect += 1
             elif _click_evidence(it):
                 row["kind"] = "G4"
                 row["severity"] = _SEVERITY["G4"]
@@ -628,6 +644,15 @@ def compute_gaps(*, page_items: list[dict] | None,
             # 的那些**。它掉到 0 而 controlsClicked 还是 0，说明页面上一个
             # enabled 控件都没枚举到 —— 那是枚举坏了，不是没缺口。
             "controlsUnclicked": controls_unclicked,
+            # 点了、没请求、**但有可见反应**（弹层/跳转）的控件数。
+            # 它是从 G4 里**扣掉**的那一批，所以必须单独渲染：
+            # 不写出来的话，G4 从 40 掉到 3 看着像"缺口变少了"，
+            # 而真相是"这 37 个本来就不是缺口"。
+            "controlsWithEffect": controls_with_effect,
+            # 枚举到几个表单字段。**它是「表单覆盖了没」的分母** ——
+            # 上一趟这个数是 0（选择器里压根没有 input），于是那个问题
+            # 连问都问不出来：分母是 0，任何覆盖率都成立。
+            "fieldsSeen": fields_seen,
             "routeEndpoints": len(r_eps),
             # Q 边分四本账，别只报一个总数：`helperHits` 一旦掉回 0，
             # 说明 helper 库没读到或对方改了签名 —— 那时候 G1/G3 会**暴涨**，

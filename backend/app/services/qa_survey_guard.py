@@ -131,6 +131,64 @@ def classify_control(label: str, role: str = "") -> str:
     return "read" if r in _READ_ROLES else "unknown"
 
 
+# ── L2b：开层 ≠ 提交 ─────────────────────────────────────────────────────
+
+# `classify_control` 答的是「点下去**会不会写**」，`新建`/`编辑` 判成 write 是对的。
+# 这一段答的是另一个问题：「我们**点不点**」。合成一句的话只有两个坏选择 ——
+# 要么按 write 一辈子不点（那个系统的表单就永远枚举不到），
+# 要么改判成 read（那是把层里的「保存/提交」也一起放行了）。
+#
+# 为什么值得多这一段：2026-09-04 那一趟量出来，1266 个可操作项里**一个输入框
+# 都没有**。不是被测系统没有表单，是表单全在没被打开的层里 —— 于是
+# 「表单覆盖了没」这个问题的**分母是 0，任何覆盖率都成立**。
+#
+# 开层的那一下**本身不写**：真正的写在层里的「保存/提交/确定」上，而那些
+# 我们一个都不点。就算判错了，L1 那层网也会把写请求 abort 掉。
+_OPENER_WORDS = (
+    "新建", "创建", "添加", "新增", "编辑", "修改", "配置", "设置",
+    "new", "create", "add", "edit", "config", "setting",
+)
+
+# **一个都不许点**，哪怕 L1 会把请求拦下来。三条理由各自独立成立：
+#  ① 退出/登出：点完这一下，后面每一页都渲染成登录页，**而每一格都是绿的**
+#     —— 2026-09-04 刚修完一次一模一样的假绿，别自己再造一次；
+#  ② 删除/清空/重置：多数系统弹二次确认（我们不点确认），但**有的用原生
+#     `window.confirm`** —— 那一下会把整个分片吊死在一个 Playwright 默认不处理的
+#     弹框上，报出来是超时，看不出是自己点出来的；
+#  ③ 就算请求被 L1 拦了，页面上也已经弹了一条失败提示 —— 我们是来看的，
+#     不该在别人的环境里留脚印。
+_NEVER_CLICK_WORDS = (
+    "删除", "移除", "清空", "重置", "停用", "禁用", "注销", "退出", "登出",
+    "下线", "作废", "撤销", "重启", "停止", "驳回", "拒绝", "审批", "通过",
+    "delete", "remove", "clear", "reset", "disable", "logout", "sign out",
+    "revoke", "restart", "stop", "approve", "reject",
+)
+
+
+def click_intent(label: str, role: str = "") -> str:
+    """`safe` / `opener` / `never` —— 无向枚举里**这个控件点不点**。
+
+    顺序是**禁点优先**：`重置密码` 里既有"重置"也有"密码"，先判禁点才不会
+    因为别的词表命中而放行。`safe` 就是 L2 那档（`SAFE_TO_CLICK`），
+    `opener` 是"点开一个层"，其余一律 `never`。
+    """
+    text = (label or "").strip().lower()
+    for w in _NEVER_CLICK_WORDS:
+        if w in text:
+            return "never"
+    # 角色照旧**先于**文案：一个文案叫「新增」的开关，点下去就是打开一个开关，
+    # 不是弹一个层。少了这一句，`_OPENER_WORDS` 会把整档 switch/checkbox
+    # 重新放行 —— 而那正是 `classify_control` 里角色优先要挡的东西。
+    if (role or "").strip().lower() in _WRITE_ROLES:
+        return "never"
+    if classify_control(label, role) in SAFE_TO_CLICK:
+        return "safe"
+    for w in _OPENER_WORDS:
+        if w in text:
+            return "opener"
+    return "never"
+
+
 # ── L3 ────────────────────────────────────────────────────────────────────
 
 # 主爬账号。**只读账号**——L1/L2 拦不住的东西，靠它在服务端被拒。

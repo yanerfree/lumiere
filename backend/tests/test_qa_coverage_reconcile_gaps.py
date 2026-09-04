@@ -449,7 +449,13 @@ class Test计数为0也要渲染:
                                  # 两个都得在：G4 那张表空着有两种完全不同的
                                  # 原因（没点过 vs 点了都有请求），只有这两个数
                                  # 能分开。
-                                 "controlsClicked": 0, "controlsUnclicked": 0}
+                                 # `controlsWithEffect` 是第三种原因：点了、没发
+                                 # 请求，但**弹出了一个层**。少这个数，G4 从 40
+                                 # 掉到 3 会被读成"缺口变少了"。
+                                 "controlsClicked": 0, "controlsUnclicked": 0,
+                                 "controlsWithEffect": 0,
+                                 # 表单字段数 = 「表单覆盖了没」的分母。
+                                 "fieldsSeen": 0}
 
 
 class Test页面级的边:

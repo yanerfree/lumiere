@@ -64,6 +64,14 @@ def merge_shards(shards, *, main_role: str) -> list[dict]:
             if key in by_key and key not in fresh:
                 for row in by_key[key]:
                     row["_roles"].add(role)
+                    # 「点过」和「点了有反应」是**关于这个控件**的事实，不是关于
+                    # 角色的。跨分片取并集 —— 不取的话，主爬那份（先进来的）
+                    # 一个 `clicked=False` 就把别的角色刚点出来的证据盖掉了，
+                    # 而这两件事在报告上都长成"G4 是空的"。
+                    if src.get("clicked"):
+                        row["clicked"] = True
+                    if src.get("effect") and not row.get("effect"):
+                        row["effect"] = src["effect"]
                 continue
             row = dict(src)
             row["_roles"] = {r for r in src.get("roles_visible") or []} | (
