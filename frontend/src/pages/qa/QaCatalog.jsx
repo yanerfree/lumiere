@@ -931,7 +931,12 @@ export default function QaCatalog() {
   const [keyword, setKeyword] = useState('')
   const [domain, setDomain] = useState()
   const [priority, setPriority] = useState()
-  const [tier, setTier] = useState()
+  // 执行层是**多选**（数组），另外四个筛选还是单选。
+  // 这一格跟别人不一样是有原因的：域/优先级/状态问的是"哪一个"，
+  // 而执行层常要问"接口那两层加起来覆盖了多少"——smoke+api 一起看是个真需求，
+  // 单选的话得看两遍再自己加。空数组 = 不筛（别写成 undefined，
+  // 下面 tier.length 和 tier.includes 都会炸）。
+  const [tier, setTier] = useState([])
   const [state, setState] = useState()
   const [quick, setQuick] = useState()          // 看板点出来的那一类：urgent/bugs/lying/mismatch
   const [showDeprecated, setShowDeprecated] = useState(false)
@@ -1129,9 +1134,9 @@ export default function QaCatalog() {
     mismatch: { label: `风险 ≥${HIGH_RISK} 但优先级 P2/P3`, test: s => s.state !== 'deprecated' && (s.risk || 0) >= HIGH_RISK && ['P2', 'P3'].includes(s.priority) },
   }), [])
 
-  const hasFilter = keyword || domain || priority || tier || state || quick
+  const hasFilter = keyword || domain || priority || tier.length || state || quick
   const clearFilters = () => {
-    setKeyword(''); setDomain(); setPriority(); setTier(); setState(); setQuick()
+    setKeyword(''); setDomain(); setPriority(); setTier([]); setState(); setQuick()
   }
   // 从看板跳过来时，别让上一次的筛选残留在里面把结果减成空的
   const jump = (patch) => {
@@ -1147,7 +1152,7 @@ export default function QaCatalog() {
     if (!showDeprecated && s.state === 'deprecated' && state !== 'deprecated') return false
     if (domain && s.domain !== domain) return false
     if (priority && s.priority !== priority) return false
-    if (tier && s.tier !== tier) return false
+    if (tier.length && !tier.includes(s.tier)) return false
     if (state && s.state !== state) return false
     if (quick && !QUICK[quick].test(s)) return false
     if (keyword) {
@@ -2056,7 +2061,30 @@ export default function QaCatalog() {
           />
           <Select placeholder="优先级" allowClear value={priority} onChange={setPriority} style={{ width: 110 }}
             options={['P0', 'P1', 'P2', 'P3'].map(p => ({ value: p, label: p }))} />
-          <Select placeholder="执行层" allowClear value={tier} onChange={setTier} style={{ width: 140 }}
+          {/* 140px 装不下「跨面全链（scenario）」，选中之后被截成「跨面全链（sce…」
+              —— 一个筛选器把自己选的是什么都显示不全。这一行右边还空着一大片
+              （共 N 条后面全是白的），所以直接放到 260。
+              多选之后再靠 maxTagCount="responsive" 兜：选两层以上就自动收成「+1」，
+              不会把整行顶开、把后面的「清除筛选」挤到第二行去。 */}
+          <Select placeholder="执行层" allowClear value={tier} onChange={setTier} style={{ width: 260 }}
+            mode="multiple" maxTagCount="responsive"
+            // 选中的标签只写中文，菜单里才带 smoke/api 这些码。
+            // 码在菜单里有用（脚本头写的就是 @tier: smoke，对得上），
+            // 但塞进标签就是「冒烟（smoke）×」——两个标签 250px，260 都装不下，
+            // 于是选两层就被折成「+1」，等于多选做了又看不见选了什么。
+            // 只留中文之后三个标签能并排，第四个才折。
+            // ⚠ 折叠占位（maxTagPlaceholder）也是走 tagRender 渲的，那一次的 value
+            // 是 null —— tierText(null) 会落到兜底的「—」，页面上就是一根破折号，
+            // 看着像坏了。所以 value 为空时用 label（就是下面那个 +N）。
+            tagRender={({ value, label, closable, onClose }) => (
+              <Tag
+                closable={closable} onClose={onClose}
+                onMouseDown={e => { e.preventDefault(); e.stopPropagation() }}
+                style={{ ...tagStyle('mute'), marginInlineEnd: 4 }}
+              >{value == null ? label : tierText(value)}</Tag>
+            )}
+            // antd 默认折起来写成「+ 1 ...」，那个省略号看着像"还没加载完"。
+            maxTagPlaceholder={omitted => `+${omitted.length}`}
             options={tiers.map(t => ({ value: t, label: `${tierText(t)}（${t}）` }))} />
           <Select placeholder="状态" allowClear value={state} onChange={setState} style={{ width: 130 }}
             options={[
