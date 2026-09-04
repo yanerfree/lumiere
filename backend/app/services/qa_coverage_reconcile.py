@@ -25,6 +25,7 @@
 """
 import re
 
+from app.services import qa_business_actions as qba
 from app.services import qa_script_endpoints as qse
 from app.services.branch_diff_service import WILDCARD, normalize_path
 
@@ -168,9 +169,16 @@ _CALL_HINT = re.compile(r"\bcurl\b|\bhttpx?\b|\bwget\b")
 # 再宽就等于"随便对上一个" —— 见 `covers()` 里为什么不直接用 `paths_match`。
 _MAX_BASE_SEGMENTS = 2
 
+# 链路骨架的两个上限。它们**只截断呈现，不影响任何判定** ——
+# `stepsTotal` / `chainsTotal` 照实报，所以"被截掉了"这件事在页面上看得见。
+# 不设上限的话，369 个脚本 × 几十步会把这份结果撑到几 MB，
+# 而链路是给人拿去照着点的，一屏之外的部分没人看。
+_CHAINS_CAP = 200
+_CHAIN_STEPS_CAP = 20
+
 
 def extract_endpoints(text: str | None) -> tuple[list[dict], list[dict]]:
-    """脚本正文 → `([{method, path, line}], [抽不出来的行])`。**只认写在行里的 url。**
+    """脚本正文 → `([{method, path, line, lineNo}], [抽不出来的行])`。**只认写在行里的 url。**
 
     helper 封装的那一大半在 `qa_script_endpoints` 里（实测（`refs/remotes/origin/main`，369 个脚本）：
     这个函数命中 136，连上 helper 之后 2943）—— 两个一起用，别只用这一个。
@@ -178,10 +186,15 @@ def extract_endpoints(text: str | None) -> tuple[list[dict], list[dict]]:
     第二个返回值是**账本**，不是错误列表：它要一路带到页面上，
     因为「这个端点没人打过」和「这一行我没读懂」是两回事，
     而它们在 G3 里长得一模一样。
+
+    `lineNo` 是 1 起的原始行号。它不是给人看的定位信息（`line` 已经带了原文），
+    是**排序键**：同一个脚本文件的命中会和 `qa_script_endpoints` 那半合并，
+    合并之后只有行号排得出「他写在文件里的执行顺序」——
+    而那个顺序就是业务链路骨架（见 `qa_business_actions.chain_of`）。
     """
     hits: list[dict] = []
     misses: list[dict] = []
-    for raw in (text or "").splitlines():
+    for lineno, raw in enumerate((text or "").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -192,7 +205,7 @@ def extract_endpoints(text: str | None) -> tuple[list[dict], list[dict]]:
                 continue
             mf = _METHOD_FLAG.search(line)
             hits.append({"method": (mf.group(1).upper() if mf else ""),
-                         "path": path, "line": line[:200]})
+                         "path": path, "line": line[:200], "lineNo": lineno})
             found = True
         if found or _OUT_OF_SCOPE_TOKEN.search(line):
             # 口径外的行（`${GW}`/`${AI}`）不进 hits，也**不算"读不懂"** ——
@@ -202,7 +215,7 @@ def extract_endpoints(text: str | None) -> tuple[list[dict], list[dict]]:
         if _CALL_HINT.search(line):
             # 这一行明显在发请求，但 url 拼不出来（变量套变量 / helper 封装）。
             # **不当成「没打过」** —— 那正是会凭空造出 G3 的地方。
-            misses.append({"line": line[:200], "why": "url 拼不出来"})
+            misses.append({"line": line[:200], "why": "url 拼不出来", "lineNo": lineno})
     return hits, misses
 
 
@@ -236,9 +249,10 @@ def covers(script_path: str, target_path: str) -> bool:
 # G1 ∈P ∧ ∈R ∧ ∉Q   页面点得到、清单一条场景都没有        blame catalog  最硬
 # G2 ∈R ∧ ∉P ∧ ∉Q   端点在、页面到不了、也没人测          blame catalog
 # G3 ∈P ∧ 清单认领了该域 ∧ 无脚本打过        认领了没兑现   blame script
-# G4 ∈P ∧ **点过** ∧ 控件无任何请求        纯前端行为      需判断
-#    ⚠ 「点过」是硬前提，不是修饰语。今天的无向枚举一个控件都不点，
-#      所以今天 G4 恒为空 + 一条声明（`controls_clicked`）。
+# G4 ∈P ∧ **点过而且算过** ∧ 控件无任何请求   纯前端行为      需判断
+#    ⚠ 前提是两条，都不是修饰语：**点过**（`clicked`）**而且算过**
+#      （`endpoints` 不是 NULL）。少一条就不是 G4，只能记数 + 声明 ——
+#      「没点」记 `controlsUnclicked`、「点了没量到」记 `controlsUnmeasured`。
 # G5 present 但 disabled，既无请求也无路由    死按钮/flag     情报，不是缺口
 #
 # **G1 和 G3 字面上会重叠**（都含 ∈P ∧ ∉Q）。按 blame 分开：
@@ -383,6 +397,9 @@ def compute_gaps(*, page_items: list[dict] | None,
 
     q_paths: list[tuple[str, str, str]] = []   # (domain, method, path)
     unextracted: list[dict] = []
+    # 每个脚本文件的命中（两半合并、按行号排好）。链路骨架从这里算，
+    # 但得等 `readable_paths` 齐了才算得准 —— 所以先攒着。
+    per_script: list[tuple[str, str, str, list[dict]]] = []
     q_inline = q_helper = q_out_of_scope = q_infra = 0
     for sc in scripts or []:
         text = sc.get("text")
@@ -395,11 +412,72 @@ def compute_gaps(*, page_items: list[dict] | None,
         q_helper += len(hl["hits"])
         q_out_of_scope += len(hl["otherBase"]) + len(_OUT_OF_SCOPE_TOKEN.findall(text or ""))
         q_infra += len(hl["infra"])
-        for h in hits + hl["hits"]:
+        merged = sorted(hits + hl["hits"], key=lambda h: (h.get("lineNo") or 0))
+        per_script.append((dom, sid, sc.get("path") or "", merged))
+        for h in merged:
             q_paths.append((dom, h["method"], h["path"]))
         for m in misses + hl["misses"]:
             unextracted.append({"scenarioId": sid, "domain": dom,
                                 "line": m["line"], "why": m.get("why") or ""})
+
+    # ── 动作面（脚本这一半）+ 链路骨架 ──────────────────────────
+    #
+    # 需求：§14.2「业务不只是增删改查」+ §13.2「链路骨架 = 同一个脚本文件里的
+    # 调用顺序」。判据全在 `qa_business_actions` 里，这儿只负责喂数据。
+    #
+    # `readable_paths` 分动作和子资源，两个来源合起来用：R 边（路由表，最准）
+    # ＋ Q 边自己的 GET。**两边都空时传 `None` 而不是空集合** ——
+    # 空集合读作「查过了，这些路径都不能 GET」，于是每条深路径都会被判成
+    # 一个业务动作，凭空给这个域造出一堆动作名；`None` 读作「没这份信息」，
+    # `action_verb` 会在 `why` 里写明依据弱。
+    readable: set[str] = set()
+    for r in routes or []:
+        if (r.get("method") or "").upper() in qba.READ_METHODS:
+            rp = normalize_path(r.get("path") or "")
+            if rp:
+                readable.add(rp)
+    for _d, qm, qp in q_paths:
+        if qm in qba.READ_METHODS and qp:
+            readable.add(qp)
+    readable_paths = readable or None
+
+    chains: list[dict] = []
+    chain_steps_total = 0
+    for dom, sid, spath, merged in per_script:
+        steps = qba.chain_of(merged, readable_paths=readable_paths)
+        chain_steps_total += len(steps)
+        # **一步不叫链路。** 单个写操作已经在动作面里数到了，
+        # 再当成一条"链路"会让链路数虚高到脚本数，而那个数是拿来判
+        # 「这个域的业务往前走了几格」的。
+        if len(steps) < 2:
+            continue
+        chains.append({"domain": dom, "scenarioId": sid, "scriptPath": spath,
+                       "steps": steps[:_CHAIN_STEPS_CAP],
+                       "stepsTotal": len(steps)})
+    chains.sort(key=lambda c: (-len(c["steps"]), c["domain"], c["scenarioId"]))
+    chains_total = len(chains)
+    chains = chains[:_CHAINS_CAP]
+
+    actions_by_domain: dict[str, dict] = {}
+    for dom, _sid, _spath, merged in per_script:
+        d = actions_by_domain.setdefault(dom, {"actions": {}, "crud": {}, "subreads": {}})
+        inv = qba.verb_inventory(merged, readable_paths=readable_paths)
+        for bucket, verbs in inv.items():
+            for verb, eps in verbs.items():
+                cur = d[bucket].setdefault(verb, [])
+                for ep in eps:
+                    if ep not in cur:
+                        cur.append(ep)
+    business_actions = {
+        dom: {b: {v: sorted(eps) for v, eps in sorted(vs.items())} for b, vs in buckets.items()}
+        for dom, buckets in sorted(actions_by_domain.items())
+    }
+    if readable_paths is None and any(
+            b["actions"] for b in business_actions.values()):
+        # 依据弱的时候必须说出来：这批"动作"里可能混着子资源的增删改查。
+        declarations.append(
+            "既没有路由表、脚本里也一条 GET 都没抽到 —— "
+            "「动作」和「子资源的增删改查」这时候分不开，动作面偏多")
 
     def _covered(method: str, path: str) -> bool:
         for _d, qm, qp in q_paths:
@@ -415,19 +493,25 @@ def compute_gaps(*, page_items: list[dict] | None,
     g5: list[dict] = []
     edges_unsourced: list[dict] = []
     controls_unclicked = 0
+    controls_unmeasured = 0
     controls_with_effect = 0
 
     def _click_evidence(it: dict) -> bool:
         """这个控件**被点过没有**。G4 的唯一前提。
 
-        G4 的字面意思是「点下去，什么请求都没发」。而**今天的页面枚举一个控件都
-        不点**（无向枚举：它不知道自己会造出什么，也清理不掉）—— 于是每个
-        enabled 控件都是「没有端点」，照老写法会整页刷成 G4。那不是缺口清单，
-        那是一句假话乘以控件数：报告上写着「这些按钮点下去什么都不发生」，
-        而真相是「没人点过」。**没点过就判不了**，只能记数 + 声明。
+        G4 的字面意思是「点下去，什么请求都没发」。而无向枚举**只点判得安全的
+        那一小撮**（`SAFE_TO_CLICK`，其余不点：它不知道自己会造出什么，也清理
+        不掉）—— 于是绝大多数 enabled 控件都是「没有端点」，照老写法会整页刷成
+        G4。那不是缺口清单，那是一句假话乘以控件数：报告上写着「这些按钮点下去
+        什么都不发生」，而真相是「没人点过」。**没点过就判不了**，只能记数 + 声明。
 
         item 上的 `clicked` 比 run 级那个数更具体，优先它：将来只点一部分控件的
         那一趟里，没点的那些不能跟着 run 级的"点过"一起被记成 G4。
+
+        ⚠ **`clicked` 只答"点过没有"，答不了"算过没有"。** 点是点了、可是那次
+        点击的时窗没收到右边界（`clickWindowsUnclosed`），traffic 那边就没法说
+        它到底发没发请求 —— 那一行的 `endpoints` 留 NULL。所以调用处**先看
+        三态**（`measured`），这里只管点击证据那一半。
         """
         v = it.get("clicked")
         if v is not None:
@@ -444,7 +528,12 @@ def compute_gaps(*, page_items: list[dict] | None,
             fields_seen += 1
             continue
         anchor = f"{it.get('page_path') or ''} :: {it.get('anchor') or it.get('label') or ''}"
-        raw_eps = it.get("endpoints") or []
+        # **三态，别用 `or []` 一把塌掉**：NULL = 没算过（没点、或点了没算出来），
+        # `[]` = 算过了、确实一条都没发（**G4 就是这个值**）。
+        # 塌成同一个的后果是一千多个没碰过的控件集体变成 G4，而且不报错。
+        raw_eps = it.get("endpoints")
+        measured = raw_eps is not None
+        raw_eps = raw_eps or []
         eps: list[dict] = []
         for e in raw_eps:
             if edge_ok(e, build_fingerprint):
@@ -477,7 +566,11 @@ def compute_gaps(*, page_items: list[dict] | None,
                 # 记成 G4 的话，每探一个弹层就白送一条「这按钮点下去什么都没
                 # 发生」，而它明明当着我们的面弹出来了。
                 controls_with_effect += 1
-            elif _click_evidence(it):
+            elif not measured and _click_evidence(it):
+                # 点了，但这一次点击**没算出**发没发请求（时窗缺右边界）。
+                # 记成 G4 是拿"没算过"冒充"算过是 0" —— 那正是 G4 唯一的内容。
+                controls_unmeasured += 1
+            elif measured and _click_evidence(it):
                 row["kind"] = "G4"
                 row["severity"] = _SEVERITY["G4"]
                 g4.append(row)
@@ -612,6 +705,11 @@ def compute_gaps(*, page_items: list[dict] | None,
              "这一趟一个控件都没点（无向枚举不点控件），G4（点了没有请求）判不了")
             + "；%d 个 enabled 控件因此没有端点账" % controls_unclicked)
 
+    if controls_unmeasured:
+        declarations.append(
+            "有 %d 个控件点过、但那次点击的流量没算出来（点击时窗缺右边界），"
+            "它们不进 G4 —— 「没算过」不许当「算过是 0」" % controls_unmeasured)
+
     if not page_survey_available:
         # **这条声明是本模块的存在理由。** 只剩 G2 的话，这份报告做的事
         # 跟 QA 自己的 `check-route-drift.sh` 一模一样（路由表 vs 基线），
@@ -656,6 +754,10 @@ def compute_gaps(*, page_items: list[dict] | None,
             # 的那些**。它掉到 0 而 controlsClicked 还是 0，说明页面上一个
             # enabled 控件都没枚举到 —— 那是枚举坏了，不是没缺口。
             "controlsUnclicked": controls_unclicked,
+            # 点过、但那次点击的流量没算出来（时窗缺右边界）的控件数。
+            # 和上一行**分开数**：一个是"没碰过"，一个是"碰了没量到"，
+            # 前者补预算就能解决，后者是采集有洞 —— 合成一个数就分不出该修哪个。
+            "controlsUnmeasured": controls_unmeasured,
             # 点了、没请求、**但有可见反应**（弹层/跳转）的控件数。
             # 它是从 G4 里**扣掉**的那一批，所以必须单独渲染：
             # 不写出来的话，G4 从 40 掉到 3 看着像"缺口变少了"，
@@ -676,7 +778,25 @@ def compute_gaps(*, page_items: list[dict] | None,
             "helpersParsed": len(parsed["helpers"]),
             "helpersInfra": len(parsed["infra"]),
             "helpersUnparsed": len(parsed["unparsed"]),
+            # 链路三个数**都渲染，0 也渲染**。`chainsTotal` 是截断前的条数，
+            # `chainSteps` 是所有脚本的写操作步数之和 —— 后者掉回 0 意味着
+            # 「一条链路都读不出来」，而那时 `chains` 是空表，
+            # 跟"这个域没有业务链路"长得一模一样。
+            "chains": len(chains),
+            "chainsTotal": chains_total,
+            "chainSteps": chain_steps_total,
+            # 这个域有几个**非增删改查**的动作（去重后的动作词数）。
+            # 它是 §14.2 那个问题的答案，混进 CRUD 里就永远答不出来了。
+            "actionVerbs": sum(len(b["actions"]) for b in business_actions.values()),
         },
+        # 业务链路骨架（§13.2）：每条 = 一个脚本文件里的写操作顺序。
+        # **它是假设不是结论** —— 说的是"该按什么顺序去点什么"，
+        # 结论只由真点下去之后页面发出了什么决定（§13.3）。
+        "chains": chains,
+        # 动作面的**脚本那一半**（§14.2）：这个域有哪些非增删改查的动作。
+        # 页面那一半在爬取侧，两边一拼才出「脚本打过但页面没这个按钮」
+        # 和「页面有这个动作但脚本一次没打过」。
+        "businessActions": business_actions,
         "endpointsUnextracted": unextracted,
         "endpointsUnattributed": unattributed,
         "edgesUnsourced": edges_unsourced,

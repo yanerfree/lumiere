@@ -91,8 +91,10 @@ class QaPageSurvey(Base):
 
     # P 边：**页面级**的「打开这一页浏览器发了哪些请求」（归页规则在
     # `qa_page_traffic`）。**不是** item 那一列 `endpoints` 的「点这个控件会打
-    # 哪些端点」—— 这一趟一个控件都没点，把页面流量写进那一列等于凭空造一条
-    # `observed` 的控件→端点边（`EDGE_SOURCES` 白名单防的就是它）。
+    # 哪些端点」—— 页面级的边归的是"这一页"，把它摊到页面上每个控件头上等于
+    # 凭空造一条 `observed` 的控件→端点边（`EDGE_SOURCES` 白名单防的就是它）。
+    # 控件级那一列怎么来的见 `endpoints` 自己的注释（按**点击时间窗**归属，
+    # 跟这里的导航时间窗是同一招、不同窗口）。
     #
     # **NULL 读作「这趟还没算过 P 边」，`[]` 读作「算过了，没有边」。**
     # 所以没有 server_default —— 默认值一填，「没算过」就会被读成「没有」，
@@ -157,8 +159,15 @@ class QaPageSurveyItem(Base):
 
     # 哪些角色看得见它 —— 角色维度的缺口就是从这一列算出来的。只存角色名。
     roles_visible: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    # 点它会打哪些端点（观测到的，不是猜的）。抽不出来就是空，
-    # **不当成「没打过」** —— 那条纪律在 Epic 7 的 `endpointsUnextracted` 上。
+    # 点它会打哪些端点（观测到的，不是猜的）。归属靠**点击时窗**
+    # （`qa_page_traffic.bucket_clicks`），和上面 `page_edges` 的导航时窗是两本账。
+    # **三态，一个都不许合**（跟 `page_edges` 同一条纪律，所以这里也故意不给
+    # `server_default`）：
+    #   · `[{...}]` = 点过，发了这几条
+    #   · `[]`      = **点过，一条请求都没发** —— G4 就是从这个值来的
+    #   · `NULL`    = **没点过**（预算没排到、点不着、或那一趟根本不点控件）
+    # 塌成 `[]` 的后果不报错：一千多个没碰过的控件会集体宣布「点了什么都没发」，
+    # G4 从个位数涨到四位数，全是假的。
     endpoints: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     # 指向 survey：这一项第一次/最近一次是在哪趟看见的。

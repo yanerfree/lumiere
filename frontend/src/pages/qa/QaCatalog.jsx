@@ -3133,6 +3133,423 @@ function SelectorReport({ rep }) {
   )
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// §12 / §13.6 有向链路 —— 造一条**自己前缀**的数据，在它身上把这个域走完
+//
+// 和上面无向枚举那本账**分开两本**，一格都不许摊派：无向枚举一个写按钮都不点，
+// 所以它名下的写操作永远是 0 —— 那是设计，不是结论。写操作这一维只有这里量。
+// ════════════════════════════════════════════════════════════════════════
+
+// 环名从后端的 `CHAIN_STEPS` 来，这里只做中文。多出一环（后端加了新环、
+// 这里没跟上）就直接显示原名 —— 显示成空的话，那一环在页面上就消失了。
+const STEP_CN = {
+  create: '新建', list: '回列表找', detail: '进详情', edit: '编辑',
+  verify: '回列表确认', delete: '删除', confirm: '确认删掉了',
+}
+// 断点归谁。**owner 必须露出来**：「我们没认出层」和「产品删不掉」排在同一个
+// 待办里，就没人去查产品那一半 —— 而那是最值钱的一类发现。
+const OWNER_CN = {
+  ours: { text: '我们的欠账', tone: 'warn' },
+  product: { text: '产品的问题', tone: 'bad' },
+  finding: { text: '这本身是一条发现', tone: 'bad' },
+  fact: { text: '记成事实', tone: 'mute' },
+  unknown: { text: '还判不了归谁', tone: 'info' },
+}
+
+function ChainLedger({ d, mainRole }) {
+  if (!d) {
+    return (
+      <Section title="业务链路（有向）" hint="造一条自己前缀的数据：新建 → 回列表找 → 进详情 → 编辑 → 确认 → 删除">
+        <Nothing text="这一趟没跑有向链路（老 survey）—— 页面上的写操作那一维不是 0，是没量。" />
+      </Section>
+    )
+  }
+  const c = d.counters || {}
+  const meta = d.meta || {}
+  const bps = meta.breakpoints || {}
+  const fks = meta.facts || {}
+  const chains = d.chains || []
+  const bpCount = c.chainBreakpoints || {}
+  const factCount = c.chainFacts || {}
+  return (
+    <>
+      <Section
+        title="业务链路（有向）"
+        hint={`造一条自己前缀的数据，在它身上把这个域走完${mainRole ? ` · 走的是主爬角色 ${mainRole}` : ''}`}
+      >
+        <Space wrap size={[16, 6]}>
+          <Num label="开了几条链" n={c.chainsAttempted} />
+          <Num label="建成了" n={c.chainsCreated}
+               hint="点开新建、表单填上、提交成功。只有它不是 0，后面的详情/编辑/删除才可能有" />
+          <Num label="走到底" n={c.chainsCompleted} />
+          <Num label="写请求" n={c.chainWrites}
+               hint="P 边**唯一**的写操作来源。它是 0 的时候，别拿「他没测写接口」去质问对方——那是我们没量到" />
+          <Num label="写请求被拒" n={c.chainWritesFailed}
+               hint="先看报错原文（多半是我们填的值不合规），别直接当成产品缺陷" />
+          <Num label="填不出来的字段" n={c.chainFieldsUnfillable}
+               hint="要验证码 / 要上传 / 依赖另一条数据。这是**我们的欠账清单**，不是「这些表单没有校验」" />
+          <Num label="建完才解锁的页" n={c.chainPagesUnlocked} />
+          <Num label="留了没清的数据" n={c.chainsResidue} />
+        </Space>
+        <div style={{ marginTop: 10 }}>
+          <Space wrap size={[8, 8]}>
+            <GapPill
+              tone="warn" name="「新建」在，但是灰的" rows={d.createDisabled}
+              render={r => (
+                <>
+                  <span style={{ color: C.ink }}>{r.label || '（没有名字）'}</span>
+                  <span style={{ color: C.faint }}> · {r.page}</span>
+                </>
+              )}
+            />
+            {/* 断点/事实只画**发生过**的那几格。这两本账的 0 在计数区已经
+                摆过（`chainsAttempted` 那一排），这里再铺一排 0 只会把真正
+                发生的那一两格埋掉。 */}
+            {Object.keys(bps).map(k => (bpCount[k] ? (
+              <Tooltip key={k} title={bps[k].why?.replace(/\*\*/g, '')}>
+                <Tag style={tagStyle(OWNER_CN[bps[k].owner]?.tone || 'info')}>
+                  断在「{bps[k].label}」
+                  <b style={{ marginLeft: 6, fontFamily: 'var(--font-mono)' }}>{bpCount[k]}</b>
+                  <span style={{ color: C.faint, marginLeft: 6 }}>
+                    {OWNER_CN[bps[k].owner]?.text || bps[k].owner}
+                  </span>
+                </Tag>
+              </Tooltip>
+            ) : null))}
+            {Object.keys(fks).map(k => (factCount[k] ? (
+              <Tooltip key={k} title={fks[k].why?.replace(/\*\*/g, '')}>
+                <Tag style={tagStyle('mute')}>
+                  {fks[k].label}
+                  <b style={{ marginLeft: 6, fontFamily: 'var(--font-mono)' }}>{factCount[k]}</b>
+                </Tag>
+              </Tooltip>
+            ) : null))}
+          </Space>
+        </div>
+        <Says items={d.declarations} />
+      </Section>
+
+      {chains.length ? (
+        <Section
+          title="每一环点的是哪儿、走通了没有"
+          hint="这一环 · 页面上点哪个控件 · 谁能点 · 真走通了吗（走不通那一环的原话一并留着）"
+        >
+          {chains.map((ch, i) => (
+            <div key={i} style={{ marginBottom: 12 }}>
+              <div style={{ fontSize: 12, color: C.ink, marginBottom: 4 }}>
+                <code style={{ fontFamily: 'var(--font-mono)' }}>{ch.page}</code>
+                <span style={{ color: C.faint }}> · 这一条的记号 {ch.tag}</span>
+                {ch.breakpoint ? (
+                  <Tooltip title={ch.breakpointDetail || bps[ch.breakpoint]?.why?.replace(/\*\*/g, '')}>
+                    <Tag style={{ ...tagStyle(OWNER_CN[bps[ch.breakpoint]?.owner]?.tone || 'info'), marginLeft: 8 }}>
+                      断在「{bps[ch.breakpoint]?.label || ch.breakpoint}」
+                    </Tag>
+                  </Tooltip>
+                ) : (
+                  <Tag style={{ ...tagStyle(ch.completed ? 'ok' : 'mute'), marginLeft: 8 }}>
+                    {ch.completed ? '走到底了' : '没记断点'}
+                  </Tag>
+                )}
+              </div>
+              {(ch.steps || []).length ? (
+                <div style={{ fontSize: 12 }}>
+                  {(ch.steps || []).map((s, j) => (
+                    <div key={j} style={{
+                      display: 'flex', gap: 10, lineHeight: 1.9,
+                      borderBottom: `1px solid ${C.line}`,
+                    }}>
+                      <span style={{ width: 92, color: C.ink }}>
+                        {STEP_CN[s.step] || s.step}
+                      </span>
+                      {/* 空的 `control` 是「这一环不点任何控件」（回列表确认那种），
+                          不是「没记」—— 所以写出来，别留白。 */}
+                      <span style={{ flex: 1, color: s.control ? C.ink : C.faint }}>
+                        {s.control || '（这一环不点控件）'}
+                      </span>
+                      <span style={{ width: 96, color: C.gray }}>{mainRole || '（角色没记）'}</span>
+                      <span style={{ width: 150, color: C.gray }}>
+                        {s.ok ? '走通了' : '没走通'}
+                        {s.detail ? (
+                          <Tooltip title={s.detail}>
+                            <span style={{ marginLeft: 6, borderBottom: `1px dashed ${C.faint}` }}>
+                              看原话
+                            </span>
+                          </Tooltip>
+                        ) : null}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <Nothing text="这条链一环都没记上 —— 连「新建」都没点成（见上面的断点）。" />
+              )}
+            </div>
+          ))}
+        </Section>
+      ) : null}
+
+      {d.residue?.length ? (
+        <Section title="我们在被测环境里留下的东西" hint="自带清理没做到的那几条。**必须能被单独找出来清掉**，别混在声明里等人读">
+          {d.residue.map((r, i) => (
+            <div key={i} style={{ fontSize: 12, color: C.ink, lineHeight: 1.8, marginBottom: 4 }}>
+              <Tag style={tagStyle(r.kind === 'cleanup_failed' ? 'bad' : 'warn')}>
+                {r.kind === 'cleanup_failed' ? '发起了删除但没删掉' : '造了没试着删'}
+              </Tag>
+              <Rich text={r.detail} />
+            </div>
+          ))}
+        </Section>
+      ) : null}
+    </>
+  )
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// §14.5 功能地图 + 状态清单，和 §15 那**两个分开的数**
+//
+// 这一块只有一条不许犯的错：**广度和深度不许合成一个分**。加权之后
+// 「看全了但只走通一条」和「只看了一半但都走通了」拿到同一个分，
+// 而这两种欠的账完全不同（一个要补前置去看，一个要往深里走）。
+// 同理，三种「没看到」也**分三本**：`unreached` 是遗漏，`seen_not_run` 是取舍。
+// ════════════════════════════════════════════════════════════════════════
+
+function DomainMap({ dm, mainRole }) {
+  if (!dm) {
+    return (
+      <Section title="功能地图 · 广度 / 深度" hint="这个域有哪些功能、我们看到了几个、走通了几条">
+        <Nothing text="这一趟没画功能地图（老 survey，或一条链都没开）—— 广度不是满，是没量。" />
+      </Section>
+    )
+  }
+  const meta = dm.meta || {}
+  const wheres = meta.wheres || {}
+  const unseenCN = meta.unseen || {}
+  const hintCN = meta.hintKinds || {}
+  const b = dm.breadth || {}
+  const dep = dm.depth || {}
+  const sf = dm.surface || {}
+  const actions = sf.actions || []
+  const pair = dm.pairing || {}
+  const maps = dm.maps || []
+  // 状态边按「按钮名」索引：同一个按钮在两种状态下一亮一灰，那就是状态机的一条边。
+  const edgeOf = {}
+  for (const e of sf.stateEdges || []) edgeOf[`${e.where}|${e.label}`] = e
+  // 提示原文按链合并 —— 「没走通时页面说了什么」是 §14.5 那一列的原料。
+  const hints = maps.flatMap(m => (m.rules?.hints || []).map(h => ({ ...h, page: m.page })))
+  return (
+    <>
+      {/* 两列并排，中间**没有**总分那一格。别在这里算一个出来。 */}
+      <Section title="广度 / 深度 —— 两个数，分开看" hint="广度=页面上的功能我们看到了没有（必须满）；深度=业务链路走通了没有（允许不满，但没走的要说清楚）">
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 24 }}>
+          <div style={{ minWidth: 300 }}>
+            <div style={{ fontSize: 12, color: C.ink, marginBottom: 4 }}>
+              广度
+              <Tooltip title="满的判据只有一条：没有「没走到」的层。看到 100 个动作但漏了详情页那一层，广度就是不满；而一趟都没跑起来时它也不算满">
+                <Tag style={{ ...tagStyle(b.full ? 'ok' : 'warn'), marginLeft: 8 }}>
+                  {b.full ? '满了' : '不满'}
+                </Tag>
+              </Tooltip>
+            </div>
+            <Space wrap size={[14, 6]}>
+              <Num label="看到的动作" n={b.actionsSeen} />
+              <Num label="读不到谁能点" n={b.roleUnknown}
+                   hint="灰没灰读不出来 ⇒ 这一条不算看全。不这么算的话，读不到的那半边会白拿一个满分广度" />
+              {Object.keys(wheres).map(k => (
+                <Tooltip key={k} title={wheres[k]}>
+                  <span><Num label={k} n={(b.byWhere || {})[k]} /></span>
+                </Tooltip>
+              ))}
+            </Space>
+          </div>
+          <div style={{ minWidth: 300 }}>
+            <div style={{ fontSize: 12, color: C.ink, marginBottom: 4 }}>
+              深度
+              <Tag style={{ ...tagStyle(dep.mainChainDone ? 'ok' : 'warn'), marginLeft: 8 }}>
+                {dep.mainChainDone ? '主链走通了一条' : '主链一条都没走通'}
+              </Tag>
+            </div>
+            <Space wrap size={[14, 6]}>
+              <Num label="开了几条" n={dep.chainsAttempted} />
+              <Num label="走到底" n={dep.chainsCompleted} />
+              <Num label="走过的状态边" n={dep.statesWalked}
+                   hint="我们那一条数据真的从一个状态走到了另一个状态。0 = 深度这一维只有「建了删了」，没有状态流转" />
+              <Num label="看得出来的状态边" n={dep.stateEdges} />
+              <Num label="看到了没走" n={dep.notRun} />
+              <Num label="够不到" n={dep.blocked} />
+            </Space>
+          </div>
+        </div>
+        {/* 三本账分开摆。合成一个「未测」之后，遗漏就再也报不出来了。 */}
+        <div style={{ marginTop: 12 }}>
+          <Space wrap size={[8, 8]}>
+            {Object.keys(unseenCN).map(k => (
+              <Tooltip key={k} title={unseenCN[k].why?.replace(/\*\*/g, '')}>
+                <span>
+                  <GapPill
+                    tone={unseenCN[k].ours ? 'warn' : 'mute'}
+                    name={`${unseenCN[k].label}${unseenCN[k].ours ? '（算我们的欠账）' : '（不算欠账）'}`}
+                    rows={(dm.unseen || {})[k]}
+                    render={r => (
+                      <>
+                        <span style={{ color: C.ink }}>{r.label || '（没有名字）'}</span>
+                        {r.where && <span style={{ color: C.faint }}> · {wheres[r.where] || r.where}</span>}
+                        {r.why && <span style={{ color: C.gray }}> · {r.why}</span>}
+                      </>
+                    )}
+                  />
+                </span>
+              </Tooltip>
+            ))}
+          </Space>
+        </div>
+        <Says items={dm.declarations} />
+      </Section>
+
+      <Section
+        title="功能地图"
+        hint="每个动作一行：点哪儿 · 属于哪一行/哪一层 · 谁能点 · 状态一变它亮/灰跟不跟着变（「点完变成什么状态」看下面「状态清单」里走过的那条路）"
+      >
+        {actions.length ? (
+          <div style={{ fontSize: 12, maxHeight: 420, overflow: 'auto' }}>
+            {actions.map((a, i) => {
+              const e = edgeOf[`${a.where}|${a.label}`]
+              const unknown = !a.enabledIn?.length && !a.disabledIn?.length
+              return (
+                <div key={i} style={{
+                  display: 'flex', gap: 10, lineHeight: 1.9,
+                  borderBottom: `1px solid ${C.line}`,
+                }}>
+                  <span style={{ flex: 1, color: C.ink }}>{a.label}</span>
+                  <Tooltip title={wheres[a.where] || a.where}>
+                    <span style={{ width: 130, color: C.gray }}>{a.where}</span>
+                  </Tooltip>
+                  {/* 「谁能点」这一列：读不到就写读不到，别默认成「谁都能点」。
+                      角色只有主爬那一个，所以这里说的是**在哪个状态下**亮/灰。 */}
+                  <span style={{ width: 210, color: unknown ? C.faint : C.gray }}>
+                    {unknown ? (
+                      <Tooltip title="这个控件灰没灰我们读不出来（没有 disabled 属性、也不是标准控件）—— 不是「谁都能点」">
+                        <span style={{ borderBottom: `1px dashed ${C.faint}` }}>读不到灰没灰</span>
+                      </Tooltip>
+                    ) : (
+                      <>
+                        {mainRole ? `${mainRole}：` : ''}
+                        {/* 空状态别再套一层括号（`亮（（没状态））`）—— 它是
+                            「这一环没数出状态列」，不是一个叫「没状态」的状态。 */}
+                        {a.enabledIn?.length ? `亮（${a.enabledIn.map(s => s || '没数出状态').join('/')}）` : ''}
+                        {a.disabledIn?.length ? ` 灰（${a.disabledIn.map(s => s || '没数出状态').join('/')}）` : ''}
+                      </>
+                    )}
+                  </span>
+                  <span style={{ width: 170, color: C.gray }}>
+                    {e ? (
+                      <Tooltip title="同一个按钮在一种状态下亮、另一种状态下灰 —— 这是状态机上的一条边，比记「点失败了」值钱得多">
+                        <span style={{ borderBottom: `1px dashed ${C.faint}` }}>状态一变就换脸</span>
+                      </Tooltip>
+                    ) : <span style={{ color: C.faint }}>没看出状态差异</span>}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <Nothing text="动作面一行都没有 —— 不是「这个域没有功能」，是这一趟没枚举到（一条链都没开的话，行内/批量/详情页那几层结构上不可能露面）。" />
+        )}
+      </Section>
+
+      <Section title="状态清单" hint="列表上数出来的状态值 · 我们那一条走过哪些 · 哪些一次都没到过">
+        {maps.length ? maps.map((m, i) => (
+          <div key={i} style={{ fontSize: 12, marginBottom: 8 }}>
+            <code style={{ fontFamily: 'var(--font-mono)', color: C.ink }}>{m.page}</code>
+            {/* 状态是从**列表里数出来的**，不是猜的：某一列取值反复出现、
+                种类又不多，那一列就是状态列。数不出来时说「数不出来」，
+                别写 0 —— 那句话会被读成「这个对象没有状态」。 */}
+            <div style={{ color: C.gray, lineHeight: 1.9 }}>
+              列表里数出来的状态：
+              {(m.state?.candidates?.candidates || []).length
+                ? (m.state.candidates.candidates
+                    .map(c => (c.values || []).join('、')).join(' ｜ '))
+                : '（这一趟没数出状态列 —— 不是「没有状态」，是没进到有数据的列表）'}
+            </div>
+            <div style={{ color: C.gray, lineHeight: 1.9 }}>
+              走过：{(m.state?.path?.path || []).join(' → ') || '（一格都没走）'}
+            </div>
+            <div style={{ color: C.gray, lineHeight: 1.9 }}>
+              一次都没到过：{(m.state?.notWalked || []).join('、') || '（没有）'}
+              <Tooltip title="这是「没走到的分支」，不是「这些状态不存在」，也不是「他没测这些状态」——后一句得看对方脚本">
+                <span style={{ marginLeft: 6, color: C.faint }}>?</span>
+              </Tooltip>
+            </div>
+            {(m.structure?.appeared || []).length ? (
+              <div style={{ color: C.gray, lineHeight: 1.9 }}>
+                建完之后详情页多出来的区块：{m.structure.appeared.join('、')}
+              </div>
+            ) : null}
+          </div>
+        )) : (
+          <Nothing text="没有状态清单 —— 状态是从列表里数出来的，这一趟没进到有数据的列表那一层。" />
+        )}
+      </Section>
+
+      <Section title="页面说了什么（原话）" hint="填错 / 点不动 / 状态不对时页面给的提示。**落原文，不落 pass/fail** —— 原文才是这个功能的业务规则">
+        {hints.length ? (
+          <Space wrap size={[8, 8]}>
+            {Object.keys(hintCN).map(k => (
+              <GapPill
+                key={k} tone={k === 'permission' ? 'info' : (k === 'state_edge' ? 'warn' : 'mute')}
+                name={hintCN[k].label}
+                rows={hints.filter(h => h.kind === k)}
+                render={r => (
+                  <>
+                    <span style={{ color: C.ink }}>{r.text}</span>
+                    <span style={{ color: C.faint }}>
+                      {' '}· {r.page}{r.status ? ` · ${r.status}` : ''}
+                    </span>
+                  </>
+                )}
+              />
+            ))}
+          </Space>
+        ) : (
+          <Nothing text="一句提示都没收到 —— 不是「这个产品没有校验」，是我们没走到会触发提示的那一步。" />
+        )}
+      </Section>
+
+      <Section
+        title="动作面 × 脚本：谁在测、谁没人测"
+        hint="连接键是「这个按钮发了哪条端点」。**两边都空不是对齐了** —— 那是控件级那一列还没落下来"
+      >
+        <Space wrap size={[8, 8]}>
+          <Tag style={tagStyle(pair.paired ? 'ok' : 'mute')}>
+            {pair.paired ? '连上了' : '一条都没连上（下面两个清单这时恒为空，别读成「完全一致」）'}
+          </Tag>
+          <GapPill
+            tone="warn" name="脚本打了、页面上找不到这个动作"
+            rows={pair.verbsNotOnPage}
+            render={r => (
+              <>
+                <span style={{ color: C.ink }}>{r.verb}</span>
+                <span style={{ color: C.faint }}> · {(r.calls || []).slice(0, 3).join('、')}</span>
+              </>
+            )}
+          />
+          <GapPill
+            tone="bad" name="页面上点得到、脚本一条都没测"
+            rows={pair.actionsUntested}
+            render={r => (
+              <>
+                <span style={{ color: C.ink }}>{r.verb}</span>
+                <span style={{ color: C.faint }}>
+                  {' '}· {(r.controls || []).slice(0, 3).map(x => x.label).join('、')}
+                </span>
+              </>
+            )}
+          />
+        </Space>
+      </Section>
+    </>
+  )
+}
+
 function Reconcile({ rec }) {
   // 这道开关是整块里最要紧的一行。对账没跑成时**一个缺口数都不许画** ——
   // 画出来的 0 会被读成「没缺口」，而真相是「没算」。
@@ -3463,6 +3880,15 @@ function LiveSurvey({ projectId, envs, canRun }) {
               <Nothing text="这一趟没做选择器验证（老 survey，或计划里没带选择器表）—— 不是「选择器都没问题」。" />
             </Section>
           )}
+
+          {/* 有向链路 / 功能地图排在对账**前面**：对账那几个缺口的成色，
+              全看这两块量到了什么 —— 写操作一条没量到的时候，「他没测写接口」
+              那类缺口一律不能当真。 */}
+          {/* 主爬角色**先读账本**：`plan` 只在「刚点了这一趟」时有值，
+              刷新一次或看历史那一趟就是 null —— 只读 plan 的话「谁能点」
+              那一列会一律显示「角色没记」，而账本里明明记着。 */}
+          <ChainLedger d={led.directed} mainRole={led.mainRole || plan?.mainRole} />
+          <DomainMap dm={led.domainMap} mainRole={led.mainRole || plan?.mainRole} />
 
           <Reconcile rec={led.reconcile} />
         </>

@@ -29,9 +29,31 @@ from urllib.parse import urljoin, urlsplit
 
 from app.services.qa_page_traffic import (
     api_prefixes_from_routes,
+    attach_control_edges,
+    bucket_clicks,
     bucket_entries,
+    merge_control_edges,
     merge_edges,
 )
+from app.services.qa_directed_chain import (
+    CHAIN_FACTS,
+    UNFILLABLE,
+    chain_declarations,
+    chain_meta,
+    edit_value,
+    finish_chain,
+    new_chain,
+    new_probe_tag,
+    note_breakpoint,
+    note_fact,
+    note_step,
+    note_write,
+    pick_control,
+    plan_fill,
+    residue_findings,
+    summarize_chains,
+)
+from app.services.qa_domain_map import absorb_reading, map_meta, summarize_maps
 from app.services.qa_role_visibility import merge_shards
 from app.services.qa_selectors import PROBE_JS, merge_probe
 from app.services.ui_selector_render import anchor_selector, infer_kind
@@ -131,15 +153,28 @@ def _role_credentials(role: str, env_vars=None) -> tuple[str, str]:
 
 # ── L1：路由拦截 ──────────────────────────────────────────────────────────
 
-def make_readonly_guard(ledger: dict):
+def make_readonly_guard(ledger: dict, gate=None):
     """返回给 `context.route("**/*", …)` 用的回调。
 
     这里**只有**「问判定 + abort」两行是有意义的；判定本体在 `qa_survey_guard`。
     被拦下的写请求记进账本 —— 拦到东西不是"没事发生"，是**爬虫差点动了别人的数据**，
     这件事要能在页面上看见，不然下次就没人知道这层网救过命。
+
+    `gate` 是给**有向链路**开的一道窗：它是个零参数函数，返回真时这一刻的写
+    请求放行并单独计数（`directedWrites`）。三条纪律，少一条这层网就白搭：
+
+      · **默认关**（`gate=None` ⇒ 恒 fail-closed），无向枚举那一路一个字都没变；
+      · 开窗的人负责 `try/finally` 关上 —— 忘了关等于这一趟后面全程无保护；
+      · **不许另开一个没有 guard 的 context 来写**。那样写请求既不过判定、
+        也不计数，账本上和"什么都没发生"一模一样，
+        而它恰恰是唯一一处我们真的在动别人环境的地方。
     """
     async def _guard(route, request):
         if is_write_request(request.method, request.url):
+            if gate is not None and gate():
+                ledger["directedWrites"] = ledger.get("directedWrites", 0) + 1
+                await route.continue_()
+                return
             ledger["writesBlocked"] = ledger.get("writesBlocked", 0) + 1
             ledger.setdefault("writesBlockedSample", [])
             if len(ledger["writesBlockedSample"]) < 20:
@@ -196,6 +231,13 @@ _COLLECT_JS = """(rootSel) => {
       required: el.required === true || el.getAttribute('aria-required') === 'true',
       readonly: el.readOnly === true || el.getAttribute('aria-readonly') === 'true',
       fieldType: isField ? (el.getAttribute('type') || el.tagName.toLowerCase()) : '',
+      // 下面三个只给**有向链路**定位用（`qa_directed_chain.field_selector`）。
+      // 它们是页面写死的标记（不是 `value`），所以上面那条「绝不取 value」的
+      // 纪律没被动过；少了它们，一半的表单框锚不住，链路会断在
+      // 「填不出来」那一格上 —— 而那一格看起来像产品没有表单。
+      name: el.getAttribute('name') || '',
+      placeholder: el.getAttribute('placeholder') || '',
+      ariaLabel: el.getAttribute('aria-label') || '',
     });
   }
   return out;
@@ -385,6 +427,17 @@ def degrade_for_gaps(status: str, ledger: dict) -> str:
     return status
 
 
+def item_key(page_path: str, anchor: str, scope: str = "") -> str:
+    """item 的主键，**唯一出处**。
+
+    `scope` 是弹层前缀（`[新建]`）—— 少了它，弹层里那个「保存」和页面上
+    那个「保存」会是同一行。而**点击时窗也拿它当归属键**（`bucket_clicks`）：
+    两边各写一遍格式，哪天有人改了一处，边就会静静挂到另一个控件头上 ——
+    JSON 列上没有外键，挂错了一条测试都不会红。
+    """
+    return f"{page_path}::{scope}{anchor}"
+
+
 def _state_of(raw: dict) -> str:
     """`present` / `enabled` —— 只记**看得见的事实**。
 
@@ -445,7 +498,7 @@ def collect_items(page_path: str, page_title: str, raw_items, ledger: dict,
         # `anchor`** —— anchor 是拿去还原选择器的原值（S6.5 要用），
         # 掺一个层名进去，登记表那边就再也对不上了。
         out.append({
-            "key": f"{page_path}::{scope}{anchor}",
+            "key": item_key(page_path, anchor, scope),
             "page_path": page_path,
             "page_title": (f"{page_title} · 「{scope.strip('[]')}」层内"
                            if scope else page_title),
@@ -454,7 +507,12 @@ def collect_items(page_path: str, page_title: str, raw_items, ledger: dict,
             "label": label,
             "control_type": kind,
             "state": _state_of(raw),
-            "endpoints": [],
+            # **NULL，不是 `[]`。** 这一列的三态一个都不许合：
+            # 有边 / 点了没边（`[]`，G4 的料）/ **没点过**（NULL）。
+            # 建行的时候写 `[]` 等于替一千多个还没碰过的控件宣布
+            # 「点了，什么请求都没发」—— G4 会从个位数涨到四位数，全是假的。
+            # 真点过的那几行由 `attach_control_edges` 覆盖。
+            "endpoints": None,
             # 点击证据。**默认 False，一行不漏地写出来** —— 缺这个键的行会
             # 退回 run 级的 `controlsClicked`，而那个数从这一版起不再是 0：
             # 于是 1200 多个**没点过**的控件会跟着被记成「点了什么都没发生」。
@@ -572,7 +630,8 @@ async def _close_dialog(page) -> bool:
 
 async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str,
                          raw_items, ledger: dict, budget: int,
-                         seen_openers: set) -> tuple[list, dict, int, list]:
+                         seen_openers: set, clicks: list | None = None
+                         ) -> tuple[list, dict, int, list]:
     """把这一页的「开层」按钮点开几个，**枚举层里的东西**，再关掉。
 
     返回 `(层里的账本行, {anchor: 反应}, 用掉几次预算, 点出来的新页面)`。
@@ -588,7 +647,12 @@ async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str
        L1 确实拦住了，但那说明这个按钮不只是开层，下次改判据要看这条。
     3. **关不掉就整页重载并停止这一页的探测**。宁可少探两个层，
        也不要把 B 层里的控件记到 A 按钮名下。
-    4. **链接和表头不占预算**（`NON_OPENER_ROLES` / 带 `href`）。
+    4. **点下去那一刻记一格时窗**（`clicks`）——「这一次点击发出了什么请求」
+       只能靠时间归属（HAR 里没有"这条请求属于哪次点击"这种字段），
+       归属规则在 `qa_page_traffic.bucket_clicks`。
+       时窗**只在点成功之后才登记**：点不着的那些一格都不留，
+       否则它们会以「点了什么都没发」的名义进 G4，而我们根本没碰到它。
+    5. **链接和表头不占预算**（`NON_OPENER_ROLES` / 带 `href`）。
        2026-09-04 实测：255 次点击里 234 次是跳转、开层 **0 次** ——
        名额全被左侧导航和 `Created At` 这种表头吃掉，真正的「新建」
        一个都没轮到。账本那时显示「点了 255 下」，看着非常健康。
@@ -632,11 +696,13 @@ async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str
     used = 0
     for anchor, label, sel in picked:
         before = ledger.get("writesBlocked", 0)
+        win: dict = {}
         try:
             # 点之前把「现在就在的层状物」盖上章 —— 点完只认没盖章的。
             await _eval(page, _MARK_PRE_JS)
         except Exception:                                # noqa: BLE001
             pass
+        started = _now()      # 先取时间再点：反了的话点击瞬间的请求就落在窗外了
         try:
             await page.locator(sel).first.click(timeout=CLICK_TIMEOUT_MS)
         except Exception as e:                           # noqa: BLE001
@@ -648,6 +714,13 @@ async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str
             continue
         used += 1
         ledger["controlsClicked"] = ledger.get("controlsClicked", 0) + 1
+        # 点成了才登记时窗。右边界在下面每一条岔路上各自盖 ——
+        # **一律不延长**：点完紧接着是关层 / goto 回来，延长会把关层和
+        # 重载的流量算成"这个按钮发的"。
+        win = {"page": page_path, "key": item_key(page_path, anchor),
+               "anchor": anchor, "label": label, "startedAt": started}
+        if clicks is not None:
+            clicks.append(win)
         effect = ""
         # 轮询而不是一次 `wait_for_selector`：判据是"新冒出来的"，
         # 这件事只有对比之后才知道，没有哪个 CSS 选择器能等它。
@@ -681,10 +754,16 @@ async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str
                     {"page": page_path, "label": label})
             out.extend(collect_items(page_path, page_title, inner, ledger,
                                      scope=f"[{label}]"))
+            # 右边界落在**关层之前**：关层自己会发请求（有的产品在关的时候
+            # 提交/刷新），算进来就成了"点开这个按钮会调那条端点"。
+            win["endedAt"] = _now()
             if not await _close_dialog(page):
                 ledger.setdefault("dialogsStuck", []).append(
                     {"page": page_path, "label": label})
                 marks[anchor] = effect
+                # 这条岔路 `break` 掉了，收尾那两行走不到 —— 在这儿补。
+                win["effect"] = effect
+                win.setdefault("endedAt", _now())
                 try:
                     await page.goto(page_url, timeout=PAGE_TIMEOUT_MS)
                     await page.wait_for_load_state("networkidle",
@@ -697,19 +776,669 @@ async def _probe_dialogs(page, *, page_path: str, page_title: str, page_url: str
             effect = "navigate"
             ledger["dialogsNavigated"] = ledger.get("dialogsNavigated", 0) + 1
             found_paths.append(urlsplit(page.url).path)
+            # 右边界落在**跳回去之前**。这一格里混着**目标页自己的加载流量** ——
+            # 那不是这个按钮"调"的。所以 `effect` 必须跟着边走（`bucket_clicks`
+            # 会把它带上），丢了就变成一句错话。
+            win["endedAt"] = _now()
             try:
                 await page.goto(page_url, timeout=PAGE_TIMEOUT_MS)
                 await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
             except Exception:                            # noqa: BLE001
                 pass
         else:
-            # 点了、没弹层、没跳转、也没发请求 —— **这才是 G4 要找的东西**。
+            # 点了、没弹层、没跳转 —— 看得见的反应是没有了，
+            # **但"发没发请求"还得看时窗**：静默保存/静默刷新也长这样。
+            # 真正的 G4 是两样都空（`bucket_clicks` 的 `controlsSilent`）。
             ledger["dialogsNoEffect"] = ledger.get("dialogsNoEffect", 0) + 1
+            win["endedAt"] = _now()
         if ledger.get("writesBlocked", 0) > before:
             ledger.setdefault("openerBlockedWrite", []).append(
                 {"page": page_path, "label": label})
         marks[anchor] = effect
+        win["effect"] = effect
+        # 兜底：上面三条岔路都盖过章了，这里只管万一漏掉的那条。
+        # **盖不上就是盖不上** —— 没有右边界的窗在 `bucket_clicks` 里整条弃掉
+        # 并记 `clickWindowsUnclosed`，绝不当成「点了没发请求」。
+        win.setdefault("endedAt", _now())
     return out, marks, used, found_paths
+
+
+# ── 有向链路：造自己那一条，再在它身上把这个域走完 ─────────────────────────
+#
+# 判据全在 `app/services/qa_directed_chain.py`（纯函数、零业务词）。
+# 这里只有「怎么点」，一个判断都不做 —— 那边换个产品照样成立，
+# 这边换个产品要改的只有 Playwright 的用法。
+
+# 一趟最多几条链。**是预算不是过滤**：每一页都造一条会把被测环境撑爆，
+# 而"撑爆"的表现是下一趟"列表里有 300 条"这类断言开始时红时绿。
+CHAIN_BUDGET = 6
+# 点完等多久收请求。比 `DIALOG_WAIT_MS` 长：写请求要落库，回得比开层慢。
+CHAIN_SETTLE_MS = 2_500
+
+ROW_SEL = '[data-qa-probe-row]'
+
+# 在列表里找到**自己那一行**并圈出它的范围。
+#
+# 为什么非要圈：行内的「编辑 / 删除」在每一行上都长一模一样（同 testid、
+# 同文案），不圈就是 `.first` —— 那点的是**列表第一行**，很可能是别人的数据。
+# 这不是"少测一点"，是**动了不该动的东西**，而账本上看不出来。
+#
+# 优先级 `tr` > `role=row` > `li`：toast 提示里也会出现刚建好的名字
+# （「创建成功：qa-probe-7f3a」），那种一般是 `div`，圈不出行来 —— 圈不出来
+# 就报 `row_unscoped`，**一个写按钮都不点**。
+_MARK_ROW_JS = r"""(tag) => {
+  const t = String(tag).toLowerCase();
+  for (const el of document.querySelectorAll('[data-qa-probe-row]'))
+    el.removeAttribute('data-qa-probe-row');
+  const hits = [];
+  for (const el of document.querySelectorAll('td, th, li, a, span, div, p')) {
+    if ((el.textContent || '').toLowerCase().includes(t)) hits.push(el);
+  }
+  if (!hits.length) return {found: false, scoped: false, scope: ''};
+  // 三档偏好各自找一遍，宁可多走两轮也不要"最深的那个恰好在 toast 里"。
+  const PREF = [
+    (n) => n.tagName && n.tagName.toLowerCase() === 'tr',
+    (n) => n.getAttribute && n.getAttribute('role') === 'row',
+    (n) => n.tagName && n.tagName.toLowerCase() === 'li',
+  ];
+  for (let i = 0; i < PREF.length; i++) {
+    for (const hit of hits) {
+      let node = hit;
+      while (node && node !== document.body) {
+        if (PREF[i](node)) {
+          node.setAttribute('data-qa-probe-row', '1');
+          return {found: true, scoped: true,
+                  scope: (node.tagName || '').toLowerCase()};
+        }
+        node = node.parentElement;
+      }
+    }
+  }
+  return {found: true, scoped: false, scope: ''};
+}"""
+
+# 下拉挑第一个能挑的。原生 `<select>` 和"点开再挑"的自定义组件都要认 ——
+# 只认一种的话，另一种会以「必填项填不出来」的名义把整条链断在第一步，
+# 而那一格看起来像"这个产品的表单我们填不了"。
+_PICK_OPTION_JS = r"""(sel) => {
+  const el = document.querySelector(sel);
+  if (!el) return 'gone';
+  if (el.tagName && el.tagName.toLowerCase() === 'select') {
+    const opts = [...el.options].filter(o => !o.disabled && o.value !== '');
+    if (!opts.length) return 'empty';
+    el.value = opts[0].value;
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+    return 'ok';
+  }
+  return 'interactive';
+}"""
+
+# 「点完之后页面变成什么样」—— §14.1 那四样里的三样原料
+# （规则的提示原文 / 状态 / 结构；第四样「动作面」用的还是 `_COLLECT_JS`）。
+#
+# **全走语义标签和 ARIA，零类名、零业务词**：换个 UI 库、换个产品照样成立。
+# 判据一个都不在这儿 —— 这里只把原文捞上来，怎么归类在
+# `app/services/qa_domain_map.py`（纯函数，可以拿同一份原料重算）。
+_READ_JS = r"""() => {
+  const vis = (el) => {
+    const r = el.getBoundingClientRect();
+    return r.width > 0 || r.height > 0;
+  };
+  const txt = (el) => (el.innerText || el.textContent || '').trim();
+
+  // ① 提示。**原文照抄，一个字不压** —— 提示原文就是规则本身
+  // （§14.1 那条 ⚠：压成 pass/fail 之后这条约束下一趟就查不回来了）。
+  // `role=alert|status` 和 `aria-live` 是 ARIA 标准，各家 toast/表单报错都用它。
+  const hints = [];
+  const HSEL = '[role="alert"], [role="status"], [aria-live="polite"],'
+             + ' [aria-live="assertive"], [aria-errormessage]';
+  for (const el of document.querySelectorAll(HSEL)) {
+    if (!vis(el)) continue;
+    const s = txt(el);
+    if (s && s.length <= 300 && !hints.includes(s)) hints.push(s);
+  }
+  // 校验没过的字段，它自己指向的那句提示。
+  for (const f of document.querySelectorAll('[aria-invalid="true"]')) {
+    const ids = (f.getAttribute('aria-describedby') || '').split(/\s+/);
+    for (const id of ids) {
+      if (!id) continue;
+      const el = document.getElementById(id);
+      if (!el || !vis(el)) continue;
+      const s = txt(el);
+      if (s && s.length <= 300 && !hints.includes(s)) hints.push(s);
+    }
+  }
+
+  // ② 区块标题。差集 = **建完一条数据才出现的结构**（审批记录、操作日志、
+  // 关联列表都在这里冒出来）。这里只捞标题，**不解释它是什么** ——
+  // 解释要认产品名词。
+  const sections = [];
+  const SSEL = 'h1, h2, h3, h4, h5, h6, [role="heading"], [role="tab"],'
+             + ' legend, caption, summary';
+  for (const el of document.querySelectorAll(SSEL)) {
+    if (!vis(el)) continue;
+    const s = txt(el).slice(0, 80);
+    if (s && !sections.includes(s)) sections.push(s);
+  }
+
+  // ③ 列表每一行的单元格文本。拿它**数**这个对象一共有几种状态
+  // （§14.3：同一列里反复出现的少数几个短词）。⚠ 只取行内文本，
+  // 不取 `value` —— 那条纪律和 `_COLLECT_JS` 一样。
+  const cells = [];
+  let ourRow = [];
+  const RSEL = 'tr, [role="row"], li';
+  for (const row of document.querySelectorAll(RSEL)) {
+    if (!vis(row)) continue;
+    const kids = row.querySelectorAll('td, th, [role="cell"],'
+                                    + ' [role="gridcell"], [role="columnheader"]');
+    let vals = [];
+    if (kids.length) {
+      for (const c of kids) vals.push(txt(c).slice(0, 60));
+    } else {
+      const s = txt(row).slice(0, 60);
+      if (s) vals = [s];
+    }
+    if (!vals.length) continue;
+    if (cells.length < 200) cells.push(vals);
+    if (row.getAttribute('data-qa-probe-row') === '1') ourRow = vals;
+  }
+  return {hints: hints, sections: sections, cells: cells, ourRow: ourRow};
+}"""
+
+
+async def _run_chain(page, *, page_path: str, page_url: str, raw_items,
+                     ledger: dict, chains: list, clicks: list, windows: list,
+                     gate: dict) -> list[str]:
+    """在这一页上走**一条**有向链路。返回新解锁的页面路径。
+
+    顺序是需求 §12.3 那条：`新建 → 列表 → 详情 → 编辑 → 回列表确认 → 删除
+    → 确认没了`。每一环记一格，断了**只记第一个断点**（后面没走过，
+    写"失败"是一句我们没验证过的话）。
+
+    三条硬约束（§12.4），少一条这一维就不该开：
+
+    1. **自带清理且能查账** —— 删不掉要报残留（`residue_findings`），
+       不是"下次再说"。
+    2. **只造改删自己前缀的那一条** —— 判据在文本前缀上，不在按钮名字上；
+       圈不出行范围（`row_unscoped`）就一个写按钮都不点。
+    3. **每页最多一条链一次新建** —— 这个函数一页只调一次，预算在
+       `CHAIN_BUDGET`。
+
+    L1 那道网在这段时间里**为我们开一道窗**（`gate`），窗上的每个写请求都
+    单独计数（`directedWrites`）。窗在 `finally` 里关 —— 忘了关等于这一趟
+    后面全程无保护，而无保护跑起来一切正常。
+    """
+    unlocked: list[str] = []
+    create = pick_control(raw_items, "create")
+    if create is None:
+        # 有「新建」但是灰的 —— **这是一条业务规则**（当前状态/当前角色不让建），
+        # 比"没有这个功能"值钱得多。两件事不许合成一个"没找到"。
+        dis = pick_control(raw_items, "create", allow_disabled=True)
+        if dis is not None:
+            ledger.setdefault("chainCreateDisabled", []).append(
+                {"page": page_path, "label": (dis.get("label") or "").strip()})
+        return unlocked
+    if not anchor_selector(testid=create.get("testid") or "",
+                           elem_id=create.get("id") or "",
+                           text=(create.get("label") or "").strip()):
+        # 锚不住就不点：下一趟找不回同一个按钮，而"这一趟点的是哪个"就成了悬案。
+        ledger.setdefault("chainCreateAnchorless", []).append(page_path)
+        return unlocked
+
+    tag = new_probe_tag()
+    chain = new_chain(page_path, tag)
+    chains.append(chain)
+    # 勾选之前页面上有哪些控件。批量条靠**差集**认出来（见 `probe_batch`）。
+    base_labels = {(r.get("label") or "").strip() for r in raw_items or []}
+    # 页面级那本账里占住这段时间：不占的话这几下会落进 `edgesUnwindowed`，
+    # 读起来像"归不了页的漏账"。`tail: False` —— 一格都不许延长。
+    win = {"path": page_path, "kind": "directed", "tail": False,
+           "startedAt": _now()}
+    windows.append(win)
+
+    pending: list = []
+
+    def _on_resp(resp):
+        try:
+            if is_write_request(resp.request.method, resp.url):
+                pending.append(resp)
+        except Exception:                                # noqa: BLE001
+            pass
+
+    page.on("response", _on_resp)
+
+    async def flush():
+        """把这一步发出去的写请求记进链的账本。
+
+        报错原文**只在非 2xx 时留**、而且截断：服务端说"名称已存在"是最好的
+        线索；2xx 的响应体里是被测环境的业务数据，一个字都不该抄进我们的账本。
+        """
+        while pending:
+            resp = pending.pop(0)
+            body = ""
+            status = getattr(resp, "status", None)
+            if not (isinstance(status, int) and 200 <= status < 300):
+                try:
+                    body = (await resp.text())[:300]
+                except Exception:                        # noqa: BLE001
+                    body = ""
+            note_write(chain, method=resp.request.method,
+                       path=urlsplit(resp.url).path, status=status, body=body)
+
+    async def click(raw, *, root: str = "", scope: str = "") -> bool:
+        """点一下并**登记点击时窗** —— 控件级那条 `按钮 → 写接口` 的边就靠它。
+
+        `root` 非空时定位限定在那个范围里（行内 / 层内）。**行内操作必须给
+        `root`** ：不给就是 `.first`，点的是列表第一行 = 别人的数据。
+        `scope` 是记账用的 key 前缀，和 `root` 是两件事：行内那几个按钮
+        **本来就是这一页的控件**（page 级枚举里有它们），所以 `scope` 留空，
+        边才落到那一行 item 的 `endpoints` 上。
+        """
+        label = (raw.get("label") or "").strip()
+        anchor = raw.get("testid") or raw.get("id") or label
+        sel = anchor_selector(testid=raw.get("testid") or "",
+                              elem_id=raw.get("id") or "", text=label)
+        if not sel:
+            return False
+        loc = page.locator(root).locator(sel) if root else page.locator(sel)
+        started = _now()
+        try:
+            await loc.first.click(timeout=CLICK_TIMEOUT_MS)
+        except Exception as e:                           # noqa: BLE001
+            ledger.setdefault("chainClickFailed", []).append(
+                {"page": page_path, "label": label, "error": type(e).__name__})
+            return False
+        ledger["controlsClicked"] = ledger.get("controlsClicked", 0) + 1
+        w = {"page": page_path, "key": item_key(page_path, anchor, scope),
+             "anchor": anchor, "label": label, "startedAt": started}
+        clicks.append(w)
+        await page.wait_for_timeout(CHAIN_SETTLE_MS)
+        w["endedAt"] = _now()
+        w["effect"] = ""
+        await flush()
+        return True
+
+    async def back_to_list() -> dict:
+        """回列表、重新圈出自己那一行。**每次导航后都要重圈** ——
+        标记是打在 DOM 上的，一次重载就没了，而没重圈的 `ROW_SEL` 会一个都
+        匹配不到，行内点击全部"点不着"（看起来像按钮不存在）。
+        """
+        try:
+            await page.goto(page_url, timeout=PAGE_TIMEOUT_MS)
+            await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
+        except Exception:                                # noqa: BLE001
+            pass
+        try:
+            return await _eval(page, _MARK_ROW_JS, tag) or {}
+        except Exception:                                # noqa: BLE001
+            return {}
+
+    async def read(step: str, *, where: str = "page", items=None) -> dict:
+        """§14.1：每点一步，把**四样**读一遍（规则 / 状态 / 动作面 / 结构）。
+
+        「只记有没有反应」是这一维原来最大的毛病 —— 那样的账本上，
+        「点完弹了一句『名称已存在』」和「点完什么都没发生」长得一样，
+        而前者是**一条业务规则**，后者才是断点。
+
+        `where` 说这批控件**属于哪一行 / 哪一层**（§14.2 那句「欠的是归类」）。
+        调用它本身就记一笔「探过这一层」—— 探过、一个都没有是产品的事实，
+        压根没探才是我们的欠账，两者不许混（§15.3）。
+        """
+        try:
+            got = await _eval(page, _READ_JS) or {}
+        except Exception:                                # noqa: BLE001
+            got = {}
+        absorb_reading(chain, step=step, where=where, read=got, items=items)
+        return got
+
+    async def probe_batch(row_items) -> None:
+        """勾一行，看**批量条**冒出来什么（§15.2 那条因果里的一层）。
+
+        不勾选就没有批量条 —— 这一层「结构上就看不到」，
+        而看不到在报告上和"这个产品没有批量操作"长得一样。
+        勾选本身是纯前端状态，不发写请求；勾完**立刻取消**，不留痕。
+
+        新冒出来的按钮靠**和勾选前的页面控件做差集**认出来 ——
+        不认类名、不认位置，换个产品照样成立。
+        """
+        box = next((r for r in row_items or []
+                    if (r.get("fieldType") or r.get("role") or "").lower()
+                    in ("checkbox", "radio")), None)
+        if box is None:
+            # 行上没有勾选框 —— **探过了**，这是产品的事实，不是欠账。
+            await read("list", where="batch", items=[])
+            return
+        if not await click(box, root=ROW_SEL):
+            await read("list", where="batch", items=[])
+            return
+        try:
+            after = await _eval(page, _COLLECT_JS) or []
+        except Exception:                                # noqa: BLE001
+            after = []
+        fresh = [r for r in after
+                 if (r.get("label") or "").strip()
+                 and (r.get("label") or "").strip() not in base_labels]
+        await read("list", where="batch", items=fresh)
+        await click(box, root=ROW_SEL)                   # 取消勾选，不留痕
+
+    async def fill_form(root: str) -> bool:
+        """填一张表单。返回「能不能提交」。填不出来的**逐条记明账**。"""
+        try:
+            fields = await _eval(page, _COLLECT_JS, root) if root else \
+                await _eval(page, _COLLECT_JS)
+        except Exception:                                # noqa: BLE001
+            fields = []
+        plan = plan_fill(fields, tag)
+        chain["unfillable"].extend(plan["unfillable"])
+        if plan["blocked"]:
+            note_breakpoint(chain, "form_unfillable",
+                            detail="；".join(f"{u['label'] or '(无标签)'}：{u['why']}"
+                                             for u in plan["unfillable"][:3])
+                                   or "表单里没有能承载前缀的文本框")
+            return False
+        for f in plan["fills"]:
+            target = page.locator(root).locator(f["selector"]) if root \
+                else page.locator(f["selector"])
+            try:
+                if f["kind"] == "select":
+                    got = await _eval(page, _PICK_OPTION_JS,
+                                      (root + " " + f["selector"]).strip())
+                    if got == "ok":
+                        continue
+                    kind = "no_option" if got == "empty" else "interactive"
+                    chain["unfillable"].append(
+                        {"label": f["label"], "kind": kind,
+                         "why": UNFILLABLE[kind], "required": f["required"]})
+                    if f["required"]:
+                        note_breakpoint(chain, "form_unfillable",
+                                        detail=f"必填下拉「{f['label']}」：{UNFILLABLE[kind]}")
+                        return False
+                    continue
+                await target.first.fill(f["value"], timeout=CLICK_TIMEOUT_MS)
+            except Exception:                            # noqa: BLE001
+                chain["unfillable"].append(
+                    {"label": f["label"], "kind": "fill_failed",
+                     "why": UNFILLABLE["fill_failed"], "required": f["required"]})
+                if f["required"]:
+                    note_breakpoint(chain, "form_unfillable",
+                                    detail=f"必填项「{f['label']}」：{UNFILLABLE['fill_failed']}")
+                    return False
+        return True
+
+    async def submit_form(root: str, *, step: str) -> bool:
+        """找到提交按钮点下去，再看服务端答了什么。"""
+        try:
+            inner = await _eval(page, _COLLECT_JS, root) if root else \
+                await _eval(page, _COLLECT_JS)
+        except Exception:                                # noqa: BLE001
+            inner = []
+        btn = pick_control(inner, "submit")
+        if btn is None:
+            note_breakpoint(chain, "submit_failed", detail="表单上找不到提交按钮")
+            return False
+        before = len(chain["writes"])
+        if not await click(btn, root=root, scope="[表单]"):
+            note_breakpoint(chain, "submit_failed", detail="提交按钮点不着")
+            return False
+        # 提交完页面说了什么 —— **成没成都读**。没成时那句提示就是规则本身
+        # （§14.4：「不能为空」是约束、「无权限」是这一步归别人、
+        # 「当前状态不允许」是状态机的一条边，三类都不算失败）。
+        await read(step, where="layer" if root else "page")
+        fresh = chain["writes"][before:]
+        if not fresh:
+            # 点了、一个请求都没出去 —— **多半是前端校验没过**（我们少填了
+            # 用样式类标必填的那些框）。它不是"这个域没有写接口"，
+            # 所以要说清是哪一种。
+            note_breakpoint(chain, "submit_failed",
+                            detail="点了提交但一个请求都没发出去（多半是前端校验没过）")
+            return False
+        bad = [w for w in fresh if not w["ok"]]
+        if bad and not [w for w in fresh if w["ok"]]:
+            note_breakpoint(chain, "submit_failed",
+                            detail=bad[0].get("error")
+                                   or f"{bad[0]['method']} {bad[0]['path']} → {bad[0]['status']}")
+            return False
+        return True
+
+    gate["open"] = True
+    try:
+        # 底片：动手之前这一页长什么样。结构那一格靠它和最后一次做差集 ——
+        # 差出来的就是**建了一条数据才出现的东西**（§14.1 的「结构」）。
+        await read("create", where="page", items=raw_items)
+
+        # ① 新建：点开表单
+        label = (create.get("label") or "").strip()
+        if not await click(create):
+            note_breakpoint(chain, "no_form", detail=f"「{label}」点不着")
+            return unlocked
+        shape = None
+        deadline = time.monotonic() + DIALOG_WAIT_MS / 1000
+        while True:
+            try:
+                shape = await _eval(page, _FIND_LAYER_JS)
+            except Exception:                            # noqa: BLE001
+                shape = None
+            if shape or time.monotonic() >= deadline:
+                break
+            await page.wait_for_timeout(150)
+        jumped = urlsplit(page.url).path != urlsplit(page_url).path
+        if not shape and not jumped:
+            # 点了「新建」既没弹层也没跳页。**谁的问题分不出来** ——
+            # 可能是产品的死按钮，也可能是我们没认出它的层。别默认归给自己。
+            note_breakpoint(chain, "no_form",
+                            detail="点了「新建」既没弹层也没跳页")
+            note_step(chain, "create", ok=False, detail="找不到表单",
+                      control=label)
+            return unlocked
+        form_root = LAYER_SEL if shape else ""
+        if jumped:
+            unlocked.append(urlsplit(page.url).path)
+        # 表单这一层的动作面：主/次按钮都在这儿（「保存」旁边那个「保存并新建」
+        # 一直没人数过）。
+        try:
+            layer_now = await _eval(page, _COLLECT_JS, form_root) if form_root \
+                else await _eval(page, _COLLECT_JS)
+        except Exception:                                # noqa: BLE001
+            layer_now = []
+        await read("create", where="layer" if form_root else "page",
+                   items=layer_now)
+
+        # ① 新建：填 + 提交
+        if not await fill_form(form_root):
+            note_step(chain, "create", ok=False, detail="表单填不出来",
+                      control=label)
+            return unlocked
+        if not await submit_form(form_root, step="create"):
+            note_step(chain, "create", ok=False, detail="提交没成", control=label)
+            return unlocked
+        chain["created"] = True
+        note_step(chain, "create", ok=True, detail=f"建了 {tag}", control=label)
+
+        # ② 列表：找自己那一行
+        scope = await back_to_list()
+        note_step(chain, "list", ok=bool(scope.get("found")))
+        if not scope.get("found"):
+            # **这本身就是一条发现**：列表没刷新 / 分页在后面 / 需要审批才可见。
+            # 不是"建失败了" —— 写请求是 2xx，服务端认了。
+            note_breakpoint(chain, "row_not_found",
+                            detail="写请求成功了，但列表里搜不到这个名字："
+                                   "列表没刷新 / 它在后面的分页 / 要审批后才可见")
+            return unlocked
+        if not scope.get("scoped"):
+            note_breakpoint(chain, "row_unscoped",
+                            detail="名字在页面上，但认不出它属于哪一行 —— "
+                                   "**这时一个写按钮都不许点**（点了可能删的是别人那条）")
+            return unlocked
+
+        # ③ 详情：这一步才第一次解锁子页面
+        try:
+            row_items = await _eval(page, _COLLECT_JS, ROW_SEL)
+        except Exception:                                # noqa: BLE001
+            row_items = []
+        # 行内那一层的动作面 + 我们那一行现在是什么状态。
+        await read("list", where="row", items=row_items)
+        await probe_batch(row_items)
+        det = pick_control(row_items, "detail")
+        if det is None:
+            note_fact(chain, "no_detail_entry",
+                      detail=CHAIN_FACTS["no_detail_entry"]["why"])
+            note_step(chain, "detail", ok=False, detail="行上没有详情入口")
+        else:
+            if await click(det, root=ROW_SEL):
+                path = urlsplit(page.url).path
+                ok = path != urlsplit(page_url).path
+                if ok:
+                    unlocked.append(path)
+                note_step(chain, "detail", ok=ok,
+                          detail=f"进了 {path}" if ok else "点了详情但没换页",
+                          control=(det.get("label") or "").strip())
+                # 详情页那一层：页签、页签里的按钮、审批/日志/关联那几块区块。
+                # **这一层不建数据就进不来**（§15.2），所以它一直是空的。
+                try:
+                    det_items = await _eval(page, _COLLECT_JS) or []
+                except Exception:                        # noqa: BLE001
+                    det_items = []
+                await read("detail", where="detail", items=det_items)
+                tabs = [r for r in det_items
+                        if (r.get("role") or "").lower() == "tab"]
+                # 页签**探过**这件事要记账（哪怕这个产品没有页签）——
+                # 没探和探到 0 个是两回事。
+                await read("detail", where="tab", items=tabs)
+            else:
+                note_step(chain, "detail", ok=False, detail="详情点不着",
+                          control=(det.get("label") or "").strip())
+
+        # ④ 编辑
+        scope = await back_to_list()
+        try:
+            row_items = await _eval(page, _COLLECT_JS, ROW_SEL) \
+                if scope.get("scoped") else []
+        except Exception:                                # noqa: BLE001
+            row_items = []
+        edt = pick_control(row_items, "edit")
+        if edt is None:
+            # **记成事实，不当缺口**（§12.3）。链继续走 —— 不继续的话
+            # 我们造的那一条就删不掉了。
+            note_fact(chain, "no_edit_entry",
+                      detail=CHAIN_FACTS["no_edit_entry"]["why"])
+            note_step(chain, "edit", ok=False, detail="行上没有编辑入口")
+        elif await click(edt, root=ROW_SEL):
+            try:
+                shape = await _eval(page, _FIND_LAYER_JS)
+            except Exception:                            # noqa: BLE001
+                shape = None
+            eroot = LAYER_SEL if shape else ""
+            try:
+                efields = await _eval(page, _COLLECT_JS, eroot) if eroot else \
+                    await _eval(page, _COLLECT_JS)
+            except Exception:                            # noqa: BLE001
+                efields = []
+            eplan = plan_fill(efields, tag)
+            done = False
+            for f in eplan["fills"]:
+                if f["kind"] != "text":
+                    continue
+                target = page.locator(eroot).locator(f["selector"]) if eroot \
+                    else page.locator(f["selector"])
+                try:
+                    # 改一个字，但**改完还得认得出来是自己的**（`edit_value`）。
+                    await target.first.fill(edit_value(tag),
+                                            timeout=CLICK_TIMEOUT_MS)
+                    done = True
+                    break
+                except Exception:                        # noqa: BLE001
+                    continue
+            if done and await submit_form(eroot, step="edit"):
+                note_step(chain, "edit", ok=True, detail=f"改成了 {edit_value(tag)}",
+                          control=(edt.get("label") or "").strip())
+            else:
+                note_step(chain, "edit", ok=False,
+                          detail="改不动（没有可改的文本框，或提交没成）",
+                          control=(edt.get("label") or "").strip())
+        else:
+            note_step(chain, "edit", ok=False, detail="编辑点不着",
+                      control=(edt.get("label") or "").strip())
+
+        # ⑤ 回列表确认
+        scope = await back_to_list()
+        # 改完之后我们那一行的状态、和列表上一共有几种状态（§14.3 是**数**出来的）。
+        await read("verify", where="row")
+        note_step(chain, "verify", ok=bool(scope.get("scoped")),
+                  detail="回列表还能找到自己那一行" if scope.get("scoped")
+                         else "回列表圈不出自己那一行了")
+        if not scope.get("scoped"):
+            note_breakpoint(chain, "row_unscoped",
+                            detail="改完之后圈不出自己那一行 —— 不敢往下删")
+            return unlocked
+
+        # ⑥ 删除 + ⑦ 确认没了
+        try:
+            row_items = await _eval(page, _COLLECT_JS, ROW_SEL)
+        except Exception:                                # noqa: BLE001
+            row_items = []
+        dele = pick_control(row_items, "delete")
+        if dele is None:
+            note_fact(chain, "no_delete_entry",
+                      detail=CHAIN_FACTS["no_delete_entry"]["why"])
+            note_step(chain, "delete", ok=False, detail="行上没有删除入口")
+            return unlocked
+        chain["deleteTried"] = True
+        if not await click(dele, root=ROW_SEL):
+            note_step(chain, "delete", ok=False, detail="删除点不着",
+                      control=(dele.get("label") or "").strip())
+            return unlocked
+        # 二次确认框。**这是唯一允许点「确认删除」的地方** ——
+        # 前提是我们自己刚点的删除、删的是自己那一行。
+        try:
+            shape = await _eval(page, _FIND_LAYER_JS)
+        except Exception:                                # noqa: BLE001
+            shape = None
+        if shape:
+            try:
+                layer_items = await _eval(page, _COLLECT_JS, LAYER_SEL)
+            except Exception:                            # noqa: BLE001
+                layer_items = []
+            ok_btn = pick_control(layer_items, "confirm")
+            # 二次确认层里还有什么（「同时删除关联数据」这类勾选项就在这儿）。
+            await read("delete", where="layer", items=layer_items)
+            if ok_btn is not None:
+                await click(ok_btn, root=LAYER_SEL, scope="[确认]")
+        note_step(chain, "delete", ok=True,
+                  control=(dele.get("label") or "").strip())
+        scope = await back_to_list()
+        # 删完页面说了什么。「该数据已被引用，不能删除」这一句就是一条业务规则，
+        # 落成"删除失败"就把它丢了。
+        await read("confirm", where="page")
+        chain["deleted"] = not scope.get("found")
+        note_step(chain, "confirm", ok=chain["deleted"],
+                  detail="列表里已经没有了" if chain["deleted"] else "还在")
+        if not chain["deleted"]:
+            # **最值钱的那种发现**：自己造的数据删不掉。
+            # 同时它现在是被测环境里的残留 —— 两件事都要说。
+            note_breakpoint(chain, "delete_failed",
+                            detail="点了删除并确认，回列表这条还在 —— "
+                                   "自己造的数据删不掉（产品缺陷），"
+                                   "而且它现在是环境残留")
+    except Exception as e:                               # noqa: BLE001
+        # 链自己崩了**不许拖垮这一页**（更不许拖垮整趟）。但要记数：
+        # 崩在中途十有八九留了残留，而 `finish_chain` 正是靠 created/deleted
+        # 把它算出来的。
+        ledger.setdefault("chainCrashed", []).append(
+            {"page": page_path, "error": type(e).__name__})
+    finally:
+        gate["open"] = False
+        win["endedAt"] = _now()
+        try:
+            page.remove_listener("response", _on_resp)
+        except Exception:                                # noqa: BLE001
+            pass
+        try:
+            await flush()
+        except Exception:                                # noqa: BLE001
+            pass
+        finish_chain(chain)
+        chain["unlockedPaths"] = list(unlocked)
+    return unlocked
 
 
 # ── 选择器活体命中 ────────────────────────────────────────────────────────
@@ -847,17 +1576,30 @@ async def _login(page, base_url: str, role: str, ledger: dict,
 async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                      ledger: dict, har_dir: Path,
                      selector_probe: list[dict] | None = None,
-                     env_vars=None) -> list[dict]:
+                     env_vars=None, run_chains: bool = False,
+                     chains: list | None = None) -> list[dict]:
     """爬一个角色。返回账本行；**一页失败不拖垮整趟**，只记数。
 
     `selector_probe` 是 QA 仓那张公共选择器表（`qa_selectors.probe_payload`
     给的清单）。传了就在每一页上**只读地**数一遍命中，账本落
     `ledger["selectorProbe"]`。判档在 `qa_selectors.roll_up`，这里一个判断都不做。
+
+    `run_chains` 打开**有向链路**（`_run_chain`）：造一条自己前缀的数据、
+    在它身上把建→详情→编辑→删走完。**只给主爬角色开**（`run_survey` 传
+    `role == main_role`）—— 七个角色各造一条，被测环境里就是七份垃圾，
+    而多出来的六份一条新信息都不带（同一个域、同一个表单）。
     """
     har_path = har_dir / f"{role}.har"
     context = await browser.new_context(record_har_path=str(har_path),
                                         record_har_content="omit")
-    await context.route("**/*", make_readonly_guard(ledger))
+    # 有向链路要往外发写请求，就得在 L1 那道网上开一道**受控的窗**。
+    # 闸默认关着（`{"open": False}`）—— 无向枚举那一半的 fail-closed 一个字没改；
+    # 只有 `_run_chain` 在自己的 `try/finally` 里开合它，窗上的每个写请求
+    # 单独计数（`directedWrites`），账对不上时能立刻看出来。
+    chain_gate = {"open": False}
+    await context.route("**/*",
+                        make_readonly_guard(ledger,
+                                            gate=lambda: chain_gate["open"]))
     items: list[dict] = []
     try:
         page = await context.new_page()
@@ -871,6 +1613,9 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
         # 时窗记在账本上（而不是当返回值），一是 `pagesProbed` 已经是这个先例，
         # 二是归页这件事**要能复查** —— 边归错了页的时候，得看得出当时的边界。
         windows = ledger.setdefault("pageWindows", {}).setdefault(role, [])
+        # 控件级的同一套。**和页面级分开两本账**：一条请求要么属于某次点击、
+        # 要么属于某次导航，摊到两边去会让"这一页自己会调什么"再也问不出来。
+        clicks = ledger.setdefault("clickWindows", {}).setdefault(role, [])
         # 页面清单是**一条队列**，不是一个 for：菜单里发现的页要能接到后面去。
         # 清单里那些（QA 仓声明的）永远排在前面且一页不少 —— 发现来的排在后面、
         # 受预算约束，**两者的账要分得开**，不然"他没声明这一页"和
@@ -924,7 +1669,7 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                 inner, marks, used, jumped = await _probe_dialogs(
                     page, page_path=record, page_title=title, page_url=page_url,
                     raw_items=raw, ledger=ledger, budget=dialog_budget,
-                    seen_openers=seen_openers)
+                    seen_openers=seen_openers, clicks=clicks)
                 dialog_budget -= used
                 items.extend(inner)
                 # 把「点过 / 有反应」回填到**这一页自己那几行**上。
@@ -947,9 +1692,26 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
             if not isinstance(menu, dict):
                 ledger.setdefault("menuScanFailed", []).append(record)
                 menu = {}
-            # 菜单里读到的 + 点「新建」跳出来的，走**同一条**队列和预算：
-            # 两者都是"页面自己说它还能去哪儿"，分两套只会让预算算两遍。
-            for found in list(menu.get("paths") or []) + jumped:
+            # **页面级时窗到此为止。** 有向链路那几下写请求有自己的窗
+            # （`kind: "directed"`），落进这一格就成了一句错话：
+            # 「打开这一页会自动 POST」—— 而那句话接下来会被拿去和对方的
+            # 脚本比，凭空报出一批"他没测的写接口"。
+            win["endedAt"] = _now()
+            # ④ 有向链路：造一条自己的数据，在它身上把这个域走完。
+            # **每页最多一条链一次新建**（§12.4），整趟受 `CHAIN_BUDGET` 约束。
+            chain_paths: list[str] = []
+            if run_chains and chains is not None and len(chains) < CHAIN_BUDGET:
+                chain_paths = await _run_chain(
+                    page, page_path=record, page_url=page_url, raw_items=raw,
+                    ledger=ledger, chains=chains, clicks=clicks,
+                    windows=windows, gate=chain_gate)
+            elif run_chains and chains is not None:
+                # **预算用完不是"这一页没有写操作"。** 记数，不然报告上
+                # 「这个域只有这几个写入口」和「还有 20 页没去建过」长得一样。
+                ledger["chainBudgetCapped"] = ledger.get("chainBudgetCapped", 0) + 1
+            # 菜单里读到的 + 点「新建」跳出来的 + 建完才解锁的，走**同一条**
+            # 队列和预算：三者都是"页面自己说它还能去哪儿"，分开只会让预算算几遍。
+            for found in list(menu.get("paths") or []) + jumped + chain_paths:
                 tmpl = route_template(found)
                 if tmpl in seen_tmpl or found in seen_tmpl:
                     continue
@@ -962,7 +1724,6 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                     # **预算用完不是"没发现"。** 记数，否则报告上
                     # 「这个域只有这些页」和「还有 30 页没去看」长得一样。
                     ledger["menuExtraCapped"] = ledger.get("menuExtraCapped", 0) + 1
-            win["endedAt"] = _now()
             ledger["pagesVisited"] = ledger.get("pagesVisited", 0) + 1
             # 走到了就记，**哪怕这一页一个控件都没有** —— 空页恰恰是
             # 「探过了，确实看不见」，那是可比的格子，不是未探测。
@@ -1016,13 +1777,17 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     终态由 `resolve_terminal_status` 定，**`dirty` 压过 `failed`**：
     一趟全片失败但环境里的数变了，要看的是"我们动了什么"。
 
-    `page_edges` 是**页面级**的 P 边（打开这一页浏览器发了什么），归页规则在
-    `qa_page_traffic`。它**不写进 item 的 `endpoints`** —— 页面级的边归的是"这一页"，
-    摊到页面上的每个控件头上等于凭空造一条 `observed` 的控件→端点边。
-    ⚠ **`endpoints` 这一列至今一行都没写过**（2026-09-04 查库：最近一趟 1361 行里 0 行）。
-    批 2 起是真点控件了（点完只记「有没有反应」），**要记「这一次点击发出了什么」
-    得按点击时间窗归属**，跟页面级同一招、但还没做。别看见这列在就以为有数。`routes` 只用来推
-    API 前缀兜底分类（拿不到就只靠 `_resourceType`，会在 declarations 里说明）。
+    P 边有**两个粒度，两本账，绝不互相摊派**（归属规则都在 `qa_page_traffic`）：
+
+    · `page_edges` = **页面级**（打开这一页浏览器发了什么），靠导航时窗归页。
+      它**不写进 item 的 `endpoints`** —— 摊到这一页每个控件头上等于凭空造
+      一条 `observed` 的控件→端点边。
+    · item 上的 `endpoints` = **控件级**（点这个按钮发出了什么），靠点击时窗归属，
+      2026-09-04 补上（此前那一列建了、一行没写过）。**三态不许合**：
+      有边 / 点了没边（`[]`）/ 没点过（NULL）。账在 `ledger["controlTraffic"]`。
+
+    `routes` 只用来推 API 前缀兜底分类（拿不到就只靠 `_resourceType`，
+    会在 declarations 里说明）。
 
     `env_vars` 是**这一趟**的配置（`BASE_URL` / `LOGIN_*` / `<ROLE>_USERNAME` …），
     由接口层从项目环境合出来直接传进来。**不走 `os.environ`**，理由在 `_cfg`：
@@ -1070,7 +1835,12 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
                     # 这一趟拿了几条选择器去探。**0 也要写出来** —— 清单是空的
                     # （QA 仓没拉到 / 解析全军覆没）和"探了但一条都没命中"在报告上
                     # 长得一模一样，而前者是我们自己没跑成，不是他的选择器有问题。
-                    "selectorsProbed": len(selector_probe or [])}
+                    "selectorsProbed": len(selector_probe or []),
+                    # 有向链路在 L1 那道网上**放过**了几个写请求。
+                    # 0 也要摆出来：它和 `writesBlocked` 是一对账 ——
+                    # 「这一趟一个写请求都没放过」和「这一格压根没记」
+                    # 在页面上长得一样，而前者说明链一条都没跑起来。
+                    "directedWrites": 0}
 
     ledger["selfCheck"] = self_check_label(totals_probe)
     totals_before = await totals_probe() if totals_probe else None
@@ -1084,9 +1854,13 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
                                      "planned": len(page_paths),
                                      "roles": list(others)}
     ledger["shardsTotal"] = len(shards)
+    # 有向链路的账。**只有主爬角色往里写**（`run_chains`），所以不按角色分本 ——
+    # 分了会让"这一格是空的"读起来像"这个角色没跑链"，而真相是它压根没资格跑。
+    chains: list[dict] = []
     shard_rows: list[dict] = []
     hars: dict[str, dict] = {}
     buckets: list[dict] = []
+    click_buckets: list[dict] = []
     api_prefixes = api_prefixes_from_routes(routes)
     ok = 0
 
@@ -1098,9 +1872,13 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
 
             async def _one(role: str, paths: list[str]):
                 async with sem:
-                    return role, await crawl_role(browser, base_url, role, paths,
-                                                  ledger, har_dir,
-                                                  selector_probe, env_vars)
+                    return role, await crawl_role(
+                        browser, base_url, role, paths, ledger, har_dir,
+                        selector_probe, env_vars,
+                        # **只主爬角色造数据。** 七个角色各造一条，环境里就是
+                        # 七份垃圾，而多出来的六份一条新信息都不带
+                        # （同一个域、同一张表单）。
+                        run_chains=(role == main_role), chains=chains)
 
             results = await asyncio.gather(
                 *(_one(r, p) for r, p in shards), return_exceptions=True)
@@ -1134,10 +1912,44 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
                 role=role,
                 closed_at=(ledger.get("contextClosedAt") or {}).get(role),
                 api_prefixes=api_prefixes))
+            # 同一份 HAR 再走一遍控件级的时窗。**不传 `closed_at`** ——
+            # 控件级一律不延长尾巴（延长会把关层/重载算成点击发的）。
+            click_buckets.append(bucket_clicks(
+                har, (ledger.get("clickWindows") or {}).get(role) or [],
+                role=role, api_prefixes=api_prefixes))
 
     items = merge_shards(shard_rows, main_role=main_role)
     traffic = merge_edges(buckets)
     ledger["traffic"] = {k: v for k, v in traffic.items() if k != "edges"}
+    # 控件级的边不单独返回，直接挂到 item 的 `endpoints` 上 —— 那一列就是它的家。
+    control = merge_control_edges(click_buckets)
+    ledger["controlTraffic"] = {k: v for k, v in control.items()
+                                if k not in ("edges", "attempted")}
+    ledger["controlTraffic"].setdefault("counters", {}).update(
+        attach_control_edges(items, control["edges"], control["attempted"]))
+
+    # 有向那一维的账：链本身 + 计数 + **没验到什么的声明** + 残留清单。
+    # 声明和残留分开两格：前者是"这一维量到哪儿了"，后者是"我们在别人环境里
+    # 留下了什么" —— 后一件必须能被单独找出来清掉，别混在声明里等人读。
+    chain_summary = summarize_chains(chains)
+    ledger["directed"] = {"chains": chains, "counters": chain_summary,
+                          "declarations": chain_declarations(
+                              chain_summary,
+                              create_disabled=len(
+                                  ledger.get("chainCreateDisabled") or []),
+                              main_role=main_role),
+                          "residue": residue_findings(chains),
+                          # 「新建」是灰的那几页跟着账本走：一条链都没开时，
+                          # 这份名单就是**唯一**能解释"为什么没开"的东西。
+                          "createDisabled": list(
+                              ledger.get("chainCreateDisabled") or []),
+                          # 名字表跟着账本走（见 `chain_meta` 的注）
+                          "meta": chain_meta()}
+    # §14.5 + §15：功能地图 + 广度/深度两个数。**这里不带脚本那一半** ——
+    # 爬取侧手上没有 Q 边，`pair_actions` 会自己声明 `paired: False`。
+    # 两边一拼在 `qa_live_survey.reconcile` 里补（那儿 `q` 在作用域内）。
+    ledger["domainMap"] = summarize_maps(chains)
+    ledger["domainMap"]["meta"] = map_meta()
 
     totals_after = await totals_probe() if totals_probe else None
     status = resolve_terminal_status(shards_total=len(shards), shards_ok=ok,

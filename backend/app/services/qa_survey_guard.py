@@ -138,6 +138,12 @@ def _word_hit(text: str, word: str) -> bool:
     return bool(rx.search(text))
 
 
+# 有向链路（`qa_directed_chain`）要认「哪个按钮是新建/提交/删除」，
+# 用的必须是**同一条**匹配规则。分叉出去的那一天，`Created At` 就会在
+# 那一半重新被认成「新建按钮」—— 而这一半的测试全绿，谁都不会去看。
+word_hit = _word_hit
+
+
 def classify_control(label: str, role: str = "") -> str:
     """`read` / `write` / `unknown`——这个控件点下去会不会改数据。
 

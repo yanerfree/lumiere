@@ -31,6 +31,12 @@ from app.services.qa_coverage_reconcile import (
     page_applicability,
     propose_rows,
 )
+from app.services.qa_domain_map import (
+    attach_control_endpoints,
+    map_declarations,
+    pair_actions,
+    script_verbs_of,
+)
 from app.services.qa_route_table import fetch_route_table, route_table_note
 from app.services.qa_selectors import parse_selectors, probe_payload, roll_up
 from app.services.qa_survey_cache import route_table_hash
@@ -465,14 +471,36 @@ def reconcile(*, plan: dict, ledger: dict | None, items: list | None,
         page_edges=page_edges,
         controls_clicked=led.get("controlsClicked"),
     )
+    # 功能地图的**两边一拼**（§14.2）在这儿补：爬取侧只有页面那一半，
+    # 脚本那一半（`businessActions`）是 `compute_gaps` 刚算出来的。
+    # 一拼之后 `pairing` 才有结论，声明也要跟着重发一遍 ——
+    # 否则页面上会一直挂着爬取侧那句「一条都没连上」，而其实连上了。
+    dmap = led.get("domainMap")
+    if isinstance(dmap, dict) and dmap.get("surface") is not None:
+        # 页面那一半的最后一段路：「这个按钮发了什么」记在 item 的
+        # `endpoints` 那一列上，接上来 `pageVerbs` 才有值。不接的话
+        # 两个清单恒为空，读起来像「页面和脚本完全一致」（见 `pair_actions`）。
+        attach_control_endpoints(dmap["surface"], items)
+        dmap["pairing"] = pair_actions(
+            dmap["surface"], None,
+            script_verbs=script_verbs_of(gaps.get("businessActions")),
+            # 对账那边算 `readable` 用的是 R 边 + Q 边的 GET，那份集合没往外传。
+            # 这儿传 `None` = 「没这份信息」，`action_verb` 会走保守判据
+            # （末段紧跟 id 才算动作）。**不许传空集合** —— 空集合读作
+            # 「查过了，都不能 GET」，于是每条深路径都变成一个动作名。
+            readable_paths=None)
+        dmap["declarations"] = map_declarations(
+            dmap["pairing"], dmap.get("unseen") or {}, dmap["surface"])
+
     proposals = propose_rows(gaps=gaps, scenarios=q["scenarios"])
     applicability = page_applicability(
         scenarios=q["scenarios"],
         page_domains=gaps.get("pageDomains"),
         page_survey_available=page_survey_available)
 
-    # 声明汇总：计划的 + Q 侧的 + **流量的** + 对账的。**按序去重**，页面直接渲染
-    # 这一份 —— 四处各渲染一份的话，读的人得自己拼出「这一趟少验了什么」。
+    # 声明汇总：计划的 + Q 侧的 + **流量的** + **有向链路的** + 对账的。
+    # **按序去重**，页面直接渲染这一份 —— 五处各渲染一份的话，
+    # 读的人得自己拼出「这一趟少验了什么」。
     #
     # ⚠ 流量那一路（`merge_edges`）是 2026-09-04 补进来的：它一直在产声明
     # （归不了页的边、抢跑的边、"这一趟多半没登进去"），可那些只落在
@@ -484,6 +512,14 @@ def reconcile(*, plan: dict, ledger: dict | None, items: list | None,
     for line in (list(plan.get("declarations") or [])
                  + list(q.get("declarations") or [])
                  + list(((led.get("traffic") or {}).get("declarations")) or [])
+                 # 有向链路那一路同理，而且更要紧：一条链都没跑起来的时候，
+                 # P 边里只有 GET 是**必然结果**，拿它去判「他没测写接口」
+                 # 会报出一批假缺口 —— 那句话只在这条声明里。
+                 + list(((led.get("directed") or {}).get("declarations")) or [])
+                 # 功能地图那一路（上面刚重发过）：「这一趟哪几层压根没看到」
+                 # 只在这份声明里 —— 广度欠账不出声的话，
+                 # 报告上「他没测这些」和「我们没看到这些」长得一模一样。
+                 + list(((led.get("domainMap") or {}).get("declarations")) or [])
                  + list(gaps.get("declarations") or [])):
         if line and line not in seen:
             seen.add(line)

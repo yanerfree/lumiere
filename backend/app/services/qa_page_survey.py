@@ -188,7 +188,14 @@ async def save_survey(session, *, project_id: uuid.UUID, env_id=None,
             anchor=r.get("anchor") or "", anchor_kind=r.get("anchor_kind") or "",
             label=r.get("label") or "", control_type=r.get("control_type") or "",
             state=r.get("state") or "present",
-            roles_visible=r.get("roles_visible") or [], endpoints=r.get("endpoints") or [],
+            roles_visible=r.get("roles_visible") or [],
+            # **`or []` 这一手在这一列上是错的**：`endpoints` 是三态的
+            # （有边 / 点了没边 `[]` / **没点过** NULL），`or []` 把 NULL
+            # 塌成 `[]`，等于替一千多个没碰过的控件宣布「点了什么都没发」——
+            # G4 会从个位数涨到四位数，全是假的，而且一条测试都不会红。
+            # 同一条纪律上面那列 `page_edges` 一直守着（模型上故意不给
+            # `server_default`），这里 2026-09-04 才补上。
+            endpoints=r.get("endpoints"),
             first_seen_survey_id=seen.get(r["key"], survey.id),
             last_seen_survey_id=survey.id))
     await session.flush()

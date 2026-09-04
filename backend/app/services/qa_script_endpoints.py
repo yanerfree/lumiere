@@ -442,8 +442,13 @@ def _iter_helper_names(line: str, known: dict):
 def extract_helper_calls(text: str | None, parsed: dict) -> dict:
     """脚本正文 + `parse_helper_lib()` 的结果 → 四个桶。
 
-    `hits` 每条 `{method, path, line, helper}`；method 一定是具体方法
+    `hits` 每条 `{method, path, line, helper, lineNo}`；method 一定是具体方法
     （读不出来的进 `misses`，理由见模块头部那条 ⚠）。
+
+    `lineNo` 是 1 起的原始行号，四个桶都带。它是**排序键**不是定位信息：
+    同一个脚本文件里这半的命中要和 `qa_coverage_reconcile.extract_endpoints`
+    那半合并，合并之后只有行号排得出「他写在文件里的执行顺序」，
+    而那个顺序就是业务链路骨架（见 `qa_business_actions.chain_of`）。
     """
     helpers = (parsed or {}).get("helpers") or {}
     infra = (parsed or {}).get("infra") or {}
@@ -453,28 +458,32 @@ def extract_helper_calls(text: str | None, parsed: dict) -> dict:
     other_hits: list[dict] = []
     infra_hits: list[dict] = []
 
-    for raw in (text or "").splitlines():
+    for lineno, raw in enumerate((text or "").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
 
         for name in _iter_helper_names(line, other):
-            other_hits.append({"line": line[:200], "helper": name, "base": other[name]})
+            other_hits.append({"line": line[:200], "helper": name, "base": other[name],
+                               "lineNo": lineno})
         for name in _iter_helper_names(line, infra):
             infra_hits.append({"line": line[:200], "helper": name,
                                "path": normalize_script_path(infra[name]["pathLiteral"]),
-                               "method": infra[name].get("method") or ""})
+                               "method": infra[name].get("method") or "",
+                               "lineNo": lineno})
 
         for name in _iter_helper_names(line, helpers):
             spec = helpers[name]
             args = _args_of(line, name)
             if args is None:
-                misses.append({"line": line[:200], "helper": name, "why": "分词失败"})
+                misses.append({"line": line[:200], "helper": name, "why": "分词失败",
+                               "lineNo": lineno})
                 continue
 
             path = normalize_script_path(_pick(args, spec["pathPos"]) or "")
             if not path:
-                misses.append({"line": line[:200], "helper": name, "why": "路径不是字面量"})
+                misses.append({"line": line[:200], "helper": name,
+                               "why": "路径不是字面量", "lineNo": lineno})
                 continue
 
             # 调用点自己带 `-X POST` 的优先（`bff_code "/x" -X POST` 这种把
@@ -490,15 +499,16 @@ def extract_helper_calls(text: str | None, parsed: dict) -> dict:
                 else:
                     # 方法是变量 ⇒ **不认**。空方法在 `_covered()` 里通吃所有方法。
                     misses.append({"line": line[:200], "helper": name,
-                                   "why": "方法不是字面量"})
+                                   "why": "方法不是字面量", "lineNo": lineno})
                     continue
             else:
                 method = spec.get("method") or ""
             if not method:
-                misses.append({"line": line[:200], "helper": name, "why": "方法读不出来"})
+                misses.append({"line": line[:200], "helper": name,
+                               "why": "方法读不出来", "lineNo": lineno})
                 continue
 
             hits.append({"method": method, "path": path, "line": line[:200],
-                         "helper": name})
+                         "helper": name, "lineNo": lineno})
 
     return {"hits": hits, "misses": misses, "otherBase": other_hits, "infra": infra_hits}
