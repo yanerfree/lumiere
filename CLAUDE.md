@@ -176,7 +176,7 @@ cd /home/dreamer/lumiere && DATABASE_URL='postgresql+asyncpg://postgres:postgres
 | **数据归属与隔离**：MCP Key 为什么管不住数据、环境改项目级、哪些表该留全局（含一条「假隔离」陷阱） | [docs/data-scoping-and-isolation.md](docs/data-scoping-and-isolation.md) |
 | **权限模型**：440 个端点各挂什么守卫、角色档位（系统 admin/user/guest + 项目 manager/member）、前端按权限藏入口的口径、**2026-08-29 为什么砍到这几档** | [docs/permission-audit-2026-08.md](docs/permission-audit-2026-08.md) + `backend/app/core/permissions.py`（权限点与角色映射的唯一出处） |
 | **QA 仓场景清单（只读）**：读什么、为什么不能写、清单/脚本头怎么解析、页面为什么这么排（P/R 口径照抄对方定义）、脚本正文白名单、**域级 AI 评审**（环境缺口那一列的四个坑）、**每个域最近有人动吗**（为什么「近 7 天」这种判据在这份数据上必然恒真） | [docs/qa-repo-readonly-catalog.md](docs/qa-repo-readonly-catalog.md) |
-| **QA 域评审升级：真跑页面对流量**（三批计划、为什么纯只读只有 60 分、被否掉的「倒推页面操作」、已建未接线的 2145 行清点） | [docs/qa-domain-live-verification-plan.md](docs/qa-domain-live-verification-plan.md) |
+| **QA 域评审升级：真跑页面对流量**（现行需求在 **§12 + §13** —— 探索测试是**真的去操作**（建→改→删），业务链路（保存完干嘛、谁审批）**从对方的场景和脚本里读**；两条被否掉的省事写法：「倒推页面操作」、「按域手写脚本」，正文已删只留理由） | [docs/qa-domain-live-verification-plan.md](docs/qa-domain-live-verification-plan.md) |
 
 ## 长驻服务
 
