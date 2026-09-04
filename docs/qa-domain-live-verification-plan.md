@@ -471,10 +471,36 @@ Q 侧：scenarios 728 · scriptRefs 653 · scriptFiles 469 · helperLib 18 个�
 ### 10.4 没跑通的两件事（都不是代码问题）
 
 1. **7 个角色全部登录失败**，`stage=fill` / `TimeoutError`。
-   诊断路径按设计吐出了原因：环境里只有 `LOGIN_URL`（登录**接口**，接口场景用的），
-   浏览器登录要的是**页面路径** `LOGIN_PATH`。补上这个变量再跑，P 边才有东西。
    所以这一趟 `page_survey_available=False`，报告自己声明了
    「本轮无页面枚举，只有路由表维度 —— 等同 route-drift，G1/G3/G4/G5 未验证」。
+
+   **⚠ 这一条最初的归因是错的，2026-09-04 改**（原文说「环境里只有 `LOGIN_URL`，
+   补上 `LOGIN_PATH` 再跑」）。去登录页只读探了一趟（只 `goto` + `count()`，
+   不填不点）：
+
+   ```
+   /login -> HTTP 200 | 落地 http://192.168.51.138:3000/login
+      input[name=username]                   -> 0
+      input[autocomplete="username"]         -> 1
+      input[name=password]                   -> 0
+      input[autocomplete="current-password"] -> 1
+      button[type=submit]                    -> 1
+   ```
+
+   路径**本来就是对的** —— 代码里 `LOGIN_PATH` 的默认值就是 `login`，`goto` 拿到 200。
+   真正挂的是**默认选择器**：那套前端不给 `name=`，只有 `autocomplete=`。
+   （QA 仓 `ui/support/selectors.ts:247` 写的就是这两条，它自己的套件一直这么用。）
+
+   出错的是分诊法本身：**按「环境里配没配某个键」判**，而不是**按「哪一步挂的」判**。
+   这两种在 `stage=fill` 上给出的是**相反**的结论 —— `goto` 都过了还去怪路径。
+   **指错方向的诊断比不给诊断更贵**：人会照着改一个本来就对的配置，
+   改完照样红，然后开始怀疑别的地方。修在 `_login_hint(stage, env_vars)`
+   （`qa_page_survey_crawl.py`），四条封样盯着，其中一条**反着断言**
+   ——`stage=fill` 的提示里**不许出现** `LOGIN_PATH`／`LOGIN_URL`。
+
+   顺带一条口径：**默认值碰巧对 ≠ 配置对**。`LOGIN_PATH` 后来还是显式写进了环境
+   （连同三个选择器），因为哪天前端把登录页挪到 `/signin`，
+   靠默认值跑的那套报出来会是"选择器过期了"。
 2. **落库失败**：`column "page_edges" of relation "qa_page_surveys" does not exist`
    —— 迁移 `zzz3pedge` 还没上（开发库停在 `zzz2kscope`）。
    `bash deploy/restart-backend.sh` 不管迁移，得单独跑
@@ -486,3 +512,120 @@ Q 侧：scenarios 728 · scriptRefs 653 · scriptFiles 469 · helperLib 18 个�
 （上一版脚本报过一次「私有键泄漏 `selectorProbe`/`routeTable`」，那是子串误判 ——
 `selectorProbeable`、`routeTableNote`、`routeTableHash` 里都含那两个子串。
 **闸门的自检写成子串匹配，它自己就会造假警报**。）
+
+### 10.5 真跑之后又抓到四件事（2026-09-04 下午）
+
+10.1–10.4 是「跑起来才看得见」的第一批。把它们修完再跑，又掉出四件 ——
+**每一件都是「静态看代码一辈子看不出来」的那类**，正好是这批计划存在的理由。
+
+#### ① 一个分片挂了 1 小时 46 分，没有任何超时兜底
+
+`page.evaluate` 那一发（枚举控件）**没有 deadline**，页面上一段脚本卡住，
+整趟就停在那里 —— 没报错、没进度、也没有"我等了多久"这一格。
+外面看只有「还在跑」，和「跑得慢」长得一模一样。
+
+修的是**四道闸**，不是把那一发调快：
+
+```
+_eval()                     每次 page.evaluate 包一层 asyncio.wait_for
+CONTEXT_CLOSE_TIMEOUT_MS    20s —— context.close() 自己也会挂
+PAGE_TIMEOUT_MS             15s
+SHALLOW_MAX_PAGES  40       浅扫上限
+MAX_PARALLEL_SHARDS 2       并发分片
+```
+
+⚠ **`SHALLOW_MAX_PAGES = 40` 今天一页都没浅扫掉**（计划才 29 页）。
+它是给"页面涨到 40 以上"留的闸，现在处于**没被触发过**的状态 ——
+批 2 之前得先决定它是留着当上限、还是改成按角色分档，
+别把「从没生效过的常量」当成「验证过的保护」。
+
+#### ② 上一趟是**一份完整的假绿**：7 个角色一个都没真登进去
+
+改完超时再跑，4 分钟跑完，**exit 0，一个异常都没抛**：
+
+```
+shardsOk 7/7 · loginCount 7 · pagesVisited 181 · P 边 232 —— 全绿
+```
+
+而实际上 **29 个页面渲染的都是登录页**。
+
+根因一句话：`_login` 点完提交按钮之后等的是
+`wait_for_load_state("networkidle")` —— **它等的是「页面加载」，不是「我刚点的这一下」**。
+登录是一发 XHR，页面根本不导航，当前既然已经 networkidle，那个 API **立刻返回**；
+下一个 `goto` 直接把还在飞的 `POST /api/auth/login` 打断。
+**「没抛异常」≠「登录成功」** —— 而这一趟里，除了流量，每一格都在替它作证：
+
+* `shardsOk 7/7`：分片确实都正常收尾了
+* `loginCount 7`：`_login` 确实返回了 True
+* `pagesVisited 181`：登录页也是页，`goto` 全是 200
+
+只有三处看得出不对，**而且都得主动去看**：
+557 条选择器只命中 4 条（就是登录框自己那 4 条）、232 条 P 边里 82 条是 401、
+`controlsUnknown` 只有 1267（一个登录页能有几个控件）。
+
+改成**等登录框消失**（`wait_for_selector(密码框, state="hidden")`），
+再加一格 `edgesUnauthorized`：401/403 过三成就自己在报告里明写
+「这一趟多半根本没登进去」。**那一格不是用来过滤 401 的** ——
+页面确实调了那个端点，那条边是真的；它是用来让「没登上」自己冒出来。
+
+#### ③ 那句声明**页面一个字都不显示**（同一天，差点白修）
+
+②里新加的那句话落在 `ledger["traffic"]["declarations"]`，
+而页面渲染的是 `qa_live_survey.reconcile` 合出来的那一份（计划 + Q 侧 + 对账）——
+流量是**第四路**，谁都没把它接进去。
+
+**没人看得见的声明，和没有声明是一回事。**
+更糟的是它恰好是最该被看见的那一路：登录没成的那一趟，别的每一格都是绿的，
+**只有流量这边看得出不对**。接进去 + 4 条封样
+（`tests/test_qa_live_survey_declarations.py`），其中一条断言四路**按序**、
+一条断言两路重复的同一句只显示一次。
+
+#### ④ worktree 里跑临时脚本，import 会静默落到主仓
+
+`backend/.venv` 装的是 editable install（`__editable__.lumiere_backend-0.1.0.pth`），
+顶层包 `app` 钉死在 `/home/dreamer/lumiere/backend`（**主仓**）。
+`python /abs/path/script.py` 的 `sys.path[0]` 是**脚本自己那个目录**，
+脚本放在 `$CLAUDE_JOB_DIR/tmp` 时那儿没有 `app` → 一路找到 editable finder →
+**跑的是主仓的旧代码**。表现是「我明明改了，行为一点没变」，**一个错都不报**。
+
+（实际撞法：探针报 `_login() got an unexpected keyword argument 'env_vars'` ——
+那是主仓的旧签名。同一句 `python -c` 从 `backend/` 跑却是对的
+（`sys.path[0]=''`=cwd），两种跑法结论相反。）
+
+规矩：worktree 里跑任何临时脚本都带 `PYTHONPATH=<worktree>/backend`，
+并在脚本开头断言一句 `assert "/<worktree名>/" in 某模块.__file__`。
+现在 `live2_crawl.py` 第一行就打印「代码来自: …」。
+
+#### 修完之后的数字（同一套环境，前后对比）
+
+| | 假绿那趟 | 修完这趟 |
+|---|---|---|
+| 终态 | `partial`（还叠着落库失败） | **`done`** |
+| pagesVisited / pagesFailed | 181 / **22** | **203 / 0** |
+| shardsOk · loginCount | 7/7 · 7 | 7/7 · 7 |
+| 选择器 hitOne + hitMany | **4** + 0 | **161 + 12** |
+| 选择器 notSeen / notProbed | 455 / 98 | **286** / 98 |
+| controlsUnknown | 1267 | **6128** |
+| apiEntries · P 边 | 1541 · 232 | **3456 · 624** |
+| 401/403 的 P 边 | **82（35%）** | **33（1%）** |
+| G2 / G3 / G5 | 123 / 18 / **0** | 120 / 21 / **34** |
+
+**G5 从 0 变 34** 是这张表里最说明问题的一格：G5 = 「控件在、但 disabled」，
+登录页上一个都没有，所以假绿那趟它诚实地报了 0 —— **一个正确的 0，
+描述的却是一个不存在的世界**。
+
+（`routeCount 566→568`、`routeGroups 99→100`、`routeTableHash` 也变了：
+两趟之间被测 BFF 自己动过。这正是 `routeTableHash` 存在的理由 ——
+不然这 2 条新路由会被当成「我们上一趟漏读了」。）
+
+`edgesTail 2`：两条边落在最后一个页面时窗之后（`tail` 窗）。
+`edgesUnwindowed`/`Ambiguous`/`Unusable`/`Aborted` **全 0**，
+归页那一路这一趟没有欠账。
+
+#### 仍然没验的两格（不是 0，是没算）
+
+* **G4 判不了** —— 无向枚举不点控件（`controlsClicked 0`），
+  1232 个 enabled 控件因此**没有端点账**。这是设计，不是缺口；
+  要它就得等批 2 的有向脚本。
+* **`selfCheck notConfigured`** —— 自检那一路还没接。
+

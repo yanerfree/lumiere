@@ -471,12 +471,19 @@ def reconcile(*, plan: dict, ledger: dict | None, items: list | None,
         page_domains=gaps.get("pageDomains"),
         page_survey_available=page_survey_available)
 
-    # 声明汇总：计划的 + Q 侧的 + 对账的。**按序去重**，页面直接渲染这一份 ——
-    # 三处各渲染一份的话，读的人得自己拼出「这一趟少验了什么」。
+    # 声明汇总：计划的 + Q 侧的 + **流量的** + 对账的。**按序去重**，页面直接渲染
+    # 这一份 —— 四处各渲染一份的话，读的人得自己拼出「这一趟少验了什么」。
+    #
+    # ⚠ 流量那一路（`merge_edges`）是 2026-09-04 补进来的：它一直在产声明
+    # （归不了页的边、抢跑的边、"这一趟多半没登进去"），可那些只落在
+    # `ledger["traffic"]["declarations"]` 里，**页面一个字都不显示**。
+    # 没人看得见的声明和没有声明是一回事 —— 而它恰好是最该被看见的那一路：
+    # 登录没成的那一趟，别的每一格都是绿的，只有流量这边看得出不对。
     seen: set[str] = set()
     declarations: list[str] = []
     for line in (list(plan.get("declarations") or [])
                  + list(q.get("declarations") or [])
+                 + list(((led.get("traffic") or {}).get("declarations")) or [])
                  + list(gaps.get("declarations") or [])):
         if line and line not in seen:
             seen.add(line)

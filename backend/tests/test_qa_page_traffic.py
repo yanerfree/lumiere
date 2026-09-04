@@ -342,3 +342,44 @@ class Test模块纪律:
     def test_不许出现第三种出处(self, src):
         """`EDGE_SOURCES` 只有三个值，「模型推断」不在此列，以后也不许加。"""
         assert src not in " ".join(EDGE_SOURCES)
+
+
+# ── 「这一趟其实没登进去」要能自己冒出来 ──────────────────────────────────
+
+class Test没登进去要自己说:
+    """一次没登上的爬取，**别的每一格都是绿的**：分片 ok、页数够、边也不少。
+    只有 401 占比这一格会异常地高 —— 所以它得自己说话。
+    """
+
+    def _res(self, n401: int, n200: int):
+        """搓一份已经分好桶的结果，直接喂 `merge_edges`。"""
+        edges = ([{"pagePath": "/p", "method": "GET", "path": f"/api/a{i}",
+                   "source": "observed", "status": 401, "role": "auditor",
+                   "classified": "api", "tail": False} for i in range(n401)]
+                 + [{"pagePath": "/p", "method": "GET", "path": f"/api/b{i}",
+                     "source": "observed", "status": 200, "role": "auditor",
+                     "classified": "api", "tail": False} for i in range(n200)])
+        return [{"edges": edges, "samples": {}, "declarations": [],
+                 "counters": {"edgesObserved": n401 + n200, "edgesAborted": 0,
+                              "edgesUnauthorized": n401}}]
+
+    def test_401_过三成就明写这一趟多半没登进去(self):
+        """实测那一趟是 82/232 ≈ 35%。"""
+        out = t.merge_edges(self._res(82, 150))
+        assert any("根本没登进去" in d for d in out["declarations"])
+
+    def test_零星_401_不报_那是低权角色够不着而已(self):
+        out = t.merge_edges(self._res(3, 200))
+        assert out["declarations"] == []
+
+    def test_一条边都没有的时候不报_别拿0除0说事(self):
+        out = t.merge_edges([{"edges": [], "samples": {}, "declarations": [],
+                            "counters": {"edgesObserved": 0, "edgesAborted": 0,
+                                         "edgesUnauthorized": 0}}])
+        assert out["declarations"] == []
+
+    def test_401_单独记一格_但那条边照样进P边(self):
+        """**不是过滤** —— 页面确实调了这个端点，那条边是真的。"""
+        out = t.merge_edges(self._res(82, 150))
+        assert out["counters"]["edgesUnauthorized"] == 82
+        assert out["counters"]["pageEdges"] == 232

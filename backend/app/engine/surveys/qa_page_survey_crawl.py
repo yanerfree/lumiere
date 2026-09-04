@@ -56,7 +56,14 @@ PAGE_TIMEOUT_MS = 15_000
 
 # 浅扫每个角色只看菜单和落地页：角色维度要的是「这个角色**看得见**什么」，
 # 不需要把每个页面再点一遍。深爬只做主爬那一个角色。
+# ⚠ 40 是**上限**不是目标：QA 仓现在只解析出 29 个静态页，40 > 29 ——
+# 也就是说这个"浅"在今天的数据上**一页都没浅掉**，7 个角色跑的是同一份全量。
+# 真跑一趟才看得出来（§10.5）。改小它会动覆盖面，留给批 2 定。
 SHALLOW_MAX_PAGES = 40
+
+# 关上下文（= HAR 落盘）等多久。和页面超时分开：这一步在 `finally` 里，
+# 挂在这儿是**静默**的，连"这一片失败了"都报不出来。
+CONTEXT_CLOSE_TIMEOUT_MS = 20_000
 
 
 def _now() -> str:
@@ -248,6 +255,27 @@ def collect_items(page_path: str, page_title: str, raw_items, ledger: dict) -> l
     return out
 
 
+# ── 页面里的 JS：必须自己带闸 ─────────────────────────────────────────────
+
+async def _eval(page, js, arg=None):
+    """`page.evaluate` 外面套一层 `wait_for`。**不套就是无限期。**
+
+    Playwright 的 `evaluate` 没有 `timeout` 参数，也不吃 `set_default_timeout`
+    —— 那两个管的是定位和导航。页面里的 JS 转不完，这个 await 就永远不返回，
+    而 `goto` / `wait_for_load_state` 的 15s 一个都拦不到它。
+
+    实测（2026-09-04，UAG 全量一趟）：7 个分片里 6 个在 4 分钟内收工、HAR 都落了盘，
+    第 7 个（`platadmin`）卡在这里 **1 小时 46 分**，渲染进程一直 19% CPU 在转。
+    外面看到的是"还在跑" —— 一趟既没有总时限、也没有逐页进度，
+    于是**「挂死」和「慢」长得一模一样**，只能靠数 HAR 文件才看出来是哪一片没动。
+
+    超时按**这一页失败**处理（调用点的 `except` 记 `pagesFailed` /
+    `selectorProbeFailed`），不是整趟失败 —— 和 `PAGE_TIMEOUT_MS` 同一个口径。
+    """
+    coro = page.evaluate(js) if arg is None else page.evaluate(js, arg)
+    return await asyncio.wait_for(coro, timeout=PAGE_TIMEOUT_MS / 1000)
+
+
 # ── 选择器活体命中 ────────────────────────────────────────────────────────
 
 async def _probe_selectors(page, path: str, payload, ledger: dict) -> None:
@@ -264,7 +292,7 @@ async def _probe_selectors(page, path: str, payload, ledger: dict) -> None:
     if not payload:
         return
     try:
-        res = await page.evaluate(PROBE_JS, payload)
+        res = await _eval(page, PROBE_JS, payload)
     except Exception as e:                               # noqa: BLE001
         ledger.setdefault("selectorProbeFailed", []).append(
             {"path": path, "error": type(e).__name__})
@@ -273,6 +301,39 @@ async def _probe_selectors(page, path: str, payload, ledger: dict) -> None:
 
 
 # ── 一个角色的一趟 ────────────────────────────────────────────────────────
+
+def _login_hint(stage: str, env_vars=None) -> str:
+    """登录挂了该去改什么。**按哪一步挂的判，不按"环境里配没配某个键"判。**
+
+    这两种分诊法在 `stage=fill` 上会给出**相反**的结论。只看变量的那种会说
+    「你把登录接口当页面路径配了，去补 `LOGIN_PATH`」—— 可 `goto` 已经过了，
+    路径本来就是通的，真正挂的是三个输入框的选择器。
+
+    实测（2026-09-04，UAG `192.168.51.138:3000`）：默认路径 `/login` **恰好是对的**
+    （`goto` 拿到 200），而默认选择器 `input[name=username]` 在那套前端上
+    **一个都命中不到** —— 它用的是 `input[autocomplete="username"]`。
+    上一版就据此把 7 个角色的失败全归到了「缺 `LOGIN_PATH`」上。
+    **指错方向的诊断比不给诊断更贵**：人会照着去改一个本来就对的配置，
+    改完照样红，然后开始怀疑别的地方。
+    """
+    if stage == "goto":
+        if not _cfg(env_vars, "LOGIN_PATH") and _cfg(env_vars, "LOGIN_URL"):
+            return ("打不开登录页，而环境里只有 `LOGIN_URL`（那是登录**接口**，"
+                    "接口场景用的）—— 浏览器登录要的是**页面路径** `LOGIN_PATH`。")
+        return "打不开登录页：确认 `BASE_URL` + `LOGIN_PATH` 指到的是前端页面。"
+    if stage in ("fill", "submit"):
+        return ("登录页打开了（路径没问题），是控件没找到 —— 改 "
+                "`LOGIN_USER_SELECTOR` / `LOGIN_PASS_SELECTOR` / "
+                "`LOGIN_SUBMIT_SELECTOR`。默认值按 `name=` 猜，"
+                "而不少前端用的是 `autocomplete=`。")
+    if stage == "settle":
+        return ("表单交上去了，但**登录框没消失** —— 会话没建起来。"
+                "凭据被拒 / 有二次验证 / 点到的不是登录按钮：拿 "
+                "`<ROLE>_USERNAME` + `_PASSWORD` 直接打一次 `LOGIN_URL`，"
+                "看接口认不认（认了就是前端这一步的问题，不是账号的问题）。")
+    # 落到这儿说明加了新步骤却没给提示 —— 那是个 bug，别拿一句通用话糊过去。
+    return f"登录挂在 `{stage}`，而这一步还没登记过对应的排查方向。"
+
 
 async def _login(page, base_url: str, role: str, ledger: dict,
                  env_vars=None) -> bool:
@@ -298,7 +359,7 @@ async def _login(page, base_url: str, role: str, ledger: dict,
     # ⚠ 这里要的是**页面路径**，不是登录接口。环境里常见的是
     # `LOGIN_URL=/api/auth/login`（接口场景用的那个），拿它去 goto 会打开一段
     # JSON，然后卡在"找不到用户名输入框"——报出来是选择器的错，实际是配错了键。
-    # 所以只认 `LOGIN_PATH`，并在失败时把这件事写进账本。
+    # 所以只认 `LOGIN_PATH`；配错了长什么样，由 `_login_hint` 按**哪一步挂的**判。
     login_path = _cfg(env_vars, "LOGIN_PATH", "login")
     win = {"path": "/" + login_path.lstrip("/"), "startedAt": _now(), "tail": False}
     ledger.setdefault("pageWindows", {}).setdefault(role, []).append(win)
@@ -311,21 +372,35 @@ async def _login(page, base_url: str, role: str, ledger: dict,
         await page.fill(_cfg(env_vars, "LOGIN_PASS_SELECTOR", "input[name=password]"), pwd)
         stage = "submit"
         await page.click(_cfg(env_vars, "LOGIN_SUBMIT_SELECTOR", "button[type=submit]"))
+        # ⚠ 这一步**不能**用 `wait_for_load_state("networkidle")`。
+        # 登录是一发 XHR，页面根本不导航 —— 而那个 API 只要**当前**已经是
+        # networkidle 就立刻返回，它等的是"页面加载"，不是"我刚点的这一下"。
+        #
+        # 实测（2026-09-04，UAG `192.168.51.138:3000`）：它秒回，紧接着
+        # `crawl_role` 的第一个 `goto` 把还在飞的 `POST /api/auth/login` 掐了
+        # （HAR 里那条边没有响应状态）。于是 7 个角色全都带着一个**没建起来的
+        # 会话**往下爬，**一个异常都没抛**：
+        #   · `shardsOk 7/7`、`loginCount 7`、181 页、232 条 P 边 —— 全是绿的
+        #   · 而 29 个页面渲染的其实都是登录页：232 个控件只有 7 种标签
+        #     （`Sign In` / `Forgot password?` / `Show password` …）
+        #   · 557 条选择器只命中 4 条 —— 就是登录框自己那 4 条
+        #   · 232 条 P 边里 82 条是 401
+        # **一份完整的假绿**，而且报告里没有任何一格在说这件事。
+        #
+        # 改成**等登录框消失**：它一个信号同时管两件事 —— XHR 回来了、
+        # 而且会话真的建起来了。等不到就是没登上，按登录失败抛
+        # （`_login` 的纪律：登不上的角色什么都没看到，那个分片必须算失败，
+        # 不能带着一份登录页的 items 混成 `done`）。
         stage = "settle"
-        await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
+        await page.wait_for_selector(
+            _cfg(env_vars, "LOGIN_PASS_SELECTOR", "input[name=password]"),
+            state="hidden", timeout=PAGE_TIMEOUT_MS)
     except Exception as e:                               # noqa: BLE001
         ledger.setdefault("loginFailed", []).append({
             "role": role, "stage": stage, "error": type(e).__name__,
             "loginPath": "/" + login_path.lstrip("/"),
             "usedDefaultPath": not _cfg(env_vars, "LOGIN_PATH"),
-            # 环境里只有接口地址、没有页面路径时，把这件事直接说出来 ——
-            # 这是这类失败里最常见的一种，而它长得像"选择器过期了"。
-            "hint": ("环境里只有 `LOGIN_URL`（那是登录**接口**，接口场景用的），"
-                     "浏览器登录要的是**页面路径** `LOGIN_PATH`。"
-                     if not _cfg(env_vars, "LOGIN_PATH")
-                     and _cfg(env_vars, "LOGIN_URL") else
-                     "改 `LOGIN_PATH` / `LOGIN_USER_SELECTOR` / "
-                     "`LOGIN_PASS_SELECTOR` / `LOGIN_SUBMIT_SELECTOR`。"),
+            "hint": _login_hint(stage, env_vars),
         })
         raise
     ledger["loginCount"] = ledger.get("loginCount", 0) + 1
@@ -371,7 +446,10 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                 await page.goto(urljoin(base_url + "/", path.lstrip("/")),
                                 timeout=PAGE_TIMEOUT_MS)
                 await page.wait_for_load_state("networkidle", timeout=PAGE_TIMEOUT_MS)
-                raw = await page.evaluate(_COLLECT_JS)
+                raw = await _eval(page, _COLLECT_JS)
+                # `title()` 原来在 try 外面 —— 它一抛就会连带废掉**整个分片**
+                # （后面所有页一页不剩）。一页的标题取不到，代价该和取不到控件一样。
+                title = await page.title()
             except Exception as e:                       # noqa: BLE001
                 # **记账，不抛。** 这一页的 item 在 diff 里会被降级成 unknown
                 # （`qa_page_survey.diff_items`），绝不进 `removed` ——「没走到」和
@@ -385,7 +463,6 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
                 continue
             if not raw:
                 ledger.setdefault("pagesEmptyState", []).append(path)
-            title = await page.title()
             items.extend(collect_items(path, title, raw, ledger))
             await _probe_selectors(page, path, selector_probe, ledger)
             win["endedAt"] = _now()
@@ -395,7 +472,14 @@ async def crawl_role(browser, base_url: str, role: str, page_paths: list[str],
             probed.append(path)
     finally:
         # HAR 只在 close 时落盘 —— 不 close 就是一个空文件。
-        await context.close()
+        # **也得上闸**：渲染进程还在转 JS 的时候 close 一样会等下去，
+        # 而这里是 `finally`，挂在这儿连"这一片失败了"都报不出来。
+        try:
+            await asyncio.wait_for(context.close(),
+                                   timeout=CONTEXT_CLOSE_TIMEOUT_MS / 1000)
+        except (TimeoutError, asyncio.TimeoutError):
+            # HAR 多半是残的或空的 —— 记一格，别让它冒充"这个角色没流量"。
+            ledger.setdefault("contextCloseTimedOut", []).append(role)
         # 最后一格的右边界。少了它，最后一页的尾巴无处可延，那一页
         # `networkidle` 之后的轮询会全部记进「归不了页」。
         ledger.setdefault("contextClosedAt", {})[role] = _now()

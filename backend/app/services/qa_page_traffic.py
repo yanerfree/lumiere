@@ -225,7 +225,12 @@ def bucket_entries(har: dict | None, windows, *, role: str = "",
     c = {"entriesTotal": len(entries), "apiEntries": 0, "assetEntries": 0,
          "unclearEntries": 0, "preflightEntries": 0, "edgesObserved": 0,
          "edgesAborted": 0, "edgesTail": 0, "edgesUnwindowed": 0,
-         "edgesAmbiguous": 0, "edgesUnusable": 0, "windows": len(rows)}
+         "edgesAmbiguous": 0, "edgesUnusable": 0, "windows": len(rows),
+         # 401/403 单独记一格。**不是为了过滤掉它们** —— 页面确实调了这个端点，
+         # 那条边是真的。是为了让"这一趟其实没登上"能自己冒出来：
+         # 一次没登上的爬取，别的账全是绿的（分片 ok、页数够、边也有），
+         # 只有这一格会异常地高。见下面 `merge_edges` 里的 declaration。
+         "edgesUnauthorized": 0}
 
     for e in entries:
         if not isinstance(e, dict):
@@ -274,6 +279,8 @@ def bucket_entries(har: dict | None, windows, *, role: str = "",
         source = "aborted" if (blocked and is_write_request(method, str(req.get("url") or ""))) \
             else "observed"
         tail = at >= win["tightEnd"]
+        if isinstance(status, int) and status in (401, 403):
+            c["edgesUnauthorized"] += 1
         c["edgesAborted" if source == "aborted" else "edgesObserved"] += 1
         if tail:
             c["edgesTail"] += 1
@@ -333,5 +340,21 @@ def merge_edges(results) -> dict:
     for row in out:
         row["roles"] = sorted(row["roles"])
     counters["pageEdges"] = len(out)
+
+    # 「这一趟其实没登上」要能自己冒出来。判据只用这一趟自己的数：
+    # 401/403 占了可用边的三成以上，那就不是"某个角色少个权限"，
+    # 是会话压根没建起来 —— 那种情况下 P 边记的是登录页的流量，
+    # 而**别的每一格都正常**（分片 ok、页数够、边也不少）。
+    # 门槛写死 30% 是有意的：登录没成时实测是 35%，而正常一趟里
+    # 401 只会零星出现在低权角色够不着的那几个端点上。
+    seen = counters.get("edgesObserved", 0) + counters.get("edgesAborted", 0)
+    un = counters.get("edgesUnauthorized", 0)
+    if seen and un * 10 >= seen * 3:
+        declarations.append(
+            f"{un}/{seen} 条 P 边是 401/403 —— 这一趟多半**根本没登进去**，"
+            f"记下来的是登录页的流量。别拿它当「页面不调这些端点」的证据；"
+            f"先看 `loginFailed` 和 `selectorReport`（只命中登录框那几条 "
+            f"= 每一页渲染的都是登录页）。")
+
     return {"edges": out, "counters": counters, "samples": samples,
             "declarations": declarations}
