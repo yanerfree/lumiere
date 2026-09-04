@@ -3032,3 +3032,67 @@ class TestEnv假阳_20260829验收:
         names = [g["name"] for g in qr.env_gaps([], set(), [lib], ["config/env.sh"])]
 
         assert names == ["PSQL_DSN", "UAG_APIKEY"], names
+
+
+class Test环境不缺的时候不许自己编出缺口:
+    """**沉默会被模型自己填上。**
+
+    提示词里无条件印着「这个环境已配置的变量名」那一行，而**只有真缺东西时**
+    才跟着印一句「这只说明我们这侧没有，不许升级成覆盖结论」。一个都不缺时
+    那句话不印，模型就拿那份名单自己跟脚本里的 `$X` 比，比出一条根本不存在的
+    环境缺口 —— 而页面同一屏底下印的是代码算的「脚本要的变量这个环境都有」，
+    两句话当场打架。2026-09-04 在 AUT 域实测到。
+
+    两道各自独立：提示词说清楚（治因），结果里再兜一次（治果）。
+    """
+
+    class _Resp:
+        def __init__(self, content):
+            self.content = content
+            self.reported = frozenset()
+
+    def test_一个都不缺也要明着说出来(self):
+        out = qr.build_payload({"code": "AUT", "name": "登录契约"}, [],
+                               [{"path": "a.sh", "content": "echo hi\n", "truncated": False}],
+                               "development", ["LUM_ADMIN_USER"], [])
+        head = out.split("## 脚本正文")[0]
+
+        assert "一个都不缺" in head
+        assert "blame=env" in head          # 禁令得指名道姓，不能只说"别乱推"
+
+    async def _run(self, monkeypatch, script):
+        async def fake(messages, **kw):
+            if "## 合并后的结论" in messages[-1]["content"]:
+                return self._Resp('```json\n{"brief":{"headline":"h"},"summary":"合并"}\n```')
+            return self._Resp(
+                '```json\n{"verdict":"risky","summary":"s","scriptGaps":['
+                '{"id":"E","path":"a.sh","severity":"major","blame":"env",'
+                '"problem":"环境没配 LUM_ADMIN_USER","evidence":"echo"},'
+                '{"id":"S","path":"a.sh","severity":"major","blame":"script",'
+                '"problem":"断言太松","evidence":"echo"}]}\n```')
+
+        monkeypatch.setattr(qr.llm_client, "complete", fake)
+        return await qr.run_review(
+            domain={"code": "AUT", "name": "登录契约"}, scenarios=[],
+            scripts=[{"path": "a.sh", "content": script, "truncated": False}],
+            env_name="development", env_keys=[], lib_texts=[])
+
+    @pytest.mark.asyncio
+    async def test_代码说不缺就把模型报的环境缺口丢掉(self, monkeypatch):
+        out = await self._run(monkeypatch, "echo hi\n")
+
+        assert [g["id"] for g in out["scriptGaps"]] == ["S"]
+        assert out["envMissing"] == []
+        assert out["envBlameDropped"] == 1        # 丢了几条要留痕，不能静悄悄地少一行
+
+    @pytest.mark.asyncio
+    async def test_真有缺口的时候一条都不许丢(self, monkeypatch):
+        """★ 反面。判据只有代码那一份 —— 它说缺，模型报的环境问题就是对的。
+
+        修误报最容易的翻车方式是连真的一起丢掉，而丢完页面更干净、看着像修好了。
+        """
+        out = await self._run(monkeypatch, 'echo "$UAG_APIKEY"\n')
+
+        assert [g["id"] for g in out["scriptGaps"]] == ["E", "S"]
+        assert [m["name"] for m in out["envMissing"]] == ["UAG_APIKEY"]
+        assert "envBlameDropped" not in out
