@@ -410,6 +410,17 @@ const pill = (tone, w) => ({
   padding: '1px 7px', borderRadius: 9, fontSize: 12, lineHeight: '16px', fontWeight: 500,
 })
 
+// 「标签 + 一个数」的药丸（覆盖率卡右边那两枚）。比 pill() 高一档：里面装的是
+// 17px 的数，不是 12px 的字，所以圆角和内边距都要跟着放大，不然数会顶到边上。
+// tone 直接吃 TAG_TONE 那张表 —— 底色的语义（有色底 = 有话说 / 白纱片 = 中性）
+// 全页就一套，这里不另立。
+const statChip = tone => ({
+  ...tone, display: 'inline-flex', alignItems: 'baseline', gap: 5,
+  padding: '3px 10px', borderRadius: 11, lineHeight: 1,
+})
+const STAT_LABEL = { fontSize: 11, color: C.ink, fontWeight: 400 }
+const STAT_NUM = { fontSize: 17, fontWeight: 600, color: C.ink, letterSpacing: .2 }
+
 
 // 解析器认出来的列角色 → 页面上的说法。用的是这一页表头本来就用的词，
 // 别让人在"认列结果"和"表格列名"之间再翻译一次。
@@ -1609,16 +1620,35 @@ export default function QaCatalog() {
                 于是整行只有 78% 那个大字看得见 —— 被当面点名"只看到进度条"。
                 百分比是**结论**，分子分母才是**能核对的事实**（284 是清单总行数，
                 221 是有脚本认领的行数），一起被压成小灰字就等于藏了。
-                现在分成两档写：数字 18px 墨色，量词和散文留在 12px 灰 ——
-                一行里"能读的数"和"解释它的话"轻重分开，而不是整行一起抬字号
-                （整行抬会顶到 78% 的位置，两个大字并排就没有主次了）。 */}
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.ok, lineHeight: 1 }}>{coverRate}%</span>
-              <span style={{ fontSize: 12, color: C.gray }}>
-                <b style={{ fontSize: 18, fontWeight: 600, color: C.ink }}>{summary.covered}</b>
-                <span style={{ margin: '0 3px' }}>/</span>
-                <b style={{ fontSize: 18, fontWeight: 600, color: C.ink }}>{summary.total}</b>
-                <span style={{ marginLeft: 5 }}>条清单里有脚本认领</span>
+                第一版是就地抬字号（18px 墨），够看见了但还挤在 % 旁边，而这一行
+                右半边整片是空的 —— 于是第二版（2026-09-04，被点名"可以移到右边，
+                加点颜色区分"）改成左右分栏：左边 % 是结论，右边两枚药丸是事实。
+
+                颜色只上在**底**上，字一律墨色：
+                  已认领 → WASH.ok（绿底），跟左边那个绿的百分比是同一件事
+                  清单共 → 白纱 + 发丝边，跟「有色底 = 这条有话说」那条页面规矩对上
+                别把数字本身刷成绿的 —— 这一页的绿（VIVID.ok / BAR.ok）对纸只有
+                2.09:1 和 1.6:1，那是给 30px 大字和长条用的；17px 的数字刷上去
+                就是"看得见颜色、读不出数"，而这一整条改动要的恰恰是读得出。
+                标签也不能用灰（C.gray 落在绿底上只有 3.65:1，12px 不够）——
+                同一枚药丸里靠字号和字重分主次：11px 常规是标签，17px 半粗是数。 */}
+            <div style={{
+              display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+              gap: 12, marginBottom: 8, flexWrap: 'wrap',
+            }}>
+              <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.ok, lineHeight: 1 }}>{coverRate}%</span>
+                <span style={{ fontSize: 12, color: C.gray }}>的场景有脚本认领</span>
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+                <span style={statChip(TAG_TONE.ok)}>
+                  <span style={STAT_LABEL}>已认领</span>
+                  <b style={STAT_NUM}>{summary.covered}</b>
+                </span>
+                <span style={statChip(TAG_TONE.info)}>
+                  <span style={STAT_LABEL}>清单共</span>
+                  <b style={STAT_NUM}>{summary.total}</b>
+                </span>
               </span>
             </div>
             {['P0', 'P1', 'P2', 'P3'].filter(p => summary.byPriority?.[p]).map(p => {
