@@ -142,6 +142,15 @@ const VIVID = {
 //   代价比"红的图标和红的条子同色"大得多。**同色在这里不产生歧义**：
 //   一个是图标、一个是长条，形状本来就不一样。
 
+// —— 一支**能拿去写大数字**的绿。VIVID.ok 对纸只有 2.27:1，30px 的百分比那种
+// "看个大概"没问题，但 22px 的 654 是要**读出来**的数，那个对比度下就是
+// "看得见是绿的、读不出是几"。WCAG 对大号粗体（≥18.66px bold）的线是 3:1，
+// 这支 3.35:1 过线，同时 L*57 仍在"亮绿"里 —— 不是被 4.5:1 压出来的那种墨绿
+// （#007b4e，L*45，正是这一页第一条审美要求要消掉的暗色）。
+// **只给覆盖率卡右边那个分子用。** 别拿它去画条子或图标：那两处已经有
+// BAR.ok / VIVID.ok，多一支同色相的绿只会让"三个绿到底哪个是哪个"没法回答。
+const OK_TEXT = '#009a63'
+
 // —— 条子档：进度条 + 药丸/圆点以外的所有色块。**不许拿去渲染字**（对纸只有 1.6~2.2:1）。
 //
 // 彩度这一档来回调过三次，值本身不重要，**判据**才重要：
@@ -1610,26 +1619,32 @@ export default function QaCatalog() {
                 百分比是**结论**，分子分母才是**能核对的事实**（284 是清单总行数，
                 221 是有脚本认领的行数），一起被压成小灰字就等于藏了。
 
-                中间试过一版把这两个数挪到卡片右边、做成两枚带底色的药丸，
-                当场被退（2026-09-04）：「不好看，还是之前的样式，字体和颜色改一下就好了」。
-                **别再往右边挪、也别再给它们加底** —— 一行里已经有一个 30px 的绿百分比，
-                右边再摆两块有色底，一张卡上就有三个抢眼的块，谁也不是重点。
+                这一行的排法来回过三版，把要求原话记下来免得再绕：
+                  ① 就地抬字号（18px 墨）—— 看见了，但还挤在 % 旁边，右半边整片空着。
+                  ② 挪到右边 + 两枚带底色的药丸 —— 被退：「不好看」。
+                  ③ 退回一行 —— 又被退：「不是让你移动到右边吗，然后增加颜色和字体加粗」。
+                所以要的是 **② 的位置 + ① 的写法**：数字仍是裸着的「654 / 723」，
+                **不套底色方块**（一行里已经有个 30px 的绿百分比，右边再摆两块有色底
+                就是三个抢眼的块，谁也不是重点），靠**字号 + 字重 + 颜色**分主次。
 
-                所以这一版只动字号和颜色，形还是「% + 分数 + 一句话」一行：
-                  分子 20px 半粗**墨**  ← 它是这张卡真正要读的数
-                  斜杠 15px faint       ← 纯分隔符，装饰档（3.09:1）刚好够画一根线
-                  分母 20px 常规**灰**  ← 同字号但轻一档：一眼看出谁是分子谁是分母，
-                                          不用去数斜杠在哪边
-                数字一律不上绿：这一页的绿（VIVID.ok 2.09:1 / BAR.ok 1.6:1）是给
-                30px 大字和长条用的，20px 的数刷上去就是"看得见颜色、读不出数"。
-                tabular-nums 是为了让 654/723 这种等宽对齐 —— 换个数字不会左右跳。 */}
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.ok, lineHeight: 1 }}>{coverRate}%</span>
-              <span style={{ fontSize: 12, color: C.gray, fontVariantNumeric: 'tabular-nums' }}>
-                <b style={{ fontSize: 20, fontWeight: 600, color: C.ink, letterSpacing: .2 }}>{summary.covered}</b>
-                <span style={{ margin: '0 4px', fontSize: 15, color: C.faint }}>/</span>
-                <b style={{ fontSize: 20, fontWeight: 400, color: C.gray, letterSpacing: .2 }}>{summary.total}</b>
-                <span style={{ marginLeft: 6 }}>条清单里有脚本认领</span>
+                  分子 654  22px 700 OK_TEXT（绿）  ← 要读的那个数，跟左边的 % 同一件事
+                  斜杠 /    16px faint             ← 纯分隔符，装饰档 3.09:1 够画一根线
+                  分母 723  22px 600 C.gray        ← 同字号轻一档：一眼分出分子分母
+                绿用的是 OK_TEXT 不是 VIVID.ok —— 理由写在 OK_TEXT 那一支上：
+                后者 2.27:1，刷在 22px 的数上是"看得见颜色、读不出数"。
+                tabular-nums 是让数字等宽，换个数不会左右跳。 */}
+            <div style={{
+              display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+              gap: 12, marginBottom: 8, flexWrap: 'wrap',
+            }}>
+              <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.ok, lineHeight: 1 }}>{coverRate}%</span>
+                <span style={{ fontSize: 12, color: C.gray }}>的场景有脚本认领</span>
+              </span>
+              <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
+                <b style={{ fontSize: 22, fontWeight: 700, color: OK_TEXT, letterSpacing: .2 }}>{summary.covered}</b>
+                <span style={{ margin: '0 5px', fontSize: 16, color: C.faint }}>/</span>
+                <b style={{ fontSize: 22, fontWeight: 600, color: C.gray, letterSpacing: .2 }}>{summary.total}</b>
               </span>
             </div>
             {['P0', 'P1', 'P2', 'P3'].filter(p => summary.byPriority?.[p]).map(p => {
