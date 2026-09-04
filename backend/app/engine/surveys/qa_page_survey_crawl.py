@@ -1017,8 +1017,11 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     一趟全片失败但环境里的数变了，要看的是"我们动了什么"。
 
     `page_edges` 是**页面级**的 P 边（打开这一页浏览器发了什么），归页规则在
-    `qa_page_traffic`。它**不写进 item 的 `endpoints`** —— 这一趟一个控件都没
-    点过，写进去等于凭空造一条 `observed` 的控件→端点边。`routes` 只用来推
+    `qa_page_traffic`。它**不写进 item 的 `endpoints`** —— 页面级的边归的是"这一页"，
+    摊到页面上的每个控件头上等于凭空造一条 `observed` 的控件→端点边。
+    ⚠ **`endpoints` 这一列至今一行都没写过**（2026-09-04 查库：最近一趟 1361 行里 0 行）。
+    批 2 起是真点控件了（点完只记「有没有反应」），**要记「这一次点击发出了什么」
+    得按点击时间窗归属**，跟页面级同一招、但还没做。别看见这列在就以为有数。`routes` 只用来推
     API 前缀兜底分类（拿不到就只靠 `_resourceType`，会在 declarations 里说明）。
 
     `env_vars` 是**这一趟**的配置（`BASE_URL` / `LOGIN_*` / `<ROLE>_USERNAME` …），
