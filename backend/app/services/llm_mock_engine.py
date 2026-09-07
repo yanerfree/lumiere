@@ -294,10 +294,21 @@ def _resp_model(route: dict, request_body: dict, default: str) -> str:
     return req_model if route["model_mode"] == "follow_request" else (route.get("custom_model") or req_model)
 
 
+def _prompt_source(request_body: dict):
+    """auto 估算用的输入取样 —— 五种协议的入参字段不一样，取到哪个用哪个。"""
+    if not isinstance(request_body, dict):
+        return ""
+    for k in ("messages", "prompt", "contents", "input"):
+        v = request_body.get(k)
+        if v:
+            return v
+    return ""
+
+
 def _usage_pair(route: dict, request_body: dict, out_text: str) -> tuple[int, int]:
     if route["token_mode"] == "custom":
         return (route.get("custom_prompt_tokens") or 0, route.get("custom_completion_tokens") or 0)
-    prompt_text = json.dumps(request_body.get("messages") or request_body.get("prompt") or "", ensure_ascii=False)
+    prompt_text = json.dumps(_prompt_source(request_body), ensure_ascii=False)
     return (estimate_tokens(prompt_text), estimate_tokens(out_text))
 
 
@@ -411,6 +422,294 @@ async def build_anthropic_stream(route: dict, request_body: dict) -> AsyncIterat
         "stop_reason": _ANTHROPIC_STOP.get(route.get("finish_reason", "stop"), "end_turn"),
         "stop_sequence": None}, "usage": {"output_tokens": ct}})
     yield _ev("message_stop", {"type": "message_stop"})
+
+
+# ───── Gemini generateContent ─────
+# 回复在 candidates[].content.parts[]，用量叫 usageMetadata，停止原因大写。
+
+_GEMINI_FINISH = {"stop": "STOP", "length": "MAX_TOKENS", "content_filter": "SAFETY", "tool_calls": "STOP"}
+_GEMINI_STATUS = {400: "INVALID_ARGUMENT", 401: "UNAUTHENTICATED", 403: "PERMISSION_DENIED",
+                  404: "NOT_FOUND", 408: "DEADLINE_EXCEEDED", 429: "RESOURCE_EXHAUSTED"}
+
+
+def _gemini_usage(pt: int, ct: int) -> dict:
+    return {"promptTokenCount": pt, "candidatesTokenCount": ct, "totalTokenCount": pt + ct}
+
+
+def _gemini_error(route: dict, request_body: dict, status_code: int) -> dict:
+    body_text = _resolve_body(route, request_body)
+    try:
+        parsed = json.loads(body_text)
+        if isinstance(parsed, dict) and "error" in parsed:
+            return parsed
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return {"error": {"code": status_code, "message": body_text,
+                      "status": _GEMINI_STATUS.get(status_code, "INTERNAL")}}
+
+
+def build_gemini_json(route: dict, request_body: dict) -> tuple[dict, dict]:
+    """Gemini generateContent 非流式。"""
+    status_code = route["status_code"]
+    model = _resp_model(route, request_body, "gemini-1.5-pro")
+    if status_code >= 400:
+        return _gemini_error(route, request_body, status_code), _build_headers(route, "gemini")
+
+    response_type = route.get("response_type", "text")
+    parts: list[dict] = []
+    out_text = ""
+    if response_type == "tool_calls":
+        for tc in route.get("tool_calls") or []:
+            try:
+                args = json.loads(tc.get("arguments") or "{}")
+            except (json.JSONDecodeError, TypeError):
+                args = {"_raw": tc.get("arguments")}
+            parts.append({"functionCall": {"name": tc.get("name", "unknown"), "args": args}})
+        out_text = json.dumps(parts, ensure_ascii=False)
+    else:
+        out_text = _resolve_body(route, request_body)
+        if out_text:
+            parts.append({"text": out_text})
+
+    pt, ct = _usage_pair(route, request_body, out_text)
+    body = {
+        "candidates": [{
+            "content": {"role": "model", "parts": parts},
+            "finishReason": _GEMINI_FINISH.get(route.get("finish_reason", "stop"), "STOP"),
+            "index": 0,
+            "safetyRatings": [],
+        }],
+        "usageMetadata": _gemini_usage(pt, ct),
+        "modelVersion": model,
+    }
+    return body, _build_headers(route, "gemini")
+
+
+async def build_gemini_stream(route: dict, request_body: dict) -> AsyncIterator[str]:
+    """Gemini streamGenerateContent（alt=sse）：每帧是一个完整 GenerateContentResponse，
+    `data: ` 前缀、无 event 行、无 [DONE]，用量只在最后一帧带。"""
+    model = _resp_model(route, request_body, "gemini-1.5-pro")
+    chunk_delay = route.get("sse_chunk_delay_ms", 50) / 1000.0
+    content = _resolve_body(route, request_body)
+    pt, ct = _usage_pair(route, request_body, content)
+    fr = _GEMINI_FINISH.get(route.get("finish_reason", "stop"), "STOP")
+
+    def _frame(parts: list[dict], finish: str | None, usage: dict | None) -> str:
+        cand: dict = {"content": {"role": "model", "parts": parts}, "index": 0}
+        if finish:
+            cand["finishReason"] = finish
+        obj: dict = {"candidates": [cand], "modelVersion": model}
+        if usage is not None:
+            obj["usageMetadata"] = usage
+        return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n"
+
+    pieces = _split_chunks(content, route.get("sse_chunk_size") or 1)
+    if not pieces:
+        # 零内容：只发一帧带 finishReason + usage
+        yield _frame([], fr, _gemini_usage(pt, ct))
+        return
+    for i, piece in enumerate(pieces):
+        last = i == len(pieces) - 1
+        yield _frame([{"text": piece}], fr if last else None,
+                     _gemini_usage(pt, ct) if last else None)
+        await asyncio.sleep(chunk_delay)
+
+
+# ───── Ollama 原生 API ─────
+# /api/chat → message 对象；/api/generate → response 字段。
+# 流式是 NDJSON（一行一个 JSON、无 data: 前缀、无 [DONE]），最后一行 done=true 带用量。
+
+_OLLAMA_DONE_REASON = {"stop": "stop", "length": "length", "content_filter": "stop", "tool_calls": "stop"}
+
+
+def _ollama_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%S.000000000Z", time.gmtime())
+
+
+def _ollama_counts(pt: int, ct: int) -> dict:
+    return {"total_duration": 1_000_000, "load_duration": 0,
+            "prompt_eval_count": pt, "prompt_eval_duration": 0,
+            "eval_count": ct, "eval_duration": 0}
+
+
+def _is_ollama_generate(path: str) -> bool:
+    return path.split("?", 1)[0].rstrip("/").lower().endswith("/api/generate")
+
+
+def build_ollama_json(route: dict, request_body: dict, path: str) -> tuple[dict, dict]:
+    """Ollama 原生非流式。"""
+    status_code = route["status_code"]
+    if status_code >= 400:
+        body_text = _resolve_body(route, request_body)
+        try:
+            parsed = json.loads(body_text)
+            if isinstance(parsed, dict) and "error" in parsed:
+                return parsed, _build_headers(route, "ollama")
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return {"error": body_text}, _build_headers(route, "ollama")
+
+    is_generate = _is_ollama_generate(path)
+    model = _resp_model(route, request_body, "llama3")
+    content = _resolve_body(route, request_body)
+    pt, ct = _usage_pair(route, request_body, content)
+    done_reason = _OLLAMA_DONE_REASON.get(route.get("finish_reason", "stop"), "stop")
+    base = {"model": model, "created_at": _ollama_now()}
+    if is_generate:
+        body = {**base, "response": content, "done": True, "done_reason": done_reason, **_ollama_counts(pt, ct)}
+    else:
+        message: dict = {"role": "assistant", "content": content}
+        if route.get("response_type") == "tool_calls":
+            calls = []
+            for tc in route.get("tool_calls") or []:
+                try:
+                    args = json.loads(tc.get("arguments") or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    args = {"_raw": tc.get("arguments")}
+                calls.append({"function": {"name": tc.get("name", "unknown"), "arguments": args}})
+            if calls:
+                message["tool_calls"] = calls
+                message["content"] = ""
+        body = {**base, "message": message, "done": True, "done_reason": done_reason, **_ollama_counts(pt, ct)}
+    return body, _build_headers(route, "ollama")
+
+
+async def build_ollama_stream(route: dict, request_body: dict, path: str) -> AsyncIterator[str]:
+    """Ollama 流式：NDJSON。"""
+    is_generate = _is_ollama_generate(path)
+    model = _resp_model(route, request_body, "llama3")
+    chunk_delay = route.get("sse_chunk_delay_ms", 50) / 1000.0
+    content = _resolve_body(route, request_body)
+    pt, ct = _usage_pair(route, request_body, content)
+    done_reason = _OLLAMA_DONE_REASON.get(route.get("finish_reason", "stop"), "stop")
+
+    def _line(obj: dict) -> str:
+        return json.dumps(obj, ensure_ascii=False) + "\n"
+
+    def _piece_frame(piece: str) -> dict:
+        base = {"model": model, "created_at": _ollama_now()}
+        if is_generate:
+            return {**base, "response": piece, "done": False}
+        return {**base, "message": {"role": "assistant", "content": piece}, "done": False}
+
+    for piece in _split_chunks(content, route.get("sse_chunk_size") or 1):
+        yield _line(_piece_frame(piece))
+        await asyncio.sleep(chunk_delay)
+    tail = {"model": model, "created_at": _ollama_now(), "done": True, "done_reason": done_reason,
+            **_ollama_counts(pt, ct)}
+    if is_generate:
+        tail["response"] = ""
+    else:
+        tail["message"] = {"role": "assistant", "content": ""}
+    yield _line(tail)
+
+
+# ───── OpenAI Responses API ─────
+# object=response，产出在 output[]，用量叫 input_tokens/output_tokens；流式是命名事件。
+
+def _responses_status(finish_reason: str) -> tuple[str, dict | None]:
+    if finish_reason == "length":
+        return "incomplete", {"reason": "max_output_tokens"}
+    if finish_reason == "content_filter":
+        return "incomplete", {"reason": "content_filter"}
+    return "completed", None
+
+
+def build_responses_json(route: dict, request_body: dict) -> tuple[dict, dict]:
+    """OpenAI Responses 非流式。"""
+    resp_id = f"resp_{uuid.uuid4().hex[:24]}"
+    status_code = route["status_code"]
+    model = _resp_model(route, request_body, "gpt-4o")
+    if status_code >= 400:
+        body_text = _resolve_body(route, request_body)
+        try:
+            body = json.loads(body_text)
+        except (json.JSONDecodeError, TypeError):
+            err_type, err_code = _error_meta(status_code)
+            body = {"error": {"message": body_text, "type": err_type, "param": None, "code": err_code}}
+        return body, _build_headers(route, resp_id)
+
+    response_type = route.get("response_type", "text")
+    output: list[dict] = []
+    out_text = ""
+    if response_type == "tool_calls":
+        for tc in route.get("tool_calls") or []:
+            output.append({
+                "type": "function_call",
+                "id": f"fc_{uuid.uuid4().hex[:24]}",
+                "call_id": _gen_call_id(),
+                "name": tc.get("name", "unknown"),
+                "arguments": tc.get("arguments", "{}"),
+                "status": "completed",
+            })
+        out_text = json.dumps([o.get("arguments") for o in output], ensure_ascii=False)
+    else:
+        out_text = _resolve_body(route, request_body)
+        content_blocks = []
+        if out_text:
+            content_blocks.append({"type": "output_text", "text": out_text, "annotations": []})
+        output.append({
+            "type": "message",
+            "id": f"msg_{uuid.uuid4().hex[:24]}",
+            "status": "completed",
+            "role": "assistant",
+            "content": content_blocks,
+        })
+
+    pt, ct = _usage_pair(route, request_body, out_text)
+    status, incomplete = _responses_status(route.get("finish_reason", "stop"))
+    body = {
+        "id": resp_id,
+        "object": "response",
+        "created_at": int(time.time()),
+        "status": status,
+        "model": model,
+        "output": output,
+        "usage": {"input_tokens": pt, "output_tokens": ct, "total_tokens": pt + ct},
+        "incomplete_details": incomplete,
+        "error": None,
+    }
+    return body, _build_headers(route, resp_id)
+
+
+async def build_responses_stream(route: dict, request_body: dict) -> AsyncIterator[str]:
+    """OpenAI Responses 事件流：命名事件（response.created / response.output_text.delta /
+    response.completed），每帧带 event 行 —— SDK 按事件名分派。"""
+    resp_id = f"resp_{uuid.uuid4().hex[:24]}"
+    model = _resp_model(route, request_body, "gpt-4o")
+    chunk_delay = route.get("sse_chunk_delay_ms", 50) / 1000.0
+    content = _resolve_body(route, request_body)
+    pt, ct = _usage_pair(route, request_body, content)
+    status, incomplete = _responses_status(route.get("finish_reason", "stop"))
+    msg_id = f"msg_{uuid.uuid4().hex[:24]}"
+
+    def _ev(name: str, payload: dict) -> str:
+        payload = {"type": name, **payload}
+        return f"event: {name}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    def _response_obj(st: str, output: list[dict]) -> dict:
+        done = st not in ("in_progress",)
+        return {"id": resp_id, "object": "response", "created_at": int(time.time()),
+                "status": st, "model": model, "output": output,
+                "usage": ({"input_tokens": pt, "output_tokens": ct, "total_tokens": pt + ct} if done else None),
+                "incomplete_details": (incomplete if done else None), "error": None}
+
+    yield _ev("response.created", {"response": _response_obj("in_progress", [])})
+    yield _ev("response.output_item.added", {"output_index": 0, "item": {
+        "type": "message", "id": msg_id, "status": "in_progress", "role": "assistant", "content": []}})
+    yield _ev("response.content_part.added", {"item_id": msg_id, "output_index": 0, "content_index": 0,
+                                              "part": {"type": "output_text", "text": "", "annotations": []}})
+    for piece in _split_chunks(content, route.get("sse_chunk_size") or 1):
+        yield _ev("response.output_text.delta", {"item_id": msg_id, "output_index": 0,
+                                                 "content_index": 0, "delta": piece})
+        await asyncio.sleep(chunk_delay)
+    yield _ev("response.output_text.done", {"item_id": msg_id, "output_index": 0,
+                                            "content_index": 0, "text": content})
+    final_item = {"type": "message", "id": msg_id, "status": "completed", "role": "assistant",
+                  "content": ([{"type": "output_text", "text": content, "annotations": []}] if content else [])}
+    yield _ev("response.output_item.done", {"output_index": 0, "item": final_item})
+    final_event = "response.completed" if status == "completed" else "response.incomplete"
+    yield _ev(final_event, {"response": _response_obj(status, [final_item])})
 
 
 # ───── 向量 (Embeddings) ─────

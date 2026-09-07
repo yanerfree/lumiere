@@ -165,6 +165,15 @@ def test_取的是最后一条user消息():
     ("/v1/completions", "text"),
     ("/openai/v1/completions?api-version=v1", "text"),
     ("/v1/messages", "anthropic"),
+    # Gemini：动作拼在模型名后面（大小写都要认）
+    ("/v1beta/models/gemini-1.5-pro:generateContent", "gemini"),
+    ("/multi/gemini/v1beta/models/gemini-pro:streamGenerateContent?alt=sse", "gemini"),
+    # Ollama 原生：不带 /v1
+    ("/api/chat", "ollama"),
+    ("/multi/ollama/api/generate", "ollama"),
+    # OpenAI Responses
+    ("/v1/responses", "responses"),
+    ("/multi/openai/v1/responses", "responses"),
 ])
 def test_协议形状按路径判(path, shape):
     assert smart.detect_shape(path) == shape
@@ -325,6 +334,107 @@ def test_legacy流式用text字段():
     first = json.loads(frames[0].removeprefix("data: ").strip())
     assert "text" in first["choices"][0] and "delta" not in first["choices"][0]
     assert frames[-1].strip() == "data: [DONE]"
+
+
+# ───── 新增三种协议形状：Gemini / Ollama / Responses ─────
+
+def test_三种新形状的响应结构各不相同():
+    """★ 形状错了客户端 SDK 解不出来，报的错跟网关自己的 bug 长得一样。
+    每种协议的「回复放哪、用量叫什么、停止原因怎么写」都不一样，这里逐样钉死。"""
+    r = _route(token_mode="custom", custom_prompt_tokens=55, custom_completion_tokens=66)
+
+    # Gemini：candidates[].content.parts[].text + usageMetadata + 大写 finishReason
+    gem, _ = engine.build_gemini_json(r, {"contents": [{"parts": [{"text": "hi"}]}]})
+    assert gem["candidates"][0]["content"]["parts"][0]["text"] == "原本的正文"
+    assert gem["candidates"][0]["finishReason"] == "STOP"
+    assert gem["usageMetadata"] == {"promptTokenCount": 55, "candidatesTokenCount": 66, "totalTokenCount": 121}
+
+    # Ollama /api/chat → message 对象；用量叫 prompt_eval_count/eval_count；done=true
+    och, _ = engine.build_ollama_json(r, {"messages": [{"role": "user", "content": "hi"}]}, "/multi/ollama/api/chat")
+    assert och["message"] == {"role": "assistant", "content": "原本的正文"}
+    assert och["done"] is True and och["prompt_eval_count"] == 55 and och["eval_count"] == 66
+    assert "response" not in och
+
+    # Ollama /api/generate → response 字段（不是 message）
+    ogen, _ = engine.build_ollama_json(r, {"prompt": "hi"}, "/multi/ollama/api/generate")
+    assert ogen["response"] == "原本的正文" and "message" not in ogen
+
+    # Responses：object=response，产出在 output[]，用量叫 input_tokens/output_tokens
+    resp, _ = engine.build_responses_json(r, {"input": "hi"})
+    assert resp["object"] == "response" and resp["status"] == "completed"
+    assert resp["output"][0]["content"][0]["type"] == "output_text"
+    assert resp["usage"] == {"input_tokens": 55, "output_tokens": 66, "total_tokens": 121}
+
+
+def test_gemini流式无DONE无event行且用量只在末帧():
+    """Gemini streamGenerateContent 每帧是完整对象，data: 前缀、无 event、无 [DONE]。"""
+    frames = _drain(engine.build_gemini_stream(_route(response_body="甲乙丙丁", sse_chunk_size=2), {"contents": []}))
+    joined = "".join(frames)
+    assert "event:" not in joined and "[DONE]" not in joined
+    assert all(f.startswith("data: ") for f in frames)
+    # 用量只在最后一帧
+    assert "usageMetadata" not in json.loads(frames[0].removeprefix("data: ").strip())
+    last = json.loads(frames[-1].removeprefix("data: ").strip())
+    assert "usageMetadata" in last and last["candidates"][0]["finishReason"] == "STOP"
+
+
+def test_ollama流式是NDJSON末行done():
+    """★ Ollama 流式不是 SSE 而是 NDJSON：一行一个 JSON、无 data: 前缀、无 [DONE]，末行 done=true。"""
+    frames = _drain(engine.build_ollama_stream(
+        _route(response_body="甲乙丙", sse_chunk_size=1), {"messages": []}, "/multi/ollama/api/chat"))
+    assert "[DONE]" not in "".join(frames)
+    for f in frames:
+        assert not f.startswith("data: ")
+        obj = json.loads(f)  # 每一行都是独立完整 JSON
+        assert "model" in obj
+    assert json.loads(frames[-1])["done"] is True
+    assert all(json.loads(f)["done"] is False for f in frames[:-1])
+
+
+def test_responses流式带命名event且末事件completed():
+    frames = _drain(engine.build_responses_stream(_route(response_body="甲乙丙"), {"input": "x"}))
+    joined = "".join(frames)
+    for ev in ("response.created", "response.output_text.delta", "response.completed"):
+        assert f"event: {ev}\n" in joined
+    assert "[DONE]" not in joined
+
+
+def test_gemini截断和过滤映射到大写枚举():
+    gem_len, _ = engine.build_gemini_json(_route(finish_reason="length"), {"contents": []})
+    assert gem_len["candidates"][0]["finishReason"] == "MAX_TOKENS"
+    gem_cf, _ = engine.build_gemini_json(_route(finish_reason="content_filter"), {"contents": []})
+    assert gem_cf["candidates"][0]["finishReason"] == "SAFETY"
+
+
+def test_新形状的错误走各自原生错误壳():
+    """错误响应也得是目标协议的形状，否则客户端把错误当成一次正常回复解析。"""
+    gem, _ = engine.build_gemini_json(_route(status_code=429, response_body="quota"), {"contents": []})
+    assert gem["error"]["status"] == "RESOURCE_EXHAUSTED" and gem["error"]["code"] == 429
+
+    olla, _ = engine.build_ollama_json(_route(status_code=500, response_body="boom"), {}, "/multi/ollama/api/chat")
+    assert olla == {"error": "boom"}  # Ollama 的错误就是一个裸 error 字符串
+
+    resp, _ = engine.build_responses_json(_route(status_code=401, response_body="bad key"), {"input": "x"})
+    assert resp["error"]["message"] == "bad key" and resp["error"]["type"] == "invalid_request_error"
+
+
+def test_extract_user_text认全部五种入参():
+    """脱敏/指令契约靠它取「用户到底说了什么」，取不到就在那种客户端上静默失效。"""
+    assert smart.extract_user_text({"messages": [{"role": "user", "content": "A"}]}) == "A"
+    assert smart.extract_user_text({"prompt": "B"}) == "B"
+    assert smart.extract_user_text({"contents": [{"role": "user", "parts": [{"text": "C"}]}]}) == "C"
+    assert smart.extract_user_text({"input": "D"}) == "D"
+    assert smart.extract_user_text(
+        {"input": [{"role": "user", "content": [{"type": "input_text", "text": "E"}]}]}) == "E"
+
+
+def test_gemini智能应答按路径拿到形状():
+    """开着智能应答时，Gemini 路径也要判成 gemini 形状（apply_smart 落 _smart_shape）。"""
+    eff, meta = smart.apply_smart(
+        _route(), {"contents": [{"parts": [{"text": "MODE:HIT"}]}]},
+        "/multi/gemini/v1beta/models/gemini-pro:generateContent")
+    assert eff["_smart_shape"] == "gemini"
+    assert "VIOLATION" in eff["response_body"]  # 指令照常生效
 
 
 # ───── 回归守卫：没开智能应答时行为不能变 ─────

@@ -210,12 +210,63 @@ def message_text(message) -> str:
     return json.dumps(c, ensure_ascii=False)
 
 
-def extract_user_text(body: dict) -> str:
-    """最后一条 user 消息的文本。三种入参形状：
+def _gemini_content_text(content) -> str:
+    """Gemini 的 content.parts[].text 拼接。"""
+    if not isinstance(content, dict):
+        return ""
+    parts = content.get("parts")
+    if not isinstance(parts, list):
+        return ""
+    out = []
+    for p in parts:
+        if isinstance(p, dict) and isinstance(p.get("text"), str):
+            out.append(p["text"])
+        elif isinstance(p, str):
+            out.append(p)
+    return "\n".join(out)
 
-      messages[].content 是字符串       → OpenAI
+
+def _responses_input_text(inp) -> str:
+    """OpenAI Responses 的 input：字符串直接用；数组取最后一条 user 的文本。
+
+    数组项形如 {"role":"user","content":"..."} 或
+    {"role":"user","content":[{"type":"input_text","text":"..."}]}。
+    """
+    if isinstance(inp, str):
+        return inp
+    if not isinstance(inp, list) or not inp:
+        return ""
+
+    def _item_text(it) -> str:
+        if not isinstance(it, dict):
+            return str(it)
+        c = it.get("content")
+        if isinstance(c, str):
+            return c
+        if isinstance(c, list):
+            segs = []
+            for seg in c:
+                if isinstance(seg, dict) and isinstance(seg.get("text"), str):
+                    segs.append(seg["text"])
+                elif isinstance(seg, str):
+                    segs.append(seg)
+            return "\n".join(segs)
+        return ""
+
+    for it in reversed(inp):
+        if isinstance(it, dict) and it.get("role") == "user":
+            return _item_text(it)
+    return _item_text(inp[-1])
+
+
+def extract_user_text(body: dict) -> str:
+    """最后一条 user 消息的文本。五种入参形状：
+
+      messages[].content 是字符串       → OpenAI / Ollama(/api/chat)
       messages[].content 是 block 数组  → Anthropic
-      body.prompt 是字符串              → legacy completions
+      body.prompt 是字符串              → legacy completions / Ollama(/api/generate)
+      body.contents[].parts[].text      → Gemini generateContent
+      body.input（字符串或消息数组）     → OpenAI Responses
 
     没有 user 消息时退回最后一条消息 —— 有些客户端把指令塞在 system 里，
     直接返回空串的话整个契约在那种客户端上就是静默失效。
@@ -233,7 +284,15 @@ def extract_user_text(body: dict) -> str:
         return prompt
     if isinstance(prompt, list):
         return "\n".join(str(p) for p in prompt)
-    return ""
+    contents = body.get("contents")
+    if isinstance(contents, list) and contents:
+        for c in reversed(contents):
+            if isinstance(c, dict) and c.get("role") in (None, "user"):
+                return _gemini_content_text(c)
+        return _gemini_content_text(contents[-1])
+    if isinstance(contents, dict):
+        return _gemini_content_text(contents)
+    return _responses_input_text(body.get("input"))
 
 
 def all_text(body: dict) -> str:
@@ -244,7 +303,17 @@ def all_text(body: dict) -> str:
     if isinstance(messages, list) and messages:
         return "\n".join(message_text(m) for m in messages)
     prompt = body.get("prompt")
-    return prompt if isinstance(prompt, str) else ""
+    if isinstance(prompt, str):
+        return prompt
+    contents = body.get("contents")
+    if isinstance(contents, list) and contents:
+        return "\n".join(_gemini_content_text(c) for c in contents if isinstance(c, dict))
+    if isinstance(contents, dict):
+        return _gemini_content_text(contents)
+    inp = body.get("input")
+    if inp is not None:
+        return _responses_input_text(inp)
+    return ""
 
 
 def loop_stage(body: dict) -> int:
@@ -267,12 +336,25 @@ def loop_stage(body: dict) -> int:
 # ───── 协议形状 / 角色 ─────
 
 def detect_shape(path: str) -> str:
-    """按路径判协议形状：chat（chat.completion）/ text（text_completion）/ anthropic（message）。
+    """按路径判协议形状：
+      chat（OpenAI chat.completion）/ text（legacy text_completion）/
+      anthropic（message）/ gemini（generateContent）/ ollama（/api/chat|/api/generate）/
+      responses（OpenAI Responses）。
 
-    判别顺序要紧：/chat/completions 必须在 /completions 之前判掉，
-    否则 legacy 那条分支会把所有 chat 请求都吃了。
+    判别顺序要紧：
+      · :generateContent / :streamGenerateContent 拼在模型名后面，先判掉
+      · /api/chat、/api/generate 是 Ollama 原生（不带 /v1）
+      · /responses 是 OpenAI Responses
+      · /chat/completions 必须在 /completions 之前判掉，否则 legacy 那条分支把 chat 全吃了
     """
     p = (path or "").split("?", 1)[0].rstrip("/")
+    pl = p.lower()
+    if pl.endswith(":generatecontent") or pl.endswith(":streamgeneratecontent"):
+        return "gemini"
+    if pl.endswith("/api/chat") or pl.endswith("/api/generate"):
+        return "ollama"
+    if pl.endswith("/responses"):
+        return "responses"
     if p.endswith("/messages"):
         return "anthropic"
     if p.endswith("/chat/completions"):
