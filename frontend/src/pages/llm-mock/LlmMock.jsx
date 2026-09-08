@@ -172,17 +172,12 @@ export default function LlmMock() {
   const handleCreateRoute = async () => {
     const idx = routes.length % NEW_ROUTE_PRESETS.length
     const tpl = NEW_ROUTE_PRESETS[idx]
-    // 在第一段路径后插后缀：/openai/v1/... → /openai-2/v1/...；无第二段则整体加后缀
-    const withSuffix = (base, sfx) => {
-      const m = base.match(/^\/([^/]+)(\/.*)?$/)
-      return m ? `/${m[1]}-${sfx}${m[2] || ''}` : `${base}-${sfx}`
-    }
-    // 后端拦「方法+路径」重复：预设里好几个路径可能已存在，直接建会 409。
-    // 本地 routes 列表可能滞后于服务端（刚建的还没 fetch 回来），只靠本地去重会
-    // 误判为空、POST 撞 409 —— 用户就会看到「没法新建」。所以：本地先探一把，
-    // 撞了就换随机后缀 silent 重试，让「新建」永远建得出来（草稿路径反正要用户改）。
-    const taken = new Set(routes.map(r => r.path))
-    let path = taken.has(tpl.path) ? withSuffix(tpl.path, '2') : tpl.path
+    // mock 路径 = 前缀 + 固定尾巴。尾巴（/v1/chat/completions 这种）是标准 API 路径，
+    // 动了就匹配不上真实调用，不能改；能变的是前缀。所以新建时默认就随机一个前缀，
+    // 两次新建自然不撞。去掉预设自带的 mock* 段，免得叠成 /mock-x/mock-429/…。
+    const tail = tpl.path.replace(/^\/mock[^/]*/, '') || tpl.path
+    const rand = () => Math.random().toString(36).slice(2, 6)
+    let path = `/mock-${rand()}${tail}`
     for (let attempt = 0; attempt < 6; attempt++) {
       try {
         const r = await api.post('/llm-mock/routes', { method: 'POST', ...tpl, path }, { silent: true })
@@ -192,15 +187,13 @@ export default function LlmMock() {
         selectRoute(d)
         return
       } catch (e) {
-        if (e?.status === 409) {
-          path = withSuffix(tpl.path, Math.random().toString(36).slice(2, 6))
-          continue
-        }
+        // 随机前缀极小概率也撞上（本地列表滞后于服务端）：重掷一个前缀再试
+        if (e?.status === 409) { path = `/mock-${rand()}${tail}`; continue }
         message.error(e?.message || '新建失败')
         return
       }
     }
-    message.error('新建失败：这些路径都被占用了，换个预设或手动改路径后再保存')
+    message.error('新建失败：请手动改一下路径再保存')
   }
 
   // 返回是否保存成功 —— 高级设置抽屉据此决定关不关（失败就别关，改动留着）
