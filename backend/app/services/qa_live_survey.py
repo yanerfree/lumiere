@@ -525,5 +525,15 @@ def reconcile(*, plan: dict, ledger: dict | None, items: list | None,
             seen.add(line)
             declarations.append(line)
 
+    # 域码 → 域名。gaps / applicability 里到处是域码（GW/POL/…），单看码没法读；
+    # 名字只在场景那一份里带着（`_assemble` 从 `domain_meta` 抄进 `domainName`）。
+    # 这里顺手拢一份 `{码: 名}` 放进对账产物，取用方（MCP / 页面）直接查，
+    # 不用再回去 join 一次清单。`.get` 兜底：声明测试里的 `q` 场景表是空的。
+    domain_names: dict[str, str] = {}
+    for sc in q.get("scenarios") or []:
+        code = sc.get("domain") or ""
+        if code and code not in domain_names:
+            domain_names[code] = sc.get("domainName") or ""
+
     return {"gaps": gaps, "proposals": proposals, "applicability": applicability,
-            "declarations": declarations}
+            "declarations": declarations, "domainNames": domain_names}

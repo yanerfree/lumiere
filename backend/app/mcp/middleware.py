@@ -274,7 +274,13 @@ _OWNER_SQL: dict[str, tuple[str, ...]] = {
     "batch_id": ("select project_id from review_batches where id = :v",),
     # QA 域评审结论自己带 project_id。这条尤其不能漏 —— 结论里逐条列着别人 QA 仓的
     # 脚本路径和判据原文，A 项目的 Key 拿 B 项目的 reviewId 读出来，泄的是**第三方仓库**的内容。
-    "review_id": ("select project_id from qa_catalog_reviews where id = :v",),
+    # 2026-09 起 `lum_get_qa_review` 的数据源从静态评审换成活体页面枚举，`review_id`
+    # 也就是 `qa_page_surveys.id` 了；两张表都要认（老结论的 review_id 还在流通），
+    # 所以是 UNION —— 少任何一半都会让那一类 id 「查不到项目」而被误拒。
+    "review_id": (
+        "select project_id from qa_catalog_reviews where id = :v "
+        "union all select project_id from qa_page_surveys where id = :v",
+    ),
 }
 
 # 故意**不**校验的 id 参数。每一条都得写清为什么，否则下一个人只会以为是漏了。

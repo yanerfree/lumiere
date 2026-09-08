@@ -1950,42 +1950,6 @@ class TestFrontendKeepsNoCopy:
         for dead in ("const AXES", "DIM_KEYS", "DIM_SINCE", "DIM_OTHER", "dimRollup"):
             assert dead not in src, f"{dead} 还留在前端"
 
-    def test_拿不到dims时不许显示问号(self):
-        """`?` 在正常路径上专指「这一趟没查」。
-
-        降级时也画个 `?`，读的人会以为"后端查过、这几条没抓到"——
-        两个意思撞在一起就是一条假信息，比一片空白坏得多。
-
-        ⚠ 这里原来还钉着一句**原文**（"后端没给出维度口径"）。那是在钉措辞，不是钉意思：
-        改一个字就红，而红的时候它说不出到底哪条规矩被破了。现在钉两件能说清的事 ——
-        提到 `dims` 这个字段名（让人知道去哪儿看），以及**不许只给一条原因**（见下）。
-        """
-        src = self.FE.read_text(encoding="utf-8")
-        body = src.split("function DimUnavailable")[1].split("function DimTable")[0]
-
-        assert "'?'" not in body and '"?"' not in body
-        assert "dims" in body, "降级文案得点名 dims 这个字段，不然人不知道去哪儿看"
-
-    def test_降级文案不许只给一条原因(self):
-        """**原因不确定就把候选全列上，别挑一个说得最像的当结论。**
-
-        2026-08-29 实测：这段当时只写了「后端还跑着旧代码」一条。它确实是原因之一
-        （那份后端里 `with_dims` 一个字都没有），但**同时还有第二个 bug** ——
-        抽屉压根没去取过详情，一直拿列表行渲染，而列表接口故意不发 `dims`。
-        于是人照着那句唯一的诊断重启了后端，页面一模一样，
-        那句话就从"帮忙"变成了"把一个正确方向排除掉了"。
-
-        这跟本模块要抓的毛病是同一种：只验一条就宣布整件事成立。
-        自己身上不能有。
-        """
-        src = self.FE.read_text(encoding="utf-8")
-        body = src.split("function DimUnavailable")[1].split("function DimTable")[0]
-
-        assert "①" in body and "②" in body, (
-            "降级文案只给了一条原因。拿不到 dims 至少有两种可能"
-            "（后端旧代码没这个字段 / 详情那一发没成），列全了人才排得动")
-
-
 class TestEnvTiers:
     """Epic 5：变量缺口分三档 `absent` / `ambiguous` / `satisfied`。
 
@@ -2133,18 +2097,6 @@ class TestEnvTiersRendering:
 
         assert "脚本要的变量这个环境都有" in md
         assert "要从外面拿" not in md
-
-    def test_前端摘要那个数也只数真缺的(self):
-        """页面顶上还有一句「我们这条环境记录里缺 N 个变量名」。
-
-        列表里分了档、摘要里没分，那条误报只是**从列表挪进了摘要** —— 而摘要更醒目。
-        这个数在前端算，后端测不到它的行为，只能扫源码把过滤这件事钉住。
-        """
-        src = (pathlib.Path(__file__).resolve().parents[2]
-               / "frontend/src/pages/qa/QaCatalog.jsx").read_text(encoding="utf-8")
-        line = [x for x in src.splitlines() if "const nEnvVar" in x][0]
-
-        assert "ambiguous" in line or "absent" in line, line
 
     def test_真缺那一档照旧一行一个不加料(self):
         md = self._md([{"name": "UAG_APIKEY", "scripts": ["config/env.sh"],
@@ -2546,39 +2498,28 @@ class TestEvidenceRendering:
 
 
 class TestEvidenceOnTheWire:
-    """S3.5③：QA 那边的 Claude Code 是照 `evidence` 去 grep 的。"""
+    """QA 那边的 Claude Code 靠这份结论去改脚本 —— 2026-09 换了判据形态。
 
-    def test_MCP的json每行都带回验结论(self):
-        """#20。不给这个键，"搜不到"会被读成"脚本改过了" —— 然后去改脚本。"""
-        from datetime import datetime, timezone
+    以前照 `evidence`（脚本里的一句话）去 grep；现在源头换成活体页面枚举，
+    照 `scriptGaps[].endpoint`（`GET /api/x` 这种端点）去脚本里搜那个端点。
+    行级形态由 `test_qa_survey_review.py` 盯着（含"没有 evidenceCheck 这个键"），
+    这里只盯**发到线上的工具说明**有没有把新读法教清楚 —— 键换了、说明没换，
+    取用方还会去找那个不存在的 `evidence`/`evidenceCheck`。
+    """
 
+    def test_工具说明教的是拿端点去grep(self):
         from app.mcp.tools import qa_catalog as qc
-        from app.models.qa_catalog_review import QaCatalogReview
-        r = QaCatalogReview(
-            domain="AGT", domain_name="智能体", status="done", environment_name="e",
-            commit_sha="abc1234567", branch="main", actor="cc",
-            scenario_count=1, script_count=1,
-            result={"verdict": "risky", "summary": "s", "scriptGaps": [
-                {"id": "A", "path": "a.sh", "evidence": _GREP, "evidenceCheck": "verbatim"},
-                {"id": "B", "path": "a.sh", "evidence": "编的", "evidenceCheck": "unmatched"}],
-                "envMissing": [], "catalogGaps": [], "reviewedScripts": []},
-        )
-        r.created_at = datetime(2026, 8, 29, 10, 0, tzinfo=timezone.utc)
 
-        out = qc._one(r, "json")
+        doc = qc.__doc__ or ""
+        assert "endpoint" in doc
+        assert "scriptGaps" in doc
 
-        assert [g["evidenceCheck"] for g in out["scriptGaps"]] == ["verbatim", "unmatched"]
-        # 汇总跟行同源，取用方不用自己数
-        assert out["evidenceCheck"]["verified"] == 1
-        assert out["evidenceCheck"]["total"] == 2
-
-    def test_工具说明里要教怎么用这个键(self):
-        """键发出去了、没人知道该怎么读，等于没发。"""
+    def test_工具说明讲清了没有evidenceCheck这个键(self):
+        """老契约里这个键的缺席本就有定义；换了形态更得说清它为什么不在，
+        不然取用方读到"少了个键"会当成 bug 去找。"""
         from app.mcp.tools import qa_catalog as qc
 
         assert "evidenceCheck" in (qc.__doc__ or "")
-        assert "wrong-path" in (qc.__doc__ or "")
-
 
 
 class TestCatalogAnchorGate:
@@ -2695,60 +2636,6 @@ class TestCatalogAnchorGate:
         assert "**1 条**" in 有 and "**2 条**" not in 有
         assert "删除后越权" in 有
 
-    def test_页面上也得说丢了几条(self):
-        """**页面是更醒目的那一面。** 只写进导出的 Markdown，等于把这道闸门
-        藏进了没人点开的那份里 —— 打开抽屉的人看的是页面。
-
-        三档一档都不能并（同 `DimUnavailable` 那套）：
-        `undefined` 是「这一版没查」，`[]` 是「查过了一条没丢」，有东西才摊开。
-        """
-        import pathlib as _p
-        src = (_p.Path(__file__).resolve().parents[2]
-               / "frontend/src/pages/qa/QaCatalog.jsx").read_text(encoding="utf-8")
-        body = src.split("function DroppedNoAnchor")[1].split("\n}")[0]
-
-        assert "<DroppedNoAnchor res={res} />" in src, "组件写了没挂上去"
-        # 存量那一档必须单独存在：合并成 0 就是替它宣布"这些都有出处"
-        assert "dn === undefined" in body, "「没查」和「零」并成一档了"
-        assert "没经过锚点检查" in body
-        # 计数从行本身数，不接受后端另给一个数。
-        # ⚠ 断的是**渲染出来的那个数**，不是 `dn.length` 四个字 ——
-        # 上面那句 `if (!dn.length) return null` 也含它，只断名字等于没断。
-        assert "{dn.length} 条" in body
-
-
-class Test人话那段的来路要露在页面上:
-    """**页面是更醒目的那一面。** 只在导出的 Markdown 里标「这段是拼接版」，
-    等于把它藏在没人拉的那份里 —— 打开抽屉的人看的是页面，而且他看到的正是
-    那三行空着的重点。
-
-    2026-08-29 验收跑 TEM 时撞到：收口被网关限流打成空响应，退回拼接版，
-    明细 14+6 条都在，人看的那一页却是白的。
-    """
-
-    FE = (pathlib.Path(__file__).resolve().parents[2]
-          / "frontend/src/pages/qa/QaCatalog.jsx")
-
-    def _brief(self):
-        src = self.FE.read_text(encoding="utf-8")
-        return src.split("function ReviewBrief")[1].split("\nfunction ")[0]
-
-    def test_拼接版当场说而且不许折起来(self):
-        b = self._brief()
-
-        assert "res.briefSource === 'stitched'" in b, "页面根本没看这个字段"
-        assert "拼接版" in b
-        # 这句话的全部作用就是拦住"没重点 = 没问题"这个念头，含糊过去等于没写
-        assert "不是这个域没有重点" in b
-
-    def test_存量那一档不许折成收口跑成了(self):
-        """老记录没这个键。当成「跑成了」就是把「不知道」渲染成「跑成了」。"""
-        b = self._brief()
-
-        assert "!res.briefSource" in b, "「没记」这一档在页面上不存在"
-        assert "旧口径" in b
-
-
 class TestEvidenceOnThePage:
     """页面上也得跟着回验结果走 —— 而且这是**更醒目**的那一面。
 
@@ -2762,40 +2649,6 @@ class TestEvidenceOnThePage:
     def _src(self):
         return self.FE.read_text(encoding="utf-8")
 
-    def test_那句承诺不再是无条件写死的(self):
-        """✅「每条都能十秒内被否掉」曾经是无条件打印的。
-
-        一句自己没验过的承诺 —— 正是这个模块存在的意义要抓的那个形状。
-        """
-        src = self._src()
-        body = src.split("function HowIRead")[1].split("function DimUnavailable")[0]
-
-        assert "evidenceStats(res.scriptGaps)" in body, "页面没算回验结果"
-        assert "ev.unchecked > 0 ?" in body, "存量结论没有单独一档"
-        # 那句 ✅ 只许出现在「没有可回验的判据」那一档里
-        head = body.split("ev.unchecked > 0 ?")[0]
-        assert "每条都能十秒内被否掉" not in head, "那句 ✅ 还在无条件路径上"
-
-    def test_逐条标在引文旁边而不是只写在汇总里(self):
-        """照着 evidence 动手的人是一条一条看的，他不会先回头读页面顶上那句汇总。"""
-        src = self._src()
-        body = src.split("function ReviewBody")[1]
-
-        assert "g.evidenceCheck && !EV_PASS.includes(g.evidenceCheck)" in body
-        assert "先回原文确认再动手" in body
-        # 路径写错的要说清在哪儿找得到，否则等于把一条能用的判据当废品扔了
-        assert "g.evidenceFoundIn" in body
-
-    def test_存量结论按没验过算不按验过算(self):
-        """旧后端 + 新前端也落在这一档（本仓后端故意不带 --reload）。
-
-        少一个对勾没人受伤；多一个假对勾，这一列就再也不能信了。
-        """
-        src = self._src()
-        fn = src.split("function evidenceStats")[1].split("\n}")[0]
-
-        assert "rows.length - known.length" in fn, "没有把「没这个键」算进 unchecked"
-
     def test_页面的数从行本身来不读后端那份汇总(self):
         """一屏里两个数打架，读的人只会得出「这页的数不能信」。
 
@@ -2808,26 +2661,6 @@ class TestEvidenceOnThePage:
 
         for ln in code:
             assert "coverage.evidence" not in ln and "c.evidence" not in ln, ln
-
-    def test_三档都算搜到不许收紧成一档(self):
-        """收紧到只认 `verbatim`，实测 27% 的**真判据**会被打成编造。"""
-        src = self._src()
-        line = [x for x in src.splitlines() if x.startswith("const EV_PASS")][0]
-
-        for st in ec.PASS_STATES:
-            assert st in line, f"{st} 不在前端的通过档里"
-
-    def test_后端加了状态前端不能露出英文键(self):
-        """跨语言的那道缝：Python 那边加一档，JSX 这边不加就渲染成 `too_short`。
-
-        这条测试的作用是**在加状态的那一刻就红**，而不是等谁在页面上看见英文键。
-        """
-        src = self._src()
-        block = src.split("const EV_CN = {")[1].split("}")[0]
-
-        for st in ec.STATES:
-            assert st in block, f"前端 EV_CN 里没有 {st} 的中文说法"
-
 
 class Test跨两趟怎么算同一条:
     """S6 / §9 的 F 条：同一个域评两趟，`scriptGaps` 交集 ≥ 70%。

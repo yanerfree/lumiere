@@ -951,17 +951,26 @@ _section("QA 仓对账")
 _register(
     qa_catalog.get_qa_review,
     name="lum_get_qa_review",
-    description="【QA 那边取评审结论】拿平台对 QA 仓某个**域**做的 AI 评审全文。"
+    description="【QA 那边取评审结论】拿平台对 QA 仓某个**域**做的评审全文。"
                 "它答的是 QA 自己的 check-coverage.sh 答不了的那一层：脚本头写了 @scenario 就算「已覆盖」，"
                 "但**正文到底有没有验到那件事** —— 只 curl 一下看 200、只断状态码不看内容、"
                 "改了数据不读回来确认，在门禁那边全是绿的。"
-                "返回里的 `evidence` 是从脚本正文**原样抄**的锚点，直接 grep 就能定位到要改的那一句。"
+                "⚠ **2026-09 起判据换了源**：从「读脚本正文让模型判」换成**平台真去点一趟页面**"
+                "（活体页面枚举·三边对账），所以拿它去改脚本的读法也变了 —— "
+                "以前 grep `evidence`（脚本里的一句话）；现在拿 `scriptGaps[].endpoint`"
+                "（`GET /api/x` 这种端点）去自己脚本里搜**那个端点**，看打没打过它。"
+                "json 每条给：scriptGaps（声明覆盖了、页面上看得见在调、脚本却没验的端点 + 在哪个页面看见的）、"
+                "catalogGaps（页面/路由表有、清单根本没声明的端点）、deadControls（点了没反应的按钮）。"
+                "返回里**没有** `evidenceCheck` 这个键 —— 判据形态变了，自己验 = 拿端点去 grep。"
                 "⚠ **平台对 QA 仓永远只读**：这里只把结论递给你，不会往那个仓库写任何东西；"
                 "拿到之后放不放进仓库、放哪，是你那边的决定。**结论是建议，不是门禁**，"
                 "平台这边没有任何东西会因为它变红或变绿。"
+                "**先决条件**：平台得先在「QA 对账」页点过一次活体评审（真跑一趟页面枚举）；"
+                "没跑过这里会明说，让你先招呼平台跑一趟，而不是给一份空结论。"
                 "不传 domain = 列出每个域最近一次评了什么（带 verdict 和一句话结论），再按域取全文。"
-                "参数: project_id(项目UUID), domain(可选，域码如 'MCP'), review_id(可选，复核历史结论用), "
-                "format(md=Markdown全文，默认 / json=结构化的 scriptGaps/envMissing/catalogGaps)",
+                "参数: project_id(项目UUID), domain(可选，域码如 'MCP'), "
+                "review_id(可选，复核历史某一趟枚举，就是 surveyId), "
+                "format(md=Markdown全文，默认 / json=结构化的 scriptGaps/catalogGaps/deadControls)",
 )
 
 

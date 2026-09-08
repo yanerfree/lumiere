@@ -10,16 +10,25 @@ QA 仓是别人维护的黑盒验收仓，平台对它**永远只读**（`docs/q
 `check-coverage.sh` 拿清单当判据来源，多一个文件、多一列，他那边就会红在一个
 查不到原因的地方。
 
+## 数据从哪来（2026-09 换过一次）
+
+以前这份结论是**静态**评审（读脚本正文让模型判）。现在改从**活体页面枚举·三边对账**
+（`qa_page_surveys` 那一趟真去点页面得到的账本）里切出来 —— 判据从「脚本里的一句话」
+变成「**页面在调哪个端点 / 哪个按钮点了没反应**」，是真点出来的。切分逻辑在
+`app/services/qa_survey_review.py`。
+
+**所以取用方要改一个习惯**：以前拿 `evidence` 去 grep 脚本里的某一句；现在拿
+`scriptGaps[].endpoint`（`GET /api/x` 这种）去脚本里搜**那个端点**，看自己的脚本
+到底打没打过它。返回里**没有** `evidenceCheck` 这个键 —— 老契约里它的缺席本就有定义
+（「所有判据都得自己验」），这里自己验 = 拿端点去 grep。
+
 ## 谁会调这个
 
-QA 那边跑 Claude Code 改脚本时：先 `lum_get_qa_review` 拿到「哪条声明覆盖了其实没验到、
-判据是脚本里哪一句、该改成什么」，再动手改自己的脚本。返回里的 `evidence` 是从脚本正文
-原样抄的锚点，直接拿去 grep 就能定位。
+QA 那边跑 Claude Code 改脚本时：先 `lum_get_qa_review` 拿到「哪个端点声明覆盖了其实
+没验到、在哪个页面上观测到的」，再动手改自己的脚本。
 
-**先看 `evidenceCheck` 再决定要不要 grep。** 平台已经把每条判据拿回脚本正文搜过一遍：
-`verbatim`/`reflowed`/`stitched` 三档都是搜到了；`unmatched` 是搜不到（那条判据可能是编的，
-别浪费时间 grep）；`wrong-path` 是判据真、路径写错了（去 `evidenceFoundIn` 那份里找）。
-这个键**不存在**说明这份结论评在回验上线之前 —— 那种情况下所有判据都得自己验。
+**先决条件**：平台这边得先在「QA 对账」页点过一次「活体评审」（真跑一趟页面枚举）。
+没跑过 → 这里会明说「还没跑过」，让 QA 那边先招呼平台跑一趟，而不是给一份空结论。
 
 **结论是建议，不是门禁。** 平台这边没有任何东西会因为这份结论变红或变绿。
 """
@@ -30,8 +39,51 @@ import uuid
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.qa_catalog_review import QaCatalogReview
-from app.services import qa_catalog_review as qr
+from app.models.qa_page_survey import TERMINAL_STATUSES, QaPageSurvey
+from app.services import qa_survey_review as sr
+
+
+def _reconcile_of(survey: QaPageSurvey) -> dict | None:
+    """这趟账本里的对账产物；`available=False`（爬崩了）当没有处理。"""
+    rec = ((survey.ledger or {}).get("reconcile")) if survey else None
+    if isinstance(rec, dict) and rec.get("available"):
+        return rec
+    return None
+
+
+def _meta(survey: QaPageSurvey) -> dict:
+    when = survey.finished_at or survey.started_at
+    return {
+        "surveyId": str(survey.id),
+        "environmentName": survey.env_name or "",
+        "buildFingerprint": survey.build_fingerprint or "",
+        "status": survey.status,
+        "createdAt": when.isoformat() if when else None,
+    }
+
+
+async def _latest_survey(session: AsyncSession, pid: uuid.UUID
+                         ) -> tuple[QaPageSurvey | None, dict | None, bool]:
+    """最近一趟**有可用对账**的活体枚举。
+
+    返回 `(survey, reconcile, ran_at_all)`：
+      · 找到有账本的 → `(s, rec, True)`
+      · 跑过但最近这些趟对账都没算成（爬崩） → `(None, None, True)`
+      · 从没跑过 → `(None, None, False)`
+
+    「跑过但没算成」和「从没跑过」必须分开说 —— 前者让 QA 那边知道该重跑，
+    后者让他知道该先招呼平台跑第一趟。
+    """
+    rows = (await session.execute(
+        select(QaPageSurvey).where(
+            QaPageSurvey.project_id == pid,
+            QaPageSurvey.status.in_(TERMINAL_STATUSES))
+        .order_by(desc(QaPageSurvey.started_at)).limit(25))).scalars().all()
+    for s in rows:
+        rec = _reconcile_of(s)
+        if rec is not None:
+            return s, rec, True
+    return None, None, bool(rows)
 
 
 async def get_qa_review(
@@ -41,117 +93,56 @@ async def get_qa_review(
     review_id: str | None = None,
     format: str = "md",  # noqa: A002 — 对外参数名就叫 format
 ) -> dict:
-    """拿 QA 域评审的结论。不传 domain = 列出每个域最近一次评了什么。
+    """拿 QA 域评审的结论（源自最近一趟活体页面枚举）。
 
-    - `domain='MCP'` → 那个域**最近一次已完成**的评审全文
-    - `review_id=...` → 指定的那一次（复核历史结论时用，域名可能已经改过）
+    - 不传 `domain` = 列出这一趟里每个域评了什么（verdict + 一句话 + 各类缺口数）
+    - `domain='MCP'` → 那个域的全文（哪个端点没验到、在哪个页面上看见的）
+    - `review_id=...` → 指定的某一趟枚举（复核历史结论时用，review_id 就是 surveyId）
     - `format='md'` 给 Markdown 全文（贴 issue / 交给 AI 改脚本）；
-      `format='json'` 给结构化的 scriptGaps / envMissing / catalogGaps（自己拼报表时用）
+      `format='json'` 给结构化的 scriptGaps / catalogGaps / deadControls（自己拼报表时用）
     """
     try:
         pid = uuid.UUID(str(project_id))
     except (ValueError, AttributeError, TypeError):
         return {"error": f"project_id 不是合法 UUID：{project_id}"}
 
+    # —— 定位这一趟 ——
     if review_id:
         try:
-            r = await session.get(QaCatalogReview, uuid.UUID(str(review_id)))
+            survey = await session.get(QaPageSurvey, uuid.UUID(str(review_id)))
         except (ValueError, AttributeError, TypeError):
             return {"error": f"review_id 不是合法 UUID：{review_id}"}
-        if r is None or str(r.project_id) != str(pid):
-            return {"error": "找不到这次评审（或它不属于这个项目）"}
-        return _one(r, format)
-
-    if not domain:
-        rows = (await session.execute(
-            select(QaCatalogReview).where(QaCatalogReview.project_id == pid)
-            .order_by(desc(QaCatalogReview.created_at)).limit(200))).scalars().all()
-        latest: dict[str, QaCatalogReview] = {}
-        for r in rows:                      # 已按时间倒序，第一条就是最近的
-            latest.setdefault(r.domain, r)
-        if not latest:
-            return {"reviews": [], "hint": "这个项目还没评过任何域。去平台「QA 对账」页点某个域的「AI 评审」。"}
-        return {
-            "reviews": [{
-                "domain": r.domain,
-                "domainName": r.domain_name or "",
-                "status": r.status,
-                # 三档说的都是清单上那个 ✅「已覆盖」成不成立：
-                # ok 都成立 / risky 部分不成立 / bad 多数不成立
-                "verdict": (r.result or {}).get("verdict") if r.result else None,
-                "headline": qr.brief_of(r.result).get("headline") if r.result else None,
-                "scenarioCount": r.scenario_count,
-                "scriptCount": r.script_count,
-                "commitSha": (r.commit_sha or "")[:10],
-                "environmentName": r.environment_name or "",
-                "createdAt": r.created_at.isoformat() if r.created_at else None,
-            } for r in latest.values()],
-            "hint": "要某个域的全文：再调一次这个工具，带上 domain。",
-        }
-
-    r = (await session.execute(
-        select(QaCatalogReview).where(
-            QaCatalogReview.project_id == pid,
-            QaCatalogReview.domain == domain,
-            QaCatalogReview.status == "done")
-        .order_by(desc(QaCatalogReview.created_at)).limit(1))).scalars().first()
-    if r is None:
-        # 「在跑」和「从没评过」是两件事，分开说 —— 不然人会以为这个域评过了但结论是空的
-        pending = (await session.execute(
-            select(QaCatalogReview).where(
-                QaCatalogReview.project_id == pid, QaCatalogReview.domain == domain,
-                QaCatalogReview.status.in_(("queued", "running")))
-            .order_by(desc(QaCatalogReview.created_at)).limit(1))).scalars().first()
-        if pending is not None:
-            return {"status": pending.status, "domain": domain,
-                    "hint": "这个域正在评，几十秒后再来拿。"}
-        return {"error": f"{domain} 这个域还没有已完成的评审"}
-    return _one(r, format)
-
-
-def _one(r: QaCatalogReview, fmt: str) -> dict:
-    """一次评审的完整交付物。
-
-    **元数据必须跟着结论一起走**：评的是哪个 commit、在哪个环境上评的、
-    哪几份脚本进了模型。没有它们，接手的人没法判断这份结论还算不算数 ——
-    脚本改过之后旧结论会指着一段已经不存在的代码。
-    """
-    if r.status != "done":
-        return {"status": r.status, "domain": r.domain,
-                "error": r.error, "hint": "这次评审没有可用的结论。"}
-    res = r.result or {}
-    out = {
-        "domain": r.domain,
-        "domainName": r.domain_name or "",
-        "verdict": res.get("verdict"),
-        "reviewedCommit": (r.commit_sha or "")[:10],
-        "reviewedBranch": r.branch or "",
-        "environmentName": r.environment_name or "",
-        "reviewedScripts": res.get("reviewedScripts") or [],
-        "createdAt": r.created_at.isoformat() if r.created_at else None,
-        "readOnly": "平台只读了 QA 仓的清单与脚本正文，没有做任何写操作；这份结论是建议，不是门禁。",
-    }
-    if fmt == "json":
-        out.update({
-            "brief": qr.brief_of(res),
-            "summary": res.get("summary") or "",
-            # 每行随行带 `evidenceCheck`（Epic 3）。取用方是照 `evidence` 去 grep 的，
-            # 它需要知道**哪条不值得 grep** —— 不给这个键，"搜不到"会被读成"脚本改过了"。
-            "scriptGaps": res.get("scriptGaps") or [],
-            "envMissing": res.get("envMissing") or [],
-            "catalogGaps": res.get("catalogGaps") or [],
-            # 汇总也给一份，免得取用方自己数一遍、数出跟页面不一样的数。
-            # 跟页面同源：两边都是 `evidence_stats` 扫 `scriptGaps` 这些行本身。
-            "evidenceCheck": qr.evidence_stats(res.get("scriptGaps") or []),
-            # `nextUp` 2026-08-29 停产，这里**故意留一个空数组一个周期**再摘键：
-            # 对外契约上直接删字段，取用方的 `res["nextUp"]` 会 KeyError 当场炸；
-            # 留成 `[]` 则退化成"这个域没有"，读的人自己就不看了。
-            # 摘键的时候连这三行一起删。
-            # ⚠ 存量结论的 result 里还有旧数据，这里**不透传** ——
-            # 透传等于把停产的东西继续发出去，而且它算得就是错的（见 _gap_key 的注释）。
-            "nextUp": [],
-        })
+        if survey is None or str(survey.project_id) != str(pid):
+            return {"error": "找不到这一趟枚举（或它不属于这个项目）"}
+        rec = _reconcile_of(survey)
+        if rec is None:
+            return {"status": survey.status, "surveyId": str(survey.id),
+                    "error": "这一趟枚举没有可用的对账结果（多半是爬取没跑成）。"}
     else:
-        out["markdown"] = qr.to_markdown(r)
-        out["filename"] = f"qa-review-{r.domain}-{(r.commit_sha or '')[:7]}.md"
-    return out
+        survey, rec, ran = await _latest_survey(session, pid)
+        if rec is None:
+            if ran:
+                return {"reviews": [],
+                        "hint": "这个项目最近几趟活体枚举都没对成账（爬取没跑成）。"
+                                "去平台「QA 对账」页点「活体评审」重跑一趟。"}
+            return {"reviews": [],
+                    "hint": "这个项目还没跑过活体页面枚举。"
+                            "去平台「QA 对账」页点「活体评审」，选环境跑一趟。"}
+
+    meta = _meta(survey)
+    universe = sr.domain_universe(rec)
+
+    # —— 单个域 ——
+    if domain:
+        if domain not in universe:
+            return {"domain": domain, "surveyId": meta["surveyId"],
+                    "error": f"{domain} 这个域在最近这趟活体枚举里没出现",
+                    "knownDomains": universe}
+        return sr.one(rec, meta, domain, format)
+
+    # —— 列出所有域 ——
+    return {
+        "survey": meta,
+        "reviews": [sr.domain_summary(rec, code) for code in universe],
+        "hint": "要某个域的全文：再调一次这个工具，带上 domain。",
+    }

@@ -1,18 +1,16 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Card, Table, Tag, Space, Button, Input, Select, message, Tooltip,
-  Progress, Modal, Form, Collapse, Popconfirm, Popover, Checkbox, Drawer, Empty, Spin, Tabs,
+  Progress, Modal, Form, Collapse, Popconfirm, Popover, Checkbox, Drawer, Spin,
   ConfigProvider,
 } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, BugOutlined, FileTextOutlined, SettingOutlined,
   InfoCircleOutlined, CheckCircleFilled, WarningFilled, CloseCircleOutlined,
-  BorderOutlined,
-  RobotOutlined, LoadingOutlined, CopyOutlined, DownloadOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
-import { copyToClipboard } from '../../utils/clipboard'
 import { PERM } from '../../utils/permissions'
 import { usePermissions } from '../../utils/PermissionContext'
 
@@ -737,11 +735,6 @@ function DomainWhen({ d, now, anchor }) {
 // 单独列一张表而不是在渲染处写 if，是为了让"两处必须同源"这件事在代码里看得见。
 const GAP_TONE = { p0: 'bad', gap: 'warn', full: 'ok' }
 
-// AI 评审那枚筹码的底：305° 淡紫的 L*92 档（C*11.7，65% 上限），墨字其上 8.15:1。
-// 比 WASH.low 再淡一档（dE 11.6）—— 它是**动作入口**，不是一个语义标签，
-// 不该和 P2 那颗药丸看着一样。
-const AI_CHIP = '#ece5f7'
-
 const COVER_STROKE = [
   { key: 'p0', color: BAR.danger, label: '缺 P0', note: 'P0 有缺口 —— check-coverage.sh 直接 BLOCK' },
   { key: 'gap', color: BAR.warn, label: '有缺口', note: '缺的都不是 P0，不阻断门禁' },
@@ -755,64 +748,6 @@ const coverStrokeOf = (d) => {
   if (d.p0Gap) return COVER_STROKE[0]
   if (d.gap) return COVER_STROKE[1]
   return COVER_STROKE[2]
-}
-
-// 评审徽标。三件事：
-//   1. 把**评审时间**摆进悬浮 —— 原来这儿一个时间都没有（只有环境和 commit），
-//      而"这结论是什么时候下的"恰恰是要不要信它的前提；
-//   2. 评审时间早于这个域最后一次改动 = 过期，格子里直接挂个橙色警告。
-//      不能只写在悬浮里：24 行里哪几行的结论已经不作数，得不悬浮就看得见；
-//   3. 说清是哪一侧动的 —— 清单侧常是整仓批量提交扫到的，那种"过期"轻一些。
-// 过期时**不动徽标本身的颜色**：结论当时是什么结论，它还是什么结论，
-// 过期是另一件事，交给旁边那个警告标去说。
-function ReviewBadge({ d, rv, now, onOpen }) {
-  const v = VERDICT[rv.result?.verdict]
-  // finishedAt 优先：createdAt 是排队时刻，一个域拆几批读能差出十几分钟
-  const at = rv.finishedAt || rv.createdAt
-  const rt = at ? Date.parse(at) : NaN
-  const dt = d.updatedAt ? Date.parse(d.updatedAt) : NaN
-  const stale = Number.isFinite(rt) && Number.isFinite(dt) && rt < dt
-  const onlyCatalog = d.updatedFrom === 'catalog'
-  return (
-    <Tooltip title={
-      <div style={{ fontSize: 12, lineHeight: 1.8, maxWidth: 360 }}>
-        <div><b>{v?.text || '已评'}</b></div>
-        <div style={{ marginTop: 4 }}>
-          评审于 <b>{relWhen(at, now)}</b>
-          <div style={{ color: C.gray }}>{absWhen(at)}</div>
-        </div>
-        {stale && (
-          <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.line}` }}>
-            <div><b>⚠ 这次评审已经过期</b></div>
-            <div>
-              评审跑完之后，这个域的{onlyCatalog ? '清单侧' : '脚本侧'}在
-              {' '}{absWhen(d.updatedAt)}{' '}又动过。
-            </div>
-            <div style={{ color: C.gray }}>
-              上面那句结论是改动<b>之前</b>得出的，现在不一定还成立 ——
-              要拿它当验收依据，得重评一次。
-            </div>
-            {onlyCatalog && (
-              <div style={{ color: C.gray, marginTop: 4 }}>
-                不过清单侧常常是整仓批量提交扫到的（重命名、一次性恢复），
-                那种情况下这个域的内容未必真变了 —— 点开看 commit 标题就知道。
-              </div>
-            )}
-          </div>
-        )}
-        <div style={{ color: C.gray, marginTop: 6 }}>
-          {rv.environmentName || '—'} · {rv.commitSha} · 点开看结论
-        </div>
-      </div>
-    }>
-      <span style={{ cursor: 'pointer' }} onClick={() => onOpen(rv)}>
-        {stale && <WarningFilled style={{ color: VIVID.warn, marginRight: 4, fontSize: 12 }} />}
-        <Tag style={{ ...tagStyle(v?.tone || 'mute'), cursor: 'pointer' }}>
-          {v?.short || '已评'}
-        </Tag>
-      </span>
-    </Tooltip>
-  )
 }
 
 function Hit({ onClick, active, children, style }) {
@@ -834,83 +769,6 @@ function Hit({ onClick, active, children, style }) {
     </div>
   )
 }
-
-// AI 评审的结论。措辞对着「这个域的脚本撑不撑得起这个域的清单」说，
-// 不用「通过/不通过」—— 这里没有门禁，说"不通过"会被当成拦了谁的活
-// 词换过三轮，前两轮同一个毛病（**用一个词概括，读的人就得猜**），第三轮是另一个：
-//   第一版「靠得住 / 有水分 / 撑不住」—— "水"在哪？"撑"的是什么？
-//   第二版「能信 / 信一半 / 不能信」—— 信什么？信一半是哪一半？
-//   第三版「都验到了 / 部分没验到 / 多数没验到」—— 意思清楚了，但**没主语**：
-//     同一个抽屉里还写着「一份都没真跑」「第 3 批没读成」，读的人完全有理由把
-//     「部分没验到」读成"你自己只看了一部分"。**结论词除了要不用再解释一遍，
-//     还得让人一眼看出「这句话在说谁」。**
-//   第四版「认领都算数 / 部分认领不算数 / 多数认领不算数」—— 主语有了，
-//     但「认领」是**我们这边发明的词**，QA 的清单上根本没有它，写的是 ✅「已覆盖」。
-//     读的人得先在脑子里把「认领」翻回「已覆盖」才看得懂，等于把词典塞给了读者。
-//     （2026-08-29 实测：拿这一版问人，第一反应就是"这是什么意思"。）
-// 第五版的规矩：**只许用 QA 清单上原本就有的词**，再加一个能判真假的动词。
-//   「已覆盖」是他们自己写在清单上的，加引号原样引；「成立 / 不成立」谁都不用学。
-//   这一栏答的就是一句话：*清单上那个「已覆盖」，成不成立？*
-// 一个结论配两种长度，**不是嫌长随手砍的**：
-//   text  给抽屉标题和「这次判…」那句用 —— 那儿有整行的地方，主语「已覆盖」写全。
-//   short 给「按域看缺口」那张表的徽标用 —— 那一格一百来 px，11 个字的 text 横着
-//         压到右边一列的域码上去了（2026-08-29 截图为证：SYS 那行盖住了 TEM）。
-// 为什么这回敢砍到两个字（前四版砍不动，见上面那段）：**以前徽标是唯一的出口**，
-//   一个词没说清就真没地方说了；现在悬停补全句、点开是整屉细节，这一格只用回答
-//   「要不要点进去」。于是留下的只有判真假那两个字，程度交给颜色（绿 / 橙 / 红）——
-//   「部分 / 多数」还留着，那是橙红两档唯一的区别，省了两档就并成一档。
-//   主语（「已覆盖」）不写进徽标，但**必须在悬停第一行**，别让人猜这栏在说谁。
-// 不用「9 处不实」这种数字：徽标是模型对整个域下的一句总评，跟底下 scriptGaps 数出来
-//   的条数不是一个来源（见 VERDICT_SOURCE），并排放数字会被读成同一个数，然后打架。
-const VERDICT = {
-  ok: { short: '属实', text: '「已覆盖」都成立', tone: 'ok',
-        why: '清单标了「已覆盖」的场景，脚本读下来都真在验那件事' },
-  risky: { short: '部分不实', text: '「已覆盖」部分不成立', tone: 'warn',
-           why: '有一部分标了「已覆盖」，脚本其实没验到 —— 断言太松，或在这个环境里整条跳过了' },
-  bad: { short: '多数不实', text: '「已覆盖」多数不成立', tone: 'bad',
-         why: '标了「已覆盖」的主要场景多数没真验到 —— 这个域的「已覆盖」当不了验收依据' },
-}
-const VERDICT_SUBJECT = '说的是 QA 的清单和脚本，不是说我读了多少 —— 我这趟读了多少、漏没漏，在「怎么看的」里单独写。'
-// 这一句非写不可：**徽标和底下那些数不是一个来源**，而它们并排放着，
-// 不说就会被读成"徽标 = 把下面的数加起来得出的"。实际上徽标是模型对整个域下的一句总评，
-// 底下那些数是从 scriptGaps 一行行数出来的。于是完全可能「多数不成立」配一个很小的数
-// —— 那不是打架，是两件事。多批取最坏也得说：一个域拆 8 批读，**一批判 bad 整个域就是 bad**。
-const VERDICT_SOURCE = '这句总评是模型对整个域下的，不是把下面的数加起来算的；一个域拆几批读，取最坏的那批。'
-
-// 「谁动手」。人第一个要知道的不是严重度，是"这条要不要我处理"。
-// 上一版三类混在一张表里：MCP 那 6 条里有 2 条根子是我们自己的环境记录没铺 apikey，
-// 跟人家脚本一点关系没有 —— 看的人先当成"脚本写得不行"，理解半天才反应过来。
-// **别让人来分，分好了给他。**
-// 色相跟着「挡不挡」走，不是给三个负责人各发一支颜色：
-//   脚本要改 = 真挡人 → 红；环境没铺 = 要处理但不挡 → 琥珀；
-//   清单要商量 = 平台这边不表态、得跟仓库主人谈 → 蓝。
-// 上一版这里给 catalog 发的是绿 —— 而绿在这一页只说「好了」，
-// 一支颜色不能既是"覆盖到位"又是"这条口径对不上"。
-const BLAME = {
-  script: { title: 'QA 的脚本要改', tone: 'bad',
-            why: '断言写得站不住：跑绿了也证明不了它认领的那件事' },
-  env: { title: '不是脚本的问题：环境没铺东西', tone: 'warn',
-         why: '脚本可能写得很对，只是在这个环境里自己跳过了。我们只看得到自己这侧的环境记录，QA 跑的时候有没有，这儿判不了' },
-  catalog: { title: '清单口径要商量', tone: 'info',
-             why: '脚本和环境都没错，是清单认领的口径对不上，或者这件事清单里压根没列' },
-}
-// 人在这一页只做一个决定：这个域要不要停下来处理。
-// 上一版给他的是四十几条一句话（分三栏、每栏露 3 条）—— 24 个域这么看，一天看不完两个。
-// 维度固定，横着比也是这几块，明细留在隔壁「给 AI / 整改」那页（那页给动手的人看）。
-//
-// ⚠ 某一格 0 条 ≠ 这一块没问题，只等于**这一趟没抓到**。这句话必须摆在表旁边：
-//   漏判是看不见的，让 0 自己去暗示"这块过了"，等于替结论吹牛。
-// 域名已经带了代号就别再拼一遍 —— 抽屉标题真出现过「AI 评审 · MCP MCP 能力」。
-function domainLabel(code, name) {
-  const c = (code || '').trim(); const n = (name || '').trim()
-  if (!c) return n
-  if (!n) return c
-  return n.startsWith(c) ? n : `${c} ${n}`
-}
-
-const BLAME_ORDER = ['script', 'env', 'catalog']
-const blameOf = g => (BLAME[g.blame] ? g.blame : 'script')
-const REVIEW_RUNNING = s => s === 'queued' || s === 'running'
 
 const LEGEND = (
   <div style={{ maxWidth: 460, fontSize: 12, lineHeight: 1.9 }}>
@@ -964,13 +822,8 @@ export default function QaCatalog() {
   const [file, setFile] = useState(null)
   const [fileLoading, setFileLoading] = useState(false)
 
-  // 域级 AI 评审
+  // 环境列表（活体评审弹框里选环境用）
   const [envs, setEnvs] = useState([])
-  const [reviews, setReviews] = useState({})      // 域码 → 最近一次评审
-  const [reviewFor, setReviewFor] = useState(null)   // 正在弹「选环境」框的那个域
-  const [envId, setEnvId] = useState()
-  const [starting, setStarting] = useState(false)
-  const [openReview, setOpenReview] = useState(null)  // 抽屉里展示的那一条
 
   const fetchData = useCallback(async () => {
     setLoading(true)
@@ -982,63 +835,9 @@ export default function QaCatalog() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  const fetchReviews = useCallback(async () => {
-    try {
-      const res = await api.get(`/projects/${projectId}/qa-catalog/reviews`)
-      const map = {}
-      for (const r of res.data?.reviews || []) map[r.domain] = r
-      setReviews(map)
-      return map
-    } catch { return {} }
-  }, [projectId])
-
   useEffect(() => {
-    fetchReviews()
     api.get(`/projects/${projectId}/environments`).then(r => setEnvs(r.data || [])).catch(() => {})
-  }, [projectId, fetchReviews])
-
-  // 有域在评就接着轮询。**不轮询的话页面永远停在「排队中」** —— 后台跑完了没人告诉它
-  const pending = useMemo(
-    () => Object.values(reviews).filter(r => r.status === 'queued' || r.status === 'running'),
-    [reviews])
-  useEffect(() => {
-    if (!pending.length) return undefined
-    const t = setInterval(async () => {
-      const map = await fetchReviews()
-      // 抽屉开着的那条也要跟着变，否则人盯着一个「评审中」看到天荒地老。
-      // ⚠ `dims` 得**留住**：列表接口不发它，直接覆盖就会把刚取回来的详情打回原形，
-      // 于是抽屉每 3 秒在「分好组的表」和「一列裸键」之间闪一次
-      // （同一个域的同一条评审，id 没变，dims 不会过期）。
-      setOpenReview(prev => {
-        const next = prev && map[prev.domain]?.id === prev.id ? map[prev.domain] : prev
-        return next && next !== prev ? { ...next, dims: next.dims ?? prev.dims } : next
-      })
-    }, 3000)
-    return () => clearInterval(t)
-  }, [pending.length, fetchReviews])
-
-  // 抽屉里那张**按维度分组的表**要的是 `dims`，而列表接口**故意不发**它
-  // （一次几十行，每行挂一份同样的口径常量）。抽屉一直是拿列表行直接渲染的，
-  // 于是那张表从来没画出来过 —— 走的全是降级分支：把 9 个原始维度键
-  // （`skip` `assert` `coverage` …）平铺成一列数字，没有中文名、没有分组、没有解释。
-  // 2026-08-29 用户问「你能用人能听得懂的来归类吗」问的就是这堆裸键。
-  // **归类一直是有的（后端 `AXES` 三块中文），只是没送到页面上。**
-  //
-  // 更坏的是降级那段自己给的诊断：它写「最常见的原因是后端还跑着旧代码」。
-  // 这里根本不是旧代码，是这条路径压根没取过详情 —— 一句猜错的诊断会把人
-  // 支去重启后端，重启完照旧，然后开始怀疑别的地方。
-  useEffect(() => {
-    const r = openReview
-    if (!r?.id || r.status !== 'done' || r.dims) return
-    let dead = false
-    api.get(`/projects/${projectId}/qa-catalog/reviews/${r.id}`)
-      .then(res => {
-        // 期间人可能已经切到别的域或关掉了，别把详情盖到另一条上
-        if (!dead && res.data?.id === r.id) setOpenReview(res.data)
-      })
-      .catch(() => { /* 取不到就维持降级渲染，那段已经把话说清楚了 */ })
-    return () => { dead = true }
-  }, [projectId, openReview])
+  }, [projectId])
 
   const openFile = async (path) => {
     setFile({ path, content: '' })
@@ -1048,18 +847,6 @@ export default function QaCatalog() {
         `/projects/${projectId}/qa-catalog/file?path=${encodeURIComponent(path)}`)
       setFile(res.data)
     } catch { setFile(null) } finally { setFileLoading(false) }
-  }
-
-  const startReview = async () => {
-    setStarting(true)
-    try {
-      const res = await api.post(`/projects/${projectId}/qa-catalog/reviews`,
-        { domain: reviewFor.code, envId })
-      setReviews(prev => ({ ...prev, [reviewFor.code]: res.data }))
-      setReviewFor(null)
-      setOpenReview(res.data)
-      message.success(`已开始评审 ${reviewFor.code}，几十秒后出结论`)
-    } catch { /* request.js 已展示错误 */ } finally { setStarting(false) }
   }
 
   // 「拉取最新」的提示语。**三种情况必须说得不一样**，不能一律"已拉取最新"：
@@ -1941,8 +1728,7 @@ export default function QaCatalog() {
           items={[{
             key: 'd',
             label: <span style={{ fontSize: 13 }}>
-              按域看缺口（{domainRows.length} 个域 · 按域码排，位置不随进度动 · 点一行筛这个域 ·
-              点「AI 评审」看这个域的脚本撑不撑得起清单）
+              按域看缺口（{domainRows.length} 个域 · 按域码排，位置不随进度动 · 点一行筛这个域）
               {summary?.activityUnavailable ? (
                 <Tag style={{ ...tagStyle('warn'), marginLeft: 8 }}>更新时间这次没算出来</Tag>
               ) : summary?.activityTruncated ? (
@@ -1965,18 +1751,11 @@ export default function QaCatalog() {
                     </span>
                   </Tooltip>
                 ))}
-                {/* 这是一句话，不是装饰 —— 按上面 faint 的用途边界，得用 hint。
-                    实测 faint 在这块纸上是 3.25:1，hint 是 4.61:1。 */}
-                <span style={{ color: C.gray }}>
-                  <WarningFilled style={{ color: VIVID.warn, marginRight: 4 }} />
-                  评审徽标前有这个 = 评完之后这个域又动过，结论已过期
-                </span>
               </div>
               {/* 600 → 618：缺口那格 96→104、更新时间那格 86→96，两格各多留出药丸的
                   内边距。min 跟不上就是进度条被挤成 0 宽（理由见上面那条注释）。 */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(618px, 1fr))', gap: '2px 24px' }}>
                 {domainRows.map(d => {
-                  const rv = reviews[d.code]
                   return (
                     <Hit key={d.code} active={domain === d.code} onClick={() => jump({ domain: domain === d.code ? undefined : d.code })}>
                       <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, width: 40 }}>{d.code}</span>
@@ -2010,57 +1789,6 @@ export default function QaCatalog() {
                         </span>
                       </span>
                       <DomainWhen d={d} now={renderedAt} anchor={activityAnchor} />
-                      {/* 80 → 96。原来这一格里最宽的是「AI 评审」按钮（实测 62px），
-                          徽标最长「多数不实」实测 69px；过期时徽标前面多一个警告标
-                          （12px 图标 + 4px 间距 = 16），69 + 16 = 85 就顶破 80 了。
-                          留 96 是给它一点余量。上面 grid 的 minmax 跟着 +16（584 → 600）——
-                          那个 584 是量出来的 min-content，这一格宽了它就得跟着涨，
-                          不涨就是进度条被挤掉宽度。 */}
-                      <span style={{ width: 96, textAlign: 'right' }} onClick={e => e.stopPropagation()}>
-                        {REVIEW_RUNNING(rv?.status) ? (
-                          <Tag icon={<LoadingOutlined />} style={{ ...tagStyle('info'), cursor: 'pointer' }}
-                               onClick={() => setOpenReview(rv)}>评审中</Tag>
-                        ) : rv?.status === 'done' ? (
-                          // 徽标是缩写版，长句和时间都在悬浮里补齐 —— 缩了字不等于可以不说全
-                          <ReviewBadge d={d} rv={rv} now={renderedAt} onOpen={setOpenReview} />
-                        ) : rv?.status === 'failed' ? (
-                          // **不给红**：「没评上」是这趟没跑成，不是这个域评出来很差。
-                          //   原来它跟「多数不实」同一支粉 —— 扫这一列会数出三个
-                          //   「结论很差」的域，实际只有两个，第三个是工具自己挂了。
-                          //   跟「评审中」同一支中性药丸：两个都是**还没有结论**。
-                          <Tag style={{ ...tagStyle('info'), cursor: 'pointer' }}
-                               onClick={() => setOpenReview(rv)}>没评上</Tag>
-                        ) : canGenerate ? (
-                          // 同样躲开 .ant-btn 那套 !important（理由见上面「P0 待补」那颗筹码）。
-                          // 更要紧的是**它得安静**：这一格在 24 行里每行都出现一次，
-                          // 而它是全页重复次数最多的可点元素。上一版给的是品牌青的 link 按钮，
-                          // 于是 24 个高饱和色块沿右边缘排成一列，比它旁边真正要人看的
-                          // 「缺 · P0 n」还抢眼 —— **重复得越多，就越该轻**。
-                          // 2026-09-01：从"全灰文字 + 悬停转墨"改成**浅紫筹码 + 墨字**。
-                          // 「AI 评审按钮全是灰色」是原话。上一版那个"越重复越该轻"的判据
-                          // 走过头了 —— 轻到只剩灰字，它就不再像个能点的东西，
-                          // 而它右边那一列**每一行都长得像一段说明文字**。
-                          // 底色取 305° 那支淡紫的**再淡一档**（L*92，比 WASH.low 还淡
-                          // 一个档，dE 11.6，不会跟 P2 那颗药丸混）。为什么是紫不是三支
-                          // 语义色：按这一页的规矩，紫这一族管的就是「不表态好坏」
-                          // （P2、P3、空轨都在这一族），而"能点一下"正是不表态 ——
-                          // 一个动作入口不该借用「危险 / 待补 / 已覆盖」里的任何一支。
-                          // 24 行排下来仍然安静：这个底对纸只有 1.05:1，是一片淡影，
-                          // 不是 24 个色块。悬停加深到 WASH.low（同一族，深一档）。
-                          <button
-                            type="button"
-                            onClick={() => { setReviewFor(d); setEnvId(envs[0]?.id) }}
-                            style={{
-                              font: 'inherit', fontSize: 12, lineHeight: '16px',
-                              padding: '1px 8px', borderRadius: 9,
-                              border: 0, background: AI_CHIP, cursor: 'pointer',
-                              color: C.ink, display: 'inline-flex', alignItems: 'center', gap: 4,
-                            }}
-                            onMouseEnter={e => { e.currentTarget.style.background = WASH.low }}
-                            onMouseLeave={e => { e.currentTarget.style.background = AI_CHIP }}
-                          ><RobotOutlined style={{ fontSize: 12 }} />AI 评审</button>
-                        ) : null}
-                      </span>
                     </Hit>
                   )
                 })}
@@ -2281,754 +2009,14 @@ export default function QaCatalog() {
         )}
       </Drawer>
 
-      {/* 选环境 —— 环境是结论的一部分：脚本要的变量这个环境有没有，直接决定它跑不跑得起来 */}
-      <Modal
-        title={`AI 评审 · ${domainLabel(reviewFor?.code, reviewFor?.name)}`}
-        open={!!reviewFor} onCancel={() => setReviewFor(null)}
-        okText="开始评审" confirmLoading={starting} onOk={startReview}
-        okButtonProps={{ disabled: !envs.length }} width={520}
-      >
-        <PageAlert
-          type="info" showIcon style={{ marginBottom: 16 }}
-          message="只读这个域的清单和脚本，不跑任何东西"
-          description="平台不会在这个环境上执行 QA 的脚本，也不会往 QA 仓写任何内容。结论只存在本平台。"
-        />
-        <div style={{ fontSize: 13, lineHeight: 2, marginBottom: 12 }}>
-          <div>这个域共 <b>{reviewFor?.total || 0}</b> 条场景（已覆盖 {reviewFor?.covered || 0} · 待补 {reviewFor?.gap || 0}）</div>
-          <div style={{ color: C.gray }}>
-            重点看「声明覆盖了、其实没验到」—— 这正是 QA 自己的 <code>check-coverage.sh</code> 查不了的那一层。
-          </div>
-        </div>
-        <div style={{ fontSize: 13, marginBottom: 6 }}>在哪个环境上评</div>
-        {envs.length ? (
-          <Select
-            value={envId} onChange={setEnvId} style={{ width: '100%' }}
-            options={envs.map(e => ({ value: e.id, label: e.name }))}
-          />
-        ) : (
-          <PageAlert type="warning" showIcon message="这个项目还没配环境"
-                 description="去「项目设置 → 环境」加一个再来，评审要拿环境的变量名跟脚本引用对账。" />
-        )}
-        <div style={{ fontSize: 12, color: C.gray, marginTop: 8 }}>
-          只把环境的<b>变量名</b>交给模型对账（脚本要 <code>ADMIN_TOKEN</code>、这个环境有没有），
-          <b>变量值一个字节都不会外传</b>。
-        </div>
-      </Modal>
-
-      {/* 评审结论 */}
-      <Drawer
-        title={<Space>
-          <span>AI 评审 · {domainLabel(openReview?.domain, openReview?.domainName)}</span>
-          {openReview?.status === 'done' && (
-            <Tag style={tagStyle(VERDICT[openReview.result?.verdict]?.tone || 'mute')}>
-              {VERDICT[openReview.result?.verdict]?.text || '已评'}
-            </Tag>
-          )}
-        </Space>}
-        open={!!openReview} onClose={() => setOpenReview(null)} width={780}
-        extra={openReview?.status === 'done' && canGenerate && (
-          <Button size="small" icon={<RobotOutlined />} onClick={() => {
-            const d = domainRows.find(x => x.code === openReview.domain)
-            setOpenReview(null); setReviewFor(d || { code: openReview.domain }); setEnvId(openReview.environmentId || envs[0]?.id)
-          }}>重评</Button>
-        )}
-      >
-        {!openReview ? null : REVIEW_RUNNING(openReview.status) ? (
-          <div style={{ textAlign: 'center', padding: '48px 0', color: C.gray }}>
-            <Spin /><div style={{ marginTop: 12 }}>正在读这个域的 {openReview.scriptCount} 份脚本…几十秒，可以关掉页面</div>
-          </div>
-        ) : openReview.status === 'failed' ? (
-          <PageAlert type="error" showIcon message="这次没评上" description={openReview.error} />
-        ) : (
-          <ReviewTabs r={openReview} onOpenFile={openFile} projectId={projectId} />
-        )}
-        {openReview && (
-          <div style={{ marginTop: 20, paddingTop: 10, borderTop: `1px solid ${C.line}`, fontSize: 12, color: C.gray, lineHeight: 1.9 }}>
-            环境 <b>{openReview.environmentName || '—'}</b> · QA 仓 {openReview.branch} <code>{openReview.commitSha}</code>
-            {' · '}{openReview.actor} 发起于 {openReview.createdAt && new Date(openReview.createdAt).toLocaleString('zh-CN')}
-            <div>结论只存在本平台，QA 仓没有任何变化。</div>
-          </div>
-        )}
-      </Drawer>
     </div>
     </ConfigProvider>
   )
 }
 
-// 严重度只描边不填底，所以**边**走图形档的鲜色（3:1 就够），标签里的**字**一律墨色。
-// 边已经说了轻重，字再上一遍色是同一件事说两遍，而且 12px 的彩字要过 4.5:1 就得压到
-// L*45 —— 那个亮度上的琥珀是深褐色，正是要消掉的暗沉。
-// minor 用 C.faint（不是 C.line）：白纱片的发丝边就是 C.line，两者会撞 ——
-// g3 那一行「清单口径要商量」和 minor 挨着排，都是浅边浅底，看着像同一个标签断成两截。
-// C.faint 是实实在在的灰环（3.09:1，装饰档够用），三档就成了 红／琥珀／灰 的干净三级。
-const SEVERITY_EDGE = { blocker: VIVID.red, major: VIVID.warn, minor: C.faint }
+const Nothing = ({ text }) => <div style={{ fontSize: 12, color: C.gray }}>{text}</div>
 
-// 判据回验（后端 `qa_evidence_check`：把模型给的 evidence 拿回脚本正文搜一遍）。
-// 三档都算搜到 —— 真实判据经常是「第 12 行的断言 + 第 40 行的清理」拼起来的，
-// 要求整块一字不差会把这类**真判据**判成编造。
-const EV_PASS = ['verbatim', 'reflowed', 'stitched']
-const EV_CN = {
-  verbatim: '一字不差抄的', reflowed: '只有换行/缩进变了', stitched: '从正文几处拼起来的',
-  'wrong-path': '判据是真的，但路径写错了', unmatched: '在这一批脚本里搜不到',
-  too_short: '太短，搜到了也不算验过', empty: '没给判据',
-}
-
-// **从行本身数，不读后端那份 `coverage.evidence` 汇总。** 页面列的就是这些行，
-// 同一个来源就不可能出现「上面写「12 条 grep 得到」、底下列着 9 条 ⚠」这种一屏里
-// 两个数打架 —— 那种页面读的人只会得出「这页的数不能信」。
-// 存量结论（回验上线之前评的）没有 evidenceCheck 键，**一律算没验过，不算验过**：
-// 拿一句没验过的话去担保另一句没验过的话，正是这个模块要抓的形状。
-// 旧后端 + 新前端也落在这一档（本仓后端故意不带 --reload），说出来好过悄悄挂个对勾。
-function evidenceStats(gaps) {
-  const rows = gaps || []
-  const known = rows.filter(g => EV_CN[g.evidenceCheck])
-  return {
-    total: rows.length,
-    unchecked: rows.length - known.length,
-    verified: known.filter(g => EV_PASS.includes(g.evidenceCheck)).length,
-  }
-}
-
-// 一次评审有两拨读者，需要的东西不是同一个东西 —— 所以分两页，不做成一页里的折叠。
-//
-// **人**（测试经理/项目经理）：三十秒决定要不要停下来处理。他不需要知道
-// 是哪一句 `assert_status 200`，他需要知道"这个域标着已覆盖的 7 条里有 5 条是 P0，
-// 这次运行一条都没执行"。细节混在里面，这句话就被埋掉了。
-//
-// **AI / 动手改脚本的人**：要的恰恰是被埋掉的那些 —— 哪个文件、哪一句、改成什么。
-// 判据锚点（evidence）是从脚本正文原样抄的，能直接 grep 到。
-//
-// 默认停在「给人看」那一页：打开这个抽屉的十有八九是人。
-function ReviewTabs({ r, onOpenFile, projectId }) {
-  return (
-    <Tabs
-      size="small" defaultActiveKey="human"
-      items={[
-        { key: 'human', label: '给人看 · 结论', children: <ReviewBrief r={r} /> },
-        {
-          key: 'ai',
-          label: '给 AI / 整改 · 细节',
-          children: <ReviewBody r={r} onOpenFile={onOpenFile} projectId={projectId} />,
-        },
-      ]}
-    />
-  )
-}
-
-// 人话那一页。**只说结论和后果**，一个脚本路径都不出现。
-// 「我是怎么看的」。别人第一次看到这份结论，第一个念头是"你凭什么这么说" ——
-// 与其等他质疑，不如先把方法和边界摆出来。三句话，不解释术语。
-// 「我是怎么看的」+「这次读了多少」合成一块，**默认折起来**。
-// 这两段每个域都一模一样，24 个域就是同一段话读 24 遍 —— 第二个域起它就是噪声。
-// 但也不能删：别人第一眼的质疑就是"你凭什么这么说"。折起来 = 想看的点开，
-// 不想看的不占屏。⚠ 只有"没读全"那句是例外，它必须一直露在外面。
-function HowIRead({ res, r }) {
-  const [open, setOpen] = useState(false)
-  const c = res.coverage || {}
-  const total = c.scenariosTotal || res.scenarioCount || r?.scenarioCount || 0
-  const shown = c.scenariosShown
-  const missedS = shown != null && total > shown ? total - shown : 0
-  const missedF = (c.scriptsTotal || 0) - (c.scriptsRead || 0)
-  const cut = (res.reviewedScripts || []).filter(x => x.truncated).length
-  const batches = c.batches || 1
-  const read = c.scriptsRead || (res.reviewedScripts || []).length
-  const failed = c.batchesFailed || []
-  const ev = evidenceStats(res.scriptGaps)
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.9 }}>
-        读了 <b style={{ color: C.ink }}>{read}</b> 份脚本正文
-        {batches > 1 && `（分 ${batches} 批读完再合并）`}
-        、{shown != null ? shown : total} 条场景，一份都没真跑。
-        <a onClick={() => setOpen(v => !v)}
-           style={{ marginLeft: 8, color: C.gray, cursor: 'pointer' }}>
-          {open ? '收起' : '怎么看的？'}
-        </a>
-      </div>
-      {(missedS > 0 || missedF > 0 || cut > 0) && (
-        <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.9 }}>
-          ⚠ 这个域共 {total} 条场景
-          {missedS > 0 && `，其余 ${missedS} 条这次没进模型`}
-          {missedF > 0 && `；还有 ${missedF} 份脚本没读进来`}
-          {cut > 0 && `；${cut} 份正文被截断（截断的不下结论）`}
-          —— 上面的结论只覆盖读到的这部分。
-        </div>
-      )}
-      {/* 有批次没读成，这句必须露在外面：少读一批 = 少读十几份脚本，
-          而"少读了"和"没问题"在页面上长得一模一样 */}
-      {failed.length > 0 && (
-        <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.9 }}>
-          ⚠ {failed.map(i => `第 ${i} 批`).join('、')}没读成（网关限流或超时），
-          那几批的脚本这一趟等于没看 —— 重跑一次这个域就补上了。
-        </div>
-      )}
-      {open && (
-        <div style={{
-          background: VEIL, border: `1px solid ${C.line}`,
-          borderRadius: 8, padding: '12px 14px', marginTop: 8, fontSize: 12.5,
-          color: C.gray, lineHeight: 2,
-        }}>
-          <div style={{ fontWeight: 600, color: C.ink }}>流程（每一步都只读，QA 仓一个字没动）</div>
-          <div>① 取这个域的场景清单 —— 它<b>说要验</b>什么；</div>
-          <div>② 取认领了这些场景的脚本正文 —— 它<b>实际在验</b>什么；</div>
-          <div>③ 环境变量对账 —— <b>纯代码算的，不过模型</b>；只有变量<b>名</b>进提示词，值一个字节都不进；</div>
-          <div>④ 一条条对，只问一个问题：<b style={{ color: C.ink }}>这条断言能不能失败？</b>
-            改坏了会红才算真在验，恒真的断言跑绿等于没跑
-            {batches > 1 && `（脚本一次装不进一轮对话，切成 ${batches} 批各读各的，每批都拿到完整场景清单 —— ${read} 份全读了，不是抽了几份）`}；</div>
-          <div>⑤ 合并：结论取<b>最坏</b>的那一批（平均一下会把最要命的那批稀释掉），
-            各堆的条数由代码数好、模型只许照抄；</div>
-          <div>⑥ 渲染成这一页。<b>QA 那边自己来拉</b>（导出 / MCP），平台不往他仓里放任何东西。</div>
-
-          <div style={{ fontWeight: 600, color: C.ink, marginTop: 8 }}>为什么一份都没跑</div>
-          <div>· <b>跑不了</b>：脚本要 QA 自己那套运行环境，而且真跑会往被测系统写数据（造数、审批、删除）—— 那是别人的环境。</div>
-          <div>· <b>更要紧的是不该靠跑</b>：这次要判的恰恰是「跑绿了但没验到」。
-            恒真断言跑一万遍也是绿的，<b>跑本身对这个问题零信息量</b>。
-            要判它只有两条路：读正文（这一趟做的），或者把动作删掉再跑看它变不变红 —— 后者要改人家的脚本，只读做不到。</div>
-          <div>· <b>代价</b>：所以<b>脚本在真环境里跑不跑得起来，这份结论判不了</b>，那一半只有 QA 自己跑得出来。</div>
-
-          <div style={{ fontWeight: 600, color: C.ink, marginTop: 8 }}>靠得住吗 —— 自己掂量这四条</div>
-          {/* 这句话原来是**无条件**写死的 —— 一句自己没验过的承诺，而这个模块的
-              全部意义就是抓「结论看起来有据、依据其实没验过」。现在它跟着回验结果走，
-              导出的那份 Markdown 同理（`_导出结论` 里是同一套分支）。 */}
-          {ev.unchecked > 0 ? (
-            <div>· ⚠ <b>这份结论的判据没回验过</b>：它评在回验上线之前，
-              {ev.total} 条判据平台一条都没搜过。要用就自己 grep 一遍。</div>
-          ) : ev.total === 0 ? (
-            <div>· ✅ <b>每条都能十秒内被否掉</b>：判据是从脚本正文原样抄的，
-              grep 一下就知道我说得对不对。<b>这才是它能被信的理由，不是「AI 说的」。</b>
-              （这一趟没有脚本级发现，没有可回验的判据。）</div>
-          ) : (
-            <div>· {ev.verified === ev.total ? '✅' : '⚠'} <b>判据回验过了</b>：
-              {ev.total} 条判据平台已经拿回脚本正文搜过一遍，{ev.verified} 条 grep 得到，
-              {ev.verified === ev.total ? '一条不落。' : (
-                <><b>{ev.total - ev.verified} 条搜不到</b>，在「给 AI · 逐条」那页
-                  逐条标着 —— 那几条先别照着改。</>
-              )}
-              <b>这才是它能被信的理由，不是「AI 说的」。</b></div>
-          )}
-          <div>· ⚠ <b>单趟单模型，没有第二意见</b>：同一份脚本再评一次，措辞会变、条数会差几条。
-            拿它当「要不要停下来处理」的依据可以，别拿它当分数。</div>
-          <div>· ⚠ <b>漏判是看不见的</b>：抓到多少不等于只有多少；某一格 0 条只等于这一趟没抓到。</div>
-          <div>· ⚠ <b>环境那一列判的是我们这侧</b>：QA 自己跑的时候有没有那些变量，平台看不到。</div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// 人看那页的主体：**三个大维度一张表，查法缩进在底下**。
-// 上一版是「抓到 46 条」+ 三栏各露 3 条一句话 —— 信息量按域的大小长，大域看不完。
-// 第一次改成维度时直接摆了六条查法，结果是「你写的都是什么维度，我咋看不懂」——
-// 那六条是**我怎么查的**，不是他脑子里的维度。现在顶层只有覆盖面 / 场景设置 / 断言，
-// 三个数就够做决定；查法退到子项，想知道"凭什么这么判"的人才往下读。
-// 手上这条评审没带 `dims` 时走这里。
-//
-// ⚠ 2026-08-29 这段只写了一条原因（「后端还跑着旧代码」），而当时**同时有两个 bug**，
-// 它只说中了其中一个：
-//   ① 后端确实跑着旧代码 —— 那份后端里 `with_dims` 一个字都没有，详情接口不发 `dims`。
-//      **人截图时看到的就是这一条。**
-//   ② 抽屉压根没去取过详情。列表接口**故意不发** `dims`（几十行每行挂一份同样的
-//      口径常量），而抽屉一直拿列表行直接渲染 —— 就算后端是新的，这张表照样画不出来。
-// 只写一条的代价不是"少写一句"：人照着它重启了后端，②还在，页面一模一样，
-// 于是那句唯一的诊断从"帮忙"变成了"排除掉一个正确方向"。
-// **降级文案的规矩：原因不确定就把候选全列上，别挑一个说得最像的当结论** ——
-// 这跟这整个模块要抓的毛病是同一种（断言只验一条就宣布整件事成立）。
-//
-// 拿不到时前端**不自己重算一份**，只把结论里的原始维度标签**原样**列出来：
-// 不猜名字、不摆 0，更**不许显示 `?`** —— 正常路径上 `?` 专指「这一趟没查」，
-// 两个意思撞在一起就是一条假信息，比一片空白坏得多。
-function DimUnavailable({ res }) {
-  const n = {}
-  ;[...(res.scriptGaps || []), ...(res.catalogGaps || [])].forEach(g => {
-    const k = g.dim || '(模型没给它归维度)'
-    n[k] = (n[k] || 0) + 1
-  })
-  const keys = Object.keys(n).sort((a, b) => n[b] - n[a])
-  return (
-    <div style={{ marginBottom: 16, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
-      <div style={{ fontWeight: 600, color: C.ink }}>
-        ⚠ 还没拿到维度口径，分好组的那张表画不出来
-      </div>
-      <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.8, marginBottom: 6 }}>
-        维度的中文名、分成哪三块、哪一项「这一趟没查」，全由后端随详情一起发
-        （<code>GET …/qa-catalog/reviews/&#123;id&#125;</code> 的 <code>dims</code>；列表接口不发，
-        几十行每行挂一份同样的口径太浪费）。拿不到时前端<b>不自己重算一份</b> ——
-        重算就得再抄一份口径回来，抄的那份漂了会把「压根没查」渲染成一个漂亮的 0。
-        <b>刚点开时闪一下是正常的</b>，详情还在路上。一直停在这里就是那一发没拿到，
-        原因<b>不止一种，按这个顺序排掉</b>：① 后端跑着旧代码，那一版还没有
-        <code>dims</code> 这个字段（<code>bash deploy/restart-backend.sh</code>，
-        再对一眼进程启动时间和最新提交时间）；② 详情那一发失败了（刷新一次，看浏览器
-        网络面板里这条是不是非 200）；③ 都不是的话看后端日志。
-        下面是结论里的原始维度标签，按条数排：
-      </div>
-      {keys.length ? keys.map(k => (
-        <div key={k} style={{ display: 'flex', gap: 10, alignItems: 'baseline', padding: '3px 0' }}>
-          <span style={{ width: 26, flexShrink: 0, textAlign: 'right', fontWeight: 700,
-                         fontVariantNumeric: 'tabular-nums', color: C.ink }}>{n[k]}</span>
-          <code style={{ fontSize: 12.5, color: C.gray }}>{k}</code>
-        </div>
-      )) : <div style={{ fontSize: 12.5, color: C.gray }}>这一趟一条都没抓到</div>}
-    </div>
-  )
-}
-
-function DimTable({ res, r }) {
-  // **口径由后端发**（`to_dict(..., with_dims=True)`）。以前这里是前端自己按一份
-  // 抄来的常量重算的，注释写着「跟后端必须一字不差」—— 而那是一句没有任何东西
-  // 在执行的话。拿不到就明说拿不到，不许为了"兜底"把那份副本抄回来。
-  const rows = r?.dims
-  if (!rows) return <DimUnavailable res={res} />
-  const hit = rows.filter(d => d.count > 0).map(d => d.name)
-  const stale = rows.reduce((a, d) => a + d.unavailable, 0)
-  return (
-    <div style={{ marginBottom: 16, paddingTop: 12, borderTop: `1px solid ${C.line}` }}>
-      <div style={{ fontWeight: 600, color: C.ink }}>
-        按维度看{hit.length ? ` —— ${hit.join('、')}都有问题` : ' —— 这一趟三块都没抓到'}
-      </div>
-      <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.8, marginBottom: 6 }}>
-        三个维度是固定的，24 个域横着比也是这三块。
-        <b>某一格 0 条只说明这一趟没抓到，不等于那一块没问题。</b>
-        {stale > 0 && (
-          <div style={{ color: C.ink }}>
-            ⚠ 有 {stale} 项标着「这一趟没查」：这个域是加这几条判据之前评的，
-            模型没被问过它们 —— <b>重评一次这个域就补上了</b>，在那之前别读成没问题。
-          </div>
-        )}
-      </div>
-      {rows.map(d => (
-        <div key={d.axis} style={{ paddingTop: 6, borderTop: `1px solid ${C.line}` }}>
-          {/* 大维度那一行：人只看这三个数 */}
-          <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
-            <span style={{
-              width: 26, flexShrink: 0, textAlign: 'right', fontWeight: 700, fontSize: 15,
-              fontVariantNumeric: 'tabular-nums', color: d.count ? C.ink : C.gray,
-            }}>{d.count || '—'}</span>
-            <span style={{ fontWeight: 600, color: d.count ? C.ink : C.gray }}>{d.name}</span>
-            <span style={{ fontSize: 12, color: C.gray }}>{d.why}</span>
-          </div>
-          {/* 子项 = 怎么判的。想细看的人才往下读，大维度那三个数已经够做决定 */}
-          {d.items.map(it => (
-            <div key={it.key} style={{
-              display: 'flex', gap: 10, alignItems: 'baseline', padding: '3px 0 3px 36px',
-            }}>
-              {/* 「没查」和「查了没抓到」都是 0，但意思正好相反 —— 混在一起就是假安心 */}
-              <span style={{
-                width: 18, flexShrink: 0, textAlign: 'right',
-                fontVariantNumeric: 'tabular-nums', color: it.count ? C.ink : C.faint,
-              }}>{it.unavailable ? '?' : it.count || '—'}</span>
-              <span style={{ width: 178, flexShrink: 0, fontSize: 12.5,
-                             color: it.count ? C.ink : C.gray }}>{it.name}</span>
-              <span style={{ fontSize: 12, color: it.unavailable ? C.ink : C.gray,
-                             lineHeight: 1.8 }}>
-                {it.unavailable ? '这一趟没查 —— 这个域是加这条判据之前评的，重评一次就补上' : it.why}
-              </span>
-            </div>
-          ))}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function ReviewBrief({ r }) {
-  const res = r.result || {}
-  const b = res.brief || {}
-  const v = VERDICT[res.verdict]
-  const gaps = res.scriptGaps || []
-  // `catalogGaps` 也算进「谁动手」的总数：它此前只在「给 AI」那页露过，于是人看的这页
-  // 出现过一句「清单要商量：17 处」底下却只列 1 条 —— 一屏里两个数打架，读的人只会
-  // 得出「这页的数不能信」。
-  const nCat = (res.catalogGaps || []).length
-  const n = {
-    script: gaps.filter(g => blameOf(g) === 'script').length,
-    env: gaps.filter(g => blameOf(g) === 'env').length,
-    catalog: gaps.filter(g => blameOf(g) === 'catalog').length + nCat,
-  }
-  const total = gaps.length + nCat
-  // **只数 `absent`。** `ambiguous` 是"名字对不上、环境里有同族的"，
-  // 把它算进「缺 N 个」等于把那条误报从列表挪到了摘要里 —— 摘要还更醒目。
-  // 没标 state 的（存量结论）按真缺算：多一条要人看的行，好过悄悄洗白一个真缺口。
-  const nEnvVar = (res.envMissing || []).filter(v => (v.state || 'absent') === 'absent').length
-  return (
-    <div style={{ fontSize: 13 }}>
-      <div style={{
-        padding: '14px 16px', borderRadius: 8, marginBottom: 14,
-        background: VEIL, border: `1px solid ${C.line}`,
-      }}>
-        <div style={{ fontSize: 15, fontWeight: 600, lineHeight: 1.8, color: C.ink }}>
-          {b.headline || res.summary || '这一轮没给出结论'}
-        </div>
-        {v && (
-          <div style={{ fontSize: 12.5, color: C.gray, marginTop: 8, lineHeight: 1.9 }}>
-            这次判「<b style={{
-              color: C.ink,
-            }}>{v.text}</b>」= {v.why}
-            {/* 结论词的主语必须写出来。省掉主语，读的人会把它读成"评审只做了一半" */}
-            <div style={{ color: C.gray, marginTop: 2 }}>{VERDICT_SUBJECT}</div>
-            <div style={{ color: C.gray }}>{VERDICT_SOURCE}</div>
-          </div>
-        )}
-        {/* 人话那段是拼接版时**必须当场说**。退回拼接之后 headline 是概述的前 120 字，
-            底下的重点、下一步、撑得住的部分全是空的 —— 这一页于是长成
-            「这个域没什么重点」，跟「总结那一趟根本没跑成」一模一样。
-            2026-08-29 跑 TEM 时真撞到：明细 14+6 条都在，人看的这页是白的。
-            折起来不行，这句要的就是拦住"没重点 = 没问题"这个念头。 */}
-        {res.briefSource === 'stitched' && (
-          <div style={{ fontSize: 12, color: C.ink, marginTop: 8, lineHeight: 1.9 }}>
-            ⚠ 上面这句是<b>拼接版</b>：把各批结论收成一段人话的那一趟没跑成（网关限流或超时），
-            所以只剩一句概述，下面的重点和「下一步」是空的 ——
-            <b>「没列重点」是这次没写出来，不是这个域没有重点</b>。
-            逐条发现一条没少，重跑一次这个域就补上了。
-          </div>
-        )}
-        {/* 存量结论没这个键。**不许当成"收口跑成了"** —— 老记录里同样混着收口挂过的，
-            折进去就是把「不知道」渲染成「跑成了」。 */}
-        {!res.briefSource && (
-          <div style={{ fontSize: 12, color: C.gray, marginTop: 8, lineHeight: 1.9 }}>
-            这一趟没记「上面这段是怎么来的」（旧口径评的，当时不区分「收口跑成了」和
-            「收口挂了退回拼接」）—— 底下的重点要是空的，别读成这个域没有重点。
-          </div>
-        )}
-      </div>
-
-      <HowIRead res={res} r={r} />
-
-      <DimTable res={res} r={r} />
-
-      {total > 0 && (
-        <div style={{ fontSize: 12.5, color: C.gray, lineHeight: 2, marginBottom: 14 }}>
-          这 <b style={{ color: C.ink }}>{total}</b> 条<b>按谁动手分</b>：
-          <b style={{ color: C.ink }}>QA 改脚本 {n.script} 条</b>
-          <span style={{ color: C.faint }}> · </span>
-          我们这侧铺环境 {n.env} 条
-          <span style={{ color: C.faint }}> · </span>
-          找 QA 对清单口径 {n.catalog} 条。
-          {/* 变量个数和场景条数是两码事，一屏之内并排出现过 10 和 7，得说清是哪个 */}
-          {nEnvVar > 0 && `（环境那几条的根子：我们这条环境记录里缺 ${nEnvVar} 个变量名，
-            值要在真正跑套件的地方注入，平台这边补上也不会让 QA 的脚本真跑起来。）`}
-          <div style={{ color: C.gray }}>
-            要逐条看（哪个文件、哪一句、改成什么）—— 切到隔壁「给 AI / 整改」那一页。
-          </div>
-        </div>
-      )}
-
-      {b.solid?.length > 0 && (
-        <div style={{ marginBottom: 14 }}>
-          <div style={{ fontWeight: 600, color: C.ink, marginBottom: 4 }}>撑得住的部分</div>
-          {b.solid.map((x, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, padding: '2px 0', lineHeight: 1.9 }}>
-              <span style={{ color: VIVID.ok, flexShrink: 0 }}>✓</span>
-              <span style={{ fontSize: 12.5, color: C.gray }}>{x}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {b.nextStep && (
-        <PageAlert type="info" showIcon style={{ marginBottom: 12 }}
-               message="下一步" description={b.nextStep} />
-      )}
-
-      {/* 三个数字块撤了：「这次的结论」抽屉标题上有、「脚本要改」上面那行有、
-          「缺的变量」也并进那行了 —— 同一个数在一屏里出现两次，人就得对一次。 */}
-      <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.9 }}>
-        <b>结论是建议</b>，不是门禁 —— 清单和脚本都是 QA 自己维护的，平台只读。
-      </div>
-    </div>
-  )
-}
-
-// 「这次到底看了多少」。**上限截掉的那部分必须写在这儿** ——
-// 页面上方写着「场景 75 条」，而进模型的只有 60 条；不说的话读的人默认 75 条都评过了。
-// 截断本身不是问题（额度有限，先给 P0/高风险），把截断说成全量才是。
-function Scanned({ res, r }) {
-  const c = res.coverage || {}
-  const total = c.scenariosTotal || res.scenarioCount || r.scenarioCount
-  const shown = c.scenariosShown
-  const missedS = shown != null && total > shown ? total - shown : 0
-  const missedF = (c.scriptsTotal || 0) - (c.scriptsRead || 0)
-  const cut = (res.reviewedScripts || []).filter(x => x.truncated).length
-  return (
-    <div style={{
-      fontSize: 12, color: C.gray, marginTop: 12, paddingTop: 10,
-      borderTop: `1px solid ${C.line}`, lineHeight: 1.9,
-    }}>
-      这次读了 {(res.reviewedScripts || []).length} 份脚本
-      {cut > 0 && `（其中 ${cut} 份正文太长被截断，截断的那几份不下结论）`}
-      ，评了 {shown != null ? shown : total} 条场景。
-      {(missedS > 0 || missedF > 0) && (
-        <div style={{ color: C.ink }}>
-          ⚠ 这个域共 {total} 条场景
-          {missedS > 0 && `，其余 ${missedS} 条这次没进模型`}
-          {missedF > 0 && `；还有 ${missedF} 份脚本没读进来`}
-          —— 上面的结论只覆盖读到的这部分。
-        </div>
-      )}
-    </div>
-  )
-}
-
-
-// 评审结论的正文。三块的顺序 = 测试员下一步该干什么的顺序：
-// 先看「声明了没验到」（覆盖率是虚的），再看环境跑不跑得起来，最后才是清单本身缺什么。
-//
-// 原来还有第四块「待补的先做哪条」（nextUp），2026-08-29 去掉了：分批读的时候
-// 每批只看得到一部分脚本却要给全域排序，各批各排一份再拼起来 —— 实测同一个域
-// 六批产出 18 行、去重后只有 3 件事，第 1/4/7/10/13/16 位全是同一条。
-// 存量结论的 result 里还留着这个键，这里不渲染它（不会崩，就是不显示）。
-function ReviewBody({ r, onOpenFile, projectId }) {
-  const res = r.result || {}
-  // 注意别把 res.nextUp 加回来充数：存量结论里它有值，加回来会让一份
-  // 「这一轮什么都没说」的旧结论看起来像有内容。
-  const empty = !res.scriptGaps?.length && !res.catalogGaps?.length
-    && !res.envMissing?.length
-  return (
-    <div style={{ fontSize: 13 }}>
-      <TakeAway r={r} projectId={projectId} />
-      {res.summary && (
-        <div style={{ marginBottom: 16, lineHeight: 1.9 }}><Rich text={res.summary} /></div>
-      )}
-
-      <Section title="抓到的问题（按谁动手排）"
-               hint="脚本头写了 @scenario，但正文没验到那件事 —— QA 自己的门禁查不了这一层">
-        {res.scriptGaps?.length ? [...res.scriptGaps]
-          .sort((a, c) => BLAME_ORDER.indexOf(blameOf(a)) - BLAME_ORDER.indexOf(blameOf(c)))
-          .map((g, i) => (
-          <div key={i} style={{ padding: '8px 0', borderTop: i ? `1px dashed ${C.line}` : 'none' }}>
-            <Space size={6} wrap style={{ marginBottom: 4 }}>
-              {g.id && <Tag style={tagStyle('mute')}>{g.id}</Tag>}
-              {/* 动手的人也要先知道这条归谁：改脚本解决不了的那些，别让他白改一遍 */}
-              <Tag style={tagStyle(BLAME[blameOf(g)].tone)}>
-                {BLAME[blameOf(g)].title}
-              </Tag>
-              {/* 严重度只描边不填底：它跟左边那颗「谁动手」说的是两件事，
-                  两颗都实心会读成同一个标签被切成了两半。 */}
-              {g.severity && <Tag style={{ margin: 0, background: 'transparent',
-                                           color: C.ink,
-                                           boxShadow: RING(SEVERITY_EDGE[g.severity] || C.faint) }}>
-                {g.severity}</Tag>}
-              {g.path && (
-                <a onClick={() => onOpenFile(g.path)} style={{ fontFamily: 'var(--font-mono)', fontSize: 12, color: C.gray, textDecoration: 'underline dotted' }}>
-                  {g.path}
-                </a>
-              )}
-            </Space>
-            <div style={{ lineHeight: 1.8 }}><Rich text={g.problem} /></div>
-            {/* 判据锚点：从脚本正文原样抄的，拿去 grep 就能定位到要改的那一句。
-                没有它，"这条断言不够"就只是一句评价，接手的人还得自己把整份脚本读一遍。 */}
-            {g.evidence && (
-              <pre style={{
-                margin: '6px 0', padding: '6px 10px', background: VEIL,
-                // 跟 Rich 里的行内 code 同一个理由：#476582 是第五支蓝灰。
-                // 这里是从脚本正文原样抄来的判据，是这一段的主要内容，给足对比度。
-                borderRadius: 4, fontFamily: 'var(--font-mono)', fontSize: 12,
-                color: C.ink, whiteSpace: 'pre-wrap', overflowX: 'auto',
-              }}>{g.evidence}</pre>
-            )}
-            {/* 判据没搜到就必须在**这段引文旁边**说，不能只写在页面顶上那句汇总里：
-                照着 evidence 动手的人是一条一条看的，他不会先回头读汇总。
-                **只标记，不删也不降 severity** —— severity 说的是「对仓库有多糟」，
-                回验说的是「我有多确信」，两个正交的轴合成一个就都读不出来了。
-                存量结论（没有这个键）不逐条标：顶上那句已经说了整份都没回验，
-                这里再标一遍就是给每一行都糊上噪音。 */}
-            {g.evidenceCheck && !EV_PASS.includes(g.evidenceCheck) && (
-              <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.8 }}>
-                ⚠ <b>这条的判据平台没验上</b>（{EV_CN[g.evidenceCheck] || g.evidenceCheck}）
-                {g.evidenceFoundIn && <>，不过在 <code>{g.evidenceFoundIn}</code> 里搜到了</>}
-                {' '}—— 结论本身可能仍然成立，但<b>先回原文确认再动手</b>。
-              </div>
-            )}
-            {g.fix && <div style={{ color: C.gray, lineHeight: 1.8 }}>建议改成：<Rich text={g.fix} /></div>}
-          </div>
-        )) : <Nothing text="逐条读下来没抓到「声明了没验到」的" />}
-      </Section>
-
-      <Section title="我们这侧环境记录里没有的名字（不是脚本的问题）"
-               hint={`脚本引用的、或 config 里声明「要从外面传」的，而我们这条 ${r.environmentName || '所选环境'} 记录里没有。代码算的，不是模型猜的 —— 但它只说明我们这侧没记着，推不出 QA 自己跑的时候也缺`}>
-        {res.envMissing?.length ? (
-          <Space direction="vertical" size={4} style={{ width: '100%' }}>
-            {/* 分母。「缺 2 个」既可能是 2/3 也可能是 2/40 —— 没分母读的人判不了
-                这一列有多严重，而判不了的结果通常是整列被当噪音略过。 */}
-            {res.envSatisfied?.length > 0 && (
-              <div style={{ fontSize: 12, color: C.gray }}>
-                这个域要从外面拿 {res.envMissing.length + res.envSatisfied.length} 个变量，
-                其中 {res.envSatisfied.length} 个这个环境里有。
-              </div>
-            )}
-            {res.envMissing.map(v => (
-              <div key={v.name}>
-                {/* 两档分开画。混在一起是这一列最贵的毛病：一条响亮的假阳
-                    （7 组角色账号都在，却报「缺 PASSWORD」）跟真缺口并排、
-                    同样的警告色 —— 人扫两眼就把整列当噪音，真缺口跟着被无视。 */}
-                <Tag style={{ ...tagStyle(v.state === 'ambiguous' ? 'mute' : 'warn'),
-                              fontFamily: 'var(--font-mono)' }}>{v.name}</Tag>
-                <Tooltip title={(v.scripts || []).join('\n')}>
-                  <span style={{ fontSize: 12, color: C.gray }}>
-                    {(v.scripts || []).map(p => p.split('/').pop()).join('、')}
-                  </span>
-                </Tooltip>
-                {v.state === 'ambiguous' && (
-                  /* 降级要连**凭什么降**一起写出来，否则它就是一句无从复核的断言 */
-                  <div style={{ fontSize: 12, color: C.gray, marginLeft: 2 }}>
-                    名字对不上，<b>不是真缺</b>：环境里有{' '}
-                    <span style={{ fontFamily: 'var(--font-mono)' }}>
-                      {(v.family || []).join('、')}
-                    </span>
-                  </div>
-                )}
-              </div>
-            ))}
-            <div style={{ fontSize: 12, color: C.gray }}>
-              公共库里真赋过值的、自带兜底值的、shell 自带的、夹具运行时拼出来的都已经排掉。
-              写成 <code>{'export X="${X:-}"'}</code> 的算缺 ——
-              那是仓库在明说这个值得从环境来，没配就整条静默跳过。
-              <div style={{ marginTop: 4 }}>
-                ⚠ 两件事别搞混：在平台这边补上变量<b>不会</b>让 QA 的脚本真跑起来（值要在真正跑套件的地方注入）；
-                而平台这边没记着，也<b>不等于</b>那边缺。所以这一列不构成对 QA 的意见。
-              </div>
-            </div>
-          </Space>
-        ) : <Nothing text="脚本要的变量这个环境都有" />}
-      </Section>
-
-      <Section title="清单本身漏了什么" hint="这个域的场景之间明显缺的一环 —— 清单是别人维护的，这只是建议">
-        {res.catalogGaps?.length ? res.catalogGaps.map((g, i) => (
-          <div key={i} style={{ padding: '6px 0', lineHeight: 1.8 }}>
-            <Space size={6}>
-              <Rich text={g.scenario || g.problem} />
-              {/* 域级结论每批都会各说一遍。修好去重键之后这里会**少掉一大截行** ——
-                  不说清"这条 N 批都提到"，读的人会以为这一趟少发现了东西。 */}
-              {g.mergedFrom > 1 && (
-                <Tag style={{ margin: 0 }}>{g.mergedFrom} 批都提到</Tag>
-              )}
-            </Space>
-            {g.why && <div style={{ color: C.gray }}><Rich text={g.why} /></div>}
-          </div>
-        )) : <Nothing text="没看出明显缺的一环" />}
-        <DroppedNoAnchor res={res} />
-      </Section>
-
-      {empty && <Empty description="模型这一轮什么都没说 —— 重评一次试试" />}
-
-      <Scanned res={res} r={r} />
-    </div>
-  )
-}
-
-// S8.1 · 清单侧结论指不出出处的，后端整条丢掉了。**这里必须说丢了几条。**
-//
-// 闸门本身不是问题，**静默的闸门才是** —— 一条没丢和丢了 8 条要是在页面上长得一样，
-// 这道闸门就变成了它自己要防的那个东西（这个模块存在的意义就是抓这种形状）。
-//
-// 三档，一档都不能并：
-//   · `undefined` —— 存量结论，那一趟压根没有这道闸门。**「没查」不是「零」**，
-//     渲染成 0 就是替它宣布"这些都有出处"。同 `DimUnavailable` 那套。
-//   · `[]` —— 查过了，一条没丢。这才是那个可以安静的档。
-//   · 有东西 —— 摊开原话，划掉。列出来不是让人去改，是让「丢了几条」可见。
-function DroppedNoAnchor({ res }) {
-  const dn = res.droppedNoAnchor
-  if (dn === undefined) {
-    return (
-      <div style={{ marginTop: 8, color: C.gray, fontSize: 12 }}>
-        这一趟评的时候还没有「清单侧结论必须指得出出处」这道闸门，上面这些<b>没经过锚点检查</b>。
-        不是它们都有出处，是这一版没查。
-      </div>
-    )
-  }
-  if (!dn.length) return null
-  return (
-    <div style={{ marginTop: 8, color: C.gray, fontSize: 12 }}>
-      ⚠ 另有 <b>{dn.length} 条</b>指不出出处，已经丢掉，没算进上面。模型说清单缺这些，
-      却一句原文都抄不出来 —— 指不出出处的结论<b>没人能十秒内否掉它</b>，
-      不该混进要发给清单主人的整改建议里。列在这儿只为让「丢了几条」可见，不是让你去改：
-      {dn.map((g, i) => (
-        <div key={i} style={{ marginTop: 2 }}>
-          <s>{g.scenario || g.why || g.problem || '—'}</s>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// 「QA 那边怎么拿到这份结论」—— 只能是他自己来拉，因为平台对 QA 仓永远只读。
-//
-// 所以这里给的是**文本**：复制走贴 issue、或存成 .md 交给他那边的 AI 改脚本。
-// QA 那边跑 Claude Code 的话有第三条路：MCP 工具 lum_get_qa_review，直接拿同一份东西。
-// 三条路都是"拉"，平台一个字节都不会往那个仓库写。
-function TakeAway({ r, projectId }) {
-  const [busy, setBusy] = useState(false)
-
-  const fetchMd = async () => {
-    const res = await api.get(
-      `/projects/${projectId}/qa-catalog/reviews/${r.id}/export`, { params: { format: 'md' } })
-    return res.data
-  }
-
-  // **别用 navigator.clipboard.writeText**：平台平时是用局域网 IP 走 http 访问的，
-  // 那是非安全上下文，`navigator.clipboard` 整个对象都不存在 —— 于是这个按钮
-  // 必抛 `Cannot read properties of undefined (reading 'writeText')`，
-  // 一次都没成功过（2026-08-31 报过来的就是这条）。utils/clipboard.js 里
-  // 那个 copyToClipboard 备了 textarea + execCommand 的老路，http 下能用。
-  const copy = async () => {
-    setBusy(true)
-    try {
-      const d = await fetchMd()
-      await copyToClipboard(d.markdown)
-      message.success('已复制 Markdown 全文，可直接贴到 issue 或交给 AI')
-    } catch (e) {
-      // 复制失败 copyToClipboard 自己已经弹过了；这里只管取全文那一步的失败
-      if (!e?.reported) message.error(e.message || '复制失败')
-    } finally { setBusy(false) }
-  }
-
-  const download = async () => {
-    setBusy(true)
-    try {
-      const d = await fetchMd()
-      const url = URL.createObjectURL(new Blob([d.markdown], { type: 'text/markdown' }))
-      const a = document.createElement('a')
-      a.href = url; a.download = d.filename; a.click()
-      // 晚一拍再 revoke：紧接着 click 同步撤销会跟下载线程抢，Chrome 偶发存成
-      // 一个没扩展名的 blob id 文件。别处（LoadTest 的 downloadText）就是这么写的。
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
-      // **必须说一句**：这个按钮原来存完一声不响 —— 人不知道成没成、存的是哪个文件，
-      // 于是反复点，Chrome 攒出 xxx.md、xxx (1).md、xxx (2).md 一堆，
-      // 就成了「下载了一堆东西，不知道是什么」（2026-08-31 报过来的第二条）。
-      message.success(`已存成 ${d.filename}`)
-    } catch (e) {
-      message.error(e.message || '导出失败')
-    } finally { setBusy(false) }
-  }
-
-  return (
-    <div style={{
-      display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-      padding: '8px 12px', marginBottom: 14, borderRadius: 6,
-      background: VEIL, border: `1px solid ${C.line}`,
-    }}>
-      <span style={{ fontSize: 12, color: C.ink }}>把这份结论交给 QA：</span>
-      <Button size="small" icon={<CopyOutlined />} loading={busy} onClick={copy}>复制 Markdown</Button>
-      <Button size="small" icon={<DownloadOutlined />} loading={busy} onClick={download}>存成 .md</Button>
-      <Tooltip title={
-        <div style={{ fontSize: 12, lineHeight: 1.9 }}>
-          QA 那边跑 Claude Code 的话，让它直接调 MCP 工具
-          <code> lum_get_qa_review</code>（带 project_id 和 domain）拿同一份东西，
-          不用人来回传。
-          <div style={{ marginTop: 6 }}>
-            三条路都是<b>他来拉</b> —— 平台对 QA 仓永远只读，不会替他往仓库里放文件。
-            他那边的 <code>check-coverage.sh</code> 拿清单当判据来源，
-            我们多写一个文件，他就会红在一个查不到原因的地方。
-          </div>
-        </div>
-      }>
-        <span style={{ fontSize: 12, color: C.gray, cursor: 'help', borderBottom: `1px dashed ${C.faint}` }}>
-          QA 用 MCP 直接拉？
-        </span>
-      </Tooltip>
-    </div>
-  )
-}
-
+// 抽屉里每个板块的小标题 + 一句灰色说明，正文若干。活体评审各面板共用。
 function Section({ title, hint, children }) {
   return (
     <div style={{ marginBottom: 18 }}>
@@ -3039,12 +2027,10 @@ function Section({ title, hint, children }) {
   )
 }
 
-const Nothing = ({ text }) => <div style={{ fontSize: 12, color: C.gray }}>{text}</div>
-
 // ════════════════════════════════════════════════════════════════════════
 // 活体页面枚举 —— QA 域评审的**另一半**
 //
-// 上面那张清单表和 AI 评审读的都是别人仓库里的 shell 脚本，那是「读代码猜页面在
+// 上面那张清单表读的是别人仓库里的 shell 脚本，那是「读代码猜页面在
 // 干什么」。这一块反过来：真去打开被测环境的页面，看它**实际**发了哪些请求，
 // 再跟清单（Q 边）、BFF 自己的路由表（R 边）三边对账。
 //
@@ -3068,7 +2054,7 @@ const SURVEY_STATUS = {
   // dirty 比 failed 更该报警：failed 只是「这趟没跑成」，dirty 是**只读爬完了、
   // 可环境里的数变了** —— 那意味着有个写请求漏过了三层守卫，得去查。
   dirty: { text: '环境被改动了', tone: 'bad' },
-  // 「没跑成」不表示这个域很差，跟 ReviewBadge 对 failed 的口径一致：中性。
+  // 「没跑成」不表示这个域很差，按中性显示（info，不是 bad）。
   failed: { text: '没跑成', tone: 'info' },
 }
 
@@ -3761,6 +2747,93 @@ function Reconcile({ rec }) {
   )
 }
 
+// 概括版：真去点了一遍，对出来哪些缺口 —— 只报「问题 + 在哪」，按严重度排。
+// 计数、账本、完整对账全搬去抽屉里的「详细数据」；AI 那份（走 MCP）是完整版。
+// 这里同样守那条硬规矩：**没算过 ≠ 算过是 0** —— 没算就说没算，别画一个漂亮的「零问题」。
+const DIGEST_ORDER = [
+  { k: 'g1', render: gapLine },
+  { k: 'g3', render: gapLine },
+  { k: 'g2', render: gapLine },
+  { k: 'g4', render: controlLine },
+  { k: 'g5', render: controlLine },
+]
+function ProblemDigest({ rec }) {
+  if (!rec) {
+    return (
+      <Section title="检查结论" hint="真去点一遍，对出来的问题 + 在哪">
+        <Nothing text="这一趟没做对账（老 survey 或跑到一半停了）—— 下面不是「零问题」，是没算。" />
+      </Section>
+    )
+  }
+  if (rec.available === false) {
+    return (
+      <Section title="检查结论" hint="真去点一遍，对出来的问题 + 在哪">
+        <PageAlert
+          type="warning"
+          message="对账没跑成 —— 不是「零问题」，是没算"
+          description={
+            <div style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: C.ink }}>
+              {rec.reason}
+            </div>
+          }
+        />
+      </Section>
+    )
+  }
+  const g = rec.gaps || {}
+  const dims = g.dimensions || {}
+  const notVerified = Object.keys(DIM_CN).filter(k => dims[k] !== 'verified')
+  const groups = DIGEST_ORDER.filter(o => (g[o.k] || []).length)
+  const total = groups.reduce((n, o) => n + g[o.k].length, 0)
+  const CAP = 6
+  return (
+    <Section
+      title="检查结论"
+      hint="真去点了一遍，对出来这些缺口 —— 每条都写了在哪。完整清单和计数在下方「详细数据」，AI 拿的是完整版"
+    >
+      {total === 0 ? (
+        <div style={{ fontSize: 13, color: C.ink }}>
+          没对出缺口。
+          {notVerified.length ? (
+            <span style={{ color: C.gray }}>但有维度这趟没验（{notVerified.map(k => DIM_CN[k]).join('、')}）—— 它名下的缺口是没算，不是 0。</span>
+          ) : (
+            <span style={{ color: C.gray }}>（P/R/G2/G4 四维都验过了。）</span>
+          )}
+        </div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {groups.map(o => {
+            const rows = g[o.k]
+            return (
+              <div key={o.k}>
+                <Tag style={tagStyle(GAP_CN[o.k].tone)}>
+                  {GAP_CN[o.k].name}
+                  <b style={{ marginLeft: 6, fontFamily: 'var(--font-mono)' }}>{rows.length}</b>
+                </Tag>
+                <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                  {rows.slice(0, CAP).map((r, i) => (
+                    <div key={i} style={{ fontSize: 12, lineHeight: 1.8, paddingLeft: 2 }}>{o.render(r)}</div>
+                  ))}
+                  {rows.length > CAP && (
+                    <div style={{ fontSize: 12, color: C.gray }}>
+                      还有 {rows.length - CAP} 条 —— 见下方「详细数据」
+                    </div>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+          {notVerified.length > 0 && (
+            <div style={{ fontSize: 12, color: C.gray, lineHeight: 1.7 }}>
+              另有维度这趟没验：{notVerified.map(k => DIM_CN[k]).join('、')} —— 那几维名下的缺口是没算，不是 0。
+            </div>
+          )}
+        </div>
+      )}
+    </Section>
+  )
+}
+
 function LiveSurvey({ projectId, envs, canRun }) {
   const [envId, setEnvId] = useState()
   const [data, setData] = useState(null)        // { hasRun, envId, survey }
@@ -3769,6 +2842,7 @@ function LiveSurvey({ projectId, envs, canRun }) {
   const [task, setTask] = useState(null)        // { taskId, status, message }
   const [starting, setStarting] = useState(false)
   const [detailOpen, setDetailOpen] = useState(false)  // 详细结果搬进抽屉，卡面只留一条摘要
+  const [runOpen, setRunOpen] = useState(false)        // 「活体评审」按钮 → 弹框选环境 + 看说明 + 开跑
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -3838,30 +2912,13 @@ function LiveSurvey({ projectId, envs, canRun }) {
           </div>
         </div>
         <Space>
-          <Select
-            placeholder="选环境" style={{ width: 180 }} value={envId} size="small"
-            onChange={setEnvId} options={envs.map(e => ({ value: e.id, label: e.name }))}
-          />
-          <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={load}>
-            刷新结果
-          </Button>
           {canRun && (
-            <Popconfirm
-              title="这会真的去访问被测环境"
-              description={
-                <div style={{ maxWidth: 320, fontSize: 12, color: C.gray, lineHeight: 1.7 }}>
-                  只读：不点不认识的控件，写请求（POST/PUT/PATCH/DELETE）一律在浏览器层
-                  拦下。跑完还会核一遍环境里的数有没有变。
-                </div>
-              }
-              onConfirm={start} okText="跑" cancelText="算了"
-              disabled={!envs.length}
-            >
-              <Button
-                size="small" type="primary" icon={running ? <LoadingOutlined /> : <BugOutlined />}
-                loading={starting} disabled={!envs.length || running}
-              >{running ? '正在跑' : '真跑一趟'}</Button>
-            </Popconfirm>
+            <Button
+              size="small" type="primary"
+              icon={running ? <LoadingOutlined /> : <BugOutlined />}
+              loading={starting} disabled={!envs.length || running}
+              onClick={() => setRunOpen(true)}
+            >{running ? '正在跑' : '活体评审'}</Button>
           )}
           <Button
             size="small" icon={<FileTextOutlined />}
@@ -3894,7 +2951,7 @@ function LiveSurvey({ projectId, envs, canRun }) {
       {/* 卡面只留一条摘要，跑出来的细节全进抽屉，别铺在主表格上面占地 */}
       {!task && (loading && !s ? <Spin size="small" /> : data?.hasRun === false ? (
         <div style={{ fontSize: 12, color: C.gray }}>
-          <Rich text="这个环境上还没跑过 —— 点右上「真跑一趟」。（没跑过不等于没缺口。）" />
+          <Rich text="这个环境上还没跑过 —— 点右上「活体评审」。（没跑过不等于没缺口。）" />
         </div>
       ) : s ? (
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -3916,7 +2973,20 @@ function LiveSurvey({ projectId, envs, canRun }) {
           {s && <Tag style={tagStyle(st.tone)}>{st.text}</Tag>}
         </Space>}
         open={detailOpen} onClose={() => setDetailOpen(false)} width={860}
+        extra={<Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新</Button>}
       >
+      {/* 概括：问题 + 在哪，一眼看完。计数 / 链路 / 完整对账全折进下面「详细数据」。
+          AI 拿到的是详细版（走 MCP），不受这里折叠影响。 */}
+      {s ? <ProblemDigest rec={led.reconcile} /> : (
+        <Nothing text={plan ? '计划已算出（在下面「详细数据」里）—— 跑完这一趟再回来看结论。' : '还没有结果 —— 点上面「活体评审」跑一趟。'} />
+      )}
+
+      {(s || plan) && (
+        <Collapse ghost style={{ marginTop: 8 }} items={[{
+          key: 'detail',
+          label: '详细数据 —— 计数 / 选择器 / 链路 / 完整三边对账',
+          children: (
+            <>
       {/* 刚起那一趟的计划。**计划是在请求里算完的**，所以配置类的错（没 BASE_URL、
           认不出 selectors.ts）在这里立刻就是一句人话，不用等任务转十几秒。 */}
       {plan && (
@@ -3940,7 +3010,7 @@ function LiveSurvey({ projectId, envs, canRun }) {
         </Section>
       )}
 
-      {s ? (
+      {s && (
         <>
           <Section
             title="最近一趟"
@@ -4016,10 +3086,41 @@ function LiveSurvey({ projectId, envs, canRun }) {
 
           <Reconcile rec={led.reconcile} />
         </>
-      ) : (
-        <Nothing text={plan ? '计划已算出（见上）—— 跑完这一趟再回来看对账结果。' : '还没有结果 —— 上面点「真跑一趟」。'} />
+      )}
+            </>
+          ),
+        }]} />
       )}
       </Drawer>
+
+      {/* 「活体评审」按钮 → 这个弹框：选环境 + 看清楚它会干什么 + 开跑。
+          说明照原来 Popconfirm 那段，只是从一行小字挪进弹框，看得清。 */}
+      <Modal
+        title="活体评审 —— 真去打开被测环境点一遍"
+        open={runOpen} onCancel={() => setRunOpen(false)}
+        okText="开始跑" cancelText="算了"
+        okButtonProps={{
+          icon: <BugOutlined />, loading: starting,
+          disabled: !envId || !envs.length || running,
+        }}
+        onOk={async () => { await start(); setRunOpen(false) }}
+      >
+        <div style={{ marginBottom: 6, fontSize: 13, color: C.ink }}>在哪个环境上跑</div>
+        <Select
+          placeholder="选环境" style={{ width: '100%' }} value={envId}
+          onChange={setEnvId} options={envs.map(e => ({ value: e.id, label: e.name }))}
+        />
+        <PageAlert
+          type="info" style={{ marginTop: 16 }}
+          message="这会真的去访问被测环境"
+          description={<Rich text="**只读**：只点「新建 / 编辑」这类开层按钮各一次；删除、停用、退出一个都不点。写请求（POST/PUT/PATCH/DELETE）一律在浏览器层拦下。跑完还会核一遍环境里的数有没有变 —— 变了会标红。整趟几十秒到几分钟。" />}
+        />
+        {!envs.length && (
+          <div style={{ marginTop: 12, fontSize: 12, color: C.gray }}>
+            这个项目还没有环境 —— 去「项目设置 → 环境与变量」建一个，至少要有 BASE_URL 和一套只读账号。
+          </div>
+        )}
+      </Modal>
     </Card>
   )
 }
