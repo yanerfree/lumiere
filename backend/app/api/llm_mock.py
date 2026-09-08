@@ -38,6 +38,14 @@ async def get_routes(session: AsyncSession = Depends(get_db)):
 
 @router.post("/routes", response_model=MockRouteResponse, status_code=201)
 async def create_route(body: MockRouteCreate, session: AsyncSession = Depends(get_db)):
+    conflict = await svc.find_conflict(session, body.method, body.path)
+    if conflict:
+        m = (body.method or "POST").upper()
+        return JSONResponse(
+            {"error": f"已存在相同「方法+路径」的路由：{m} {body.path}（{conflict.name}）。"
+                      f"同一个方法+路径只能有一条，请直接用它，或换一个路径。"},
+            status_code=409,
+        )
     count = await svc.count_routes(session)
     if count > 0 and body.name == "新路由":
         body.name = f"路由 {count + 1}"
@@ -67,6 +75,18 @@ async def update_route(route_id: uuid.UUID, body: MockRouteUpdate, session: Asyn
         return JSONResponse({"error": "Route not found"}, status_code=404)
     if existing.locked:
         return JSONResponse({"error": "路由已锁定，请先解锁后再编辑"}, status_code=423)
+    # 改了方法或路径时，不能撞上别的路由（排除自己）—— 前端保存会整份提交，
+    # 所以这一步也顺带拦住「把当前路由改成和某条一样」的情况
+    if body.method is not None or body.path is not None:
+        new_method = body.method if body.method is not None else existing.method
+        new_path = body.path if body.path is not None else existing.path
+        conflict = await svc.find_conflict(session, new_method, new_path, exclude_id=route_id)
+        if conflict:
+            return JSONResponse(
+                {"error": f"已存在相同「方法+路径」的路由：{(new_method or 'POST').upper()} {new_path}"
+                          f"（{conflict.name}）。两条路由不能用同一个方法+路径。"},
+                status_code=409,
+            )
     route = await svc.update_route(session, route_id, body)
     return MockRouteResponse.model_validate(route, from_attributes=True)
 

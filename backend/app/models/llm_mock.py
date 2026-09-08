@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -10,6 +10,12 @@ from app.models.user import Base
 
 class MockRoute(Base):
     __tablename__ = "mock_routes"
+    # 运行时按 (method, path) 二元组选路由（_match_route 里 method 大小写不敏感比较），
+    # 两条撞上后一条会被永久顶掉、还偶发 —— 所以唯一键就建在这个二元组上，
+    # 且对 method 取 upper() 做函数索引，和运行时的比较口径完全对齐（写入侧也统一转大写）。
+    __table_args__ = (
+        Index("uq_mock_routes_method_path", text("upper(method)"), "path", unique=True),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4, server_default=func.gen_random_uuid()
