@@ -64,7 +64,7 @@ async def reorder_routes(body: ReorderRequest, session: AsyncSession = Depends(g
 async def lock_route(route_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
     route = await svc.toggle_lock(session, route_id)
     if not route:
-        return JSONResponse({"error": "Route not found"}, status_code=404)
+        return JSONResponse({"error": "该路由不存在（可能已被删除），请刷新页面后重试"}, status_code=404)
     return MockRouteResponse.model_validate(route, from_attributes=True)
 
 
@@ -72,7 +72,7 @@ async def lock_route(route_id: uuid.UUID, session: AsyncSession = Depends(get_db
 async def update_route(route_id: uuid.UUID, body: MockRouteUpdate, session: AsyncSession = Depends(get_db)):
     existing = await svc.get_route(session, route_id)
     if not existing:
-        return JSONResponse({"error": "Route not found"}, status_code=404)
+        return JSONResponse({"error": "该路由不存在（可能已被删除），请刷新页面后重试"}, status_code=404)
     if existing.locked:
         return JSONResponse({"error": "路由已锁定，请先解锁后再编辑"}, status_code=423)
     # 改了方法或路径时，不能撞上别的路由（排除自己）—— 前端保存会整份提交，
@@ -95,7 +95,7 @@ async def update_route(route_id: uuid.UUID, body: MockRouteUpdate, session: Asyn
 async def delete_route(route_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
     route = await svc.get_route(session, route_id)
     if not route:
-        return JSONResponse({"error": "Route not found"}, status_code=404)
+        return JSONResponse({"error": "该路由不存在（可能已被删除），请刷新页面后重试"}, status_code=404)
     if route.locked:
         return JSONResponse({"error": "路由已锁定，请先解锁后再删除"}, status_code=423)
     routes = await svc.list_routes(session)
@@ -112,7 +112,7 @@ async def delete_route(route_id: uuid.UUID, session: AsyncSession = Depends(get_
 async def toggle_route(route_id: uuid.UUID, session: AsyncSession = Depends(get_db)):
     existing = await svc.get_route(session, route_id)
     if not existing:
-        return JSONResponse({"error": "Route not found"}, status_code=404)
+        return JSONResponse({"error": "该路由不存在（可能已被删除），请刷新页面后重试"}, status_code=404)
     if existing.locked:
         return JSONResponse({"error": "路由已锁定，请先解锁后再操作"}, status_code=423)
     route = await svc.toggle_route(session, route_id)

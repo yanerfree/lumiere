@@ -170,30 +170,37 @@ export default function LlmMock() {
   }, [routeForm, serviceStatus, pathPattern])
 
   const handleCreateRoute = async () => {
-    try {
-      const idx = routes.length % NEW_ROUTE_PRESETS.length
-      const tpl = NEW_ROUTE_PRESETS[idx]
-      // 后端现在拦「方法+路径」重复：预设里好几个路径（/v1/embeddings、
-      // /openai/v1/chat/completions 等）可能已经存在，直接建会 409。
-      // 新建的是一条待用户编辑的草稿，这里先把路径改唯一，让「新建」始终建得出来。
-      const taken = new Set(routes.map(r => r.path))
-      const uniquePath = (base) => {
-        if (!taken.has(base)) return base
-        // 在第一段路径后插序号：/mock-429/v1/... → /mock-429-2/v1/...；无第二段则整体加后缀
-        const m = base.match(/^\/([^/]+)(\/.*)?$/)
-        for (let n = 2; n < 999; n++) {
-          const cand = m ? `/${m[1]}-${n}${m[2] || ''}` : `${base}-${n}`
-          if (!taken.has(cand)) return cand
+    const idx = routes.length % NEW_ROUTE_PRESETS.length
+    const tpl = NEW_ROUTE_PRESETS[idx]
+    // 在第一段路径后插后缀：/openai/v1/... → /openai-2/v1/...；无第二段则整体加后缀
+    const withSuffix = (base, sfx) => {
+      const m = base.match(/^\/([^/]+)(\/.*)?$/)
+      return m ? `/${m[1]}-${sfx}${m[2] || ''}` : `${base}-${sfx}`
+    }
+    // 后端拦「方法+路径」重复：预设里好几个路径可能已存在，直接建会 409。
+    // 本地 routes 列表可能滞后于服务端（刚建的还没 fetch 回来），只靠本地去重会
+    // 误判为空、POST 撞 409 —— 用户就会看到「没法新建」。所以：本地先探一把，
+    // 撞了就换随机后缀 silent 重试，让「新建」永远建得出来（草稿路径反正要用户改）。
+    const taken = new Set(routes.map(r => r.path))
+    let path = taken.has(tpl.path) ? withSuffix(tpl.path, '2') : tpl.path
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        const r = await api.post('/llm-mock/routes', { method: 'POST', ...tpl, path }, { silent: true })
+        const d = r.data || r
+        message.success('路由已创建')
+        await fetchRoutes()
+        selectRoute(d)
+        return
+      } catch (e) {
+        if (e?.status === 409) {
+          path = withSuffix(tpl.path, Math.random().toString(36).slice(2, 6))
+          continue
         }
-        return `${base}-${Date.now()}`
+        message.error(e?.message || '新建失败')
+        return
       }
-      const body = { method: 'POST', ...tpl, path: uniquePath(tpl.path) }
-      const r = await api.post('/llm-mock/routes', body)
-      const d = r.data || r
-      message.success('路由已创建')
-      await fetchRoutes()
-      selectRoute(d)
-    } catch {}
+    }
+    message.error('新建失败：这些路径都被占用了，换个预设或手动改路径后再保存')
   }
 
   // 返回是否保存成功 —— 高级设置抽屉据此决定关不关（失败就别关，改动留着）
