@@ -6,7 +6,7 @@ import {
   SettingOutlined, UserOutlined, FileSearchOutlined, ApiOutlined,
   MenuFoldOutlined, MenuUnfoldOutlined, BellOutlined, RobotOutlined,
   ThunderboltOutlined, ToolOutlined, SendOutlined,
-  NodeIndexOutlined, SearchOutlined,
+  NodeIndexOutlined, SearchOutlined, DownOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
   DeploymentUnitOutlined, CommentOutlined,
 } from '@ant-design/icons'
@@ -106,7 +106,7 @@ function RequirePerm({ perm, children }) {
 
 function AppLayout() {
   const [collapsed, setCollapsed] = useState(false)
-  const [projectName, setProjectName] = useState('')
+  const [projects, setProjects] = useState([])
   const [pwdOpen, setPwdOpen] = useState(false)
   const [pwdLoading, setPwdLoading] = useState(false)
   const [pwdForm] = Form.useForm()
@@ -122,14 +122,29 @@ function AppLayout() {
   const projectId = projectMatch ? projectMatch[1] : null
   const isProjectPage = !!projectId
 
-  // 进入项目时获取项目名称
+  // 进入项目时把项目列表拉下来：顶栏既要显示当前项目名，也要能直接切到别的项目
+  // （以前只取一个名字，切项目得先退回项目列表再点进去）。
   useEffect(() => {
-    if (!projectId) { setProjectName(''); return }
-    api.get('/projects').then(res => {
-      const p = res.data.find(item => item.id === projectId)
-      setProjectName(p ? p.name : '')
-    }).catch(() => {})
+    if (!projectId) { setProjects([]); return }
+    api.get('/projects').then(res => setProjects(res.data || [])).catch(() => {})
   }, [projectId])
+  const projectName = (projects.find(item => item.id === projectId) || {}).name || ''
+
+  // 切项目时**只保留"当前在哪个功能页"，带 id 的那几段一律砍掉**。
+  // /projects/A/cases/<用例id> 原样换成 B，那个用例在 B 里不存在 ——
+  // 会打开一个一直转圈或全空的详情页，比留在原地更像坏了。
+  // 砍到列表页（/cases、/plans、/reports）都是真实存在的路由，砍不出 404。
+  const switchProject = (nextId) => {
+    if (!nextId || nextId === projectId) return
+    const looksLikeId = (seg) =>
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(seg) || /^\d+$/.test(seg)
+    const kept = []
+    for (const seg of location.pathname.split('/').slice(3)) {
+      if (looksLikeId(seg)) break
+      kept.push(seg)
+    }
+    navigate(`/projects/${nextId}/${kept.length ? kept.join('/') : 'cases'}`)
+  }
 
   // 侧边栏分组。按**这个功能实际作用在什么上**分，不按菜单名字听起来像什么。
   //
@@ -330,7 +345,30 @@ function AppLayout() {
           {isProjectPage && projectName && (
             <>
               <span style={{ color: '#e0e0e3', margin: '0 4px' }}>/</span>
-              <span style={{ color: '#8c919e', fontSize: 13 }}>{projectName}</span>
+              <Dropdown
+                trigger={['click']}
+                menu={{
+                  items: projects.map(p => ({ key: p.id, label: p.name })),
+                  selectable: true,
+                  selectedKeys: [projectId],
+                  onClick: ({ key }) => switchProject(key),
+                  // 项目多了要能滚，antd 的菜单本身不会自己限高
+                  style: { maxHeight: 360, overflowY: 'auto' },
+                }}
+              >
+                <span
+                  title="点这里切换到其它项目"
+                  style={{
+                    color: '#8c919e', fontSize: 13, cursor: 'pointer', padding: '2px 6px',
+                    borderRadius: 4, display: 'inline-flex', alignItems: 'center', gap: 4,
+                  }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(0,0,0,0.04)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                >
+                  {projectName}
+                  <DownOutlined style={{ fontSize: 9, color: '#c9cdd4' }} />
+                </span>
+              </Dropdown>
               <BranchSelector projectId={projectId} />
             </>
           )}

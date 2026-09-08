@@ -142,6 +142,15 @@ const VIVID = {
 //   代价比"红的图标和红的条子同色"大得多。**同色在这里不产生歧义**：
 //   一个是图标、一个是长条，形状本来就不一样。
 
+// —— 一支**能拿去写大数字**的绿。VIVID.ok 对纸只有 2.27:1，30px 的百分比那种
+// "看个大概"没问题，但 22px 的 654 是要**读出来**的数，那个对比度下就是
+// "看得见是绿的、读不出是几"。WCAG 对大号粗体（≥18.66px bold）的线是 3:1，
+// 这支 3.35:1 过线，同时 L*57 仍在"亮绿"里 —— 不是被 4.5:1 压出来的那种墨绿
+// （#007b4e，L*45，正是这一页第一条审美要求要消掉的暗色）。
+// **只给覆盖率卡右边那个分子用。** 别拿它去画条子或图标：那两处已经有
+// BAR.ok / VIVID.ok，多一支同色相的绿只会让"三个绿到底哪个是哪个"没法回答。
+const OK_TEXT = '#009a63'
+
 // —— 条子档：进度条 + 药丸/圆点以外的所有色块。**不许拿去渲染字**（对纸只有 1.6~2.2:1）。
 //
 // 彩度这一档来回调过三次，值本身不重要，**判据**才重要：
@@ -931,7 +940,12 @@ export default function QaCatalog() {
   const [keyword, setKeyword] = useState('')
   const [domain, setDomain] = useState()
   const [priority, setPriority] = useState()
-  const [tier, setTier] = useState()
+  // 执行层是**多选**（数组），另外四个筛选还是单选。
+  // 这一格跟别人不一样是有原因的：域/优先级/状态问的是"哪一个"，
+  // 而执行层常要问"接口那两层加起来覆盖了多少"——smoke+api 一起看是个真需求，
+  // 单选的话得看两遍再自己加。空数组 = 不筛（别写成 undefined，
+  // 下面 tier.length 和 tier.includes 都会炸）。
+  const [tier, setTier] = useState([])
   const [state, setState] = useState()
   const [quick, setQuick] = useState()          // 看板点出来的那一类：urgent/bugs/lying/mismatch
   const [showDeprecated, setShowDeprecated] = useState(false)
@@ -1048,13 +1062,30 @@ export default function QaCatalog() {
     } catch { /* request.js 已展示错误 */ } finally { setStarting(false) }
   }
 
+  // 「拉取最新」的提示语。**三种情况必须说得不一样**，不能一律"已拉取最新"：
+  //   · 没有 diff（后端刚重启、这次是第一次读）→ 只说拉到了，不报 0 条 ——
+  //     报"新增 0 条"会被当成"仓库确实没动"，而事实是"没得比"。
+  //   · commit 没变 → 直接说清单没有变化。此前提示成功而数字一动不动，
+  //     查了半天才发现是后端没重启（CLAUDE.md 记着这一笔），根因之一就是这句话
+  //     从来不区分"拉到了新东西"和"拉了但什么都没变"。
+  //   · 有增有改 → 报数。删除的也报，那一列没人会主动去数。
+  const refreshText = (d) => {
+    if (!d) return '已从 QA 仓拉取最新清单'
+    const parts = []
+    if (d.added) parts.push(`新增 ${d.added} 条`)
+    if (d.updated) parts.push(`更新 ${d.updated} 条`)
+    if (d.removed) parts.push(`移除 ${d.removed} 条`)
+    if (parts.length) return `已拉取最新：${parts.join('，')}`
+    return d.commitChanged ? '已拉到新 commit，场景清单没有变化' : '已是最新，清单没有变化'
+  }
+
   const handleRefresh = async () => {
     setRefreshing(true)
     try {
       const res = await api.post(`/projects/${projectId}/qa-catalog/refresh`)
       setData(res.data)
       if (res.data?.error) message.warning(res.data.error)
-      else message.success('已从 QA 仓拉取最新清单')
+      else message.success(refreshText(res.data?.refreshDiff))
     } catch { /* request.js 已展示错误 */ } finally { setRefreshing(false) }
   }
 
@@ -1112,9 +1143,9 @@ export default function QaCatalog() {
     mismatch: { label: `风险 ≥${HIGH_RISK} 但优先级 P2/P3`, test: s => s.state !== 'deprecated' && (s.risk || 0) >= HIGH_RISK && ['P2', 'P3'].includes(s.priority) },
   }), [])
 
-  const hasFilter = keyword || domain || priority || tier || state || quick
+  const hasFilter = keyword || domain || priority || tier.length || state || quick
   const clearFilters = () => {
-    setKeyword(''); setDomain(); setPriority(); setTier(); setState(); setQuick()
+    setKeyword(''); setDomain(); setPriority(); setTier([]); setState(); setQuick()
   }
   // 从看板跳过来时，别让上一次的筛选残留在里面把结果减成空的
   const jump = (patch) => {
@@ -1130,7 +1161,7 @@ export default function QaCatalog() {
     if (!showDeprecated && s.state === 'deprecated' && state !== 'deprecated') return false
     if (domain && s.domain !== domain) return false
     if (priority && s.priority !== priority) return false
-    if (tier && s.tier !== tier) return false
+    if (tier.length && !tier.includes(s.tier)) return false
     if (state && s.state !== state) return false
     if (quick && !QUICK[quick].test(s)) return false
     if (keyword) {
@@ -1524,6 +1555,16 @@ export default function QaCatalog() {
                   一行整条是彩的，而它说的只是"这份数字是什么时候拉的"这件中性的事。
                   现在只有「（14 小时前）」那半句表态，时间戳和 commit 一律中性。 */}
               <div style={{ fontSize: 12, color: C.gray, cursor: 'pointer', whiteSpace: 'nowrap' }}>
+                {/* 分支必须显式写「QA 仓分支」：顶栏那个分支选择器是**平台自己的用例分支**
+                    （v2.2.0 之类），跟这份清单读的分支是两回事，只写「分支 main」会被
+                    当成同一个东西。 */}
+                {repo.branch && (
+                  <>
+                    QA 仓分支 <code style={{ color: C.gray }}>{repo.branch}</code>
+                    {repo.branchAuto && '（自动识别）'}
+                    {' · '}
+                  </>
+                )}
                 {repo.fetchedAt ? (
                   <>
                     拉取于 {new Date(repo.fetchedAt).toLocaleString('zh-CN')}
@@ -1573,10 +1614,37 @@ export default function QaCatalog() {
             title="覆盖到哪了"
             extra={<span style={{ fontSize: 11, color: C.gray }}>不含 {summary.deprecated} 条已废弃</span>}
           >
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.ok, lineHeight: 1 }}>{coverRate}%</span>
-              <span style={{ fontSize: 12, color: C.gray }}>
-                {summary.covered} / {summary.total} 条清单里有脚本认领
+            {/* 「221 / 284」这两个数原来跟后面那句散文同字号同灰色（12px gray），
+                于是整行只有 78% 那个大字看得见 —— 被当面点名"只看到进度条"。
+                百分比是**结论**，分子分母才是**能核对的事实**（284 是清单总行数，
+                221 是有脚本认领的行数），一起被压成小灰字就等于藏了。
+
+                这一行的排法来回过三版，把要求原话记下来免得再绕：
+                  ① 就地抬字号（18px 墨）—— 看见了，但还挤在 % 旁边，右半边整片空着。
+                  ② 挪到右边 + 两枚带底色的药丸 —— 被退：「不好看」。
+                  ③ 退回一行 —— 又被退：「不是让你移动到右边吗，然后增加颜色和字体加粗」。
+                所以要的是 **② 的位置 + ① 的写法**：数字仍是裸着的「654 / 723」，
+                **不套底色方块**（一行里已经有个 30px 的绿百分比，右边再摆两块有色底
+                就是三个抢眼的块，谁也不是重点），靠**字号 + 字重 + 颜色**分主次。
+
+                  分子 654  22px 700 OK_TEXT（绿）  ← 要读的那个数，跟左边的 % 同一件事
+                  斜杠 /    16px faint             ← 纯分隔符，装饰档 3.09:1 够画一根线
+                  分母 723  22px 600 C.gray        ← 同字号轻一档：一眼分出分子分母
+                绿用的是 OK_TEXT 不是 VIVID.ok —— 理由写在 OK_TEXT 那一支上：
+                后者 2.27:1，刷在 22px 的数上是"看得见颜色、读不出数"。
+                tabular-nums 是让数字等宽，换个数不会左右跳。 */}
+            <div style={{
+              display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+              gap: 12, marginBottom: 8, flexWrap: 'wrap',
+            }}>
+              <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.ok, lineHeight: 1 }}>{coverRate}%</span>
+                <span style={{ fontSize: 12, color: C.gray }}>的场景有脚本认领</span>
+              </span>
+              <span style={{ whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums', lineHeight: 1 }}>
+                <b style={{ fontSize: 22, fontWeight: 700, color: OK_TEXT, letterSpacing: .2 }}>{summary.covered}</b>
+                <span style={{ margin: '0 5px', fontSize: 16, color: C.faint }}>/</span>
+                <b style={{ fontSize: 22, fontWeight: 600, color: C.gray, letterSpacing: .2 }}>{summary.total}</b>
               </span>
             </div>
             {['P0', 'P1', 'P2', 'P3'].filter(p => summary.byPriority?.[p]).map(p => {
@@ -1592,7 +1660,13 @@ export default function QaCatalog() {
                     size="small" strokeColor={PRIORITY_BAR[p]} trailColor={BAR_TRAIL}
                     style={{ flex: 1, margin: 0 }} showInfo={false}
                   />
-                  <span style={{ color: C.gray, width: 60, textAlign: 'right' }}>{s.covered}/{s.total}</span>
+                  {/* 每档的分子分母同理：条子只说"大概多少"，具体差几条要靠这两个数。
+                      13px 墨色 —— 比总数那对小一档（它们是明细，不是头条），
+                      但不再是 12px 灰的"说明小字"。宽度跟着字号从 60 放到 66，
+                      不然 P1 的 101/145 会贴到右边沿。 */}
+                  <span style={{ color: C.ink, fontSize: 13, width: 66, textAlign: 'right' }}>
+                    {s.covered}/{s.total}
+                  </span>
                 </Hit>
               )
             })}
@@ -2015,7 +2089,30 @@ export default function QaCatalog() {
           />
           <Select placeholder="优先级" allowClear value={priority} onChange={setPriority} style={{ width: 110 }}
             options={['P0', 'P1', 'P2', 'P3'].map(p => ({ value: p, label: p }))} />
-          <Select placeholder="执行层" allowClear value={tier} onChange={setTier} style={{ width: 140 }}
+          {/* 140px 装不下「跨面全链（scenario）」，选中之后被截成「跨面全链（sce…」
+              —— 一个筛选器把自己选的是什么都显示不全。这一行右边还空着一大片
+              （共 N 条后面全是白的），所以直接放到 260。
+              多选之后再靠 maxTagCount="responsive" 兜：选两层以上就自动收成「+1」，
+              不会把整行顶开、把后面的「清除筛选」挤到第二行去。 */}
+          <Select placeholder="执行层" allowClear value={tier} onChange={setTier} style={{ width: 260 }}
+            mode="multiple" maxTagCount="responsive"
+            // 选中的标签只写中文，菜单里才带 smoke/api 这些码。
+            // 码在菜单里有用（脚本头写的就是 @tier: smoke，对得上），
+            // 但塞进标签就是「冒烟（smoke）×」——两个标签 250px，260 都装不下，
+            // 于是选两层就被折成「+1」，等于多选做了又看不见选了什么。
+            // 只留中文之后三个标签能并排，第四个才折。
+            // ⚠ 折叠占位（maxTagPlaceholder）也是走 tagRender 渲的，那一次的 value
+            // 是 null —— tierText(null) 会落到兜底的「—」，页面上就是一根破折号，
+            // 看着像坏了。所以 value 为空时用 label（就是下面那个 +N）。
+            tagRender={({ value, label, closable, onClose }) => (
+              <Tag
+                closable={closable} onClose={onClose}
+                onMouseDown={e => { e.preventDefault(); e.stopPropagation() }}
+                style={{ ...tagStyle('mute'), marginInlineEnd: 4 }}
+              >{value == null ? label : tierText(value)}</Tag>
+            )}
+            // antd 默认折起来写成「+ 1 ...」，那个省略号看着像"还没加载完"。
+            maxTagPlaceholder={omitted => `+${omitted.length}`}
             options={tiers.map(t => ({ value: t, label: `${tierText(t)}（${t}）` }))} />
           <Select placeholder="状态" allowClear value={state} onChange={setState} style={{ width: 130 }}
             options={[
