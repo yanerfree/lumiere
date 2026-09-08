@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Card, Table, Tag, Space, Button, Input, Select, message, Tooltip,
   Progress, Modal, Form, Collapse, Popconfirm, Popover, Checkbox, Drawer, Spin,
-  ConfigProvider,
+  ConfigProvider, Tabs,
 } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, BugOutlined, FileTextOutlined, SettingOutlined,
   InfoCircleOutlined, CheckCircleFilled, WarningFilled, CloseCircleOutlined,
-  LoadingOutlined,
+  LoadingOutlined, CopyOutlined, DownloadOutlined,
 } from '@ant-design/icons'
 import { useParams } from 'react-router-dom'
 import { api } from '../../utils/request'
@@ -2173,6 +2173,96 @@ const controlLine = r => (
   </>
 )
 
+// gapLine / controlLine 的纯文本镜像 —— 给 AI 看的详细版、复制、下载都用它，去掉颜色只留字。
+const gapText = r =>
+  `${r.method} ${r.path}` +
+  (r.domain ? ` · ${r.domain}` : '') +
+  ((r.label || r.pagePath) ? ` · ${r.label || r.pagePath}` : '') +
+  (r.origin === 'page-load' ? '（页面加载）' : '')
+const controlText = r =>
+  `${r.label || r.anchor || '（没有名字）'} · ${r.pagePath}` +
+  (r.controlType ? ` · ${r.controlType}` : '') +
+  (r.pageDomains?.length ? ` · 找 ${r.pageDomains.join('/')} 看` : '')
+
+// 一趟活体三边对账拼成 markdown。跟 MCP `lum_get_qa_review` 同一份账本，
+// 只是这里合成一整趟、那边按域切片 —— 缺口一条不截（AI 拿的就是完整版）。
+function buildSurveyMarkdown(s, led) {
+  const n = v => (v === null || v === undefined) ? '—（没记）' : v
+  const st = SURVEY_STATUS[s?.status]?.text || s?.status || ''
+  const L = ['# 活体页面枚举 · 三边对账', '']
+  L.push(`- 环境：${s?.envName || '（环境名没记）'}`)
+  L.push(`- 状态：${st}`)
+  L.push(`- 时间：${s?.startedAt || ''}${s?.finishedAt ? ` → ${s.finishedAt}` : ''}`)
+  L.push(`- 可操作项 ${n(s?.itemCount)} · 页面加载边 ${n(s?.pageEdgeCount)} · 进过的页面 ${n(led.pagesVisited)} · 点过的控件 ${n(led.controlsClicked)} · 拦下的写请求 ${n(led.writesBlocked)}`)
+  if (s?.error) { L.push(''); L.push(`> 错误：${s.error}`) }
+  L.push('', '## 检查结论')
+
+  const rec = led.reconcile
+  if (!rec) {
+    L.push('这一趟没做对账（老 survey 或跑到一半停了）—— 不是「零问题」，是没算。')
+    return L.join('\n')
+  }
+  if (rec.available === false) {
+    L.push('对账没跑成 —— 不是「零问题」，是没算。')
+    if (rec.reason) L.push(`原因：${rec.reason}`)
+    return L.join('\n')
+  }
+  const g = rec.gaps || {}
+  const dims = g.dimensions || {}
+  const notVerified = Object.keys(DIM_CN).filter(k => dims[k] !== 'verified')
+  const order = [
+    { k: 'g1', render: gapText }, { k: 'g3', render: gapText }, { k: 'g2', render: gapText },
+    { k: 'g4', render: controlText }, { k: 'g5', render: controlText },
+  ]
+  let total = 0
+  for (const o of order) {
+    const rows = g[o.k] || []
+    if (!rows.length) continue
+    total += rows.length
+    L.push('', `### ${GAP_CN[o.k].name} · ${rows.length}`)
+    for (const r of rows) L.push(`- ${o.render(r)}`)
+  }
+  if (total === 0) L.push('没对出缺口。')
+  if (notVerified.length) {
+    L.push('', `> 这趟没验的维度：${notVerified.map(k => DIM_CN[k]).join('、')} —— 它名下的缺口是没算，不是 0。`)
+  }
+  return L.join('\n')
+}
+
+// 复制：安全上下文走 clipboard API，HTTP（非安全上下文）下 navigator.clipboard 整个
+// 不存在，落到 execCommand 兜底 —— 少这条，页面跑在 http 上时复制按钮点了没反应。
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch { /* 落兜底 */ }
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.top = '-9999px'
+    document.body.appendChild(ta)
+    ta.focus()
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch { return false }
+}
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 1500)
+}
+
 function SelectorReport({ rep }) {
   const c = rep.counters || {}
   const bk = rep.buckets || {}
@@ -2841,8 +2931,7 @@ function LiveSurvey({ projectId, envs, canRun }) {
   const [plan, setPlan] = useState(null)        // 刚起那一趟的计划（public_plan）
   const [task, setTask] = useState(null)        // { taskId, status, message }
   const [starting, setStarting] = useState(false)
-  const [detailOpen, setDetailOpen] = useState(false)  // 详细结果搬进抽屉，卡面只留一条摘要
-  const [runOpen, setRunOpen] = useState(false)        // 「活体评审」按钮 → 弹框选环境 + 看说明 + 开跑
+  const [detailOpen, setDetailOpen] = useState(false)  // 一个按钮 → 这个抽屉：跑 + 结果（两 tab） + 复制下载
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -2896,6 +2985,8 @@ function LiveSurvey({ projectId, envs, canRun }) {
     : undefined
   const st = SURVEY_STATUS[s?.status] || { text: s?.status || '', tone: 'mute' }
   const running = !!task && SURVEY_RUNNING.has(task.status)
+  // 给 AI / 复制 / 下载 的详细文本 —— 跟 MCP lum_get_qa_review 同源。
+  const md = useMemo(() => (s ? buildSurveyMarkdown(s, s.ledger || {}) : ''), [s])
 
   return (
     <Card styles={{ body: { padding: 16 } }} style={{ marginBottom: 12 }}>
@@ -2911,61 +3002,13 @@ function LiveSurvey({ projectId, envs, canRun }) {
             <Rich text="上面那些是读脚本猜的；这一块真去打开页面，看它**实际**发了什么" />
           </div>
         </div>
-        <Space>
-          {canRun && (
-            <Button
-              size="small" type="primary"
-              icon={running ? <LoadingOutlined /> : <BugOutlined />}
-              loading={starting} disabled={!envs.length || running}
-              onClick={() => setRunOpen(true)}
-            >{running ? '正在跑' : '活体评审'}</Button>
-          )}
-          <Button
-            size="small" icon={<FileTextOutlined />}
-            disabled={!(s || plan)} onClick={() => setDetailOpen(true)}
-          >查看结果</Button>
-        </Space>
+        {/* 只留一个按钮。跑不跑、看结果、复制下载，全在点开后的抽屉里。 */}
+        <Button
+          type="primary"
+          icon={running ? <LoadingOutlined /> : <BugOutlined />}
+          onClick={() => setDetailOpen(true)}
+        >{running ? '正在跑' : '活体评审'}</Button>
       </div>
-
-      {!envs.length && (
-        <PageAlert
-          type="warning" style={{ marginBottom: 12 }}
-          message="这个项目还没有环境 —— 活体枚举没有 BASE_URL 和只读账号就跑不了"
-          description={<Rich text="去「项目设置 → 环境与变量」建一个，至少要有 `BASE_URL` 和一套只读账号（`AUDITOR_USERNAME` / `AUDITOR_PASSWORD`）。" />}
-        />
-      )}
-
-      {task && (
-        <PageAlert
-          type={running ? 'info' : 'success'} style={{ marginBottom: 12 }}
-          message={running ? '正在跑（每 3 秒问一次）' : '这一趟结束了'}
-          description={
-            <div style={{ fontSize: 12, color: C.gray }}>
-              {task.message || ''}
-              {task.status && <span style={{ marginLeft: 8, color: C.faint }}>[{task.status}]</span>}
-            </div>
-          }
-        />
-      )}
-
-      {/* 卡面只留一条摘要，跑出来的细节全进抽屉，别铺在主表格上面占地 */}
-      {!task && (loading && !s ? <Spin size="small" /> : data?.hasRun === false ? (
-        <div style={{ fontSize: 12, color: C.gray }}>
-          <Rich text="这个环境上还没跑过 —— 点右上「活体评审」。（没跑过不等于没缺口。）" />
-        </div>
-      ) : s ? (
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-          <Tag style={tagStyle(st.tone)}>{st.text}</Tag>
-          <span style={{ fontSize: 12, color: C.gray }}>
-            {s.envName || '（环境名没记）'}{s.finishedAt ? ` · ${s.finishedAt}` : s.startedAt ? ` · ${s.startedAt}` : ''}
-          </span>
-          <Num label="可操作项" n={s.itemCount} />
-          <Num label="页面加载边" n={s.pageEdgeCount} />
-          <Num label="拦下的写请求" n={led.writesBlocked} />
-          <Button type="link" size="small" style={{ padding: 0, height: 'auto', fontSize: 12 }}
-            onClick={() => setDetailOpen(true)}>查看全部 →</Button>
-        </div>
-      ) : null)}
 
       <Drawer
         title={<Space>
@@ -2975,10 +3018,60 @@ function LiveSurvey({ projectId, envs, canRun }) {
         open={detailOpen} onClose={() => setDetailOpen(false)} width={860}
         extra={<Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={load}>刷新</Button>}
       >
-      {/* 概括：问题 + 在哪，一眼看完。计数 / 链路 / 完整对账全折进下面「详细数据」。
-          AI 拿到的是详细版（走 MCP），不受这里折叠影响。 */}
+        {/* 跑控制：选环境 + 开跑 + 说清它会干什么。原来在单独弹框里，挪进抽屉。 */}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
+          <Select
+            size="small" placeholder="选环境" style={{ minWidth: 180 }} value={envId}
+            onChange={setEnvId} options={envs.map(e => ({ value: e.id, label: e.name }))}
+          />
+          {canRun ? (
+            <Button
+              size="small" type="primary"
+              icon={running ? <LoadingOutlined /> : <BugOutlined />}
+              loading={starting} disabled={!envId || !envs.length || running}
+              onClick={start}
+            >{running ? '正在跑' : '开始跑'}</Button>
+          ) : (
+            <span style={{ fontSize: 12, color: C.faint }}>（没有权限跑，只能看结果）</span>
+          )}
+        </div>
+
+        <PageAlert
+          type="info" style={{ marginBottom: 12 }}
+          message="点「开始跑」会真的去访问被测环境"
+          description={<Rich text="**只读**：只点「新建 / 编辑」这类开层按钮各一次；删除、停用、退出一个都不点。写请求（POST/PUT/PATCH/DELETE）一律在浏览器层拦下。跑完还会核一遍环境里的数有没有变 —— 变了会标红。整趟几十秒到几分钟。" />}
+        />
+
+        {!envs.length && (
+          <PageAlert
+            type="warning" style={{ marginBottom: 12 }}
+            message="这个项目还没有环境 —— 活体枚举没有 BASE_URL 和只读账号就跑不了"
+            description={<Rich text="去「项目设置 → 环境与变量」建一个，至少要有 `BASE_URL` 和一套只读账号（`AUDITOR_USERNAME` / `AUDITOR_PASSWORD`）。" />}
+          />
+        )}
+
+        {task && (
+          <PageAlert
+            type={running ? 'info' : 'success'} style={{ marginBottom: 12 }}
+            message={running ? '正在跑（每 3 秒问一次）' : '这一趟结束了'}
+            description={
+              <div style={{ fontSize: 12, color: C.gray }}>
+                {task.message || ''}
+                {task.status && <span style={{ marginLeft: 8, color: C.faint }}>[{task.status}]</span>}
+              </div>
+            }
+          />
+        )}
+
+        <Tabs
+          size="small" defaultActiveKey="human"
+          items={[
+            {
+              key: 'human',
+              label: '给人看 · 结论',
+              children: (<>
       {s ? <ProblemDigest rec={led.reconcile} /> : (
-        <Nothing text={plan ? '计划已算出（在下面「详细数据」里）—— 跑完这一趟再回来看结论。' : '还没有结果 —— 点上面「活体评审」跑一趟。'} />
+        <Nothing text={plan ? '计划已算出（在下面「详细数据」里）—— 跑完这一趟再回来看结论。' : '还没有结果 —— 上面选环境，点「开始跑」跑一趟。'} />
       )}
 
       {(s || plan) && (
@@ -3091,36 +3184,46 @@ function LiveSurvey({ projectId, envs, canRun }) {
           ),
         }]} />
       )}
+              </>),
+            },
+            {
+              key: 'ai',
+              label: '给 AI · 详细',
+              children: (
+                <>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                    <Button
+                      size="small" icon={<CopyOutlined />} disabled={!md}
+                      onClick={async () => {
+                        const ok = await copyText(md)
+                        message[ok ? 'success' : 'error'](ok ? '已复制' : '复制失败 —— 手动全选也行')
+                      }}
+                    >复制</Button>
+                    <Button
+                      size="small" icon={<DownloadOutlined />} disabled={!md}
+                      onClick={() => downloadText(
+                        `qa-三边对账-${(s?.finishedAt || s?.startedAt || '').slice(0, 10) || 'result'}.md`, md)}
+                    >下载 .md</Button>
+                    <span style={{ fontSize: 12, color: C.gray }}>
+                      <Rich text="这份就是 AI 走 MCP `lum_get_qa_review` 拿的详细版（那边按域切片，这里合成一整趟）。" />
+                    </span>
+                  </div>
+                  {md ? (
+                    <pre style={{
+                      margin: 0, padding: 12, background: '#f5f4fb', borderRadius: 6,
+                      fontSize: 12, lineHeight: 1.7, fontFamily: 'var(--font-mono)',
+                      color: C.ink, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                      maxHeight: 560, overflow: 'auto',
+                    }}>{md}</pre>
+                  ) : (
+                    <Nothing text="还没有结果 —— 上面选环境点「开始跑」，跑完这里就有完整文本。" />
+                  )}
+                </>
+              ),
+            },
+          ]}
+        />
       </Drawer>
-
-      {/* 「活体评审」按钮 → 这个弹框：选环境 + 看清楚它会干什么 + 开跑。
-          说明照原来 Popconfirm 那段，只是从一行小字挪进弹框，看得清。 */}
-      <Modal
-        title="活体评审 —— 真去打开被测环境点一遍"
-        open={runOpen} onCancel={() => setRunOpen(false)}
-        okText="开始跑" cancelText="算了"
-        okButtonProps={{
-          icon: <BugOutlined />, loading: starting,
-          disabled: !envId || !envs.length || running,
-        }}
-        onOk={async () => { await start(); setRunOpen(false) }}
-      >
-        <div style={{ marginBottom: 6, fontSize: 13, color: C.ink }}>在哪个环境上跑</div>
-        <Select
-          placeholder="选环境" style={{ width: '100%' }} value={envId}
-          onChange={setEnvId} options={envs.map(e => ({ value: e.id, label: e.name }))}
-        />
-        <PageAlert
-          type="info" style={{ marginTop: 16 }}
-          message="这会真的去访问被测环境"
-          description={<Rich text="**只读**：只点「新建 / 编辑」这类开层按钮各一次；删除、停用、退出一个都不点。写请求（POST/PUT/PATCH/DELETE）一律在浏览器层拦下。跑完还会核一遍环境里的数有没有变 —— 变了会标红。整趟几十秒到几分钟。" />}
-        />
-        {!envs.length && (
-          <div style={{ marginTop: 12, fontSize: 12, color: C.gray }}>
-            这个项目还没有环境 —— 去「项目设置 → 环境与变量」建一个，至少要有 BASE_URL 和一套只读账号。
-          </div>
-        )}
-      </Modal>
     </Card>
   )
 }
