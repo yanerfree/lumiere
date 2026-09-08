@@ -969,15 +969,18 @@ export default function QaCatalog() {
   // 各执行层覆盖到哪。tier 取的是**清单自己声明的那一列**（qa_catalog 的 roles["tier"]），
   // 所以待补（gap）的行也带层 —— 分母不会塌成「只数已覆盖的」那种恒 100%。
   // 排除已废弃，跟上面覆盖率卡同口径。TIER 定义顺序在前，清单里出现的生僻层排后面。
+  // gap / p0Gap 一起算出来，好让这层的条子跟覆盖率卡用同一个 coverStrokeOf 上色
+  //（缺 P0 红 / 有缺口橙 / 全认领绿）—— 缺什么，不是身份分类。
   const byTier = useMemo(() => {
     const acc = {}
     for (const s of scenarios) {
       if (s.state === 'deprecated') continue
       const t = s.tier || ''
       if (!t) continue
-      const slot = acc[t] || (acc[t] = { total: 0, covered: 0 })
+      const slot = acc[t] || (acc[t] = { total: 0, covered: 0, gap: 0, p0Gap: 0 })
       slot.total += 1
       if (s.state === 'covered') slot.covered += 1
+      else { slot.gap += 1; if (s.priority === 'P0') slot.p0Gap += 1 }
     }
     const known = Object.keys(TIER).filter(k => acc[k])
     const rest = Object.keys(acc).filter(k => !TIER[k]).sort()
@@ -1416,7 +1419,9 @@ export default function QaCatalog() {
       {configured && summary && (
         <div style={{ display: 'flex', gap: 12, marginBottom: 12, flexWrap: 'wrap', alignItems: 'stretch' }}>
 
-          {/* 1. 覆盖到哪了 —— 并且说清「已覆盖」不等于「跑绿了」 */}
+          {/* 1. 覆盖到哪了（含还欠多少）—— 同一根「优先级」轴的两张脸合成一张卡：
+              上半「有脚本认领多少」，一条分隔线，下半「一条脚本都没有的还剩多少」。
+              并且始终说清「已覆盖」＝有脚本、不等于「跑绿了」。 */}
           <Panel
             title="覆盖到哪了"
             extra={<span style={{ fontSize: 11, color: C.gray }}>不含 {summary.deprecated} 条已废弃</span>}
@@ -1524,41 +1529,34 @@ export default function QaCatalog() {
                 </div>
               </div>
             )}
-          </Panel>
 
-          {/* 2. 还欠多少 —— 一个数字要能直接变成明天的活儿 */}
-          <Panel title="还欠多少" extra={<span style={{ fontSize: 11, color: C.gray }}>清单标 ⬜ 待补</span>}>
-            <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8 }}>
-              <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.warn, lineHeight: 1 }}>{summary.gap}</span>
-              <span style={{ fontSize: 12, color: C.gray }}>条场景还没有任何脚本</span>
-            </div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-              {['P0', 'P1', 'P2', 'P3'].filter(p => summary.byPriority?.[p]?.gap).map(p => (
-                <Tag
-                  key={p} onClick={() => jump({ priority: p, state: 'gap', sortRisk: true })}
-                  style={priority === p && state === 'gap'
-                    // 选中＝实底白字（P0 5.71:1 / P1 5.72:1 / P2·P3 6.44:1，都够 AA）
-                    ? { margin: 0, cursor: 'pointer', border: 0, background: SELECTED_FILL, color: '#fff' }
-                    : { ...tagStyle(PRIORITY_TONE[p]), cursor: 'pointer' }}
-                >
-                  {p} 缺 {summary.byPriority[p].gap}
-                </Tag>
-              ))}
-            </div>
-            <div style={{ borderTop: `1px solid ${C.line}`, paddingTop: 8 }}>
-              <div style={{ fontSize: 11, color: C.gray, marginBottom: 4 }}>
-                要挑一批今天就动手的，就挑这批：
+            {/* ── 翻面：上面数「有脚本的」，下面数「一条脚本都没有的」。
+                原来这是独立一张「还欠多少」卡，但它那个 30px 大数字 = 总数 − 已覆盖，
+                只是上面 covered/total 的差 —— 同一根优先级轴、同一个数报了两遍。
+                合进来只留它真正独有的两样：每档缺几条（点一下就把表筛成这批）、
+                和今天最该先动手的那批（P0 且风险 9）。 */}
+            <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 10, paddingTop: 8 }}>
+              <div style={{ fontSize: 12, color: C.gray, marginBottom: 6 }}>
+                另有 <b style={{ fontSize: 15, fontWeight: 700, color: VIVID.warn }}>{summary.gap}</b> 条
+                <b style={{ color: C.ink }}> 一个脚本都没有</b> —— 点一档筛出来：
               </div>
-              {/* 这里**故意不用 antd 的 <Button>**。
-                  全站 global.css 把 .ant-btn 的三种配色全用 !important 焊死了：默认档一律
-                  刷成品牌青（rgba(14,165,160,.08) + #0ea5a0），danger 档一律 #e8453c。
-                  两条都赢过行内 style —— 也就是说，只要挂着 .ant-btn，这一页就**没法**给
-                  自己的按钮定色。实测过两种写法在这张卡上的下场：
-                      danger 档   #e8453c on #f5f9fc   3.71:1  ← 12px 正文要 4.5，不过
-                      默认档      #0ea5a0 的青         整块卡里唯一一处第五色相
-                  这个控件的实际身份是**筛选筹码**（点一下把表筛成这批），不是表单提交，
-                  用原生 button 语义一样全（键盘可达、disabled 生效），还躲开了那套 !important。
-                  颜色就用本页的：选中是墨底白字（8.5:1），没选中是红底纹 + 墨字（6.57:1）。 */}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+                {['P0', 'P1', 'P2', 'P3'].filter(p => summary.byPriority?.[p]?.gap).map(p => (
+                  <Tag
+                    key={p} onClick={() => jump({ priority: p, state: 'gap', sortRisk: true })}
+                    style={priority === p && state === 'gap'
+                      // 选中＝实底白字（P0 5.71:1 / P1 5.72:1 / P2·P3 6.44:1，都够 AA）
+                      ? { margin: 0, cursor: 'pointer', border: 0, background: SELECTED_FILL, color: '#fff' }
+                      : { ...tagStyle(PRIORITY_TONE[p]), cursor: 'pointer' }}
+                  >
+                    {p} 缺 {summary.byPriority[p].gap}
+                  </Tag>
+                ))}
+              </div>
+              {/* 这里**故意不用 antd 的 <Button>**：全站 global.css 用 !important 把 .ant-btn
+                  三种配色焊死，行内 style 定不了色。这个控件本质是**筛选筹码**（点一下把表
+                  筛成这批），不是表单提交，用原生 button 语义一样全，还躲开那套 !important。
+                  颜色走本页的：选中是墨底白字（8.5:1），没选中是红底纹 + 墨字（6.57:1）。 */}
               <button
                 type="button" disabled={!urgentCount}
                 onClick={() => jump({ quick: 'urgent', sortRisk: true })}
@@ -1578,6 +1576,52 @@ export default function QaCatalog() {
                 P0 待补 · 风险 9 —— {urgentCount} 条
               </button>
             </div>
+          </Panel>
+
+          {/* 2. 各层覆盖到哪 —— 换一根轴看同一批场景：不按优先级，按「执行层」拆。
+              和上一张卡是同一批场景的两种切法，所以用同一副长相（药丸 + 进度条 + 分子/分母）。
+              条子颜色跟上一张卡、和下面按域看那一片**同一套判据**（coverStrokeOf）：
+              缺 P0 红 / 只缺非 P0 橙 / 全认领绿 —— 说的是「这一层缺什么」。层本身谁也不比谁
+              重要，所以那颗药丸保持中性（灰），只让条子上色。 */}
+          <Panel
+            title="各层覆盖到哪"
+            extra={<span style={{ fontSize: 11, color: C.gray }}>清单声明的层 · 不含已废弃</span>}
+          >
+            {byTier.length === 0 ? (
+              <Nothing text="这份清单没有「层」这一列 —— 没法按层拆。" />
+            ) : byTier.map(t => {
+              const pct = t.total ? Math.round((t.covered / t.total) * 100) : 0
+              return (
+                <Hit
+                  key={t.key}
+                  active={tier.length === 1 && tier[0] === t.key && !domain && !priority && !state && !quick}
+                  onClick={() => jump({ tier: [t.key] })}
+                >
+                  {/* 跟表格「执行层」那一列同一颗 mute 药丸（层是身份分类，保持中性）。
+                      宽度按最长的「跨面全链」四个字定，短的层不会左右跳。 */}
+                  <Tooltip title={`${t.key} — ${TIER[t.key]?.desc || ''}`}>
+                    <span style={{ ...pill('mute', 56), flex: '0 0 auto' }}>{tierText(t.key)}</span>
+                  </Tooltip>
+                  {/* 条子按「这层缺什么」上色，走跟覆盖率卡 / 域行同一支 coverStrokeOf：
+                      缺 P0 红、只缺非 P0 橙、全认领绿、清单没这层的行走空轨灰。 */}
+                  <Progress
+                    percent={pct} size="small"
+                    strokeColor={coverStrokeOf(t).color} trailColor={BAR_TRAIL}
+                    style={{ flex: 1, margin: 0 }} showInfo={false}
+                  />
+                  {/* 分子分母跟覆盖率卡每档一样：条子只说大概，具体差几条要靠这两个数 */}
+                  <span style={{ color: C.ink, fontSize: 13, width: 66, textAlign: 'right' }}>
+                    {t.covered}/{t.total}
+                  </span>
+                </Hit>
+              )
+            })}
+            {byTier.length > 0 && (
+              <div style={{ fontSize: 11, color: C.gray, marginTop: 8, lineHeight: 1.6 }}>
+                条子长短 = 有脚本认领的比例，颜色跟覆盖率卡同一套：缺 P0 标红、只缺非 P0 标橙、
+                全部认领标绿。「已覆盖」仍是<b>有脚本</b>、不等于<b>跑绿了</b>。
+              </div>
+            )}
           </Panel>
 
           {/* 3. 清单可信吗 —— 前两项是 QA 自己门禁会 BLOCK 的，不该埋在页面底部 */}
@@ -1737,49 +1781,6 @@ export default function QaCatalog() {
               第三项是「回去重新审优先级」的信号，不阻断；后两项是我们自己的解析靠不靠谱 ——
               分别是「行读掉了没」和「列读串了没」，鼠标停上去能看到认列结果。
             </div>
-          </Panel>
-
-          {/* 4. 各层覆盖到哪 —— 换一根轴看同一批场景：不按优先级，按「执行层」拆。
-              和第 1 张卡是同一件事的两种切法，所以刻意用同一副长相（药丸 + 进度条 + 分子/分母）。
-              颜色上和优先级卡有一处**故意不同**：优先级卡的条子按缺什么染色（P0 红、P1 橙…），
-              因为优先级是「有多急」；而执行层是**身份分类、不表态**（见文件头 265° 冷灰那条），
-              四层之间没有谁更重要，所以四行同一支中性紫，覆盖多少只由条子长短说，不靠颜色。 */}
-          <Panel
-            title="各层覆盖到哪"
-            extra={<span style={{ fontSize: 11, color: C.gray }}>清单声明的层 · 不含已废弃</span>}
-          >
-            {byTier.length === 0 ? (
-              <Nothing text="这份清单没有「层」这一列 —— 没法按层拆。" />
-            ) : byTier.map(t => {
-              const pct = t.total ? Math.round((t.covered / t.total) * 100) : 0
-              return (
-                <Hit
-                  key={t.key}
-                  active={tier.length === 1 && tier[0] === t.key && !domain && !priority && !state && !quick}
-                  onClick={() => jump({ tier: [t.key] })}
-                >
-                  {/* 跟表格「执行层」那一列同一颗 mute 药丸，一眼认出是同一个东西。
-                      宽度按最长的「跨面全链」四个字定，短的层不会左右跳。 */}
-                  <Tooltip title={`${t.key} — ${TIER[t.key]?.desc || ''}`}>
-                    <span style={{ ...pill('mute', 56), flex: '0 0 auto' }}>{tierText(t.key)}</span>
-                  </Tooltip>
-                  <Progress
-                    percent={pct} size="small" strokeColor={BAR.mute} trailColor={BAR_TRAIL}
-                    style={{ flex: 1, margin: 0 }} showInfo={false}
-                  />
-                  {/* 分子分母跟第 1 张卡每档一样：条子只说大概，具体差几条要靠这两个数 */}
-                  <span style={{ color: C.ink, fontSize: 13, width: 66, textAlign: 'right' }}>
-                    {t.covered}/{t.total}
-                  </span>
-                </Hit>
-              )
-            })}
-            {byTier.length > 0 && (
-              <div style={{ fontSize: 11, color: C.gray, marginTop: 8, lineHeight: 1.6 }}>
-                条子长短 = 有脚本认领的比例；层只是分类，四行同一支色不表示谁更重要。
-                「已覆盖」仍是<b>有脚本</b>、不等于<b>跑绿了</b>。
-              </div>
-            )}
           </Panel>
         </div>
       )}
