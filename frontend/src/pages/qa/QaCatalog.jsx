@@ -938,6 +938,8 @@ export default function QaCatalog() {
   const jump = (patch) => {
     clearFilters()
     setDomain(patch.domain); setPriority(patch.priority); setState(patch.state); setQuick(patch.quick)
+    // tier 是多选（数组），从卡片点进来只筛这一层
+    if (patch.tier) setTier(patch.tier)
     if (patch.sortRisk) setSorter({ columnKey: 'risk', order: 'descend' })
     if (patch.showDeprecated) setShowDeprecated(true)
   }
@@ -963,6 +965,24 @@ export default function QaCatalog() {
 
   const urgentCount = useMemo(
     () => scenarios.filter(QUICK.urgent.test).length, [scenarios, QUICK])
+
+  // 各执行层覆盖到哪。tier 取的是**清单自己声明的那一列**（qa_catalog 的 roles["tier"]），
+  // 所以待补（gap）的行也带层 —— 分母不会塌成「只数已覆盖的」那种恒 100%。
+  // 排除已废弃，跟上面覆盖率卡同口径。TIER 定义顺序在前，清单里出现的生僻层排后面。
+  const byTier = useMemo(() => {
+    const acc = {}
+    for (const s of scenarios) {
+      if (s.state === 'deprecated') continue
+      const t = s.tier || ''
+      if (!t) continue
+      const slot = acc[t] || (acc[t] = { total: 0, covered: 0 })
+      slot.total += 1
+      if (s.state === 'covered') slot.covered += 1
+    }
+    const known = Object.keys(TIER).filter(k => acc[k])
+    const rest = Object.keys(acc).filter(k => !TIER[k]).sort()
+    return [...known, ...rest].map(k => ({ key: k, ...acc[k] }))
+  }, [scenarios])
 
   // **按域码固定排序，不按缺口。** 原来是缺口多的排前面（「黑洞域」自己浮上来），
   // 代价是这一格的位置跟着覆盖进度走：补了两条 SEC，它就从第 17 位挪到第 20 位，
@@ -1717,6 +1737,49 @@ export default function QaCatalog() {
               第三项是「回去重新审优先级」的信号，不阻断；后两项是我们自己的解析靠不靠谱 ——
               分别是「行读掉了没」和「列读串了没」，鼠标停上去能看到认列结果。
             </div>
+          </Panel>
+
+          {/* 4. 各层覆盖到哪 —— 换一根轴看同一批场景：不按优先级，按「执行层」拆。
+              和第 1 张卡是同一件事的两种切法，所以刻意用同一副长相（药丸 + 进度条 + 分子/分母）。
+              颜色上和优先级卡有一处**故意不同**：优先级卡的条子按缺什么染色（P0 红、P1 橙…），
+              因为优先级是「有多急」；而执行层是**身份分类、不表态**（见文件头 265° 冷灰那条），
+              四层之间没有谁更重要，所以四行同一支中性紫，覆盖多少只由条子长短说，不靠颜色。 */}
+          <Panel
+            title="各层覆盖到哪"
+            extra={<span style={{ fontSize: 11, color: C.gray }}>清单声明的层 · 不含已废弃</span>}
+          >
+            {byTier.length === 0 ? (
+              <Nothing text="这份清单没有「层」这一列 —— 没法按层拆。" />
+            ) : byTier.map(t => {
+              const pct = t.total ? Math.round((t.covered / t.total) * 100) : 0
+              return (
+                <Hit
+                  key={t.key}
+                  active={tier.length === 1 && tier[0] === t.key && !domain && !priority && !state && !quick}
+                  onClick={() => jump({ tier: [t.key] })}
+                >
+                  {/* 跟表格「执行层」那一列同一颗 mute 药丸，一眼认出是同一个东西。
+                      宽度按最长的「跨面全链」四个字定，短的层不会左右跳。 */}
+                  <Tooltip title={`${t.key} — ${TIER[t.key]?.desc || ''}`}>
+                    <span style={{ ...pill('mute', 56), flex: '0 0 auto' }}>{tierText(t.key)}</span>
+                  </Tooltip>
+                  <Progress
+                    percent={pct} size="small" strokeColor={BAR.mute} trailColor={BAR_TRAIL}
+                    style={{ flex: 1, margin: 0 }} showInfo={false}
+                  />
+                  {/* 分子分母跟第 1 张卡每档一样：条子只说大概，具体差几条要靠这两个数 */}
+                  <span style={{ color: C.ink, fontSize: 13, width: 66, textAlign: 'right' }}>
+                    {t.covered}/{t.total}
+                  </span>
+                </Hit>
+              )
+            })}
+            {byTier.length > 0 && (
+              <div style={{ fontSize: 11, color: C.gray, marginTop: 8, lineHeight: 1.6 }}>
+                条子长短 = 有脚本认领的比例；层只是分类，四行同一支色不表示谁更重要。
+                「已覆盖」仍是<b>有脚本</b>、不等于<b>跑绿了</b>。
+              </div>
+            )}
           </Panel>
         </div>
       )}
