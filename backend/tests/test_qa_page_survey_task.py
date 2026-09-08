@@ -33,9 +33,10 @@ def 记状态(monkeypatch):
 @pytest.fixture
 def 假爬取(monkeypatch):
     from app.engine.surveys import qa_page_survey_crawl as c
-    box = {"payload": _payload()}
+    box = {"payload": _payload(), "kw": None}
 
     async def fake(**kw):
+        box["kw"] = kw
         return box["payload"]
 
     monkeypatch.setattr(c, "run_survey", fake)
@@ -302,3 +303,148 @@ class Test该爬的时候一定去爬:
         with pytest.raises(RuntimeError):
             await t._previous(project_id=str(uuid.uuid4()), env_id=None,
                               qa_commit_sha="sha-1")
+
+
+# ── 活体计划这条缝：传得下去、崩了不连坐、没有就不猜 ────────────────────
+
+def _plan(**over):
+    plan = {"routeTable": {"available": True, "routes": [{"path": "/api/x"}]},
+            "selectorProbe": {"/svc": ["[data-testid=a]"]},
+            "selectorParsed": {"keys": [{"key": "a"}]},
+            "envVars": {"AUDITOR_USERNAME": "qa-auditor",
+                        "AUDITOR_PASSWORD": "s3cret"},
+            "buildFingerprint": "", "declarations": ["计划声明一条"]}
+    plan.update(over)
+    return plan
+
+
+@pytest.fixture
+def 假对账(monkeypatch):
+    box = {"raise": None, "rec": {"gaps": {"counters": {"total": 3}},
+                                  "proposals": [], "applicability": [],
+                                  "declarations": ["对账声明一条"]}}
+
+    async def fake(**kw):
+        if box["raise"] is not None:
+            raise box["raise"]
+        box["kw"] = kw
+        return box["rec"]
+
+    monkeypatch.setattr(t, "_reconcile", fake)
+    return box
+
+
+class Test活体计划:
+    async def test_计划里的三样要真传到爬取那边(self, 记状态, 假爬取, 假落库, 假对账):
+        """**这条盯的是一次改名事故。**
+
+        任务层本来就有一个局部变量叫 `plan`（`plan_reuse` 算出来的"要不要复用"）。
+        活体计划的参数也叫 `plan` 的话，后者会被前者盖掉 —— 于是路由表、选择器
+        清单、环境变量三样全变成 `None`：选择器探测和三边对账**整片消失，而且
+        一条错都不报**，页面上看着就像"这一趟没什么可探的"。
+        """
+        r = await t.run_page_survey({}, "task-1", str(uuid.uuid4()), ["auditor"],
+                                   ["/svc"], plan=_plan())
+        assert r["status"] == "done"
+        kw = 假爬取["kw"]
+        assert kw["routes"] == [{"path": "/api/x"}]
+        assert kw["selector_probe"] == {"/svc": ["[data-testid=a]"]}
+        assert kw["env_vars"]["AUDITOR_PASSWORD"] == "s3cret"
+
+    async def test_没给计划就一格都不补(self, 记状态, 假爬取, 假落库):
+        """不补 ≠ 补 0。
+
+        今天之前的调用方压根没算过选择器和对账，账本里就**不该有**这两个键；
+        垫一个空壳进去的话，「没算过」会渲染成「算过、是 0 个缺口」。
+        """
+        r = await t.run_page_survey({}, "task-1", str(uuid.uuid4()), ["admin"],
+                                   ["/svc"])
+        assert "selectorReport" not in r["ledger"]
+        assert "reconcile" not in r["ledger"]
+
+    async def test_对账崩了不算这一趟失败_但缺口数不许落0(self, 记状态, 假爬取,
+                                                        假落库, 假对账):
+        """爬取已经真的访问过别人的环境了，那份结果得留下。
+
+        对账是纯计算、可以重算 —— 但重算之前那一格必须写成「没算」，
+        不是写成 0。这两者在页面上长得一模一样，而含义正好相反。
+        """
+        假对账["raise"] = RuntimeError("git 仓读不到")
+        r = await t.run_page_survey({}, "task-1", str(uuid.uuid4()), ["auditor"],
+                                   ["/svc"], plan=_plan())
+        assert r["status"] == "done"          # ← 不连坐
+        rec = r["ledger"]["reconcile"]
+        assert rec["available"] is False
+        assert "git 仓读不到" in rec["reason"]
+        assert any("不是 0" in d for d in rec["declarations"])
+        assert "counters" not in rec
+
+    async def test_对账跑成了就带上开关(self, 记状态, 假爬取, 假落库, 假对账):
+        r = await t.run_page_survey({}, "task-1", str(uuid.uuid4()), ["auditor"],
+                                   ["/svc"], plan=_plan())
+        rec = r["ledger"]["reconcile"]
+        assert rec["available"] is True
+        assert rec["gaps"]["counters"]["total"] == 3
+        assert "对账声明一条" in rec["declarations"]
+
+    async def test_选择器没解析出来就没有报告(self, 记状态, 假爬取, 假落库, 假对账):
+        """`selectors.ts` 找不到/解析不出来的那一趟，不许出一份"0 条选择器"的报告。"""
+        r = await t.run_page_survey({}, "task-1", str(uuid.uuid4()), ["auditor"],
+                                   ["/svc"], plan=_plan(selectorParsed=None))
+        assert "selectorReport" not in r["ledger"]
+        assert r["ledger"]["reconcile"]["available"] is True
+
+    async def test_复用那一支不受影响(self, 记状态, 假爬取, 假落库, 假对账,
+                                     monkeypatch):
+        """判"要不要复用"的仍然只有 `plan_reuse`，活体计划不插手这个判断。"""
+        from app.services import qa_survey_cache as sc
+
+        monkeypatch.setattr(sc, "plan_reuse", lambda **kw: {
+            "action": "reuse", "recompute": [], "reasons": ["测试"],
+            "summary": "复用上一趟",
+            "provenance": {"source": "reuse", "surveyId": "s-1",
+                           "surveyStatus": "partial"}})
+        monkeypatch.setattr(t, "_previous", lambda **kw: _noop())
+        r = await t.run_page_survey({}, "task-1", str(uuid.uuid4()), ["auditor"],
+                                   ["/svc"], env_id=str(uuid.uuid4()),
+                                   build_fingerprint="bf-1", plan=_plan())
+        assert r["status"] == "partial"
+        assert 假爬取["kw"] is None            # 没去爬
+
+
+async def _noop():
+    return {}
+
+
+class Test凭证边界:
+    def test_活体计划不许走_arq_enqueue(self):
+        """**计划里带着完整可用的账号密码，只能在进程内传。**
+
+        arq 的 job 参数是要 pickle 进 redis 的 —— 那等于把一份可用凭证落在一个
+        没人想到要去清的地方（还带 TTL，过期前谁都能读）。所以这条路只能是
+        `qa_catalog_review.spawn`（= `asyncio.create_task`）。
+
+        扫的是"`enqueue_job(` 后面 200 个字符里出不出现 `run_page_survey`"，
+        不是"这个文件提不提 enqueue" —— `worker.py` 的注释里就有那个词，
+        按词扫会把一句正确的注释判成违规（那种测试第一次红就会被人删掉）。
+        """
+        import pathlib
+        import re
+
+        root = pathlib.Path(t.__file__).resolve().parents[2]   # backend/app
+        bad = []
+        for f in sorted(root.rglob("*.py")):
+            src = f.read_text(encoding="utf-8")
+            if "run_page_survey" not in src:
+                continue
+            for m in re.finditer(r"enqueue_job\(", src):
+                if "run_page_survey" in src[m.start():m.start() + 200]:
+                    bad.append(str(f.relative_to(root.parent)))
+        assert bad == [], f"这些地方把活体计划塞进了 redis：{bad}"
+
+    def test_plan_只能按关键字传(self):
+        """位置传参的话，调用处看不出这一份是"带凭证的"，加个参数就错位。"""
+        import inspect
+
+        kind = inspect.signature(t.run_page_survey).parameters["plan"].kind
+        assert kind is inspect.Parameter.KEYWORD_ONLY

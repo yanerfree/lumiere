@@ -100,7 +100,8 @@ _READ_WORDS = (
     "查看", "详情", "搜索", "查询", "筛选", "过滤", "导出", "下载", "刷新", "展开",
     "收起", "全部", "更多", "返回", "取消", "关闭", "上一页", "下一页", "排序",
     "view", "detail", "search", "filter", "export", "download", "refresh", "expand",
-    "collapse", "more", "back", "cancel", "close", "next", "prev", "sort",
+    "collapse", "more", "back", "cancel", "close", "next", "prev",
+    "previous", "sort",
 )
 
 # 角色本身就说明了会不会改状态。`switch` / `checkbox` / `radio` 点一下就是改，
@@ -108,6 +109,39 @@ _READ_WORDS = (
 _WRITE_ROLES = ("switch", "checkbox", "radio", "slider", "spinbutton")
 # 导航类：点了只是换个页面。爬虫要靠它走完站点。
 _READ_ROLES = ("link", "tab", "menuitem", "treeitem")
+
+
+# ── 词表怎么匹配：ASCII 认词边界，中文认子串 ───────────────────────────────
+#
+# 2026-09-04 实测：表头 `Created At` 被 `create` 子串命中判成「开层按钮」，
+# 于是整页的预算被表头和左侧导航吃光，`dialogsOpened` **恒为 0** ——
+# 而账本上「点了 255 下」看着非常健康。子串匹配还顺带把 `Address` 判成写
+# （含 `add`）、`Preset` 判成禁点（含 `reset`）。
+#
+# 词边界只对 ASCII 有意义：Python 的 `\w` 把汉字也算词字符，
+# `\b新建\b` 在「新建服务」里两边都不是边界，一律不命中 —— 所以中文走子串。
+#
+# 尾巴只放 `s/es/ing`（`Details`、`Adding`），**不放 `d/ed`**：
+# 放了 `Created`/`Updated` 就又回到原样。代价是 `Running`、`Stopped`
+# 这类分词判成 unknown —— unknown 是**不点**的那一档，宁可少点。
+_ASCII_RE_CACHE: dict[str, "re.Pattern"] = {}
+
+
+def _word_hit(text: str, word: str) -> bool:
+    """`word` 在 `text` 里算不算命中。text/word 都应已 `lower()`。"""
+    if not word.isascii():
+        return word in text
+    rx = _ASCII_RE_CACHE.get(word)
+    if rx is None:
+        rx = re.compile(r"\b" + re.escape(word) + r"(?:s|es|ing)?\b")
+        _ASCII_RE_CACHE[word] = rx
+    return bool(rx.search(text))
+
+
+# 有向链路（`qa_directed_chain`）要认「哪个按钮是新建/提交/删除」，
+# 用的必须是**同一条**匹配规则。分叉出去的那一天，`Created At` 就会在
+# 那一半重新被认成「新建按钮」—— 而这一半的测试全绿，谁都不会去看。
+word_hit = _word_hit
 
 
 def classify_control(label: str, role: str = "") -> str:
@@ -123,19 +157,84 @@ def classify_control(label: str, role: str = "") -> str:
     if not text:
         return "read" if r in _READ_ROLES else "unknown"
     for w in _WRITE_WORDS:
-        if w in text:
+        if _word_hit(text, w):
             return "write"
     for w in _READ_WORDS:
-        if w in text:
+        if _word_hit(text, w):
             return "read"
     return "read" if r in _READ_ROLES else "unknown"
+
+
+# ── L2b：开层 ≠ 提交 ─────────────────────────────────────────────────────
+
+# `classify_control` 答的是「点下去**会不会写**」，`新建`/`编辑` 判成 write 是对的。
+# 这一段答的是另一个问题：「我们**点不点**」。合成一句的话只有两个坏选择 ——
+# 要么按 write 一辈子不点（那个系统的表单就永远枚举不到），
+# 要么改判成 read（那是把层里的「保存/提交」也一起放行了）。
+#
+# 为什么值得多这一段：2026-09-04 那一趟量出来，1266 个可操作项里**一个输入框
+# 都没有**。不是被测系统没有表单，是表单全在没被打开的层里 —— 于是
+# 「表单覆盖了没」这个问题的**分母是 0，任何覆盖率都成立**。
+#
+# 开层的那一下**本身不写**：真正的写在层里的「保存/提交/确定」上，而那些
+# 我们一个都不点。就算判错了，L1 那层网也会把写请求 abort 掉。
+_OPENER_WORDS = (
+    "新建", "创建", "添加", "新增", "编辑", "修改", "配置", "设置",
+    "new", "create", "add", "edit", "config", "setting",
+)
+
+# **一个都不许点**，哪怕 L1 会把请求拦下来。三条理由各自独立成立：
+#  ① 退出/登出：点完这一下，后面每一页都渲染成登录页，**而每一格都是绿的**
+#     —— 2026-09-04 刚修完一次一模一样的假绿，别自己再造一次；
+#  ② 删除/清空/重置：多数系统弹二次确认（我们不点确认），但**有的用原生
+#     `window.confirm`** —— 那一下会把整个分片吊死在一个 Playwright 默认不处理的
+#     弹框上，报出来是超时，看不出是自己点出来的；
+#  ③ 就算请求被 L1 拦了，页面上也已经弹了一条失败提示 —— 我们是来看的，
+#     不该在别人的环境里留脚印。
+_NEVER_CLICK_WORDS = (
+    "删除", "移除", "清空", "重置", "停用", "禁用", "注销", "退出", "登出",
+    "下线", "作废", "撤销", "重启", "停止", "驳回", "拒绝", "审批", "通过",
+    "delete", "remove", "clear", "reset", "disable", "logout", "sign out",
+    "revoke", "restart", "stop", "approve", "reject",
+)
+
+
+def click_intent(label: str, role: str = "") -> str:
+    """`safe` / `opener` / `never` —— 无向枚举里**这个控件点不点**。
+
+    顺序是**禁点优先**：`重置密码` 里既有"重置"也有"密码"，先判禁点才不会
+    因为别的词表命中而放行。`safe` 就是 L2 那档（`SAFE_TO_CLICK`），
+    `opener` 是"点开一个层"，其余一律 `never`。
+    """
+    text = (label or "").strip().lower()
+    for w in _NEVER_CLICK_WORDS:
+        if _word_hit(text, w):
+            return "never"
+    # 角色照旧**先于**文案：一个文案叫「新增」的开关，点下去就是打开一个开关，
+    # 不是弹一个层。少了这一句，`_OPENER_WORDS` 会把整档 switch/checkbox
+    # 重新放行 —— 而那正是 `classify_control` 里角色优先要挡的东西。
+    if (role or "").strip().lower() in _WRITE_ROLES:
+        return "never"
+    if classify_control(label, role) in SAFE_TO_CLICK:
+        return "safe"
+    for w in _OPENER_WORDS:
+        if _word_hit(text, w):
+            return "opener"
+    return "never"
 
 
 # ── L3 ────────────────────────────────────────────────────────────────────
 
 # 主爬账号。**只读账号**——L1/L2 拦不住的东西，靠它在服务端被拒。
 # 三层是叠着的，不是三选一：前两层是我们自己的判断，这一层是对方系统的判断。
-MAIN_CRAWL_ROLE = "qa-auditor"
+#
+# 名字是 `auditor` 而不是 `qa-auditor`：**角色名必须跟环境变量的前缀同源**，
+# 因为取凭证只有这一条路（`<PREFIX>_USERNAME` / `_PASSWORD`）。实测那个环境里
+# 只读账号配在 `AUDITOR_USERNAME=qa-auditor` 上 —— `qa-auditor` 是**账号名**，
+# 前缀才是角色。用账号名当角色名的话，这里认得出"配了只读账号"，
+# 而爬取那边去找 `QA_AUDITOR_USERNAME` 找不到，于是它被静默跳过 ——
+# 报出来是「主爬账号没登上」，而不是「你这个常量取错了名字」。
+MAIN_CRAWL_ROLE = "auditor"
 
 
 def _role_names(roles) -> list[str]:

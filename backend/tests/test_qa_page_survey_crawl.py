@@ -13,6 +13,7 @@ Test ID: qa-page-survey-crawl-UT-001
 Priority: P0
 """
 import ast
+import asyncio
 import json
 import pathlib
 
@@ -338,6 +339,10 @@ class _FakePage:
     async def wait_for_load_state(self, *a, **k):
         return None
 
+    async def wait_for_selector(self, selector, state=None, timeout=None):
+        """默认「登录框如期消失」。不消失是什么后果，见 `_NeverLeavesLoginPage`。"""
+        return None
+
     async def evaluate(self, js):
         for path, items in self.items_by_path.items():
             if self._cur.endswith(path.lstrip("/")):
@@ -471,3 +476,371 @@ class Test模块纪律:
     def test_并发对测试环境是克制的(self):
         """对方是测试环境不是压测靶子。"""
         assert 1 <= c.MAX_PARALLEL_SHARDS <= 3
+
+
+# ── 导航时窗 ─────────────────────────────────────────────────────────────
+
+class Test导航时窗:
+    """S8.2 · HAR 是**一整份**（`record_har_path` 单文件），里面没有"这条属于哪次
+    导航"这种字段。所以时间是唯一的锚 —— 时窗记错了，`qa_page_traffic` 那边
+    再对也没用，而且**错法是看不见的**：边照样生成，只是挂在别的页面名下。
+    """
+
+    @pytest.mark.asyncio
+    async def test_每一页都记一格并且按顺序(self, tmp_path, _creds):
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(_FakePage()), "http://h", "qa-auditor",
+                           ["/a", "/b"], ledger, tmp_path)
+        wins = ledger["pageWindows"]["qa-auditor"]
+        # 第一格是登录 —— 它也发请求，不记就整片落到 `edgesUnwindowed` 里
+        assert [w["path"] for w in wins] == ["/login", "/a", "/b"]
+        assert all(w.get("startedAt") and w.get("endedAt") for w in wins)
+
+    @pytest.mark.asyncio
+    async def test_起点必须记在_goto_之前(self, tmp_path, _creds):
+        """**这条是本类的第一纪律。** 记在 `goto` 之后的话，这一页自己的加载流量
+        全落在窗外 —— 而那恰好是页面级 P 边**唯一**的来源。表现是 P 账几乎全空，
+        在报告上长得像「这些页面不打接口」。
+        """
+        page = _FakePage()
+        seen = {}
+        real_goto = page.goto
+
+        async def goto(url, timeout=None):
+            # 按 url 记，别用 setdefault 记"第一次" —— 第一次是登录那一跳
+            seen[url] = c._now()
+            return await real_goto(url, timeout=timeout)
+
+        page.goto = goto
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(page), "http://h", "qa-auditor",
+                           ["/a"], ledger, tmp_path)
+        win = [w for w in ledger["pageWindows"]["qa-auditor"] if w["path"] == "/a"][0]
+        at = [v for k, v in seen.items() if k.endswith("/a")][0]
+        assert win["startedAt"] <= at <= win["endedAt"]
+
+    @pytest.mark.asyncio
+    async def test_登录那格不许延长(self, tmp_path, _creds):
+        """提交完浏览器自己跳到落地页。延长会把落地页的流量记到 `/login` 名下，
+        而报告上看不出这是错的。`tail: False` 是那一格唯一的防线。
+        """
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(_FakePage()), "http://h", "qa-auditor",
+                           ["/a"], ledger, tmp_path)
+        wins = ledger["pageWindows"]["qa-auditor"]
+        assert wins[0]["tail"] is False
+        assert "tail" not in wins[1]           # 普通页缺省就是可延长
+
+    @pytest.mark.asyncio
+    async def test_打不开的页也要有一格(self, tmp_path, _creds):
+        """超时那一页照样发过请求（发了才超时）。少这一格，那些请求会顺着
+        延长规则记到**上一页**名下 —— 凭空给上一页添几条它不打的端点。
+        """
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(_FakePage(fail_paths=["/bad"])), "http://h",
+                           "qa-auditor", ["/ok", "/bad"], ledger, tmp_path)
+        wins = ledger["pageWindows"]["qa-auditor"]
+        assert [w["path"] for w in wins] == ["/login", "/ok", "/bad"]
+        assert wins[-1].get("endedAt")
+
+    @pytest.mark.asyncio
+    async def test_关闭时刻要记下来(self, tmp_path, _creds):
+        """最后一页的尾巴延到 `context.close()`。没有这个时刻，
+        `effective_windows` **不延长**（宁可记不了账也不归错页），
+        于是最后一页的轮询流量整片丢进 `edgesUnwindowed`。
+        """
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(_FakePage()), "http://h", "qa-auditor",
+                           ["/a"], ledger, tmp_path)
+        assert ledger["contextClosedAt"]["qa-auditor"]
+
+    @pytest.mark.asyncio
+    async def test_角色各记一本(self, tmp_path, monkeypatch):
+        """两个角色跑在两个 shard 里、各有一份 HAR。混成一本的话
+        A 角色的时窗会去归 B 角色的流量。
+        """
+        for r in ("QA_AUDITOR", "TESTER"):
+            monkeypatch.setenv(f"{r}_USERNAME", "u")
+            monkeypatch.setenv(f"{r}_PASSWORD", "p")
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(_FakePage()), "http://h", "qa-auditor",
+                           ["/a"], ledger, tmp_path)
+        await c.crawl_role(_FakeBrowser(_FakePage()), "http://h", "tester",
+                           ["/b"], ledger, tmp_path)
+        assert set(ledger["pageWindows"]) == {"qa-auditor", "tester"}
+        assert [w["path"] for w in ledger["pageWindows"]["tester"]] == ["/login", "/b"]
+
+    @pytest.mark.asyncio
+    async def test_时窗真的喂给了归页那一步(self, tmp_path, _creds):
+        """上面几条只证明账本记对了。`run_survey` 不把它传下去的话，
+        `page_edges` 会稳定是 `[]` —— 而那在 `compute_gaps` 里只换来一句声明，
+        不报错。
+        """
+        src = SRC.read_text(encoding="utf-8")
+        assert 'ledger.get("pageWindows")' in src
+        assert 'closed_at=(ledger.get("contextClosedAt") or {}).get(role)' in src
+        assert 'ledger["traffic"] = ' in src
+
+
+class _LoginBrokenPage(_FakePage):
+    """登录页打开了，但表单填不进去 —— **选择器对不上**（实测最常见的一种）。
+
+    UAG 那套前端用 `input[autocomplete="username"]`，而默认值按 `name=` 猜。
+    """
+
+    async def fill(self, selector, value, **k):
+        raise TimeoutError(f"no element {selector}")
+
+
+class _LoginGotoBrokenPage(_FakePage):
+    """登录页压根打不开 —— 路径/地址配错了，或者那台机器没起来。"""
+
+    async def goto(self, url, **k):
+        raise TimeoutError(f"cannot open {url}")
+
+
+class Test登录崩了要说清是登录崩的:
+    """登录失败的诊断信息。
+
+    这几条盯的是**归因**，不是行为：登录不成，那个分片本来就该失败（抛出去，
+    `run_survey` 记 `shardsFailed`，终态不会是 `done`）。问题在于账本上只留一个
+    `TimeoutError` —— 「登录表单的选择器对不上」和「那台机器打不开」于是长得一样，
+    而一个要改配置、一个要找运维。
+    """
+
+    @pytest.mark.asyncio
+    async def test_登录崩了照旧往上抛_分片不许算成功(self, tmp_path, _creds):
+        with pytest.raises(TimeoutError):
+            await c.crawl_role(_FakeBrowser(_LoginBrokenPage()), "http://h",
+                               "qa-auditor", ["/a"], {}, tmp_path)
+
+    @pytest.mark.asyncio
+    async def test_账本上写明是登录哪一步崩的(self, tmp_path, _creds):
+        ledger = {}
+        with pytest.raises(TimeoutError):
+            await c.crawl_role(_FakeBrowser(_LoginBrokenPage()), "http://h",
+                               "qa-auditor", ["/a"], ledger, tmp_path)
+        row = ledger["loginFailed"][0]
+        assert row["role"] == "qa-auditor"
+        assert row["stage"] == "fill"          # goto 过了，是表单填不进去
+        assert row["error"] == "TimeoutError"
+        assert row["loginPath"] == "/login"
+        assert row["usedDefaultPath"] is True
+
+    @pytest.mark.asyncio
+    async def test_打不开登录页且只配了LOGIN_URL_才怪那个键(self, tmp_path, _creds):
+        """`LOGIN_URL=/api/auth/login` 是接口场景那个键。拿它当页面路径会打开一段
+        JSON —— 但这句话只在 **`goto` 那一步挂了** 的时候才成立。
+        """
+        ledger = {}
+        env = {"LOGIN_URL": "/api/auth/login",
+               "QA_AUDITOR_USERNAME": "u", "QA_AUDITOR_PASSWORD": "p"}
+        with pytest.raises(TimeoutError):
+            await c.crawl_role(_FakeBrowser(_LoginGotoBrokenPage()), "http://h",
+                               "qa-auditor", ["/a"], ledger, tmp_path, None, env)
+        row = ledger["loginFailed"][0]
+        assert row["stage"] == "goto"
+        assert "LOGIN_URL" in row["hint"]
+        assert "LOGIN_PATH" in row["hint"]
+
+    @pytest.mark.asyncio
+    async def test_goto过了就不许再怪路径_那是选择器的事(self, tmp_path, _creds):
+        """**这一条是拿实测换来的。**
+
+        2026-09-04 跑 UAG：7 个角色全挂在 `stage=fill`，账本上却写着「环境里只有
+        `LOGIN_URL`，去补 `LOGIN_PATH`」。而那台环境上默认路径 `/login`
+        **本来就是对的**（`goto` 拿到 200），真正命中不到的是
+        `input[name=username]` —— 它用 `autocomplete=`。
+        照那句话去改，改的是一个没坏的配置。
+        """
+        ledger = {}
+        env = {"LOGIN_URL": "/api/auth/login",       # 有它、且没有 LOGIN_PATH
+               "QA_AUDITOR_USERNAME": "u", "QA_AUDITOR_PASSWORD": "p"}
+        with pytest.raises(TimeoutError):
+            await c.crawl_role(_FakeBrowser(_LoginBrokenPage()), "http://h",
+                               "qa-auditor", ["/a"], ledger, tmp_path, None, env)
+        row = ledger["loginFailed"][0]
+        assert row["stage"] == "fill"
+        assert "LOGIN_USER_SELECTOR" in row["hint"]
+        assert "autocomplete" in row["hint"]
+        # 路径这时候是通的，一个字都不许提它
+        assert "LOGIN_URL" not in row["hint"]
+        assert "LOGIN_PATH" not in row["hint"]
+
+    @pytest.mark.asyncio
+    async def test_配了LOGIN_PATH还打不开_就别再提那个键(self, tmp_path):
+        ledger = {}
+        env = {"LOGIN_PATH": "/signin", "LOGIN_URL": "/api/auth/login",
+               "QA_AUDITOR_USERNAME": "u", "QA_AUDITOR_PASSWORD": "p"}
+        with pytest.raises(TimeoutError):
+            await c.crawl_role(_FakeBrowser(_LoginGotoBrokenPage()), "http://h",
+                               "qa-auditor", ["/a"], ledger, tmp_path, None, env)
+        row = ledger["loginFailed"][0]
+        assert row["usedDefaultPath"] is False
+        assert row["loginPath"] == "/signin"
+        assert "LOGIN_URL" not in row["hint"]
+
+    def test_提交完才挂的_别往选择器上引(self):
+        """`settle` 挂了 = 表单交上去了。那多半是凭据被拒，不是控件找不到。"""
+        assert "凭据" in c._login_hint("settle")
+        assert "LOGIN_USER_SELECTOR" not in c._login_hint("settle")
+
+    def test_崩掉的分片记得住是哪个角色(self):
+        """异常里没有角色，只能靠 `gather` 保序对回去。
+
+        主爬角色崩了 = 这一趟什么都没看到；浅扫角色崩了 = 少一列角色可见性。
+        只记一个异常类名的话，这两件事在报告上一模一样。
+        """
+        src = SRC.read_text(encoding="utf-8")
+        assert "zip(shards, results, strict=True)" in src
+        assert '"isMainRole": shard_role == main_role' in src
+
+
+# ── 页面里的 JS 必须带闸 ─────────────────────────────────────────────────
+
+class _HangingEvalPage(_FakePage):
+    """某一页的 JS 转不完 —— `page.evaluate` 永远不返回。
+
+    实测（2026-09-04，UAG 全量一趟）就是这个：7 个分片里 6 个 4 分钟内收工、
+    HAR 都落了盘，第 7 个（`platadmin`）卡在 evaluate 上 **1 小时 46 分**，
+    渲染进程 19% CPU 一直在转。`goto` / `wait_for_load_state` 的 15s 拦不到它
+    —— `evaluate` 压根没有 timeout 参数，也不吃 `set_default_timeout`。
+    """
+
+    def __init__(self, hang_on, **kw):
+        super().__init__(**kw)
+        self.hang_on = hang_on
+
+    async def evaluate(self, js):
+        if self._cur.endswith(self.hang_on.lstrip("/")):
+            await asyncio.sleep(30)          # 外面没闸就是 30 秒（真实里是无限）
+        return await super().evaluate(js)
+
+
+class _HangingClosePage(_FakePage):
+    pass
+
+
+class _HangingCloseContext(_FakeContext):
+    """HAR 落盘挂住。**这一步在 `finally` 里，挂在这儿是静默的。**"""
+
+    async def close(self):
+        await asyncio.sleep(30)
+
+
+class _HangingCloseBrowser:
+    def __init__(self, page):
+        self._ctx = _HangingCloseContext(page)
+
+    async def new_context(self, **kw):
+        return self._ctx
+
+
+class _TitleBrokenPage(_FakePage):
+    """标题取不到。原来 `title()` 在 try 外面 —— 一抛废掉整个分片。"""
+
+    def __init__(self, bad_title_path, **kw):
+        super().__init__(**kw)
+        self.bad = bad_title_path
+
+    async def title(self):
+        if self._cur.endswith(self.bad.lstrip("/")):
+            raise RuntimeError("no title")
+        return "T"
+
+
+class Test页面里的JS必须带闸:
+    @pytest.mark.asyncio
+    async def test_evaluate_转不完_按这一页失败处理_不拖住整趟(
+            self, tmp_path, _creds, monkeypatch):
+        """**这条是这次卡死的封样。** 没有闸的话它会跑满 30 秒才过。"""
+        monkeypatch.setattr(c, "PAGE_TIMEOUT_MS", 300)
+        page = _HangingEvalPage("/stuck")
+        ledger = {}
+        rows = await asyncio.wait_for(
+            c.crawl_role(_FakeBrowser(page), "http://h", "qa-auditor",
+                         ["/ok1", "/stuck", "/ok2"], ledger, tmp_path),
+            timeout=5)
+        assert ledger["pagesFailed"] == [{"path": "/stuck", "error": "TimeoutError"}]
+        assert ledger["pagesVisited"] == 2        # 卡住那页之后没停
+        assert rows == []
+
+    @pytest.mark.asyncio
+    async def test_关上下文挂住了_要记一格_不许静默(
+            self, tmp_path, _creds, monkeypatch):
+        """`finally` 里挂住连"这一片失败了"都报不出来 —— 所以它得有自己的账。"""
+        monkeypatch.setattr(c, "CONTEXT_CLOSE_TIMEOUT_MS", 300)
+        page = _HangingClosePage()
+        ledger = {}
+        await asyncio.wait_for(
+            c.crawl_role(_HangingCloseBrowser(page), "http://h", "qa-auditor",
+                         ["/ok1"], ledger, tmp_path),
+            timeout=5)
+        assert ledger["contextCloseTimedOut"] == ["qa-auditor"]
+
+    @pytest.mark.asyncio
+    async def test_标题取不到只废这一页_不废整个分片(self, tmp_path, _creds):
+        page = _TitleBrokenPage("/bad")
+        ledger = {}
+        await c.crawl_role(_FakeBrowser(page), "http://h", "qa-auditor",
+                           ["/ok1", "/bad", "/ok2"], ledger, tmp_path)
+        assert ledger["pagesFailed"] == [{"path": "/bad", "error": "RuntimeError"}]
+        assert ledger["pagesVisited"] == 2        # 后面那页照爬
+
+
+# ── 登录得等到"真的登进去了"，不是"没抛异常" ───────────────────────────────
+
+class _NeverLeavesLoginPage(_FakePage):
+    """表单交上去了，登录框还在原地 —— 会话没建起来。
+
+    实测（2026-09-04，UAG）就是这个形状，而且**一个异常都没抛**：
+    原来那句 `wait_for_load_state("networkidle")` 等的是"页面加载"，
+    而登录是一发 XHR、页面根本不导航，于是它秒回，紧接着的 `goto`
+    把还在飞的 `POST /api/auth/login` 掐了。7 个角色带着空会话爬了 181 页，
+    报告那头是 `shardsOk 7/7` + `loginCount 7` —— 一份完整的假绿。
+    """
+
+    async def wait_for_selector(self, selector, state=None, timeout=None):
+        raise TimeoutError("login form still there")
+
+
+class _LoginTakesPage(_FakePage):
+    """正常：提交之后登录框消失。记下等的是谁、等的是哪个状态。"""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.waited = []
+
+    async def wait_for_selector(self, selector, state=None, timeout=None):
+        self.waited.append((selector, state))
+
+
+class Test登录要等到登录框消失:
+    @pytest.mark.asyncio
+    async def test_登录框不消失就是没登上_按登录失败抛(self, _creds):
+        """**这条是这次假绿的封样。**"""
+        ledger = {}
+        with pytest.raises(TimeoutError):
+            await c._login(_NeverLeavesLoginPage(), "http://h", "qa-auditor", ledger)
+        assert ledger["loginFailed"][0]["stage"] == "settle"
+        assert ledger.get("loginCount") is None      # 没登上就不许记这一笔
+
+    @pytest.mark.asyncio
+    async def test_等的是密码框而且等它藏起来(self, _creds):
+        """等 `hidden` 不等 `detached`：有的前端只是把登录框隐藏，不从 DOM 摘掉。"""
+        page = _LoginTakesPage()
+        ledger = {}
+        assert await c._login(page, "http://h", "qa-auditor", ledger) is True
+        assert page.waited == [("input[name=password]", "hidden")]
+        assert ledger["loginCount"] == 1
+
+    def test_settle_的提示不许再说成等页面稳定(self):
+        """提示要指到「会话没建起来」，不是「网络没静下来」——
+        后者会让人去调超时，而超时调多久都没用。"""
+        hint = c._login_hint("settle")
+        assert "登录框" in hint and "LOGIN_URL" in hint
+        assert "networkidle" not in hint
+
+    def test_没登记过的步骤要自己承认_不许拿通用话糊过去(self):
+        hint = c._login_hint("某个新步骤")
+        assert "某个新步骤" in hint and "还没登记" in hint

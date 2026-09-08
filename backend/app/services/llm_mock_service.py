@@ -22,9 +22,31 @@ async def get_route(session: AsyncSession, route_id: uuid.UUID) -> MockRoute | N
     return await session.get(MockRoute, route_id)
 
 
+def _norm_method(m: str | None) -> str:
+    """method 统一大写 —— 运行时 _match_route 用 upper() 比较，写入侧对齐，
+    否则同一条 path 上 'post' 和 'POST' 会被当两条、却在运行时互相顶掉。"""
+    return (m or "POST").strip().upper() or "POST"
+
+
+async def find_conflict(
+    session: AsyncSession, method: str | None, path: str, *, exclude_id: uuid.UUID | None = None
+) -> MockRoute | None:
+    """查同一「方法+路径」上是否已有别的路由。有则返回那一条（供调用方回 409）。"""
+    stmt = select(MockRoute).where(
+        func.upper(MockRoute.method) == _norm_method(method),
+        MockRoute.path == (path or "").strip(),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(MockRoute.id != exclude_id)
+    return (await session.execute(stmt)).scalars().first()
+
+
 async def create_route(session: AsyncSession, data: MockRouteCreate) -> MockRoute:
     max_order = await session.scalar(select(func.coalesce(func.max(MockRoute.sort_order), -1)))
     payload = data.model_dump()
+    payload["method"] = _norm_method(payload.get("method"))
+    if isinstance(payload.get("path"), str):
+        payload["path"] = payload["path"].strip()
     route = MockRoute(**payload, sort_order=max_order + 1)
     session.add(route)
     await session.flush()
@@ -37,6 +59,10 @@ async def update_route(session: AsyncSession, route_id: uuid.UUID, data: MockRou
     if not route:
         return None
     for k, v in data.model_dump(exclude_unset=True).items():
+        if k == "method" and v is not None:
+            v = _norm_method(v)
+        elif k == "path" and isinstance(v, str):
+            v = v.strip()
         setattr(route, k, v)
     await session.flush()
     await session.refresh(route)

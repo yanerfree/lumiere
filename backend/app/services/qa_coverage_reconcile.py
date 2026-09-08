@@ -25,6 +25,8 @@
 """
 import re
 
+from app.services import qa_business_actions as qba
+from app.services import qa_script_endpoints as qse
 from app.services.branch_diff_service import WILDCARD, normalize_path
 
 # 归一之后仍然保留原样的尾巴：`status` / `access` 剥成 `statu` / `acces`
@@ -148,8 +150,18 @@ def domains_for(path: str | None, group: str | None, index: dict) -> set[str]:
 #   · 误报（脚本没打，却算成打了）→ 一个**真缺口凭空消失** → 不会红，谁都发现不了。
 # 差几个数量级。所以拿不准一律不认，记进 `endpointsUnextracted`。
 
+# ⚠ 这里的 base 名单是**口径**，不是"多认几个总没坏处"：
+#   · 加 `AUTH` —— 实读他们 `config/env.sh`：`AUTH=${BFF}/api/auth`，
+#     登录/刷新那一批全走它，漏掉等于 `/api/auth/*` 整段没人测。
+#   · **去掉 `GW`** —— `GW` 是 Kong（`AI=${GW}/ai/v1` 也算），不是 BFF。
+#     而 `covers()` 的后缀匹配能吃掉 2 段前缀，于是 `${GW}/v1/chat/completions`
+#     会把 BFF 的 `/api/v1/chat/completions` **标成测过了**：
+#     一个网关调用抹掉一个 BFF 缺口，不会红，谁都发现不了。
+#     它们不是"读不出来"，是**口径外** —— 单独记账（`qOutOfScope`），绝不进 hits。
 _URL_TOKEN = re.compile(
-    r"\$\{?(?:API|BFF|BASE_URL|GW|BASE)\}?(?P<path>/[^\s\"'`)\\|;>]*)")
+    r"\$\{?(?:API|BFF|AUTH|BASE_URL|BASE)\}?(?P<path>/[^\s\"'`)\\|;>]*)")
+_OUT_OF_SCOPE_TOKEN = re.compile(
+    r"\$\{?(?:%s)\}?/" % "|".join(qse.OTHER_BASES))
 _METHOD_FLAG = re.compile(r"-X\s+([A-Za-z]+)")
 _CALL_HINT = re.compile(r"\bcurl\b|\bhttpx?\b|\bwget\b")
 # 部署前缀最多吃掉几段：`$API` 展开成 `http://host/api` 还是 `http://host`
@@ -157,17 +169,32 @@ _CALL_HINT = re.compile(r"\bcurl\b|\bhttpx?\b|\bwget\b")
 # 再宽就等于"随便对上一个" —— 见 `covers()` 里为什么不直接用 `paths_match`。
 _MAX_BASE_SEGMENTS = 2
 
+# 链路骨架的两个上限。它们**只截断呈现，不影响任何判定** ——
+# `stepsTotal` / `chainsTotal` 照实报，所以"被截掉了"这件事在页面上看得见。
+# 不设上限的话，369 个脚本 × 几十步会把这份结果撑到几 MB，
+# 而链路是给人拿去照着点的，一屏之外的部分没人看。
+_CHAINS_CAP = 200
+_CHAIN_STEPS_CAP = 20
+
 
 def extract_endpoints(text: str | None) -> tuple[list[dict], list[dict]]:
-    """脚本正文 → `([{method, path, line}], [抽不出来的行])`。
+    """脚本正文 → `([{method, path, line, lineNo}], [抽不出来的行])`。**只认写在行里的 url。**
+
+    helper 封装的那一大半在 `qa_script_endpoints` 里（实测（`refs/remotes/origin/main`，369 个脚本）：
+    这个函数命中 136，连上 helper 之后 2943）—— 两个一起用，别只用这一个。
 
     第二个返回值是**账本**，不是错误列表：它要一路带到页面上，
     因为「这个端点没人打过」和「这一行我没读懂」是两回事，
     而它们在 G3 里长得一模一样。
+
+    `lineNo` 是 1 起的原始行号。它不是给人看的定位信息（`line` 已经带了原文），
+    是**排序键**：同一个脚本文件的命中会和 `qa_script_endpoints` 那半合并，
+    合并之后只有行号排得出「他写在文件里的执行顺序」——
+    而那个顺序就是业务链路骨架（见 `qa_business_actions.chain_of`）。
     """
     hits: list[dict] = []
     misses: list[dict] = []
-    for raw in (text or "").splitlines():
+    for lineno, raw in enumerate((text or "").splitlines(), 1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
@@ -178,12 +205,17 @@ def extract_endpoints(text: str | None) -> tuple[list[dict], list[dict]]:
                 continue
             mf = _METHOD_FLAG.search(line)
             hits.append({"method": (mf.group(1).upper() if mf else ""),
-                         "path": path, "line": line[:200]})
+                         "path": path, "line": line[:200], "lineNo": lineno})
             found = True
-        if not found and _CALL_HINT.search(line):
+        if found or _OUT_OF_SCOPE_TOKEN.search(line):
+            # 口径外的行（`${GW}`/`${AI}`）不进 hits，也**不算"读不懂"** ——
+            # 它读懂了，只是打的不是 BFF。混进账本会让"抽取不完备"这个数虚高，
+            # 而那个数是 G3 的可信度指示器。
+            continue
+        if _CALL_HINT.search(line):
             # 这一行明显在发请求，但 url 拼不出来（变量套变量 / helper 封装）。
             # **不当成「没打过」** —— 那正是会凭空造出 G3 的地方。
-            misses.append({"line": line[:200]})
+            misses.append({"line": line[:200], "why": "url 拼不出来", "lineNo": lineno})
     return hits, misses
 
 
@@ -217,7 +249,10 @@ def covers(script_path: str, target_path: str) -> bool:
 # G1 ∈P ∧ ∈R ∧ ∉Q   页面点得到、清单一条场景都没有        blame catalog  最硬
 # G2 ∈R ∧ ∉P ∧ ∉Q   端点在、页面到不了、也没人测          blame catalog
 # G3 ∈P ∧ 清单认领了该域 ∧ 无脚本打过        认领了没兑现   blame script
-# G4 ∈P ∧ 控件无任何请求                   纯前端行为      需判断
+# G4 ∈P ∧ **点过而且算过** ∧ 控件无任何请求   纯前端行为      需判断
+#    ⚠ 前提是两条，都不是修饰语：**点过**（`clicked`）**而且算过**
+#      （`endpoints` 不是 NULL）。少一条就不是 G4，只能记数 + 声明 ——
+#      「没点」记 `controlsUnclicked`、「点了没量到」记 `controlsUnmeasured`。
 # G5 present 但 disabled，既无请求也无路由    死按钮/flag     情报，不是缺口
 #
 # **G1 和 G3 字面上会重叠**（都含 ∈P ∧ ∉Q）。按 blame 分开：
@@ -268,6 +303,52 @@ def edge_ok(ep: dict, build_fingerprint: str | None = None) -> bool:
     return src in EDGE_SOURCES
 
 
+def _same_endpoint(am: str, ap: str, bm: str, bp: str) -> bool:
+    """P 侧观测到的路径和 R 侧自报的路由**是不是同一个端点**。
+
+    为什么不能直接比字符串：R 自报的是路由模板（`/api/v1/adapters/:adapter_id`
+    → 归一成 `/api/v1/adapters/{}`），而 P 侧是浏览器真发的、带真 id 的路径。
+    id 是 uuid 或纯数字时 `normalize_path` 会压成 `{}`，**但 slug 型 id 压不动**
+    （`/api/v1/adapters/kong-prod`）。字符串比一次就漏一次，后果是双向的假：
+    R 那条被报成「页面上没有」（多一条 G2），P 那条查不到 `group`（域可能归错）。
+
+    规矩三条，都是往"别乱连"的方向收的：
+      · **段数必须相等** —— 这里不吃部署前缀（`covers()` 那两段容忍是给 Q 侧
+        脚本用的，那边的路径来自别人的仓库）。P 和 R 都是同一个 BFF 的路径。
+      · 段级「相等，或有一边是 `{}`」。
+      · 方法为空算通配（R 偶尔不报 method），两边都写了就必须一致。
+
+    `{}` 容忍是有代价的：R 上同时有 `/adapters/{}` 和 `/adapters/health` 时，
+    P 侧的 `/adapters/health` 对两条都成立。所以**调用方必须先试精确命中、
+    不中才走这里**（`_lookup`），否则字面量路由会被通配路由抢走。
+    """
+    if am and bm and am.upper() != bm.upper():
+        return False
+    a = [x for x in (ap or "").split("/") if x]
+    b = [x for x in (bp or "").split("/") if x]
+    if len(a) != len(b) or not a:
+        return False
+    return all(x == y or x == WILDCARD or y == WILDCARD for x, y in zip(a, b))
+
+
+def _lookup(key: str, method: str, path: str, table: dict) -> dict | None:
+    """在 `p_eps` / `r_eps` 里找同一个端点。**精确优先，通配兜底。**
+
+    次序不是风格问题：反过来的话 `/adapters/health` 会先撞上 `/adapters/{}`，
+    于是一条真存在的字面量路由被当成"页面上有了"，G2 少一条 —— 少一条缺口
+    是**看不见**的那个方向。通配兜底里多个都命中时按 key 排序取第一个，
+    只为让同一份输入每次得到同一份报告。
+    """
+    hit = table.get(key)
+    if hit is not None:
+        return hit
+    for k in sorted(table):
+        m = table[k]
+        if _same_endpoint(method, path, m.get("method") or "", m.get("path") or ""):
+            return m
+    return None
+
+
 def compute_gaps(*, page_items: list[dict] | None,
                  routes: list[dict] | None,
                  scripts: list[dict] | None,
@@ -275,31 +356,128 @@ def compute_gaps(*, page_items: list[dict] | None,
                  claimed_domains: set[str] | None = None,
                  route_table_available: bool = True,
                  page_survey_available: bool = True,
-                 build_fingerprint: str | None = None) -> dict:
+                 build_fingerprint: str | None = None,
+                 helper_lib: dict[str, str] | None = None,
+                 page_edges: list[dict] | None = None,
+                 controls_clicked: int | None = None) -> dict:
     """三个账本 → 五类缺口。**纯集合运算，不问模型。**
 
     `scripts` 每条 `{domain, scenarioId, path, text}`。
+    `helper_lib` = `{lib/xxx.sh: 正文}`，喂 `qa_script_endpoints.parse_helper_lib`。
     `claimed_domains` = 清单里有场景行的域码（G1/G3 的分界）。
+    `page_edges` = **页面级** P 边（打开这一页浏览器发了什么，`qa_page_traffic`
+    归的页）。它和 `page_items[].endpoints` 那种**控件级**的边合进同一本 P 账，
+    但锚点写「(页面加载)」—— 混着看会让人以为有人点过那个按钮。
+    `None` = 这趟没算过（老 survey），`[]` = 算过了确实没有；两者的声明不一样。
+    `controls_clicked` = 这一趟**点过几个控件**。G4（"点了没有请求"）的唯一前提；
+    `None`/`0` ⇒ G4 一条不产出，只记数 + 声明。理由在 `_click_evidence` 上。
 
     两条降级声明是**一等公民**，不是附注：
       · 没有路由表 ⇒ `G2 notVerified`（S7.2 已经把这句话准备好了）
       · **没有页面枚举 ⇒ 只剩 G2，那就等于一个更慢的 route-drift** ——
         必须明说，否则这份报告看起来"跑过了、只有 2 类缺口"，
         而它其实一个新维度都没验。
+      · **没读到 helper 库 ⇒ Q 边只剩写在行里的 url**（实测（`refs/remotes/origin/main`，369 个脚本） 136 vs 2943，
+        差 25 倍），G1/G3 会是一片假缺口。这一条跟上面两条同等，不是附注。
     """
     claimed = set(claimed_domains or ())
     declarations: list[str] = []
 
     # —— Q 侧 ——
+    parsed = qse.parse_helper_lib(helper_lib or {})
+    if not parsed["helpers"]:
+        declarations.append(
+            "没读到 QA 的 helper 库（lib/*.sh），Q 边只认写在行里的 url，"
+            "G1/G3 会虚高")
+    if parsed["unparsed"]:
+        declarations.append(
+            "%d 个 helper 的参数位置读不出来，它们的调用点一律记漏读：%s"
+            % (len(parsed["unparsed"]),
+               "、".join(sorted({u["helper"] for u in parsed["unparsed"]}))))
+
     q_paths: list[tuple[str, str, str]] = []   # (domain, method, path)
     unextracted: list[dict] = []
+    # 每个脚本文件的命中（两半合并、按行号排好）。链路骨架从这里算，
+    # 但得等 `readable_paths` 齐了才算得准 —— 所以先攒着。
+    per_script: list[tuple[str, str, str, list[dict]]] = []
+    q_inline = q_helper = q_out_of_scope = q_infra = 0
     for sc in scripts or []:
-        hits, misses = extract_endpoints(sc.get("text"))
-        for h in hits:
-            q_paths.append((sc.get("domain") or "", h["method"], h["path"]))
-        for m in misses:
-            unextracted.append({"scenarioId": sc.get("scenarioId") or "",
-                                "domain": sc.get("domain") or "", "line": m["line"]})
+        text = sc.get("text")
+        dom, sid = sc.get("domain") or "", sc.get("scenarioId") or ""
+        hits, misses = extract_endpoints(text)
+        q_inline += len(hits)
+        # helper 封装的那一大半。**两个抽取器的命中合并进同一个 `q_paths`** ——
+        # 覆盖判定只看"有没有脚本打过这个端点"，跟它写成哪种形状无关。
+        hl = qse.extract_helper_calls(text, parsed)
+        q_helper += len(hl["hits"])
+        q_out_of_scope += len(hl["otherBase"]) + len(_OUT_OF_SCOPE_TOKEN.findall(text or ""))
+        q_infra += len(hl["infra"])
+        merged = sorted(hits + hl["hits"], key=lambda h: (h.get("lineNo") or 0))
+        per_script.append((dom, sid, sc.get("path") or "", merged))
+        for h in merged:
+            q_paths.append((dom, h["method"], h["path"]))
+        for m in misses + hl["misses"]:
+            unextracted.append({"scenarioId": sid, "domain": dom,
+                                "line": m["line"], "why": m.get("why") or ""})
+
+    # ── 动作面（脚本这一半）+ 链路骨架 ──────────────────────────
+    #
+    # 需求：§14.2「业务不只是增删改查」+ §13.2「链路骨架 = 同一个脚本文件里的
+    # 调用顺序」。判据全在 `qa_business_actions` 里，这儿只负责喂数据。
+    #
+    # `readable_paths` 分动作和子资源，两个来源合起来用：R 边（路由表，最准）
+    # ＋ Q 边自己的 GET。**两边都空时传 `None` 而不是空集合** ——
+    # 空集合读作「查过了，这些路径都不能 GET」，于是每条深路径都会被判成
+    # 一个业务动作，凭空给这个域造出一堆动作名；`None` 读作「没这份信息」，
+    # `action_verb` 会在 `why` 里写明依据弱。
+    readable: set[str] = set()
+    for r in routes or []:
+        if (r.get("method") or "").upper() in qba.READ_METHODS:
+            rp = normalize_path(r.get("path") or "")
+            if rp:
+                readable.add(rp)
+    for _d, qm, qp in q_paths:
+        if qm in qba.READ_METHODS and qp:
+            readable.add(qp)
+    readable_paths = readable or None
+
+    chains: list[dict] = []
+    chain_steps_total = 0
+    for dom, sid, spath, merged in per_script:
+        steps = qba.chain_of(merged, readable_paths=readable_paths)
+        chain_steps_total += len(steps)
+        # **一步不叫链路。** 单个写操作已经在动作面里数到了，
+        # 再当成一条"链路"会让链路数虚高到脚本数，而那个数是拿来判
+        # 「这个域的业务往前走了几格」的。
+        if len(steps) < 2:
+            continue
+        chains.append({"domain": dom, "scenarioId": sid, "scriptPath": spath,
+                       "steps": steps[:_CHAIN_STEPS_CAP],
+                       "stepsTotal": len(steps)})
+    chains.sort(key=lambda c: (-len(c["steps"]), c["domain"], c["scenarioId"]))
+    chains_total = len(chains)
+    chains = chains[:_CHAINS_CAP]
+
+    actions_by_domain: dict[str, dict] = {}
+    for dom, _sid, _spath, merged in per_script:
+        d = actions_by_domain.setdefault(dom, {"actions": {}, "crud": {}, "subreads": {}})
+        inv = qba.verb_inventory(merged, readable_paths=readable_paths)
+        for bucket, verbs in inv.items():
+            for verb, eps in verbs.items():
+                cur = d[bucket].setdefault(verb, [])
+                for ep in eps:
+                    if ep not in cur:
+                        cur.append(ep)
+    business_actions = {
+        dom: {b: {v: sorted(eps) for v, eps in sorted(vs.items())} for b, vs in buckets.items()}
+        for dom, buckets in sorted(actions_by_domain.items())
+    }
+    if readable_paths is None and any(
+            b["actions"] for b in business_actions.values()):
+        # 依据弱的时候必须说出来：这批"动作"里可能混着子资源的增删改查。
+        declarations.append(
+            "既没有路由表、脚本里也一条 GET 都没抽到 —— "
+            "「动作」和「子资源的增删改查」这时候分不开，动作面偏多")
 
     def _covered(method: str, path: str) -> bool:
         for _d, qm, qp in q_paths:
@@ -314,9 +492,48 @@ def compute_gaps(*, page_items: list[dict] | None,
     g4: list[dict] = []
     g5: list[dict] = []
     edges_unsourced: list[dict] = []
+    controls_unclicked = 0
+    controls_unmeasured = 0
+    controls_with_effect = 0
+
+    def _click_evidence(it: dict) -> bool:
+        """这个控件**被点过没有**。G4 的唯一前提。
+
+        G4 的字面意思是「点下去，什么请求都没发」。而无向枚举**只点判得安全的
+        那一小撮**（`SAFE_TO_CLICK`，其余不点：它不知道自己会造出什么，也清理
+        不掉）—— 于是绝大多数 enabled 控件都是「没有端点」，照老写法会整页刷成
+        G4。那不是缺口清单，那是一句假话乘以控件数：报告上写着「这些按钮点下去
+        什么都不发生」，而真相是「没人点过」。**没点过就判不了**，只能记数 + 声明。
+
+        item 上的 `clicked` 比 run 级那个数更具体，优先它：将来只点一部分控件的
+        那一趟里，没点的那些不能跟着 run 级的"点过"一起被记成 G4。
+
+        ⚠ **`clicked` 只答"点过没有"，答不了"算过没有"。** 点是点了、可是那次
+        点击的时窗没收到右边界（`clickWindowsUnclosed`），traffic 那边就没法说
+        它到底发没发请求 —— 那一行的 `endpoints` 留 NULL。所以调用处**先看
+        三态**（`measured`），这里只管点击证据那一半。
+        """
+        v = it.get("clicked")
+        if v is not None:
+            return bool(v)
+        return bool(controls_clicked)
+    fields_seen = 0
     for it in page_items or []:
+        if (it.get("control_type") or "") == "field":
+            # 表单字段**不进 G4/G5**。G4 问的是「点了没有请求」、G5 问的是
+            # 「控件在但点不动」—— 对一个输入框这两个问题都不成立：
+            # 它不是拿来点的，一个 readonly 的输入框也不是「死按钮」。
+            # 不挡的话每个只读字段都会变成一条 G5「情报」，把真正的死按钮淹掉。
+            # **但要留数**：字段有多少条，是「表单覆盖了没」这个问题的分母。
+            fields_seen += 1
+            continue
         anchor = f"{it.get('page_path') or ''} :: {it.get('anchor') or it.get('label') or ''}"
-        raw_eps = it.get("endpoints") or []
+        # **三态，别用 `or []` 一把塌掉**：NULL = 没算过（没点、或点了没算出来），
+        # `[]` = 算过了、确实一条都没发（**G4 就是这个值**）。
+        # 塌成同一个的后果是一千多个没碰过的控件集体变成 G4，而且不报错。
+        raw_eps = it.get("endpoints")
+        measured = raw_eps is not None
+        raw_eps = raw_eps or []
         eps: list[dict] = []
         for e in raw_eps:
             if edge_ok(e, build_fingerprint):
@@ -343,10 +560,24 @@ def compute_gaps(*, page_items: list[dict] | None,
                 row["kind"], row["blame"] = "G5", "情报"
                 row["severity"] = _SEVERITY["G5"]
                 g5.append(row)
-            else:
+            elif it.get("effect"):
+                # 点了、没发请求，**但页面有反应**（弹出一个层 / 跳走了）。
+                # 那不是死按钮 —— "点开一个新建表单"本来就不该发请求。
+                # 记成 G4 的话，每探一个弹层就白送一条「这按钮点下去什么都没
+                # 发生」，而它明明当着我们的面弹出来了。
+                controls_with_effect += 1
+            elif not measured and _click_evidence(it):
+                # 点了，但这一次点击**没算出**发没发请求（时窗缺右边界）。
+                # 记成 G4 是拿"没算过"冒充"算过是 0" —— 那正是 G4 唯一的内容。
+                controls_unmeasured += 1
+            elif measured and _click_evidence(it):
                 row["kind"] = "G4"
                 row["severity"] = _SEVERITY["G4"]
                 g4.append(row)
+            else:
+                # 没点过 ⇒ 不产出，**但要留下数**。丢掉的话「这一趟没点控件」
+                # 和「点了，控件都有请求」在报告上一模一样：两边 G4 都是空的。
+                controls_unclicked += 1
             continue
         for ep in eps:
             k = _ep_key(ep.get("method") or "", ep.get("path") or "")
@@ -355,6 +586,39 @@ def compute_gaps(*, page_items: list[dict] | None,
                                  "pagePath": it.get("page_path") or "",
                                  "label": it.get("label") or "",
                                  "anchor": anchor})
+
+    # 页面级的边**后进**，`setdefault` 让控件级的边压过它：同一个端点既有人
+    # 点出来、又在页面加载时打过，报告上该显示那个控件，那是更具体的事实。
+    p_edge_rows = 0
+    for e in page_edges or []:
+        page_path = e.get("pagePath") or ""
+        anchor = f"{page_path} :: (页面加载)"
+        if not edge_ok(e, build_fingerprint):
+            # 和控件边同一本账、同一个理由：说不清出处的边不采信，但**记数**。
+            edges_unsourced.append(
+                {"anchor": anchor, "pagePath": page_path,
+                 "method": (e.get("method") or "").upper(),
+                 "path": normalize_path(e.get("path") or ""),
+                 "source": str(e.get("source") or "")})
+            continue
+        p_edge_rows += 1
+        k = _ep_key(e.get("method") or "", e.get("path") or "")
+        p_eps.setdefault(k, {"method": (e.get("method") or "").upper(),
+                             "path": normalize_path(e.get("path") or ""),
+                             "pagePath": page_path,
+                             "label": "(页面加载)",
+                             "anchor": anchor, "origin": "page"})
+
+    if page_survey_available and page_edges is None:
+        # **这条和「本轮无页面枚举」同等重要。** 没有页面级边的时候 P 账几乎是
+        # 空的 —— 无向枚举一个控件都不点，控件级的边本来就没有 —— 于是 G1/G3
+        # 双双接近 0。那在页面上长得像「这个域没缺口」。
+        declarations.append("本轮没有页面级 P 边（页面加载时的流量），而无向枚举"
+                            "不点控件、控件级的边本来就是空的 —— G1/G3 会接近 0，"
+                            "那不是「没缺口」，是这一维没验")
+    elif page_survey_available and page_edges == []:
+        declarations.append("页面级 P 边算出来是 0 条 —— 页面加载不打任何接口"
+                            "不正常，先看账本里的 edgesUnwindowed / edgesUnusable")
 
     # —— R 侧 ——
     r_eps: dict[str, dict] = {}
@@ -365,6 +629,11 @@ def compute_gaps(*, page_items: list[dict] | None,
                              "group": r.get("group") or ""})
 
     page_domains: set[str] = set()
+    # 这一页上**真发出去的请求**分别归哪些域。G4/G5 那两类自己没有请求，
+    # 所以它们的 `domain` 只能是空 —— 但「这个死按钮在谁的地盘上」是查得出来的：
+    # 同一页别的请求归谁，这条就该找谁看。**不写进 `domain`**：那一格的含义是
+    # 「这条边归哪个域」，拿页面的域去填等于把"猜的"和"算出来的"混成一格。
+    doms_by_page: dict[str, set[str]] = {}
     g1: list[dict] = []
     g2: list[dict] = []
     g3: list[dict] = []
@@ -375,24 +644,29 @@ def compute_gaps(*, page_items: list[dict] | None,
 
     # G1 / G3：从页面出发
     for k, meta in p_eps.items():
-        group = (r_eps.get(k) or {}).get("group") or ""
+        group = (_lookup(k, meta["method"], meta["path"], r_eps) or {}).get("group") or ""
         doms = _domains(meta["path"], group)
         if _covered(meta["method"], meta["path"]):
             # 测到了 ⇒ 不是缺口，但**这个域在页面上有面**这件事照样成立，
             # 而且是最有力的正面证据。S7.5 靠它把域挡在 `notApplicable` 之外。
             page_domains |= doms
+            doms_by_page.setdefault(meta["pagePath"] or "", set()).update(doms)
             continue
         if not doms:
             # 归不了属 ≠ 没缺口。单独记账，**不塞进任何一类** ——
             # 塞进 G1 是误报（可能压根不该这个域管），丢掉是漏报（更坏）。
             unattributed.append({"anchor": k, "pagePath": meta["pagePath"]})
             continue
-        in_r = k in r_eps
         page_domains |= doms
+        doms_by_page.setdefault(meta["pagePath"] or "", set()).update(doms)
         for d in sorted(doms):
             row = {"domain": d, "method": meta["method"], "path": meta["path"],
                    "anchor": k, "pagePath": meta["pagePath"], "label": meta["label"],
-                   "controlAnchor": meta["anchor"]}
+                   "controlAnchor": meta["anchor"],
+                   # 这条边是点出来的还是打开页面就发的。**必须带**：
+                   # 「页面加载会调它、没人测」和「有个按钮会调它、没人测」
+                   # 是两种不同的活儿，混在一张表里没法排优先级。
+                   "origin": meta.get("origin") or "control"}
             if d in claimed:
                 row.update(kind="G3", blame="script", severity=_SEVERITY["G3"],
                            # G3 必带这个数：脚本 url 抽取必然不完备，不带它
@@ -408,7 +682,10 @@ def compute_gaps(*, page_items: list[dict] | None,
         declarations.append("本轮无路由表，G2 未验证")
     else:
         for k, meta in r_eps.items():
-            if k in p_eps or _covered(meta["method"], meta["path"]):
+            # `k in p_eps` 那种字符串相等会漏掉「R 是模板、P 带真 id」那一整类
+            # （slug 型 id 归一化压不动），于是每个这样的端点都报一条假 G2。
+            if _lookup(k, meta["method"], meta["path"], p_eps) is not None \
+                    or _covered(meta["method"], meta["path"]):
                 continue
             doms = _domains(meta["path"], meta["group"])
             if not doms:
@@ -419,12 +696,31 @@ def compute_gaps(*, page_items: list[dict] | None,
                            "severity": _SEVERITY["G2"], "method": meta["method"],
                            "path": meta["path"], "anchor": k, "group": meta["group"]})
 
+    if page_survey_available and not controls_clicked:
+        # 「没点过」和「点了都有请求」在 G4 那张空表上长得一模一样。
+        # `None`（没报这件事）比 `0`（明说没点）更坏一点：连账都没有。
+        declarations.append(
+            ("这一趟没报「点过几个控件」这件事，G4（点了没有请求）判不了"
+             if controls_clicked is None else
+             "这一趟一个控件都没点（无向枚举不点控件），G4（点了没有请求）判不了")
+            + "；%d 个 enabled 控件因此没有端点账" % controls_unclicked)
+
+    if controls_unmeasured:
+        declarations.append(
+            "有 %d 个控件点过、但那次点击的流量没算出来（点击时窗缺右边界），"
+            "它们不进 G4 —— 「没算过」不许当「算过是 0」" % controls_unmeasured)
+
     if not page_survey_available:
         # **这条声明是本模块的存在理由。** 只剩 G2 的话，这份报告做的事
         # 跟 QA 自己的 `check-route-drift.sh` 一模一样（路由表 vs 基线），
         # 只是更慢。不明说的话它看起来像"跑过了，缺口不多"。
         declarations.append("本轮无页面枚举，只有路由表维度 —— 等同 route-drift，"
                             "G1/G3/G4/G5 未验证")
+
+    # G4/G5 补一格「这一页归谁」。空列表 = 这一页一条请求都没观测到，
+    # 那是**另一件事**（整页没流量），不是"归不了属"——别把两者写成同一格。
+    for row in g4 + g5:
+        row["pageDomains"] = sorted(doms_by_page.get(row.get("pagePath") or "", ()))
 
     return {
         "g1": g1, "g2": g2, "g3": g3, "g4": g4, "g5": g5,
@@ -433,6 +729,10 @@ def compute_gaps(*, page_items: list[dict] | None,
             "page": "verified" if page_survey_available else "notVerified",
             "routeTable": "verified" if route_table_available else "notVerified",
             "g2": "verified" if route_table_available else "notVerified",
+            # G4 单独一档：它是这份报告里**唯一**需要"真点一下"才成立的维度，
+            # 页面枚举跑了不等于它验过了。
+            "g4": "verified" if (page_survey_available and controls_clicked)
+                  else "notVerified",
         },
         "counters": {
             # 0 也要渲染：只在非 0 时出现的计数，跟"没算过"长得一模一样
@@ -444,8 +744,59 @@ def compute_gaps(*, page_items: list[dict] | None,
             # 它就变成了自己要防的那个东西。
             "edgesUnsourced": len(edges_unsourced),
             "pageEndpoints": len(p_eps),
+            # 页面级边单独报一个数：它和控件级边混进同一本 P 账之后就分不出来了，
+            # 而「P 账里全是页面加载」和「有人点出了这些边」在结论上差很远。
+            "pageLoadEdges": p_edge_rows,
+            # 点过几个控件。0 也要渲染 —— 「没点」是 G4 那张表为什么空的原因，
+            # 而「没算过」（`None`）和 0 的区别在 declarations 里，不在这儿少个键。
+            "controlsClicked": int(controls_clicked or 0),
+            # enabled、没有任何端点、又没有点击证据的控件数：**本来会落进 G4
+            # 的那些**。它掉到 0 而 controlsClicked 还是 0，说明页面上一个
+            # enabled 控件都没枚举到 —— 那是枚举坏了，不是没缺口。
+            "controlsUnclicked": controls_unclicked,
+            # 点过、但那次点击的流量没算出来（时窗缺右边界）的控件数。
+            # 和上一行**分开数**：一个是"没碰过"，一个是"碰了没量到"，
+            # 前者补预算就能解决，后者是采集有洞 —— 合成一个数就分不出该修哪个。
+            "controlsUnmeasured": controls_unmeasured,
+            # 点了、没请求、**但有可见反应**（弹层/跳转）的控件数。
+            # 它是从 G4 里**扣掉**的那一批，所以必须单独渲染：
+            # 不写出来的话，G4 从 40 掉到 3 看着像"缺口变少了"，
+            # 而真相是"这 37 个本来就不是缺口"。
+            "controlsWithEffect": controls_with_effect,
+            # 枚举到几个表单字段。**它是「表单覆盖了没」的分母** ——
+            # 上一趟这个数是 0（选择器里压根没有 input），于是那个问题
+            # 连问都问不出来：分母是 0，任何覆盖率都成立。
+            "fieldsSeen": fields_seen,
             "routeEndpoints": len(r_eps),
+            # Q 边分四本账，别只报一个总数：`helperHits` 一旦掉回 0，
+            # 说明 helper 库没读到或对方改了签名 —— 那时候 G1/G3 会**暴涨**，
+            # 而暴涨看起来完全像"他们真的少测了很多"。
+            "qInlineHits": q_inline,
+            "qHelperHits": q_helper,
+            "qOutOfScope": q_out_of_scope,
+            "qInfraCalls": q_infra,
+            "helpersParsed": len(parsed["helpers"]),
+            "helpersInfra": len(parsed["infra"]),
+            "helpersUnparsed": len(parsed["unparsed"]),
+            # 链路三个数**都渲染，0 也渲染**。`chainsTotal` 是截断前的条数，
+            # `chainSteps` 是所有脚本的写操作步数之和 —— 后者掉回 0 意味着
+            # 「一条链路都读不出来」，而那时 `chains` 是空表，
+            # 跟"这个域没有业务链路"长得一模一样。
+            "chains": len(chains),
+            "chainsTotal": chains_total,
+            "chainSteps": chain_steps_total,
+            # 这个域有几个**非增删改查**的动作（去重后的动作词数）。
+            # 它是 §14.2 那个问题的答案，混进 CRUD 里就永远答不出来了。
+            "actionVerbs": sum(len(b["actions"]) for b in business_actions.values()),
         },
+        # 业务链路骨架（§13.2）：每条 = 一个脚本文件里的写操作顺序。
+        # **它是假设不是结论** —— 说的是"该按什么顺序去点什么"，
+        # 结论只由真点下去之后页面发出了什么决定（§13.3）。
+        "chains": chains,
+        # 动作面的**脚本那一半**（§14.2）：这个域有哪些非增删改查的动作。
+        # 页面那一半在爬取侧，两边一拼才出「脚本打过但页面没这个按钮」
+        # 和「页面有这个动作但脚本一次没打过」。
+        "businessActions": business_actions,
         "endpointsUnextracted": unextracted,
         "endpointsUnattributed": unattributed,
         "edgesUnsourced": edges_unsourced,

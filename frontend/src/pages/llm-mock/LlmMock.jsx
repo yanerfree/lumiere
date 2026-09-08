@@ -173,7 +173,21 @@ export default function LlmMock() {
     try {
       const idx = routes.length % NEW_ROUTE_PRESETS.length
       const tpl = NEW_ROUTE_PRESETS[idx]
-      const body = { method: 'POST', ...tpl }
+      // 后端现在拦「方法+路径」重复：预设里好几个路径（/v1/embeddings、
+      // /openai/v1/chat/completions 等）可能已经存在，直接建会 409。
+      // 新建的是一条待用户编辑的草稿，这里先把路径改唯一，让「新建」始终建得出来。
+      const taken = new Set(routes.map(r => r.path))
+      const uniquePath = (base) => {
+        if (!taken.has(base)) return base
+        // 在第一段路径后插序号：/mock-429/v1/... → /mock-429-2/v1/...；无第二段则整体加后缀
+        const m = base.match(/^\/([^/]+)(\/.*)?$/)
+        for (let n = 2; n < 999; n++) {
+          const cand = m ? `/${m[1]}-${n}${m[2] || ''}` : `${base}-${n}`
+          if (!taken.has(cand)) return cand
+        }
+        return `${base}-${Date.now()}`
+      }
+      const body = { method: 'POST', ...tpl, path: uniquePath(tpl.path) }
       const r = await api.post('/llm-mock/routes', body)
       const d = r.data || r
       message.success('路由已创建')

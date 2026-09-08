@@ -141,3 +141,116 @@ class Test形状容错:
         got = parse_routes({"Docs": ["/api/docs"]})
         assert got["routes"] == [{"group": "Docs", "method": "", "path": "/api/docs"}]
         assert got["unreadable"] == []
+
+
+# 2026-09-04 活体从 UAG 138 那台 BFF 上原样抄下来的形状（676 行里取 5 条代表）。
+# 组是一层**对象**、路由挂在它的 `routes` 里 —— 这一层不认，676 条全进 unreadable。
+_UAG = {
+    "total": 676,
+    "groups": [
+        {"prefix": "*", "count": 1,
+         "routes": [{"method": "echo_route_not_found", "path": "/api/v1/*",
+                     "name": "v4.init.func1"}]},
+        {"prefix": "adapters", "count": 2,
+         "routes": [{"method": "GET", "path": "/api/v1/adapters",
+                     "name": "handler.(*AdapterHandler).List"},
+                    {"method": "POST", "path": "/api/v1/adapters/:adapter_id/publish",
+                     "name": "handler.(*AdapterHandler).Publish"}]},
+        {"prefix": "mcp", "count": 2,
+         "routes": [{"method": "PROPFIND", "path": "/mcp", "name": "x"},
+                    {"method": "echo_route_not_found",
+                     "path": "/api/v1/agents/*", "name": "y"}]},
+    ],
+}
+
+
+class Test组是一层对象:
+    """R 侧真正的形状。**这一条是 2026-09-04 活体撞出来的，不是想出来的。**
+
+    症状特别像"没毛病"：`available=False` + 「本轮无路由表，G2 未验证」，
+    报告上那句声明写得工工整整 —— 而真相是 676 条路由一条都没读进来，
+    G2 那一整维一直在白跑。降级路径写得诚实，不代表降级本身是对的。
+    """
+
+    def test_UAG的形状能读出路由(self):
+        got = parse_routes(_UAG)
+        assert [(r["group"], r["method"], r["path"]) for r in got["routes"]] == [
+            ("adapters", "GET", "/api/v1/adapters"),
+            ("adapters", "POST", "/api/v1/adapters/:adapter_id/publish"),
+            ("mcp", "PROPFIND", "/mcp"),
+        ]
+        assert got["unreadable"] == []
+
+    def test_组名取的是prefix(self):
+        assert {r["group"] for r in parse_routes(_UAG)["routes"]} == {"adapters", "mcp"}
+
+    def test_容器认不出来的时候不许静默(self):
+        """`routes` 那一格哪天改成别的名字（我们管不着），
+        必须落回 `unreadable` 而不是变成"这个组没有端点"。"""
+        got = parse_routes({"groups": [{"prefix": "x", "eps": [{"path": "/a"}]}]})
+        assert got["routes"] == []
+        assert len(got["unreadable"]) == 1
+
+    def test_组名底下是对象也认(self):
+        got = parse_routes({"Health": {"routes": ["GET /healthz"]}})
+        assert got["routes"] == [{"group": "Health", "method": "GET",
+                                  "path": "/healthz"}]
+
+
+class Test不是端点的行要扔掉但要有数:
+    """110 行 no-route 兜底。
+
+    留着它们的后果不是"多几行噪声"：每一行都会稳定产出一条 **G2**（P 边不会有
+    `ECHO_ROUTE_NOT_FOUND /api/v1/*` 这种流量、清单也不会去测它），
+    于是报告上凭空多出一百多个"盲区"。而扔掉它们**不能不记账** ——
+    「扔了 110 行」和「一行没扔」在页面上得看得出区别。
+    """
+
+    def test_兜底行不进routes但进skipped(self):
+        got = parse_routes(_UAG)
+        assert [s["path"] for s in got["skipped"]] == ["/api/v1/*", "/api/v1/agents/*"]
+        assert all(s["why"] for s in got["skipped"])
+
+    def test_冷门但真实的动词照收(self):
+        """判据是形状（方法名是不是纯字母），不是白名单。
+        换成白名单就得年年补，而补漏一个 = 静默少一个真端点。"""
+        got = parse_routes({"dav": [{"method": "PROPFIND", "path": "/mcp"},
+                                    {"method": "REPORT", "path": "/mcp"}]})
+        assert len(got["routes"]) == 2
+        assert got["skipped"] == []
+
+    def test_通配路径也扔(self):
+        got = parse_routes({"x": [{"method": "GET", "path": "/api/v1/foo/*"}]})
+        assert got["routes"] == []
+        assert "通配" in got["skipped"][0]["why"]
+
+    @pytest.mark.asyncio
+    async def test_扔掉的条数在结论里有一格(self):
+        async def h(request):
+            return httpx.Response(200, json=_UAG)
+
+        async with _client(h) as c:
+            table = await fetch_route_table("http://x:3000", client=c)
+        note = route_table_note(table)
+        assert note["available"] is True
+        assert note["routeCount"] == 3
+        assert note["skippedCount"] == 2
+        # 0 也要有这一格：只在非 0 时出现的计数跟"没算过"长得一模一样
+        assert route_table_note(
+            {"available": True, "routes": [], "groups": []})["skippedCount"] == 0
+
+    @pytest.mark.asyncio
+    async def test_全被扔掉时说清是哪一种没读出来(self):
+        """`routes` 空 + `skipped` 满 ≠ 响应形状变了。
+        这两种的下一步动作完全不同：一个改解析器，一个是判据过严了。"""
+        async def h(request):
+            return httpx.Response(200, json={"groups": [
+                {"prefix": "a", "routes": [
+                    {"method": "echo_route_not_found", "path": "/x"}]}]})
+
+        async with _client(h) as c:
+            table = await fetch_route_table("http://x:3000", client=c)
+        assert table["available"] is False
+        assert "不可寻址端点" in table["reason"]
+        assert "形状变了" not in table["reason"]
+        assert route_table_note(table)["g2"] == G2_NOT_VERIFIED

@@ -157,7 +157,7 @@ async def save_survey(session, *, project_id: uuid.UUID, env_id=None,
                       env_name: str = "", build_fingerprint: str = "",
                       route_table_hash: str = "", roles: list | None = None,
                       status: str, ledger: dict | None = None,
-                      items: list | None = None,
+                      items: list | None = None, page_edges: list | None = None,
                       error: str | None = None) -> QaPageSurvey:
     """把一趟爬取落库。**不 commit**，由调用方决定事务边界。
 
@@ -165,11 +165,16 @@ async def save_survey(session, *, project_id: uuid.UUID, env_id=None,
     `(survey_id, key)` 撞了意味着锚点推断塌了（整页退化成文案锚点、两个按钮同名），
     那时候 diff 会变成噪声源。让它**在写入时就炸**，比在 diff 结果里表现成
     「新增 40 项」好查得多 —— 后者没人查得出源头，只会被当成前端改版。
+
+    `page_edges` **不传 = NULL = 这趟没算过 P 边**（跑崩的那几趟就是这样），
+    传空列表 = 算过了确实一条都没有。别把默认值改成 `[]` 把两者揉平：
+    「没算过」被读成「没有边」，对账那边会凭空多出一批 G1。
     """
     survey = QaPageSurvey(
         project_id=project_id, env_id=env_id, env_name=env_name or "",
         build_fingerprint=build_fingerprint or "", route_table_hash=route_table_hash or "",
         roles=list(roles or []), status=status, ledger=ledger or {},
+        page_edges=page_edges,
         finished_at=datetime.now(timezone.utc), error=error)
     session.add(survey)
     await session.flush()
@@ -183,7 +188,14 @@ async def save_survey(session, *, project_id: uuid.UUID, env_id=None,
             anchor=r.get("anchor") or "", anchor_kind=r.get("anchor_kind") or "",
             label=r.get("label") or "", control_type=r.get("control_type") or "",
             state=r.get("state") or "present",
-            roles_visible=r.get("roles_visible") or [], endpoints=r.get("endpoints") or [],
+            roles_visible=r.get("roles_visible") or [],
+            # **`or []` 这一手在这一列上是错的**：`endpoints` 是三态的
+            # （有边 / 点了没边 `[]` / **没点过** NULL），`or []` 把 NULL
+            # 塌成 `[]`，等于替一千多个没碰过的控件宣布「点了什么都没发」——
+            # G4 会从个位数涨到四位数，全是假的，而且一条测试都不会红。
+            # 同一条纪律上面那列 `page_edges` 一直守着（模型上故意不给
+            # `server_default`），这里 2026-09-04 才补上。
+            endpoints=r.get("endpoints"),
             first_seen_survey_id=seen.get(r["key"], survey.id),
             last_seen_survey_id=survey.id))
     await session.flush()

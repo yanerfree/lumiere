@@ -47,6 +47,20 @@ _FALLBACK_EMBEDDING_ROUTE: dict = {
 }
 
 
+def _wants_stream(shape: str, path: str, request_body: dict) -> bool:
+    """auto 模式下这次要不要流式 —— 各协议的信号不一样。
+
+      · Gemini：靠**路径**（:streamGenerateContent），请求体里没有 stream 字段
+      · Ollama：请求体 stream 字段，**省略时默认 true**（Ollama 原生就是这个默认）
+      · 其余（OpenAI/Anthropic/legacy/Responses）：请求体 stream 字段，省略默认 false
+    """
+    if shape == "gemini":
+        return "streamgeneratecontent" in path.split("?", 1)[0].lower()
+    if shape == "ollama":
+        return bool(request_body.get("stream", True))
+    return bool(request_body.get("stream", False))
+
+
 class MockServerManager:
     def __init__(self):
         self.port: int = 28100
@@ -269,7 +283,9 @@ class MockServerManager:
                 smart_meta.get("role"), smart_meta.get("shape"),
                 smart_meta.get("directive") or "无", route_dict.get("name"),
             )
-        shape = route_dict.get("_smart_shape") or "chat"
+        # 智能应答关着时也要按路径判形状 —— 否则 Gemini/Ollama/Responses 的静态路由
+        # 会一律当成 chat.completion，客户端 SDK 认形状不认内容，形状不对报的错跟网关自己的 bug 长得一样。
+        shape = route_dict.get("_smart_shape") or smart.detect_shape(path)
         is_embeddings = engine.is_embeddings_route(route_dict, path)
         # embeddings 没有流式、错误响应也不走流式，这两条压过 stream_mode
         if is_embeddings or route_dict["status_code"] >= 400:
@@ -283,7 +299,7 @@ class MockServerManager:
                 # 反过来耍赖：请求要流式，上游只给整包 JSON
                 is_stream = False
             else:
-                is_stream = bool(request_body.get("stream", False))
+                is_stream = _wants_stream(shape, path, request_body)
 
         # 延迟模拟
         delay = route_dict.get("delay_ms", 0)
@@ -294,7 +310,14 @@ class MockServerManager:
         first_byte_ms = (t_first_byte - t0) * 1000
 
         if is_stream:
-            if shape == "anthropic":
+            if shape == "gemini":
+                stream_builder = engine.build_gemini_stream
+            elif shape == "ollama":
+                def stream_builder(r, b):
+                    return engine.build_ollama_stream(r, b, path)
+            elif shape == "responses":
+                stream_builder = engine.build_responses_stream
+            elif shape == "anthropic":
                 stream_builder = engine.build_anthropic_stream
             elif shape == "text":
                 stream_builder = engine.build_text_completion_stream
@@ -337,14 +360,25 @@ class MockServerManager:
                             # 甩给一个独立任务去写，它不受本次取消影响。
                             self._spawn_log_task(*args)
 
+            # Ollama 流式是 NDJSON（一行一个 JSON），其余协议都是 SSE 事件流
+            if shape == "ollama":
+                media_type = "application/x-ndjson"
+            else:
+                media_type = "text/event-stream; charset=utf-8"
             headers = engine._build_headers(route_dict, "")
-            headers["content-type"] = "text/event-stream; charset=utf-8"
+            headers["content-type"] = media_type
             headers["cache-control"] = "no-cache"
             headers["connection"] = "keep-alive"
-            return StreamingResponse(stream_with_log(), media_type="text/event-stream", headers=headers)
+            return StreamingResponse(stream_with_log(), media_type=media_type, headers=headers)
         else:
             if is_embeddings:
                 resp_body, extra_headers = engine.build_embeddings_response(route_dict, request_body)
+            elif shape == "gemini":
+                resp_body, extra_headers = engine.build_gemini_json(route_dict, request_body)
+            elif shape == "ollama":
+                resp_body, extra_headers = engine.build_ollama_json(route_dict, request_body, path)
+            elif shape == "responses":
+                resp_body, extra_headers = engine.build_responses_json(route_dict, request_body)
             elif shape == "anthropic":
                 resp_body, extra_headers = engine.build_anthropic_message_json(route_dict, request_body)
             elif shape == "text":

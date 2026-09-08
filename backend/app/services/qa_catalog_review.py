@@ -694,6 +694,15 @@ def build_payload(domain: dict, scenarios: list[dict], scripts: list[dict],
                      "这个名字，**不能**推出 QA 自己跑的时候也没有 —— 由它得出的结论"
                      "一律 `blame=env`，措辞只能到「在这个环境里会跳过」，"
                      "不许升级成「脚本没验到」或「覆盖是假的」。）")
+    else:
+        # ⚠ 没有缺口时**必须显式说一句**。原来这里什么都不印，模型就拿上面那行
+        # 「已配置的变量名」自己比对脚本里的 `$X`，比出一条不存在的环境缺口 ——
+        # 而页面同一屏底下印的是代码算的结论「脚本要的变量这个环境都有」，
+        # 两句话当场打架。缺口有人说、不缺没人说，沉默就被模型自己填上了。
+        # （这个仓的凭证写在自己的 `envs/*.env` 里给了默认值，代码判 satisfied 是对的。）
+        lines.append("**代码已经逐个对过：这个域脚本要的变量，这个环境一个都不缺**"
+                     "（脚本或公共库里赋过值、给了默认值的都算有）。"
+                     "**不许再拿上面那份变量名单自己比对，推出任何 `blame=env` 的结论。**")
 
     lines += ["", "## 脚本正文"]
     if not scripts:
@@ -1244,6 +1253,14 @@ async def run_review(*, domain: dict, scenarios: list[dict],
             out["briefSource"] = "stitched"
             logger.exception("QA 域评审：分批收口失败，退回拼接版 domain=%s", domain.get("code"))
     out["envMissing"] = missing
+    # 代码说一个都不缺，模型还报环境缺口 —— 一律丢掉。**判据只有一份，就是代码那份**；
+    # 留着它会和同一页上「脚本要的变量这个环境都有」当场打架，还会在给人看那段里
+    # 占一格「环境要铺 N 项」，而那一项谁也铺不了（凭证本来就在对方仓自己的 env 文件里）。
+    if not [x for x in missing if x.get("state", "absent") == "absent"]:
+        rows = out.get("scriptGaps") or []
+        kept = [g for g in rows if (g.get("blame") or "script") != "env"]
+        out["envBlameDropped"] = len(rows) - len(kept)
+        out["scriptGaps"] = kept
     # 第三档。只存**键名**，给「缺 2 个」配个分母 —— 没分母的话
     # 「缺 2 个」既可能是 2/3 也可能是 2/40，读的人没法判这一列有多严重。
     out["envSatisfied"] = satisfied

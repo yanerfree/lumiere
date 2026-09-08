@@ -89,6 +89,18 @@ class QaPageSurvey(Base):
     # 每加一项一次迁移不现实 —— 所以是 jsonb 不是列。
     ledger: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # P 边：**页面级**的「打开这一页浏览器发了哪些请求」（归页规则在
+    # `qa_page_traffic`）。**不是** item 那一列 `endpoints` 的「点这个控件会打
+    # 哪些端点」—— 页面级的边归的是"这一页"，把它摊到页面上每个控件头上等于
+    # 凭空造一条 `observed` 的控件→端点边（`EDGE_SOURCES` 白名单防的就是它）。
+    # 控件级那一列怎么来的见 `endpoints` 自己的注释（按**点击时间窗**归属，
+    # 跟这里的导航时间窗是同一招、不同窗口）。
+    #
+    # **NULL 读作「这趟还没算过 P 边」，`[]` 读作「算过了，没有边」。**
+    # 所以没有 server_default —— 默认值一填，「没算过」就会被读成「没有」，
+    # 而那正是 G1 假缺口的来源。
+    page_edges: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     started_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -105,6 +117,12 @@ class QaPageSurveyItem(Base):
         # 比在 diff 结果里表现成「新增 40 项」好查得多。
         # ⇒ 写入路径**不许** on_conflict_do_nothing / do_update，
         #   `test_重复_key_必须炸不许静默去重` 盯着。
+        # 2026-09-04 补一句边界：**采集处**（`qa_page_survey_crawl.dedupe_items`）
+        # 会把同一页上撞 key 的行合成一行，并把撞了几次记进账本
+        # （`anchorCollisions` / `anchorCollisionKeys`）。那不是"绕开这条约束"——
+        # 表格每行同一个 `data-testid` 是常见写法，让它撞库的代价是
+        # **整趟 200+ 页一格都落不下来**，报出来的 `status=failed` 和"这一趟没跑"
+        # 长得一模一样。探测器留着，只是从"炸库"挪到了账本上一个查得到的数。
         UniqueConstraint("survey_id", "key", name="uq_qa_page_survey_items_key"),
         Index("ix_qa_page_survey_items_project_page", "project_id", "page_path"),
         Index("ix_qa_page_survey_items_key", "key"),
@@ -141,8 +159,15 @@ class QaPageSurveyItem(Base):
 
     # 哪些角色看得见它 —— 角色维度的缺口就是从这一列算出来的。只存角色名。
     roles_visible: Mapped[list | None] = mapped_column(JSONB, nullable=True)
-    # 点它会打哪些端点（观测到的，不是猜的）。抽不出来就是空，
-    # **不当成「没打过」** —— 那条纪律在 Epic 7 的 `endpointsUnextracted` 上。
+    # 点它会打哪些端点（观测到的，不是猜的）。归属靠**点击时窗**
+    # （`qa_page_traffic.bucket_clicks`），和上面 `page_edges` 的导航时窗是两本账。
+    # **三态，一个都不许合**（跟 `page_edges` 同一条纪律，所以这里也故意不给
+    # `server_default`）：
+    #   · `[{...}]` = 点过，发了这几条
+    #   · `[]`      = **点过，一条请求都没发** —— G4 就是从这个值来的
+    #   · `NULL`    = **没点过**（预算没排到、点不着、或那一趟根本不点控件）
+    # 塌成 `[]` 的后果不报错：一千多个没碰过的控件会集体宣布「点了什么都没发」，
+    # G4 从个位数涨到四位数，全是假的。
     endpoints: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     # 指向 survey：这一项第一次/最近一次是在哪趟看见的。
