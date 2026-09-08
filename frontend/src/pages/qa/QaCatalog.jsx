@@ -3768,6 +3768,7 @@ function LiveSurvey({ projectId, envs, canRun }) {
   const [plan, setPlan] = useState(null)        // 刚起那一趟的计划（public_plan）
   const [task, setTask] = useState(null)        // { taskId, status, message }
   const [starting, setStarting] = useState(false)
+  const [detailOpen, setDetailOpen] = useState(false)  // 详细结果搬进抽屉，卡面只留一条摘要
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -3862,6 +3863,10 @@ function LiveSurvey({ projectId, envs, canRun }) {
               >{running ? '正在跑' : '真跑一趟'}</Button>
             </Popconfirm>
           )}
+          <Button
+            size="small" icon={<FileTextOutlined />}
+            disabled={!(s || plan)} onClick={() => setDetailOpen(true)}
+          >查看结果</Button>
         </Space>
       </div>
 
@@ -3886,6 +3891,32 @@ function LiveSurvey({ projectId, envs, canRun }) {
         />
       )}
 
+      {/* 卡面只留一条摘要，跑出来的细节全进抽屉，别铺在主表格上面占地 */}
+      {!task && (loading && !s ? <Spin size="small" /> : data?.hasRun === false ? (
+        <div style={{ fontSize: 12, color: C.gray }}>
+          <Rich text="这个环境上还没跑过 —— 点右上「真跑一趟」。（没跑过不等于没缺口。）" />
+        </div>
+      ) : s ? (
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+          <Tag style={tagStyle(st.tone)}>{st.text}</Tag>
+          <span style={{ fontSize: 12, color: C.gray }}>
+            {s.envName || '（环境名没记）'}{s.finishedAt ? ` · ${s.finishedAt}` : s.startedAt ? ` · ${s.startedAt}` : ''}
+          </span>
+          <Num label="可操作项" n={s.itemCount} />
+          <Num label="页面加载边" n={s.pageEdgeCount} />
+          <Num label="拦下的写请求" n={led.writesBlocked} />
+          <Button type="link" size="small" style={{ padding: 0, height: 'auto', fontSize: 12 }}
+            onClick={() => setDetailOpen(true)}>查看全部 →</Button>
+        </div>
+      ) : null)}
+
+      <Drawer
+        title={<Space>
+          <span>活体页面枚举 · 三边对账</span>
+          {s && <Tag style={tagStyle(st.tone)}>{st.text}</Tag>}
+        </Space>}
+        open={detailOpen} onClose={() => setDetailOpen(false)} width={860}
+      >
       {/* 刚起那一趟的计划。**计划是在请求里算完的**，所以配置类的错（没 BASE_URL、
           认不出 selectors.ts）在这里立刻就是一句人话，不用等任务转十几秒。 */}
       {plan && (
@@ -3909,11 +3940,7 @@ function LiveSurvey({ projectId, envs, canRun }) {
         </Section>
       )}
 
-      {loading && !s ? <Spin size="small" /> : data?.hasRun === false ? (
-        // **不画一份 0 计数的空壳。** 空壳会被读成「跑过了、什么都没发现」，
-        // 那是这一整块最容易犯、也最没法察觉的错。
-        <Nothing text="这个环境上还没跑过 —— 上面按一下「真跑一趟」。（没跑过不等于没缺口。）" />
-      ) : s ? (
+      {s ? (
         <>
           <Section
             title="最近一趟"
@@ -3989,7 +4016,10 @@ function LiveSurvey({ projectId, envs, canRun }) {
 
           <Reconcile rec={led.reconcile} />
         </>
-      ) : null}
+      ) : (
+        <Nothing text={plan ? '计划已算出（见上）—— 跑完这一趟再回来看对账结果。' : '还没有结果 —— 上面点「真跑一趟」。'} />
+      )}
+      </Drawer>
     </Card>
   )
 }
