@@ -58,7 +58,6 @@ from app.services.qa_role_visibility import merge_shards
 from app.services.qa_selectors import PROBE_JS, merge_probe
 from app.services.ui_selector_render import anchor_selector, infer_kind
 from app.services.qa_survey_guard import (
-    MAIN_CRAWL_ROLE,
     SAFE_TO_CLICK,
     classify_control,
     click_intent,
@@ -1804,8 +1803,8 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     from playwright.async_api import async_playwright
 
     base_url = (base_url or _base_url(env_vars)).rstrip("/")
-    main_role = pick_main_crawl_role(roles)          # 没有只读账号 → 这里就不许开爬
-    others = shallow_scan_roles(roles)
+    main_role = pick_main_crawl_role(roles)          # 挑能写的操作账号；一个账号都没有才不开爬
+    others = shallow_scan_roles(roles, main_role)
     ledger: dict = {"writesBlocked": 0, "pagesVisited": 0, "controlsUnknown": 0,
                     "loginCount": 0, "rolesShallow": others,
                     # **点过几个控件。0 也要明写出来**，它是 G4 那张表为什么
@@ -1958,6 +1957,6 @@ async def run_survey(*, base_url: str | None = None, roles: list[str],
     status = degrade_for_gaps(status, ledger)
     ledger["shardsOk"] = ok
     ledger["safeToClick"] = list(SAFE_TO_CLICK)
-    ledger["mainRole"] = MAIN_CRAWL_ROLE
+    ledger["mainRole"] = main_role
     return {"status": status, "ledger": ledger, "items": items, "har": hars,
             "page_edges": traffic["edges"]}

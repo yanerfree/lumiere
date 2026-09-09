@@ -3098,15 +3098,15 @@ function LiveSurvey({ projectId, envs, canRun }) {
 
         <PageAlert
           type="info" style={{ marginBottom: 12 }}
-          message="点「开始跑」会真的去访问被测环境"
-          description={<Rich text="**只读**：只点「新建 / 编辑」这类开层按钮各一次；删除、停用、退出一个都不点。写请求（POST/PUT/PATCH/DELETE）一律在浏览器层拦下。跑完还会核一遍环境里的数有没有变 —— 变了会标红。整趟几十秒到几分钟。" />}
+          message="点「开始跑」会真的去访问、并操作被测环境"
+          description={<Rich text="分两半。**无向枚举（只读）**：只点「新建 / 编辑」这类开层按钮各一次；删除、停用、退出一个都不点，写请求（POST/PUT/PATCH/DELETE）在浏览器层拦下。**有向链路（会操作）**：用能操作的账号真的走一遍「新建 → 回列表找 → 进详情 → 编辑 → 删除」，只碰自己造的、带专属前缀的那条数据，走完自带清理。跑完核一遍环境里的数有没有对不上 —— 有残留会标红。整趟几十秒到几分钟。" />}
         />
 
         {!envs.length && (
           <PageAlert
             type="warning" style={{ marginBottom: 12 }}
-            message="这个项目还没有环境 —— 活体枚举没有 BASE_URL 和只读账号就跑不了"
-            description={<Rich text="去「项目设置 → 环境与变量」建一个，至少要有 `BASE_URL` 和一套只读账号（`AUDITOR_USERNAME` / `AUDITOR_PASSWORD`）。" />}
+            message="这个项目还没有环境 —— 活体验证没有 BASE_URL 和一个能操作的账号就跑不了"
+            description={<Rich text="去「项目设置 → 环境与变量」建一个，至少要有 `BASE_URL` 和一套**能操作的账号**（如 `ADMIN_USERNAME` / `ADMIN_PASSWORD`）—— 有向链路要用它真的去建 → 改 → 删。" />}
           />
         )}
 

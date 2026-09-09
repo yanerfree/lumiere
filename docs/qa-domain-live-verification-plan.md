@@ -1216,10 +1216,13 @@ UI 脚本」）。真正让无向枚举不许点写按钮的理由是**它不知
 测试：`backend/tests/test_qa_business_actions.py`、`test_qa_control_traffic.py`、
 `test_qa_directed_chain.py`、`test_qa_domain_map.py`。
 
-⚠ **有向链路目前量不到写操作。** 主爬角色被 `qa_survey_guard.pick_main_crawl_role`
-**硬钉在只读账号上**，而只读账号在多数页面上「新建」是灰的 —— 于是
-「写请求 0」这个数是**角色决定的，不是产品决定的**（页面上写的是「『新建』在，
-但是灰的 N 个」，没洗成「这个域没有写操作」）。要真量写操作，得单独给这一段
-一个能写的账号 —— 那是安全口径的改动（用户 2026-09-02 定的分界线是
-「测试环境可以操作，代码仓库不许操作」，所以允许，但要显式换掉那个钉子），
-**别顺手把 `pick_main_crawl_role` 改掉当 bug 修**。
+✅ **有向链路已能真量写操作（2026-09-09 改）。** 此前主爬角色被
+`qa_survey_guard.pick_main_crawl_role` 硬钉在只读账号 `auditor` 上，只读账号
+「新建」多半是灰的，于是「写请求 0」是角色决定的、不是产品决定的。用户明确要
+「活体验证就是要去操作」，据此把那个钉子换掉：`pick_main_crawl_role` 现在挑
+**能写的操作账号**（优先 `admin`，其次名字带 `admin` 的，都没有就用第一个；
+一个账号都没配才不开爬）。无向枚举那半段的 fail-closed 一个字没动 —— 它的安全
+本来就靠 L1 写闸默认关（`crawl_role` 的 `chain_gate`），不靠账号只读；只有
+`_run_chain` 主动开闸时写请求才放行，那一段自带前缀数据、自带清理。分界线不变：
+**测试环境可以操作，代码仓库（QA git 仓）不许操作。**
+封样：`tests/test_qa_survey_guard.py::TestL3主爬账号`。

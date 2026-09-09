@@ -247,7 +247,7 @@ async def prepare(*, session, project_id, cfg: dict, env) -> dict:
             f"不猜、不用默认值。去「项目设置 → 环境」配上再来。")
 
     role_info = roles_from(env_vars)
-    # 没只读账号就**不开爬**（判据在 `qa_survey_guard`，它会把现在配了谁一起说出来）
+    # 挑能写的操作账号主爬（判据在 `qa_survey_guard`）；一个账号都没配才不开爬
     main_role = pick_main_crawl_role(role_info["roles"])
 
     selector = await anyio.to_thread.run_sync(
@@ -279,7 +279,7 @@ async def prepare(*, session, project_id, cfg: dict, env) -> dict:
         "envName": env.name or "",
         "roles": role_info["roles"],
         "mainRole": main_role,
-        "shallowRoles": shallow_scan_roles(role_info["roles"]),
+        "shallowRoles": shallow_scan_roles(role_info["roles"], main_role),
         "pagePaths": pages["paths"],
         "pagesSkipped": pages["skipped"],
         "selectorPath": selector["path"],

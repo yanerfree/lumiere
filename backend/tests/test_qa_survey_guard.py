@@ -104,24 +104,30 @@ class TestL2控件分档:
 # ── L3 账号 ──────────────────────────────────────────────────────────────
 
 class TestL3主爬账号:
-    def test_没有只读账号就不许开爬(self):
-        """不许"先用 admin 顶一下"。
+    def test_挑能写的操作账号主爬(self):
+        """有向链路要真的建→改→删，主爬得用能写的账号，优先 admin。
 
-        顶一下的后果不是「风险高一点」：L1 的白名单和 L2 的词典都是**我们自己**
-        判的，判错就没有第二道网。只读账号是唯一由**对方系统**兜底的一层。
+        无向那半段的安全不靠这个账号，靠 L1 写闸默认关（`crawl_role` 的
+        `chain_gate`）——账号能不能写都一样被 abort 挡下，只有 `_run_chain`
+        主动开闸时才放行。所以这里挑的标准是「能写」，不是「够安全」。
         """
-        with pytest.raises(ValueError) as e:
-            g.pick_main_crawl_role(["admin", "tester"])
-        assert "auditor" in str(e.value)
+        assert g.pick_main_crawl_role(["tester", "admin"]) == "admin"
+        # 没有正好叫 admin 的，名字里带 admin 的也算操作账号
+        assert g.pick_main_crawl_role(["ops", "teamb-admin", "viewer"]) == "teamb-admin"
+
+    def test_没有admin就用第一个账号(self):
+        assert g.pick_main_crawl_role(["tester", "viewer"]) == "tester"
+
+    def test_一个账号都没有才不开爬(self):
         with pytest.raises(ValueError):
             g.pick_main_crawl_role([])
-
-    def test_有只读账号就用它(self):
-        assert g.pick_main_crawl_role(["admin", "auditor"]) == "auditor"
+        with pytest.raises(ValueError):
+            g.pick_main_crawl_role([None, "", "  "])
 
     def test_浅扫排掉主爬那个且不重复(self):
         assert g.shallow_scan_roles(
-            ["auditor", "admin", "tester", "admin", "", None]) == ["admin", "tester"]
+            ["admin", "tester", "viewer", "tester", "", None],
+            main_role="admin") == ["tester", "viewer"]
 
 
 # ── L4 凭证 ──────────────────────────────────────────────────────────────

@@ -16,7 +16,7 @@
 |---|---|---|
 | L1 网络 | `is_write_request()` | 沙箱 conftest 的 `readonly_guard`，判定为写就 `route.abort()` |
 | L2 控件 | `classify_control()` | 爬虫的动作词典，只点 `SAFE_TO_CLICK` 那一档 |
-| L3 账号 | `pick_main_crawl_role()` | 编排层选角色，主爬必须是只读账号 |
+| L3 账号 | `pick_main_crawl_role()` | 编排层选**能写**的操作账号；无向那半段的安全不靠它，靠 L1 写闸默认关（见 `crawl_role` 的 `chain_gate`） |
 | L4 凭证 | `drop_credentials()` | 落库前，HAR 里的凭证整个键扔掉 |
 | L5 自检 | `totals_changed()` / `resolve_terminal_status()` | 编排层，爬前爬后对不上就 `dirty` |
 
@@ -225,16 +225,16 @@ def click_intent(label: str, role: str = "") -> str:
 
 # ── L3 ────────────────────────────────────────────────────────────────────
 
-# 主爬账号。**只读账号**——L1/L2 拦不住的东西，靠它在服务端被拒。
-# 三层是叠着的，不是三选一：前两层是我们自己的判断，这一层是对方系统的判断。
+# 主爬账号 = **能写的操作账号**。有向链路（`_run_chain`）要真的建→改→删，
+# 就得用它登录 —— 只读账号连自己造的那条数据都建不出来，有向那半段整个跑不起来。
 #
-# 名字是 `auditor` 而不是 `qa-auditor`：**角色名必须跟环境变量的前缀同源**，
-# 因为取凭证只有这一条路（`<PREFIX>_USERNAME` / `_PASSWORD`）。实测那个环境里
-# 只读账号配在 `AUDITOR_USERNAME=qa-auditor` 上 —— `qa-auditor` 是**账号名**，
-# 前缀才是角色。用账号名当角色名的话，这里认得出"配了只读账号"，
-# 而爬取那边去找 `QA_AUDITOR_USERNAME` 找不到，于是它被静默跳过 ——
-# 报出来是「主爬账号没登上」，而不是「你这个常量取错了名字」。
-MAIN_CRAWL_ROLE = "auditor"
+# 无向枚举那半段的安全**不靠这个账号**：靠 L1 的写闸默认关着
+# （`crawl_role` 里的 `chain_gate = {"open": False}`）—— 账号能不能写都一样被
+# `route.abort()` 挡下，只有 `_run_chain` 主动开闸时才放行，那一段自带前缀数据、
+# 自带清理。所以这里挑账号的唯一标准是「能写」，不是「够安全」。
+#
+# 分界线（用户 2026-09-02 定）：**测试环境可以操作，代码仓库不许操作。**
+# 被测环境就是给测试用的，活体验证本来就该去操作它；不许碰的是 QA 的 git 仓库。
 
 
 def _role_names(roles) -> list[str]:
@@ -254,26 +254,38 @@ def _role_names(roles) -> list[str]:
     return out
 
 
-def pick_main_crawl_role(roles) -> str:
-    """主爬用哪个角色。没有只读账号就**不许开爬**，不许"先用 admin 顶一下"。
+# 优先当主爬的角色名。带 `admin` 的操作面最全，让有向链路能覆盖最多操作。
+PREFERRED_MAIN_ROLES = ("admin",)
 
-    顶一下的后果不是「风险高一点」：L1 白名单里有登录、L2 认不出的控件不点，
-    这两层都是**我们自己**判的，判错就没有第二道网了。
+
+def pick_main_crawl_role(roles) -> str:
+    """主爬用哪个角色 —— 挑一个**能写**的操作账号，让有向链路真的去建→改→删。
+
+    一个账号都没配才不开爬（连登录都做不到）。有账号就选：先找 `admin`，
+    再找名字里带 `admin` 的（`teamb-admin`/`super-admin`…），都没有就用第一个。
+    无向枚举那半段的安全由 L1 写闸兜底（默认关），不靠这里挑只读账号 ——
+    详见上面那段注释。
     """
     names = _role_names(roles)
-    if MAIN_CRAWL_ROLE not in names:
+    if not names:
         raise ValueError(
-            f"没有只读账号 {MAIN_CRAWL_ROLE}，不开爬。"
-            f"环境里现在配的是：{names or '（一个都没有）'}。"
-            f"用有写权限的账号主爬，等于把只读五层减成两层，而那两层都是我们自己判的。")
-    return MAIN_CRAWL_ROLE
+            "环境里一个带凭证的账号都没配 —— `<PREFIX>_USERNAME` 和 "
+            "`<PREFIX>_PASSWORD` 两样齐了才算一个账号。没账号登不上，不开爬。"
+            "去「项目设置 → 环境」配一个能操作的账号。")
+    for pref in PREFERRED_MAIN_ROLES:
+        if pref in names:
+            return pref
+    for name in names:
+        if "admin" in name:
+            return name
+    return names[0]
 
 
-def shallow_scan_roles(roles) -> list[str]:
+def shallow_scan_roles(roles, main_role: str = "") -> list[str]:
     """浅扫的其余角色（角色维度的缺口要靠它们）。主爬那个不重复排。"""
     seen, out = set(), []
     for name in _role_names(roles):
-        if name != MAIN_CRAWL_ROLE and name not in seen:
+        if name != main_role and name not in seen:
             seen.add(name)
             out.append(name)
     return out
