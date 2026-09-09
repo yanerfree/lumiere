@@ -1344,10 +1344,7 @@ export default function QaCatalog() {
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-          {/* 这排本来是 antd <Space>，但它会给每个孩子套一层 ant-space-item：LiveSurvey
-              返回的是「按钮 + 抽屉」两个孩子，抽屉那层空 item 在 flex gap 下会在最右
-              多留一段空档。改成普通 flex 行 —— 抽屉走 portal 不占位，就不会多出这段。 */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <Space wrap style={{ justifyContent: 'flex-end' }}>
             <Popover content={LEGEND} title="这一页的列都是什么意思" placement="bottomRight">
               <Button icon={<InfoCircleOutlined />} type="text">怎么读这一页</Button>
             </Popover>
@@ -1357,9 +1354,7 @@ export default function QaCatalog() {
             <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={refreshing} disabled={!configured}>
               拉取最新
             </Button>
-            {/* 活体评审只是一个按钮，挪到这排来 —— 原来它单占一整张全宽卡，太占高度。 */}
-            {configured && <LiveSurvey projectId={projectId} envs={envs} canRun={canGenerate} />}
-          </div>
+          </Space>
           {/* 拉取时间和 commit 必须挨着「拉取最新」：点完按钮眼睛就停在这儿，
               「这份数字是什么时候、哪个 commit 的」正是这一刻要回答的问题。
               以前压在页脚，而行高不齐时列表能有几千像素高 —— 那行字等于不存在。
@@ -1870,7 +1865,10 @@ export default function QaCatalog() {
       )}
 
       <Card styles={{ body: { padding: 16 } }}>
-        <Space wrap style={{ marginBottom: 12 }}>
+        {/* 筛选那一排 + 右端「活体评审」按钮同排：按钮钉在表格正上方最右，占位最省。
+            点开抽屉里跑/看结果，说明在按钮 tooltip 和抽屉蓝条里。 */}
+        <div style={{ display: 'flex', gap: 12, marginBottom: 12, alignItems: 'flex-start' }}>
+        <Space wrap style={{ flex: 1, minWidth: 0 }}>
           <Input
             placeholder="搜索 ID / 场景 / 脚本路径" prefix={<SearchOutlined />} allowClear
             value={keyword} onChange={e => setKeyword(e.target.value)} style={{ width: 240 }}
@@ -1932,6 +1930,8 @@ export default function QaCatalog() {
           )}
           <span style={{ fontSize: 12, color: C.gray }}>共 {filtered.length} 条</span>
         </Space>
+        {configured && <LiveSurvey projectId={projectId} envs={envs} canRun={canGenerate} />}
+        </div>
 
         <Table
           rowKey="id"
