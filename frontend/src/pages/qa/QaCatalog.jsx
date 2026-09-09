@@ -1344,7 +1344,10 @@ export default function QaCatalog() {
           </div>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-          <Space>
+          {/* 这排本来是 antd <Space>，但它会给每个孩子套一层 ant-space-item：LiveSurvey
+              返回的是「按钮 + 抽屉」两个孩子，抽屉那层空 item 在 flex gap 下会在最右
+              多留一段空档。改成普通 flex 行 —— 抽屉走 portal 不占位，就不会多出这段。 */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
             <Popover content={LEGEND} title="这一页的列都是什么意思" placement="bottomRight">
               <Button icon={<InfoCircleOutlined />} type="text">怎么读这一页</Button>
             </Popover>
@@ -1354,7 +1357,9 @@ export default function QaCatalog() {
             <Button icon={<ReloadOutlined />} onClick={handleRefresh} loading={refreshing} disabled={!configured}>
               拉取最新
             </Button>
-          </Space>
+            {/* 活体评审只是一个按钮，挪到这排来 —— 原来它单占一整张全宽卡，太占高度。 */}
+            {configured && <LiveSurvey projectId={projectId} envs={envs} canRun={canGenerate} />}
+          </div>
           {/* 拉取时间和 commit 必须挨着「拉取最新」：点完按钮眼睛就停在这儿，
               「这份数字是什么时候、哪个 commit 的」正是这一刻要回答的问题。
               以前压在页脚，而行高不齐时列表能有几千像素高 —— 那行字等于不存在。
@@ -1447,7 +1452,7 @@ export default function QaCatalog() {
                 tabular-nums 是让数字等宽，换个数不会左右跳。 */}
             <div style={{
               display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
-              gap: 12, marginBottom: 8, flexWrap: 'wrap',
+              gap: 12, marginBottom: 6, flexWrap: 'wrap',
             }}>
               <span style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
                 <span style={{ fontSize: 30, fontWeight: 600, color: VIVID.ok, lineHeight: 1 }}>{coverRate}%</span>
@@ -1535,12 +1540,14 @@ export default function QaCatalog() {
                 只是上面 covered/total 的差 —— 同一根优先级轴、同一个数报了两遍。
                 合进来只留它真正独有的两样：每档缺几条（点一下就把表筛成这批）、
                 和今天最该先动手的那批（P0 且风险 9）。 */}
-            <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 10, paddingTop: 8 }}>
-              <div style={{ fontSize: 12, color: C.gray, marginBottom: 6 }}>
-                另有 <b style={{ fontSize: 15, fontWeight: 700, color: VIVID.warn }}>{summary.gap}</b> 条
-                <b style={{ color: C.ink }}> 一个脚本都没有</b> —— 点一档筛出来：
-              </div>
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
+            <div style={{ borderTop: `1px solid ${C.line}`, marginTop: 8, paddingTop: 6 }}>
+              {/* 上半数「有脚本的」，这半数「一条脚本都没有的」。原来那句说明单占一行、
+                  药丸再占一行 —— 合成一行（说明 + 药丸同排、放不下才换行）省掉一行高度。 */}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'baseline', marginBottom: 8 }}>
+                <span style={{ fontSize: 12, color: C.gray }}>
+                  另有 <b style={{ fontSize: 15, fontWeight: 700, color: VIVID.warn }}>{summary.gap}</b> 条
+                  <b style={{ color: C.ink }}> 没脚本</b>，点一档筛出来：
+                </span>
                 {['P0', 'P1', 'P2', 'P3'].filter(p => summary.byPriority?.[p]?.gap).map(p => (
                   <Tag
                     key={p} onClick={() => jump({ priority: p, state: 'gap', sortRisk: true })}
@@ -1861,8 +1868,6 @@ export default function QaCatalog() {
           }]}
         />
       )}
-
-      {configured && <LiveSurvey projectId={projectId} envs={envs} canRun={canGenerate} />}
 
       <Card styles={{ body: { padding: 16 } }}>
         <Space wrap style={{ marginBottom: 12 }}>
@@ -3053,26 +3058,17 @@ function LiveSurvey({ projectId, envs, canRun }) {
   const md = useMemo(() => (s ? buildSurveyMarkdown(s, s.ledger || {}) : ''), [s])
 
   return (
-    <Card styles={{ body: { padding: 16 } }} style={{ marginBottom: 12 }}>
-      <div style={{
-        display: 'flex', justifyContent: 'space-between',
-        alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 12,
-      }}>
-        <div>
-          <div style={{ fontSize: 14, fontWeight: 600, color: C.ink }}>
-            活体页面枚举 · 三边对账
-          </div>
-          <div style={{ fontSize: 12, color: C.gray }}>
-            <Rich text="上面那些是读脚本猜的；这一块真去打开页面，看它**实际**发了什么" />
-          </div>
-        </div>
-        {/* 只留一个按钮。跑不跑、看结果、复制下载，全在点开后的抽屉里。 */}
+    <>
+      {/* 只留一个按钮 —— 挪进页面右上角那排，不再单占一整行整张卡。
+          跑不跑、看结果、复制下载全在点开后的抽屉里；「真去打开页面、看它实际发了
+          什么」那句说明搬进按钮 tooltip 和抽屉里的蓝条，正文不再吃版面。 */}
+      <Tooltip title="真去打开被测环境的页面，看它实际发了哪些请求，再跟清单三边对账（上面那些是读脚本猜的）">
         <Button
           type="primary"
           icon={running ? <LoadingOutlined /> : <BugOutlined />}
           onClick={() => setDetailOpen(true)}
         >{running ? '正在跑' : '活体评审'}</Button>
-      </div>
+      </Tooltip>
 
       <Drawer
         title={<Space>
@@ -3288,6 +3284,6 @@ function LiveSurvey({ projectId, envs, canRun }) {
           ]}
         />
       </Drawer>
-    </Card>
+    </>
   )
 }
