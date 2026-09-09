@@ -17,6 +17,7 @@ QA 仓是别人的仓库（黑盒验收仓：只有用例脚本，没有产品�
 两边对不上正是最该看见的信息（清单说 ✅ 但没有脚本声明它 = 清单说谎），
 所以这里如实呈现两边，不做"以清单为准"的抹平。
 """
+import json
 import logging
 import re
 import shutil
@@ -1270,3 +1271,212 @@ def read_file(project_id: str, cfg: dict, path: str) -> dict:
         # 点开的人第一眼就想知道
         "header": {} if path == catalog_path else parse_case_header(text),
     }
+
+
+# ---- 用例册（QA 仓 docs/qa/casebook/data/*.json，只读）--------------------
+#
+# QA 自己维护的「大白话用例册」：把每条验收用例写成人能读的步骤 + 为什么要验。
+# 数据是一组 JSON 数组文件；本平台只**读**、按域分组呈现，一个字都不写回。
+# 它和「对账清单」住在**同一个 QA 仓**，所以共用同一次 `git fetch`——「拉取最新」
+# 一键两收：这里默认 refresh=False，跟着对账那次抓下来的 commit 读，不单独打远端。
+#
+# 渲染口径（域名、状态词、层名、各段标题）全部抄自 QA 的 gen.py / template.html，
+# 平台不另立一套说法。**加粗标记 `**xx**` 原样带出**，交前端安全渲染，后端不拼 HTML
+# （拼 HTML = 把别人仓库里的文本当可信内容注进页面，一个 XSS 口子）。
+#
+# 用例册是**可选**的：不是每个 QA 仓都提供它。没有这个目录返回 available=False，
+# **不是错误** —— 别用 GitError 把"这个仓没写用例册"和"仓库读不到"混成一件事。
+
+CASEBOOK_DATA_DIR = "docs/qa/casebook/data"
+
+# 域码 → (列里显示的简称, 下拉里显示的全名)。唯一出处是 QA 的
+# docs/qa/casebook/gen.py 的 MOD，连**顺序**都照抄——域在页面上的排列就按这个先后。
+# **别在这儿自己发挥**：两边说法不一样，比不解释更坏。
+CASEBOOK_MOD = {
+    "E2E": ("跨面链路", "跨面全链路"),
+    "AUT": ("认证账号", "认证与账号"),
+    "TEM": ("团队成员", "团队与成员"),
+    "AGT": ("Agent", "Agent 生命周期"),
+    "PRV": ("供应商", "Provider 与模型"),
+    "RTE": ("路由实验", "路由与实验"),
+    "RES": ("韧性", "韧性"),
+    "GRD": ("护栏", "护栏"),
+    "POL": ("策略审批", "策略与审批"),
+    "FIN": ("成本预算", "成本与预算"),
+    "CAC": ("缓存", "缓存"),
+    "MCP": ("MCP 能力", "MCP 能力"),
+    "OBS": ("可观测", "可观测"),
+    "SYS": ("系统设置", "系统设置"),
+    "GIT": ("GitOps", "GitOps 与 Webhook"),
+    "SEC": ("安全边界", "安全边界"),
+    "GW": ("数据面", "数据面网关"),
+    "NFR": ("非功能", "非功能"),
+    "PUB": ("对外 API", "对外公共 API"),
+    "PCR": ("个人凭据", "个人凭据池"),
+    "ADP": ("适配器", "适配器"),
+    "SLF": ("自助中心", "自助中心"),
+    "NOD": ("节点集群", "节点与集群"),
+    "SNK": ("日志外发", "日志外发"),
+    "SMK": ("冒烟", "冒烟"),
+}
+
+# 状态词，抄自 gen.py 的 ST_LABEL（前端也有一份同样的映射，改一处要改两处）
+CASEBOOK_ST = {"done": "已覆盖", "part": "部分覆盖", "todo": "待补", "dead": "已废弃"}
+
+# 按 commit 记一份，避免每次 GET 都把二十来个 JSON 文件重新 git show + 解析一遍。
+# 键含分支：同一个仓换分支看，sha 不同不会串。
+_CASEBOOK_CACHE: dict[str, tuple[str, dict]] = {}
+
+
+def _casebook_sort_key(rec: dict):
+    """模块内按编号的**数字段**排序（TEM-2 在 TEM-10 前面，不是字典序）。
+
+    编号里取不出数字（畸形 ID）就退回字符串序，且排在正常号后面 —— 别因为一条脏数据
+    抛异常把整个域的用例册拖没了。
+    """
+    sid = rec.get("id", "")
+    parts = sid.split("-", 1)
+    if len(parts) == 2:
+        try:
+            return (0, int(parts[1]))
+        except (ValueError, TypeError):
+            pass
+    return (1, sid)
+
+
+def _casebook_case(raw: dict) -> dict:
+    """一条原始记录 → 呈现用的规整记录。
+
+    **保留 `**加粗**` 标记原样不动**（转义和加粗都交前端做）。只做结构规整：
+    把 steps / notes 里可能缺的键补齐、planes/why 统一成字符串列表，
+    这样前端不用对每个字段写一遍兜底。
+    """
+    steps = []
+    for s in raw.get("steps") or []:
+        if not isinstance(s, dict):
+            continue
+        steps.append({
+            "do": s.get("do", "") or "",
+            "see": s.get("see", "") or "",
+            "k": bool(s.get("k")),
+        })
+    notes = []
+    for n in raw.get("notes") or []:
+        if isinstance(n, dict):
+            notes.append({"k": n.get("k", "") or "", "v": n.get("v", "") or ""})
+    return {
+        "id": raw.get("id", "") or "",
+        "p": raw.get("p", "") or "",
+        "r": raw.get("r"),
+        "tier": raw.get("tier", "") or "",
+        "st": raw.get("st", "") or "",
+        "t": raw.get("t", "") or "",
+        "o": raw.get("o", "") or "",
+        "planes": [str(x) for x in (raw.get("planes") or [])],
+        "why": [str(x) for x in (raw.get("why") or [])],
+        "steps": steps,
+        "notes": notes,
+        "src": raw.get("src", "") or "",
+        "draft": bool(raw.get("_draft")),
+    }
+
+
+def read_casebook(project_id: str, cfg: dict, refresh: bool = False) -> dict:
+    """读 QA 仓的用例册（阻塞调用，请在线程里跑）。
+
+    · 没有用例册目录 → available=False（不是错误：用例册是可选的）。
+    · 未知域码 → **不崩、不当错误**（gen.py 那边是 sys.exit，我们不能照抄）：
+      落到一个以域码本身命名的组里，排在已知域之后。
+    · 某个 JSON 文件坏了 → 记进 parseErrors，跳过它，别拖垮其余的域。
+    """
+    repo = _repo_dir(project_id)
+    url = cfg["url"]
+    key = "|".join([str(project_id), cfg.get("url") or "", cfg.get("branch") or ""])
+
+    _drop_stale_cache(repo, url)
+    first_time = ensure_bare_repo(url, repo)
+    # 默认不 fetch：用例册跟着对账那次「拉取最新」抓下来的 commit 走。第一次 clone
+    # 例外（没有任何本地 ref 就没法读），ensure_bare_repo 已经把它抓下来了。
+    if refresh and not first_time:
+        fetch_origin(repo, repo / "qa-catalog.lock")
+
+    ref, branch_name = _resolve_ref(repo, cfg.get("branch") or "")
+    commit_sha = _run_git(["--git-dir", str(repo), "rev-parse", ref])
+
+    cached = _CASEBOOK_CACHE.get(key)
+    if not refresh and cached and cached[0] == commit_sha:
+        return cached[1]
+
+    commit_date = _run_git(["--git-dir", str(repo), "log", "-1", "--format=%cI", ref])
+    repo_meta = {
+        "branch": branch_name,
+        "commitSha": commit_sha,
+        "commitShort": commit_sha[:9],
+        "commitDate": commit_date,
+        "fetchedAt": _last_fetch_at(repo),
+    }
+
+    files = sorted(
+        p for p in _ls_tree(repo, ref)
+        if p.startswith(CASEBOOK_DATA_DIR + "/") and p.endswith(".json")
+    )
+    if not files:
+        data = {
+            "available": False, "repo": repo_meta, "domains": [],
+            "counts": {"total": 0, "byStatus": {}, "byTier": {}, "draft": 0},
+            "parseErrors": [],
+        }
+        _CASEBOOK_CACHE[key] = (commit_sha, data)
+        return data
+
+    by_code: dict[str, list[dict]] = {}
+    parse_errors: list[dict] = []
+    total = 0
+    by_status: dict[str, int] = {}
+    by_tier: dict[str, int] = {}
+    draft = 0
+
+    for path in files:
+        text = _show(repo, ref, path)
+        if text is None:
+            continue
+        try:
+            arr = json.loads(text)
+        except (json.JSONDecodeError, ValueError) as e:
+            parse_errors.append({"path": path, "error": str(e)})
+            continue
+        if not isinstance(arr, list):
+            parse_errors.append({"path": path, "error": "顶层不是数组"})
+            continue
+        for raw in arr:
+            if not isinstance(raw, dict) or not raw.get("id"):
+                continue
+            rec = _casebook_case(raw)
+            by_code.setdefault(rec["id"].split("-")[0], []).append(rec)
+            total += 1
+            by_status[rec["st"]] = by_status.get(rec["st"], 0) + 1
+            by_tier[rec["tier"]] = by_tier.get(rec["tier"], 0) + 1
+            if rec["draft"]:
+                draft += 1
+
+    # 域排序：已知域按 CASEBOOK_MOD 的顺序，未知域按域码字母序排在后面
+    known = [c for c in CASEBOOK_MOD if c in by_code]
+    unknown = sorted(c for c in by_code if c not in CASEBOOK_MOD)
+    domains = []
+    for code in known + unknown:
+        short, name = CASEBOOK_MOD.get(code, (code, code))
+        cases = sorted(by_code[code], key=_casebook_sort_key)
+        domains.append({
+            "code": code, "short": short, "name": name,
+            "count": len(cases), "cases": cases,
+        })
+
+    data = {
+        "available": True,
+        "repo": repo_meta,
+        "counts": {"total": total, "byStatus": by_status, "byTier": by_tier, "draft": draft},
+        "domains": domains,
+        "parseErrors": parse_errors,
+    }
+    _CASEBOOK_CACHE[key] = (commit_sha, data)
+    return data

@@ -161,6 +161,40 @@ async def read_qa_file(
     return {"data": data}
 
 
+# ── 用例册（QA 仓大白话用例，只读）─────────────────────────────
+
+@router.get("/casebook")
+async def get_qa_casebook(
+    project_id: uuid.UUID,
+    session: AsyncSession = Depends(get_db),
+    _: User = Depends(require_project_role(*perms.TIER_READ)),
+):
+    """读 QA 仓的「用例册」（大白话用例，只读，用本地缓存不打远端）。
+
+    和对账清单同住一个 QA 仓、共用同一次「拉取最新」的 fetch，所以这里 refresh=False：
+    跟着对账那次抓下来的 commit 读，**不单独打远端**。页面上换「对账表 / 用例册」不算刷新。
+
+    没配 QA 仓 → configured=false；配了但这个仓没写用例册 → available=false。
+    两者都不是错误，页面各显各的说明，别用 404/空响应把它们和"读失败"混成一件事。
+    """
+    project = await _get_project(session, project_id)
+    cfg = (project.qa_repo if project else None) or None
+    if not cfg or not cfg.get("url"):
+        return {"data": {"configured": False, "error": None, "available": False,
+                         "repo": None, "domains": [],
+                         "counts": {"total": 0, "byStatus": {}, "byTier": {}, "draft": 0},
+                         "parseErrors": []}}
+    try:
+        data = await anyio.to_thread.run_sync(
+            lambda: qa_catalog.read_casebook(str(project_id), cfg, False))
+    except GitError as e:
+        return {"data": {"configured": True, "error": e.message, "available": False,
+                         "repo": None, "domains": [],
+                         "counts": {"total": 0, "byStatus": {}, "byTier": {}, "draft": 0},
+                         "parseErrors": []}}
+    return {"data": {"configured": True, "error": None, **data}}
+
+
 # ── 域级 AI 评审 ──────────────────────────────────────────────
 
 async def _pick_env(session: AsyncSession, project_id: uuid.UUID, env_id) -> Environment:

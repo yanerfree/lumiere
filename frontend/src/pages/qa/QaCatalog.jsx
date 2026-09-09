@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Card, Table, Tag, Space, Button, Input, Select, message, Tooltip,
   Progress, Modal, Form, Collapse, Popconfirm, Popover, Checkbox, Drawer, Spin,
-  ConfigProvider, Tabs,
+  ConfigProvider, Tabs, Segmented,
 } from 'antd'
 import {
   ReloadOutlined, SearchOutlined, BugOutlined, FileTextOutlined, SettingOutlined,
@@ -825,6 +825,12 @@ export default function QaCatalog() {
   // 环境列表（活体评审弹框里选环境用）
   const [envs, setEnvs] = useState([])
 
+  // 「对账表 / 用例册」两种看法，切换只换下面这块卡的内容，顶上的覆盖卡不跟着换。
+  // 用例册是 QA 仓里那份大白话册子（docs/qa/casebook），读的是同一个仓、同一次拉取。
+  const [view, setView] = useState('catalog')
+  const [casebook, setCasebook] = useState(null)
+  const [cbLoading, setCbLoading] = useState(false)
+
   const fetchData = useCallback(async () => {
     setLoading(true)
     try {
@@ -838,6 +844,19 @@ export default function QaCatalog() {
   useEffect(() => {
     api.get(`/projects/${projectId}/environments`).then(r => setEnvs(r.data || [])).catch(() => {})
   }, [projectId])
+
+  // 用例册按需拉：第一次切到「用例册」才请求，避免每次进页面都多打一趟。
+  const loadCasebook = useCallback(async () => {
+    setCbLoading(true)
+    try {
+      const res = await api.get(`/projects/${projectId}/qa-catalog/casebook`)
+      setCasebook(res.data)
+    } catch { /* request.js 已展示错误 */ } finally { setCbLoading(false) }
+  }, [projectId])
+
+  useEffect(() => {
+    if (view === 'casebook' && !casebook && !cbLoading) loadCasebook()
+  }, [view, casebook, cbLoading, loadCasebook])
 
   const openFile = async (path) => {
     setFile({ path, content: '' })
@@ -873,6 +892,9 @@ export default function QaCatalog() {
       setData(res.data)
       if (res.data?.error) message.warning(res.data.error)
       else message.success(refreshText(res.data?.refreshDiff))
+      // 一次「拉取最新」就把整份 QA 仓 fetch 下来了，用例册跟对账表读的是同一份缓存 ——
+      // 只要之前打开过用例册，顺手也刷新它，别让两块数字对不上。
+      if (casebook) loadCasebook()
     } catch { /* request.js 已展示错误 */ } finally { setRefreshing(false) }
   }
 
@@ -1865,6 +1887,20 @@ export default function QaCatalog() {
       )}
 
       <Card styles={{ body: { padding: 16 } }}>
+        {/* 两种看法切换：对账表（分母×分子对照）/ 用例册（QA 那份大白话册子）。
+            只切这块卡的内容，顶上覆盖卡不动。默认对账表。 */}
+        <div style={{ marginBottom: 12 }}>
+          <Segmented
+            value={view}
+            onChange={setView}
+            options={[
+              { label: '对账表', value: 'catalog' },
+              { label: '用例册', value: 'casebook' },
+            ]}
+          />
+        </div>
+
+        {view === 'catalog' ? (<>
         {/* 筛选那一排 + 右端「活体评审」按钮同排：按钮钉在表格正上方最右，占位最省。
             点开抽屉里跑/看结果，说明在按钮 tooltip 和抽屉蓝条里。 */}
         <div style={{ display: 'flex', gap: 12, marginBottom: 12, alignItems: 'flex-start' }}>
@@ -1951,6 +1987,9 @@ export default function QaCatalog() {
             onChange: (p, s) => { setPage(p); setPageSize(s) },
           }}
         />
+        </>) : (
+          <CasebookView data={casebook} loading={cbLoading} configured={configured} />
+        )}
       </Card>
 
       {configured && data?.orphanScriptList?.length > 0 && (
@@ -2990,6 +3029,203 @@ function ProblemDigest({ rec }) {
         </div>
       )}
     </Section>
+  )
+}
+
+// ── 用例册：QA 仓 docs/qa/casebook 那份大白话册子 ────────────────────────
+// 读的是同一个 QA 仓、同一次拉取（GET .../qa-catalog/casebook），平台只呈现不回写。
+// 渲染贴着 QA 自己的 template.html：按编号前缀分模块、**加粗**、关键步骤标红、
+// 草稿挂「待润色」。文案里的 `**` / `` ` `` 交给已有的 <Rich> 渲，顺带保证 XSS 安全
+// —— 后端只透传原始记号，不拼 HTML。
+const CB_STATUS_TONE = { done: 'ok', part: 'warn', todo: 'info', dead: 'mute' }
+const CB_STATUS_TEXT = { done: '已覆盖', part: '部分覆盖', todo: '待补', dead: '已废弃' }
+const CB_TIER_TEXT = { ui: '页面', scenario: '全链' }
+const CB_H3 = { fontSize: 11, fontWeight: 700, letterSpacing: '.12em', color: C.gray, margin: '0 0 6px' }
+const CB_COLHEAD = { fontSize: 11, letterSpacing: '.08em', color: C.faint }
+
+function CasebookRow({ c }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+      <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, fontWeight: 600, color: C.ink, flex: 'none', width: 76 }}>{c.id}</code>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 500, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <Rich text={c.t} />
+        {c.draft && (
+          <span style={{ marginLeft: 7, padding: '0 6px 1px', borderRadius: 3, fontSize: 10.5, fontWeight: 600, ...TAG_TONE.warn }}>待润色</span>
+        )}
+      </span>
+      <span style={{ flex: 'none' }}><span style={pill(PRIORITY_TONE[c.p], 30)}>{c.p}</span></span>
+      <span style={{ flex: 'none', width: 40, fontSize: 12, color: C.gray, textAlign: 'center' }}>{CB_TIER_TEXT[c.tier] || c.tier}</span>
+      <span style={{ flex: 'none' }}><Tag style={tagStyle(CB_STATUS_TONE[c.st])}>{CB_STATUS_TEXT[c.st] || c.st}</Tag></span>
+      <span style={{ flex: 'none', width: 26, fontFamily: 'var(--font-mono)', fontSize: 12.5, color: C.gray, textAlign: 'right' }}>{c.r}</span>
+    </div>
+  )
+}
+
+function CasebookDetail({ c }) {
+  const isTodo = c.st === 'todo'
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14, padding: '2px 2px 8px' }}>
+      {c.o && (
+        <div style={{
+          display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 11, alignItems: 'baseline',
+          padding: '11px 13px', background: WASH.ok, border: `1px solid ${C.line}`, borderRadius: 8,
+        }}>
+          <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: '.08em', color: C.ink, whiteSpace: 'nowrap' }}>这条干什么</span>
+          <p style={{ margin: 0, color: C.ink, lineHeight: 1.75 }}><Rich text={c.o} /></p>
+        </div>
+      )}
+      {c.planes?.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: 12 }}>
+          {c.planes.map((p, i) => (
+            <span key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              {i > 0 && <span style={{ color: C.faint, fontFamily: 'var(--font-mono)' }}>→</span>}
+              <span style={{ padding: '2px 9px', borderRadius: 3, ...TAG_TONE.info }}>{p}</span>
+            </span>
+          ))}
+        </div>
+      )}
+      {c.why?.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 11, alignItems: 'baseline' }}>
+          <span style={{ fontSize: 11, letterSpacing: '.08em', color: C.gray, fontWeight: 700, whiteSpace: 'nowrap' }}>
+            {isTodo ? '为什么还没做' : '为什么要验'}
+          </span>
+          <div>
+            {c.why.map((w, i) => (
+              <p key={i} style={{ margin: 0, color: C.gray, fontSize: 13.5, lineHeight: 1.75 }}><Rich text={w} /></p>
+            ))}
+          </div>
+        </div>
+      )}
+      {c.steps?.length > 0 && (
+        <div>
+          <h3 style={CB_H3}>{isTodo ? '做起来会验什么' : '测试步骤'}</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: '24px 1fr 1fr', gap: '0 18px', paddingBottom: 4 }}>
+            <span /><span style={CB_COLHEAD}>怎么操作</span><span style={CB_COLHEAD}>该看到什么</span>
+          </div>
+          <div style={{ borderTop: `1px solid ${C.line}` }}>
+            {c.steps.map((s, i) => (
+              <div key={i} style={{
+                display: 'grid', gridTemplateColumns: '24px 1fr 1fr', gap: '0 18px',
+                padding: '8px 0', borderBottom: `1px solid ${C.line}`, alignItems: 'start',
+                // 关键步骤（k:true）标红：淡红底 + 红序号，跟 QA 册子里那条红一致
+                ...(s.k ? { background: WASH.danger, borderRadius: 4 } : {}),
+              }}>
+                <div style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: s.k ? VIVID.red : C.gray, textAlign: 'center' }}>{i + 1}</div>
+                <div style={{ lineHeight: 1.7, color: C.ink, paddingRight: 4 }}><Rich text={s.do} /></div>
+                <div style={{ lineHeight: 1.7, color: C.gray, fontSize: 13.5, paddingRight: s.k ? 8 : 0 }}><Rich text={s.see} /></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {c.notes?.length > 0 && (
+        <div>
+          <h3 style={CB_H3}>注意</h3>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'flex', flexDirection: 'column', gap: 9 }}>
+            {c.notes.map((n, i) => (
+              <li key={i} style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: 10, alignItems: 'start', fontSize: 13.5, lineHeight: 1.7, color: C.gray }}>
+                <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, fontWeight: 600, padding: '2px 6px', borderRadius: 3, background: VEIL, color: C.gray, border: `1px solid ${C.line}`, whiteSpace: 'nowrap', marginTop: 3 }}>{n.k}</span>
+                <span><Rich text={n.v} /></span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {c.src && <p style={{ fontFamily: 'var(--font-mono)', fontSize: 11.5, color: C.faint, margin: 0 }}><Rich text={c.src} /></p>}
+    </div>
+  )
+}
+
+function CasebookView({ data, loading, configured }) {
+  const [mod, setMod] = useState()
+  const [tier, setTier] = useState()
+  const [prio, setPrio] = useState()
+  const [st, setSt] = useState()
+  const [kw, setKw] = useState('')
+
+  if (loading && !data) return <div style={{ padding: 40, textAlign: 'center' }}><Spin /></div>
+  if (configured === false) {
+    return <PageAlert type="info" message="尚未配置 QA 仓"
+      description="先在右上角配置 QA 仓 —— 用例册和对账表读的是同一个仓库。" />
+  }
+  if (data?.error) {
+    return <PageAlert type="error" message="读取用例册失败" description={data.error} />
+  }
+  if (!data || data.available === false) {
+    return <PageAlert type="info" message="这个 QA 仓里还没有用例册"
+      description="用例册放在 QA 仓的 docs/qa/casebook/data 下（一批 .json）。等 QA 那边补上，点右上角「拉取最新」就能看到。" />
+  }
+
+  const domains = data.domains || []
+  const counts = data.counts || {}
+  const by = counts.byStatus || {}
+
+  const groups = domains
+    .map(d => ({
+      ...d,
+      cases: (d.cases || []).filter(c => {
+        if (tier && c.tier !== tier) return false
+        if (prio && c.p !== prio) return false
+        if (st && c.st !== st) return false
+        if (kw) {
+          const k = kw.toLowerCase()
+          if (!((c.id || '').toLowerCase().includes(k) || (c.t || '').toLowerCase().includes(k))) return false
+        }
+        return true
+      }),
+    }))
+    .filter(d => (!mod || d.code === mod) && d.cases.length)
+
+  const shown = groups.reduce((n, d) => n + d.cases.length, 0)
+
+  return (
+    <div>
+      {data.parseErrors?.length > 0 && (
+        <PageAlert type="warning" style={{ marginBottom: 12 }}
+          message={`有 ${data.parseErrors.length} 个用例册文件读不出来`}
+          description={data.parseErrors.map(e => e.file || e).join('，')} />
+      )}
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Input placeholder="搜编号或场景" prefix={<SearchOutlined />} allowClear
+          value={kw} onChange={e => setKw(e.target.value)} style={{ width: 220 }} />
+        <Select placeholder="模块" allowClear value={mod} onChange={setMod} style={{ width: 210 }}
+          showSearch optionFilterProp="label"
+          options={domains.map(d => ({ value: d.code, label: `${d.code} · ${d.name}（${d.count}）` }))} />
+        <Select placeholder="执行层" allowClear value={tier} onChange={setTier} style={{ width: 110 }}
+          options={[{ value: 'scenario', label: '全链' }, { value: 'ui', label: '页面' }]} />
+        <Select placeholder="优先级" allowClear value={prio} onChange={setPrio} style={{ width: 100 }}
+          options={['P0', 'P1', 'P2', 'P3'].map(p => ({ value: p, label: p }))} />
+        <Select placeholder="状态" allowClear value={st} onChange={setSt} style={{ width: 120 }}
+          options={Object.entries(CB_STATUS_TEXT).map(([v, l]) => ({ value: v, label: l }))} />
+        <span style={{ fontSize: 12, color: C.gray }}>共 {shown} 条</span>
+      </Space>
+
+      {/* 用例册自己的口径：不含接口层，所以分母跟对账表不一样，单独说清楚 */}
+      <div style={{ fontSize: 12, color: C.gray, marginBottom: 14 }}>
+        全册 {counts.total} 条 · 已覆盖 {by.done || 0} · 部分覆盖 {by.part || 0} · 待补 {by.todo || 0} · 已废弃 {by.dead || 0}
+        {counts.draft ? ` · 待润色 ${counts.draft}` : ''}
+      </div>
+
+      {shown === 0 ? (
+        <div style={{ padding: 34, textAlign: 'center', color: C.gray, fontSize: 13.5 }}>没有符合条件的用例。</div>
+      ) : groups.map(d => (
+        <div key={d.code} style={{ marginBottom: 18 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 4px', marginBottom: 4, borderBottom: `1px solid ${C.line}` }}>
+            <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: C.ink }}>{d.code}</code>
+            <span style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{d.short}</span>
+            <span style={{ marginLeft: 'auto', fontSize: 12, color: C.gray }}>{d.cases.length} 条</span>
+          </div>
+          <Collapse
+            bordered={false} ghost
+            items={d.cases.map(c => ({
+              key: c.id,
+              label: <CasebookRow c={c} />,
+              children: <CasebookDetail c={c} />,
+            }))}
+          />
+        </div>
+      ))}
+    </div>
   )
 }
 
