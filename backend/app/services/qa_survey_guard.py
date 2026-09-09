@@ -126,11 +126,19 @@ _READ_ROLES = ("link", "tab", "menuitem", "treeitem")
 # 这类分词判成 unknown —— unknown 是**不点**的那一档，宁可少点。
 _ASCII_RE_CACHE: dict[str, "re.Pattern"] = {}
 
+# antd 会在**两个相邻汉字**的按钮文案里插一个空格：`<Button>确定</Button>`
+# 在 DOM 里是「确 定」，`<Button>创建</Button>` 是「创 建」（只对 default/primary、
+# 非 small 的按钮，而弹窗页脚那个「提交/确认」恰好就是这一档）。中文走子串匹配，
+# 这个空格会让「确定」「创建」这类词永远命中不了 —— 有向链路于是在
+# 「表单上找不到提交按钮」处断掉，看着像"这个产品没有新建功能"。
+# 只抹掉「汉字 空白 汉字」之间的那个空白，不动别处的空格，正好等于 antd 的插法。
+_CJK_SPACE_RE = re.compile(r"(?<=[一-鿿])\s+(?=[一-鿿])")
+
 
 def _word_hit(text: str, word: str) -> bool:
     """`word` 在 `text` 里算不算命中。text/word 都应已 `lower()`。"""
     if not word.isascii():
-        return word in text
+        return word in _CJK_SPACE_RE.sub("", text)
     rx = _ASCII_RE_CACHE.get(word)
     if rx is None:
         rx = re.compile(r"\b" + re.escape(word) + r"(?:s|es|ing)?\b")

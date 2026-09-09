@@ -319,3 +319,17 @@ class TestL2词表按词边界匹配:
         assert g.classify_control("Details", "button") == "read"
         assert g.classify_control("Filters", "button") == "read"
         assert g.click_intent("Previous", "button") == "safe"
+
+    def test_antd在两个汉字间插的空格不挡匹配(self):
+        # antd 把 <Button>确定</Button> 渲染成「确 定」、<Button>创建</Button>
+        # 渲染成「创 建」（弹窗页脚那个 primary 按钮就是这一档）。中文走子串，
+        # 这个空格会让「确定」「创建」永远命中不了 —— 有向链路点不到提交按钮，
+        # 整条建→改→删断在第一步。这里钉死：带空格的照样认得出。
+        assert g._word_hit("创 建", "创建")
+        assert g._word_hit("确 定", "确定")
+        assert g.click_intent("创 建", "button") == "opener"
+        assert g.click_intent("删 除", "button") == "never"
+        # 只抹「汉字 空白 汉字」之间那个空格，别处的空格不动，
+        # 英文那一路（词边界正则）也一点不受影响。
+        assert not g._word_hit("a b", "ab")
+        assert g.classify_control("Create Team", "button") == "write"
