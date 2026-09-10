@@ -89,6 +89,41 @@ def test_没传run_state时行为不变():
     assert out["verdict"] == "approved"
 
 
+# ── 模型回空 / 格式坏了：也落无法审核，不能默默 approved ──────────
+
+def test_模型没给可用结论不能判通过():
+    """429 降级到 CLI 通道时最常见：那头把评审提示词当待办去"做"、回空。
+    没有结论的 approved 是一张假凭据 —— 必须落无法审核。"""
+    out = score_and_verdict({"verification_depth": {"score": 95}}, [], _APPLICABLE,
+                            response_usable=False)
+    assert out["verdict"] == "inconclusive", "模型哑了却给过了 = 假凭据"
+
+
+def test_模型回空但机器已抓到blocker仍打回():
+    """恒真断言这种事实由机器判据抓，跟模型回没回空无关，不能被"无法审核"盖掉。"""
+    out = score_and_verdict({}, [{"severity": "blocker", "kind": "tautology_assertion"}],
+                            _APPLICABLE, response_usable=False)
+    assert out["verdict"] == "rejected"
+
+
+def test_模型给了可用结论就照常判():
+    """反例（最重要）：response_usable 默认 True，别把正常审核也拖成无法审核。"""
+    out = score_and_verdict({"verification_depth": {"score": 90}}, [], _APPLICABLE,
+                            response_usable=True)
+    assert out["verdict"] == "approved"
+
+
+def test_review_case真的把回空接到这道闸上():
+    """只测 score_and_verdict 的话，把 review_case 里 `response_usable=parsed is not None`
+    那行删掉也不会红 —— 钉住调用点。"""
+    import inspect
+
+    from app.services.review import reviewer
+    src = inspect.getsource(reviewer.review_case)
+    assert "response_usable = parsed is not None" in src, "回空没接到无法审核闸上"
+    assert "response_usable=response_usable" in src, "算出来了却没传给 score_and_verdict"
+
+
 # ── §3 第 2、3 条：步骤↔脚本对账 ─────────────────────────────────
 
 _STEPS = [{"seq": 1, "action": "点击「弃用服务」", "expected": "状态徽标变为「已弃用」"},

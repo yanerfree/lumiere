@@ -335,3 +335,56 @@ def test_length在非星号路径上不需要基准():
     for op in ("not_exists", "is_empty"):
         w = _missing_path_baseline([step("删后查", "data.items", op)])
         assert len(w) == 1, op
+
+
+# ── status in/not_in：逗号串必须拆开 ─────────────────────────────
+# 人给 in 填「允许这几个状态码」时很自然写成一个字符串 "200,204" 而不是数组。
+# 不拆的话整串喂给 int() 抛错、退回原字符串比较：
+#   · in "200,204"    → 真出 204 也判失败（假红，白挡一条好用例）；
+#   · not_in "500,502" → 真出 500 也放过（**假绿**，服务端错误整类洗绿）。
+# 后者是重点：一条「不该是服务端错」的断言在系统真炸时反而通过。
+
+def test_status_in_逗号串命中要绿():
+    assert _one({"type": "status", "operator": "in", "expected": "200,204"}, {}, 204)["passed"] is True
+    assert _one({"type": "status", "operator": "in", "expected": "200,204"}, {}, 200)["passed"] is True
+
+
+def test_status_in_逗号串没命中要红():
+    assert _one({"type": "status", "operator": "in", "expected": "200,204"}, {}, 500)["passed"] is False
+
+
+def test_status_notin_逗号串真出该值必须红是最要紧的一条():
+    """**这条是防假绿的核心反例。** not_in "500,502" 在状态真是 500 时若还绿，
+    等于「不该是服务端错」这条断言在系统真炸时通过 —— 纯假绿。"""
+    assert _one({"type": "status", "operator": "not_in", "expected": "500,502"}, {}, 500)["passed"] is False
+    assert _one({"type": "status", "operator": "not_in", "expected": "500,502"}, {}, 502)["passed"] is False
+
+
+def test_status_notin_逗号串不在集合里才绿():
+    assert _one({"type": "status", "operator": "not_in", "expected": "500,502"}, {}, 200)["passed"] is True
+
+
+def test_status_数组形式照旧():
+    """数组本来就该工作，别为了修逗号串把它弄坏。"""
+    assert _one({"type": "status", "operator": "in", "expected": [200, 204]}, {}, 200)["passed"] is True
+    assert _one({"type": "status", "operator": "not_in", "expected": [500, 502]}, {}, 500)["passed"] is False
+
+
+def test_status_等号不受逗号逻辑影响():
+    """==/!= 走的是标量分支，字符串状态码仍按数值比（"200" == 200）。"""
+    assert _one({"type": "status", "operator": "==", "expected": 200}, {}, 200)["passed"] is True
+    assert _one({"type": "status", "operator": "==", "expected": "200"}, {}, 200)["passed"] is True
+    assert _one({"type": "status", "operator": "!=", "expected": 200}, {}, 500)["passed"] is True
+
+
+def test_notin是合法操作符():
+    """编辑器下拉里有 not_in，_VALID_OPS 里也必须有，否则选了就「不认识的操作符」。"""
+    from app.services.api_test_runner import _VALID_OPS
+    assert "not_in" in _VALID_OPS["status"]
+
+
+def test_重试判断也认逗号串():
+    """`in "401,403"` 断言判得对、401 重试逻辑却认不出 = 两处打架。同一口径。"""
+    from app.services.api_test_runner import _expects_status
+    assert _expects_status([{"type": "status", "operator": "in", "value": "401,403"}], 401) is True
+    assert _expects_status([{"type": "status", "operator": "in", "value": "401,403"}], 500) is False
