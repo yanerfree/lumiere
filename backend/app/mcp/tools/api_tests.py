@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.api_test import ApiTestScenario, ApiTestStep
+from app.models.api_test_folder import ApiTestFolder
 
 
 async def list_api_test_scenarios(
@@ -32,8 +33,30 @@ async def list_api_test_scenarios(
     页面侧没事（它不校验 schema），只有 MCP 那条路会炸 —— 活体自测撞出来的。
     """
     q = select(ApiTestScenario).where(ApiTestScenario.branch_id == uuid.UUID(branch_id))
+    # folder_id 传的必须是**接口场景目录**（api_test_folders）的 id。
+    # 最常见的踩坑：把「用例目录树」（lum_get_folder_tree 那套）的 id 传进来 ——
+    # 它在 api_test_folders 里查不到，`folder_id ==` 过滤后恒为空，
+    # 看起来像"这个目录下一条接口场景都没有"，其实是**目录 id 用错了系统**。
+    # 静默返回空会让人以为"确实没有"，所以这里显式探一下、查不到就点破。
+    folder_warning = None
     if folder_id:
-        q = q.where(ApiTestScenario.folder_id == uuid.UUID(folder_id))
+        folder_uuid = uuid.UUID(folder_id)
+        exists = await session.scalar(
+            select(ApiTestFolder.id).where(
+                ApiTestFolder.id == folder_uuid,
+                ApiTestFolder.branch_id == uuid.UUID(branch_id),
+            )
+        )
+        if exists is None:
+            folder_warning = (
+                "这个 folder_id 在本分支的**接口场景目录**里查不到。"
+                "接口场景目录和用例目录是两套、id 不通用 —— "
+                "你多半把用例目录树（lum_get_folder_tree）的 id 传进来了。"
+                "下面的列表已忽略这个过滤、返回本分支全部接口场景；"
+                "要按目录筛请用接口场景自己的目录 id。"
+            )
+        else:
+            q = q.where(ApiTestScenario.folder_id == folder_uuid)
     if status:
         q = q.where(ApiTestScenario.status == status)
     q = q.order_by(ApiTestScenario.created_at.desc())
@@ -57,13 +80,16 @@ async def list_api_test_scenarios(
             "stepCount": await _count_steps(session, sc.id),
             "sourceCaseId": str(sc.source_case_id),
         })
-    return {
+    out = {
         "scenarios": rows,
         "total": len(rows),
         "usage": "这里列的是**各用例的接口维度产物**，一个用例最多一条。"
                  "判「这个测试点写没写过」用 lum_list_cases，别拿这个列表判 —— "
                  "看到一条全绿就以为「已经有了」，实测跑偏过。",
     }
+    if folder_warning:
+        out["folderIdWarning"] = folder_warning
+    return out
 
 
 # 步骤名里带半角逗号是常态 —— 实测全库 2647 个步骤里 134 个有（前置条件那种长句
