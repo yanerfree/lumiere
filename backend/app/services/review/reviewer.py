@@ -367,13 +367,15 @@ def _kind_to_dim(kind: str | None) -> str:
 
 
 def score_and_verdict(dimensions: dict, findings: list[dict], applicable: dict,
-                      run_state: dict | None = None) -> dict:
+                      run_state: dict | None = None, response_usable: bool = True) -> dict:
     """**判定在代码里，不问 LLM。**
 
     - 有 blocker → 一律不过。哪怕它给 95 分。
     - major >= MAJOR_LIMIT → 不过。
     - **没真跑成功 → 不可能是 approved**（review-spec §9）。落成第三种结论
       「无法审核」，既不算通过也不算打回 —— 见下面 `run_state` 那段。
+    - **模型回空 / 格式坏了 → 也落「无法审核」**（`response_usable=False`）。
+      没有结论的通过同样是假凭据，不能默默 approved —— 见下面那段。
     - **分数不参与判定**（理由见下面那段注释），只做排序和体检。
     - LLM 没给某个适用维度的分 → 按该维度上的 finding 严重程度兜一个，
       不是当满分（缺分数默认满分，等于漏评就白送）。
@@ -425,6 +427,13 @@ def score_and_verdict(dimensions: dict, findings: list[dict], applicable: dict,
         verdict = "inconclusive"
         reason = f"无法审核：{(run_state or {}).get('reason') or '这次没真跑成功'}。" \
                  f"既不算通过也不算打回 —— 环境就绪后重审。"
+    elif not response_usable:
+        # 模型这次没给出可用的评审结论（回空 / 不是能解析的 JSON）。既不能判通过
+        # （没结论的通过 = 假凭据），也不能判打回（用例可能没毛病，是模型这次哑了）。
+        # 落「无法审核」，重试或换个没被限流的模型再来。
+        verdict = "inconclusive"
+        reason = "无法审核：模型这次没有返回可用的评审结论（回空或格式坏了）。" \
+                 "重试，或在「AI 服务配置」换一个没被限流的模型再审。"
     else:
         verdict, reason = "approved", (
             f"没有致命问题" + (f"，1 处重要问题已列出" if majors else "") + f"（体检分 {total}）")
@@ -663,10 +672,17 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
         logger.exception("评审 LLM 调用失败")
         return {"error": f"AI 评审失败：{str(e)[:200]}"}
 
-    parsed = _parse(resp.content) or {}
+    parsed = _parse(resp.content)
+    # 模型回空 / 回的不是能解析的 JSON（429 降级到 CLI 通道时最常见 —— 那头会把
+    # 评审提示词当成一件待办去"做"、不作答）→ 这次**没有可用的评审结论**。
+    # 不能因此判 approved：没有结论的通过是一张假凭据（跟 review-spec §9「没真跑
+    # 成功就不可能通过」同一个道理）。落 inconclusive 让它重审 —— 但机器判据里
+    # 已有的 blocker/major 仍然照压（score_and_verdict 里 blocker/major 在前）。
+    response_usable = parsed is not None
+    parsed = parsed or {}
     findings = merge_findings(ev.get("machineFindings") or [], parsed.get("findings") or [])
     scored = score_and_verdict(parsed.get("dimensions") or {}, findings, applicable,
-                               run_state=run_state)
+                               run_state=run_state, response_usable=response_usable)
 
     result = {
         "caseId": str(case_id), "caseCode": ev["case"]["caseCode"],

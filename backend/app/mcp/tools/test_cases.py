@@ -583,6 +583,9 @@ async def update_case(
         case.expected_confirmed_note = expected_confirmed_note.strip()[:2000]
         case.expected_confirmed_actor = (expected_confirmed_by or "未署名").strip()[:100]
         case.expected_confirmed_at = datetime.now(timezone.utc)
+        # 落款是"改动"，得进 changed —— 只写不记，CC 分不出「确认落库了」和
+        # 「参数被默默吞了」。回显在下面，和 set_target_level / create_case 一个口径。
+        changed.append("expectedConfirmed")
     elif reconfirm and prev_conf[0]:
         # 措辞润色：依据原样沿用，只重盖时间。落款文本不动 ——
         # 让 CC 重打一遍几百字，重填出来的也不是新确认。
@@ -605,6 +608,17 @@ async def update_case(
 
     result = {**_case_to_dict(case), "targetLevel": case.target_level,
               "targetLevelReason": case.target_level_reason, "changed": changed}
+    # 落款状态回显 —— 只写不回的话 CC 没法确认「预期已确认」这一步到底落没落。
+    # 改了步骤/预期时 case_service.update_case 会把它清成 None，这里就不会回显，
+    # 正好对上下面那条「标记已失效」的提醒。
+    if case.expected_confirmed_at:
+        result["expectedConfirmed"] = {
+            "by": case.expected_confirmed_actor,
+            "note": case.expected_confirmed_note,
+            "at": case.expected_confirmed_at.isoformat(),
+        }
+    if case.blocked_external:
+        result["blockedExternal"] = case.blocked_external
     if case.bug_refs or bug_refs is not None:
         result["bugRefs"] = case.bug_refs or []
         result["blockedByBug"] = case.blocked_by_bug

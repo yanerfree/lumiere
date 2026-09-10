@@ -428,6 +428,26 @@ def _as_int(v):
         return v
 
 
+def _status_expected_list(expected):
+    """status 的 in/not_in 期望值统一成一串整数。
+
+    列表直接用；**逗号串（"200,204"）按逗号拆**。人在编辑器里给 in 填「允许这几个
+    状态码」时很自然写成一个字符串 `"200,204"` 而不是数组。不拆的话整串喂给 `_as_int`
+    转 int 抛错、退回原字符串，于是：
+      · `in "200,204"`  → `204 in ["200,204"]` 恒 **false**（假红：状态明明是 204 也判失败）；
+      · `not_in "500,502"` → `500 not in ["500,502"]` 恒 **true**（**假绿**：状态真是 500
+        也放过 ——「不该是服务端错」这条断言在真出 500 时反而通过）。
+    后者是这条修的重点：一个 not_in 逗号串会把服务端错误整类洗绿。
+    """
+    if isinstance(expected, (list, tuple)):
+        seq = expected
+    elif isinstance(expected, str) and "," in expected:
+        seq = [p.strip() for p in expected.split(",") if p.strip() != ""]
+    else:
+        seq = [expected]
+    return [_as_int(x) for x in seq]
+
+
 def _expects_status(assertions: list[dict], code: int) -> bool:
     """断言是否预期该状态码（401 重试判断用）。
 
@@ -438,10 +458,9 @@ def _expects_status(assertions: list[dict], code: int) -> bool:
         if a.get("type") != "status":
             continue
         exp = expected_of(a)
-        if isinstance(exp, (list, tuple)):
-            if any(_as_int(x) == code for x in exp):
-                return True
-        elif _as_int(exp) == code:
+        # 列表、标量、逗号串一把吃 —— 跟 _check_assertions 的 status 分支同一口径，
+        # 否则 `in "401,403"` 这条断言判得对、重试逻辑却认不出，两处会打架。
+        if code in _status_expected_list(exp):
             return True
     return False
 
@@ -450,7 +469,7 @@ def _expects_status(assertions: list[dict], code: int) -> bool:
 # 以前一律落到 passed=False，于是出现"状态码 200、期望 200、却显示失败"
 # 这种查不出原因的假失败（写成 eq 而不是 == 就会中招）。
 _VALID_OPS = {
-    "status": ("==", "!=", "in"),
+    "status": ("==", "!=", "in", "not_in"),
     "body_contains": ("contains", "not_contains"),
     # is_empty / length / 大小比较是后补的：
     # · is_empty —— 「列表应该是空的」以前根本表达不了，只能拿 body_contains not_contains
@@ -548,15 +567,22 @@ def _check_assertions(assertions: list[dict], status_code: int, resp_body) -> li
             # **别在这儿重新取一遍期望值。** 原来这行是 `expected = a.get("value")`，
             # 把上面的口径覆盖掉，于是 `{"type":"status","expected":200}` 变成 None、
             # 200 == None 判失败，而报错那行读 expected、打印「期望 200」。见 expected_of。
-            expected = ([_as_int(x) for x in expected]
-                        if isinstance(expected, (list, tuple)) else _as_int(expected))
             actual = status_code
-            if operator == "==":
-                passed = actual == expected
-            elif operator == "!=":
-                passed = actual != expected
-            elif operator == "in":
-                passed = actual in (expected if isinstance(expected, list) else [expected])
+            if operator in ("in", "not_in"):
+                # 「状态码应/不应落在这几个里」。**逗号串和数组都吃**，统一交给
+                # _status_expected_list 拆开转整数 —— 不这么做时逗号串会让 in 恒假红、
+                # not_in 恒假绿（真出 500 也放过），见该函数注释。
+                # 典型用法：in "200,204"、not_in [500,502,503]（不该是服务端错）。
+                allowed = _status_expected_list(expected)
+                hit = actual in allowed
+                passed = hit if operator == "in" else not hit
+            else:
+                exp = ([_as_int(x) for x in expected]
+                       if isinstance(expected, (list, tuple)) else _as_int(expected))
+                if operator == "==":
+                    passed = actual == exp
+                elif operator == "!=":
+                    passed = actual != exp
         elif a_type == "body_contains":
             _cv = expected_of(a)
             contain_val = "" if _cv is None else _cv
@@ -682,8 +708,17 @@ async def run_single_step(
         )
 
     auth_origin = None
+    anonymous = False
     if "Authorization" in headers:
-        auth_origin = "步骤自己设的 Authorization 头（值由上面的变量解析而来）"
+        if not str(headers["Authorization"]).strip():
+            # **显式留空 Authorization = 故意不带鉴权**（匿名 / 越权类负例要的就是这个）。
+            # 不删掉的话下面会照样自动补 token，「匿名访问该 401/403」这种用例根本没法写
+            # —— 平台永远替它登录成功，断言恒绿。删掉、且下面 401 重试也不再替它补 token。
+            headers.pop("Authorization")
+            anonymous = True
+            auth_origin = "步骤显式留空 Authorization → 故意匿名，未注入任何 token"
+        else:
+            auth_origin = "步骤自己设的 Authorization 头（值由上面的变量解析而来）"
     else:
         if "AUTH_TOKEN" in env:
             headers["Authorization"] = f"Bearer {env['AUTH_TOKEN']}"
@@ -714,8 +749,11 @@ async def run_single_step(
     try:
         resp = await client.request(method=step.method, url=url, headers=headers, json=body if body else None)
 
-        # 401 被动重试：断言不预期 401 且有 TokenCache → 刷新 token 重试一次
-        if resp.status_code == 401 and token_cache and not _expects_status(step.assertions, 401):
+        # 401 被动重试：断言不预期 401 且有 TokenCache → 刷新 token 重试一次。
+        # 故意匿名的步骤（anonymous）**一律不重试补 token** —— 否则它一遇 401 就被
+        # 平台偷偷登录后重放，匿名负例（哪怕断的是 403）会被悄悄洗成鉴权通过。
+        if resp.status_code == 401 and token_cache and not anonymous \
+                and not _expects_status(step.assertions, 401):
             token = await token_cache.refresh_token(client)
             if token:
                 headers["Authorization"] = f"Bearer {token}"
