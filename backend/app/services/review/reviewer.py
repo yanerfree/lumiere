@@ -121,13 +121,17 @@ _SYSTEM = """你是这个测试平台的评审员，替代人工那道「待审�
    · **`reflections` 为空** = **自证不全**：作者没说这条在验什么。不是零分，
      但 self_coverage 最高给 70，并列一条 major「没答回推四问，这条在验什么只能靠猜」。
 8. 只输出一个 JSON 对象，用 ```json 包裹。
+9. **每个字段只写结论、不写过程**：problem 说清"哪里·错在哪"（≤40字），
+   fix 说"改成什么"（≤30字），comment / summary 同样一句话带过。
+   不复述用例内容、不解释判断依据、不写"建议 / 考虑到 / 为了"这类铺垫 ——
+   CC 要的是"改哪条"，人要的是"凭什么不过"，两边都不需要作文。
 
 JSON 形状（dimensions 里只出现适用的维度，分数 0-100 整数）：
 {
   "dimensions": {
-    "scenario_sanity": {"score": 85, "comment": "一句话"},
-    "verification_depth": {"score": 60, "comment": "一句话"},
-    "self_coverage": {"score": 90, "comment": "一句话"}
+    "scenario_sanity": {"score": 85, "comment": "≤20字，只判不解释"},
+    "verification_depth": {"score": 60, "comment": "≤20字，只判不解释"},
+    "self_coverage": {"score": 90, "comment": "≤20字，只判不解释"}
   },
   "findings": [
     {"dimension": "verification_depth", "severity": "blocker",
@@ -138,7 +142,7 @@ JSON 形状（dimensions 里只出现适用的维度，分数 0-100 整数）：
      "fix": "补一步拿该应用凭据打网关，审批前必须 401、审批后 200"}
   ],
   "coverageGaps": ["模块级缺口：禁用后重新启用是否恢复调用（邻居里没有，不扣这一条的分）"],
-  "summary": "两句话之内说清这条用例的问题"
+  "summary": "≤50字，只点最要命那一处，不复述用例、不讲原理、不铺垫"
 }"""
 
 
@@ -309,7 +313,7 @@ def merge_findings(machine: list[dict], llm: list[dict]) -> list[dict]:
             # 点不出是哪一类的"致命"降成 major。它照样进 mustFix、照样参与
             # 「两处 major 就打回」，只是不再单独一票否决。
             sev = "major"
-        prob = str(f.get("problem") or "")[:600]
+        prob = str(f.get("problem") or "")[:160]
         if not prob:
             continue
         where = str(f.get("where") or "")
@@ -324,7 +328,7 @@ def merge_findings(machine: list[dict], llm: list[dict]) -> list[dict]:
             continue
         out.append({"dimension": dim, "severity": sev,
                     "where": where[:200] or "-",
-                    "problem": prob, "fix": str(f.get("fix") or "")[:600] or None,
+                    "problem": prob, "fix": str(f.get("fix") or "")[:120] or None,
                     # **stepRef 要留着**：跟 kind 同一个理由 —— 前端要能跳到那一步，
                     # CC 要知道该改哪一步，丢了就只能回去从文本里刮数字。
                     **({"stepRef": ",".join(sorted(refs, key=int))} if refs else {}),
@@ -391,7 +395,7 @@ def score_and_verdict(dimensions: dict, findings: list[dict], applicable: dict,
             s = min(s, cap)
         per_dim[key] = {"label": meta["label"], "score": s,
                         "weight": round(meta["normWeight"] * 100),
-                        "comment": str(raw.get("comment") or "")[:300] or None}
+                        "comment": str(raw.get("comment") or "")[:80] or None}
     total = round(sum(d["score"] * applicable[k]["normWeight"] for k, d in per_dim.items()))
     blockers = [f for f in findings if f.get("severity") == "blocker"]
     majors = [f for f in findings if f.get("severity") == "major"]
@@ -672,7 +676,7 @@ async def review_case(session: AsyncSession, case_id: uuid.UUID, *, ai_config=No
         "coverageGaps": [str(g)[:300] for g in (parsed.get("coverageGaps") or [])][:8],
         # 砍了几条要说出来 —— 不说的话"就这 8 条"和"被截断了"长得一样。
         "coverageGapsTotal": len(parsed.get("coverageGaps") or []),
-        "summary": str(parsed.get("summary") or "")[:600],
+        "summary": str(parsed.get("summary") or "")[:140],
         "owes": ev.get("owes"),
         "reviewedAt": datetime.now(timezone.utc).isoformat(),
         "model": getattr(ai_config, "model", None),
