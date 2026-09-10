@@ -3043,23 +3043,41 @@ const CB_TIER_TEXT = { ui: '页面', scenario: '全链' }
 const CB_H3 = { fontSize: 11, fontWeight: 700, letterSpacing: '.12em', color: C.gray, margin: '0 0 6px' }
 const CB_COLHEAD = { fontSize: 11, letterSpacing: '.08em', color: C.faint }
 
-function CasebookRow({ c }) {
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-      <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, fontWeight: 600, color: C.ink, flex: 'none', width: 76 }}>{c.id}</code>
-      <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 500, color: C.ink, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-        <Rich text={c.t} />
+// 用例册每条 = 表格一行（列头由 antd 渲，跟「对账表」同款，不再手摆导致中间留空）。
+// 「场景」不设宽，吃掉剩余宽度；右侧几列钉死宽度、居中/右对齐，读起来是张表。
+const CB_COLUMNS = [
+  {
+    title: '编号', dataIndex: 'id', key: 'id', width: 96,
+    render: id => <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, fontWeight: 600, color: C.ink }}>{id}</code>,
+  },
+  {
+    title: '场景', dataIndex: 't', key: 't',
+    render: (t, c) => (
+      <span style={{ fontSize: 14, fontWeight: 500, color: C.ink }}>
+        <Rich text={t} />
         {c.draft && (
           <span style={{ marginLeft: 7, padding: '0 6px 1px', borderRadius: 3, fontSize: 10.5, fontWeight: 600, ...TAG_TONE.warn }}>待润色</span>
         )}
       </span>
-      <span style={{ flex: 'none' }}><span style={pill(PRIORITY_TONE[c.p], 30)}>{c.p}</span></span>
-      <span style={{ flex: 'none', width: 40, fontSize: 12, color: C.gray, textAlign: 'center' }}>{CB_TIER_TEXT[c.tier] || c.tier}</span>
-      <span style={{ flex: 'none' }}><Tag style={tagStyle(CB_STATUS_TONE[c.st])}>{CB_STATUS_TEXT[c.st] || c.st}</Tag></span>
-      <span style={{ flex: 'none', width: 26, fontFamily: 'var(--font-mono)', fontSize: 12.5, color: C.gray, textAlign: 'right' }}>{c.r}</span>
-    </div>
-  )
-}
+    ),
+  },
+  {
+    title: '优先级', dataIndex: 'p', key: 'p', width: 88, align: 'center',
+    render: p => <span style={pill(PRIORITY_TONE[p], 30)}>{p}</span>,
+  },
+  {
+    title: '执行层', dataIndex: 'tier', key: 'tier', width: 80, align: 'center',
+    render: tier => <span style={{ fontSize: 12, color: C.gray }}>{CB_TIER_TEXT[tier] || tier}</span>,
+  },
+  {
+    title: '状态', dataIndex: 'st', key: 'st', width: 104, align: 'center',
+    render: st => <Tag style={tagStyle(CB_STATUS_TONE[st])}>{CB_STATUS_TEXT[st] || st}</Tag>,
+  },
+  {
+    title: '风险', dataIndex: 'r', key: 'r', width: 72, align: 'right',
+    render: r => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: C.gray }}>{r}</span>,
+  },
+]
 
 function CasebookDetail({ c }) {
   const isTodo = c.st === 'todo'
@@ -3210,18 +3228,23 @@ function CasebookView({ data, loading, configured }) {
         <div style={{ padding: 34, textAlign: 'center', color: C.gray, fontSize: 13.5 }}>没有符合条件的用例。</div>
       ) : groups.map(d => (
         <div key={d.code} style={{ marginBottom: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 4px', marginBottom: 4, borderBottom: `1px solid ${C.line}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 4px', marginBottom: 4 }}>
             <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: C.ink }}>{d.code}</code>
             <span style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{d.short}</span>
             <span style={{ marginLeft: 'auto', fontSize: 12, color: C.gray }}>{d.cases.length} 条</span>
           </div>
-          <Collapse
-            bordered={false} ghost
-            items={d.cases.map(c => ({
-              key: c.id,
-              label: <CasebookRow c={c} />,
-              children: <CasebookDetail c={c} />,
-            }))}
+          {/* 每个域一张表，各带列头 —— 列头始终贴着数据，翻到哪都看得见列名。
+              点行展开看这条的详情（这条干什么/步骤/注意），展开渲染沿用 CasebookDetail。 */}
+          <Table
+            rowKey="id"
+            columns={CB_COLUMNS}
+            dataSource={d.cases}
+            size="small"
+            pagination={false}
+            expandable={{
+              expandedRowRender: c => <CasebookDetail c={c} />,
+              expandRowByClick: true,
+            }}
           />
         </div>
       ))}
