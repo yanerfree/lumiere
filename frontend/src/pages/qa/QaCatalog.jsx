@@ -3045,36 +3045,58 @@ const CB_COLHEAD = { fontSize: 11, letterSpacing: '.08em', color: C.faint }
 
 // 用例册每条 = 表格一行（列头由 antd 渲，跟「对账表」同款，不再手摆导致中间留空）。
 // 「场景」不设宽，吃掉剩余宽度；右侧几列钉死宽度、居中/右对齐，读起来是张表。
+// **全册一张表 + 分页**，不再按域切成 23 张 —— 分块时每张表都带一份列头、
+// 域间还有标题行，翻找一条要先想它归哪个域；合成一张之后「模块」变成一列，
+// 排序筛选都在同一份数据上，368 条按页翻。
 const CB_COLUMNS = [
   {
     title: '编号', dataIndex: 'id', key: 'id', width: 96,
     render: id => <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, fontWeight: 600, color: C.ink }}>{id}</code>,
   },
   {
-    title: '场景', dataIndex: 't', key: 't',
-    render: (t, c) => (
-      <span style={{ fontSize: 14, fontWeight: 500, color: C.ink }}>
-        <Rich text={t} />
-        {c.draft && (
-          <span style={{ marginLeft: 7, padding: '0 6px 1px', borderRadius: 3, fontSize: 10.5, fontWeight: 600, ...TAG_TONE.warn }}>待润色</span>
-        )}
+    // 不分块了，域码必须落到行上，否则看一条不知道它属于哪个模块。
+    title: '模块', dataIndex: '_short', key: '_mod', width: 140,
+    render: (short, c) => (
+      <span style={{ fontSize: 12.5, color: C.gray, whiteSpace: 'nowrap' }}>
+        <code style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: C.ink, marginRight: 6 }}>{c._code}</code>
+        {short}
       </span>
     ),
   },
   {
-    title: '优先级', dataIndex: 'p', key: 'p', width: 88, align: 'center',
+    // **不给它写 width**：fixed 布局下没写宽度的这一列吃掉全部剩余宽度。
+    // 之前收窄它 + 末尾加空列，结果是把空白从中间挪到了右边 —— 一样是空。
+    // 现在把「这条干什么」截成一行垫在标题下面：宽度是被字填满的，不是被留白填满的，
+    // 行高固定两行（CELL_H），368 条翻页照样齐。
+    title: '场景', dataIndex: 't', key: 't',
+    render: (t, c) => (
+      <div style={{ minHeight: CELL_H, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 1, paddingRight: 12 }}>
+        <span style={{ fontSize: 14, fontWeight: 500, color: C.ink, ...clampTo(1) }}>
+          <Rich text={t} />
+          {c.draft && (
+            <span style={{ marginLeft: 7, padding: '0 6px 1px', borderRadius: 3, fontSize: 10.5, fontWeight: 600, ...TAG_TONE.warn }}>待润色</span>
+          )}
+        </span>
+        {c.o && (
+          <span style={{ fontSize: 12.5, lineHeight: 1.6, color: C.gray, ...clampTo(1) }}><Rich text={c.o} /></span>
+        )}
+      </div>
+    ),
+  },
+  {
+    title: '优先级', dataIndex: 'p', key: 'p', width: 96, align: 'center',
     render: p => <span style={pill(PRIORITY_TONE[p], 30)}>{p}</span>,
   },
   {
-    title: '执行层', dataIndex: 'tier', key: 'tier', width: 80, align: 'center',
+    title: '执行层', dataIndex: 'tier', key: 'tier', width: 92, align: 'center',
     render: tier => <span style={{ fontSize: 12, color: C.gray }}>{CB_TIER_TEXT[tier] || tier}</span>,
   },
   {
-    title: '状态', dataIndex: 'st', key: 'st', width: 104, align: 'center',
+    title: '状态', dataIndex: 'st', key: 'st', width: 112, align: 'center',
     render: st => <Tag style={tagStyle(CB_STATUS_TONE[st])}>{CB_STATUS_TEXT[st] || st}</Tag>,
   },
   {
-    title: '风险', dataIndex: 'r', key: 'r', width: 72, align: 'right',
+    title: '风险', dataIndex: 'r', key: 'r', width: 84, align: 'center',
     render: r => <span style={{ fontFamily: 'var(--font-mono)', fontSize: 12.5, color: C.gray }}>{r}</span>,
   },
 ]
@@ -3160,6 +3182,13 @@ function CasebookView({ data, loading, configured }) {
   const [prio, setPrio] = useState()
   const [st, setSt] = useState()
   const [kw, setKw] = useState('')
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(50)
+
+  // 改筛选顺手回第一页 —— antd 不会自己重置，否则筛完还停在第 8 页是一片空白，
+  // 看着像「筛没了」，其实只是翻过头了。包在 setter 外面而不是写 effect：
+  // effect 里 setState 会多渲染一轮（eslint 也拦）。
+  const pick = fn => v => { fn(v); setPage(1) }
 
   if (loading && !data) return <div style={{ padding: 40, textAlign: 'center' }}><Spin /></div>
   if (configured === false) {
@@ -3178,10 +3207,12 @@ function CasebookView({ data, loading, configured }) {
   const counts = data.counts || {}
   const by = counts.byStatus || {}
 
-  const groups = domains
-    .map(d => ({
-      ...d,
-      cases: (d.cases || []).filter(c => {
+  // 全册拍平成一份行数据：域信息（_code/_short）带到每一行上，供「模块」列显示。
+  // 域的先后沿用后端给的顺序（照抄 QA 自己 gen.py 的 MOD 排列），同域内保持原序。
+  const rows = domains
+    .filter(d => !mod || d.code === mod)
+    .flatMap(d => (d.cases || [])
+      .filter(c => {
         if (tier && c.tier !== tier) return false
         if (prio && c.p !== prio) return false
         if (st && c.st !== st) return false
@@ -3190,11 +3221,10 @@ function CasebookView({ data, loading, configured }) {
           if (!((c.id || '').toLowerCase().includes(k) || (c.t || '').toLowerCase().includes(k))) return false
         }
         return true
-      }),
-    }))
-    .filter(d => (!mod || d.code === mod) && d.cases.length)
+      })
+      .map(c => ({ ...c, _code: d.code, _short: d.short })))
 
-  const shown = groups.reduce((n, d) => n + d.cases.length, 0)
+  const shown = rows.length
 
   return (
     <div>
@@ -3205,15 +3235,15 @@ function CasebookView({ data, loading, configured }) {
       )}
       <Space wrap style={{ marginBottom: 12 }}>
         <Input placeholder="搜编号或场景" prefix={<SearchOutlined />} allowClear
-          value={kw} onChange={e => setKw(e.target.value)} style={{ width: 220 }} />
-        <Select placeholder="模块" allowClear value={mod} onChange={setMod} style={{ width: 210 }}
+          value={kw} onChange={e => { setKw(e.target.value); setPage(1) }} style={{ width: 220 }} />
+        <Select placeholder="模块" allowClear value={mod} onChange={pick(setMod)} style={{ width: 210 }}
           showSearch optionFilterProp="label"
           options={domains.map(d => ({ value: d.code, label: `${d.code} · ${d.name}（${d.count}）` }))} />
-        <Select placeholder="执行层" allowClear value={tier} onChange={setTier} style={{ width: 110 }}
+        <Select placeholder="执行层" allowClear value={tier} onChange={pick(setTier)} style={{ width: 110 }}
           options={[{ value: 'scenario', label: '全链' }, { value: 'ui', label: '页面' }]} />
-        <Select placeholder="优先级" allowClear value={prio} onChange={setPrio} style={{ width: 100 }}
+        <Select placeholder="优先级" allowClear value={prio} onChange={pick(setPrio)} style={{ width: 100 }}
           options={['P0', 'P1', 'P2', 'P3'].map(p => ({ value: p, label: p }))} />
-        <Select placeholder="状态" allowClear value={st} onChange={setSt} style={{ width: 120 }}
+        <Select placeholder="状态" allowClear value={st} onChange={pick(setSt)} style={{ width: 120 }}
           options={Object.entries(CB_STATUS_TEXT).map(([v, l]) => ({ value: v, label: l }))} />
         <span style={{ fontSize: 12, color: C.gray }}>共 {shown} 条</span>
       </Space>
@@ -3224,30 +3254,29 @@ function CasebookView({ data, loading, configured }) {
         {counts.draft ? ` · 待润色 ${counts.draft}` : ''}
       </div>
 
-      {shown === 0 ? (
-        <div style={{ padding: 34, textAlign: 'center', color: C.gray, fontSize: 13.5 }}>没有符合条件的用例。</div>
-      ) : groups.map(d => (
-        <div key={d.code} style={{ marginBottom: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 9, padding: '6px 4px', marginBottom: 4 }}>
-            <code style={{ fontFamily: 'var(--font-mono)', fontSize: 12, fontWeight: 600, color: C.ink }}>{d.code}</code>
-            <span style={{ fontSize: 13, fontWeight: 600, color: C.ink }}>{d.short}</span>
-            <span style={{ marginLeft: 'auto', fontSize: 12, color: C.gray }}>{d.cases.length} 条</span>
-          </div>
-          {/* 每个域一张表，各带列头 —— 列头始终贴着数据，翻到哪都看得见列名。
-              点行展开看这条的详情（这条干什么/步骤/注意），展开渲染沿用 CasebookDetail。 */}
-          <Table
-            rowKey="id"
-            columns={CB_COLUMNS}
-            dataSource={d.cases}
-            size="small"
-            pagination={false}
-            expandable={{
-              expandedRowRender: c => <CasebookDetail c={c} />,
-              expandRowByClick: true,
-            }}
-          />
-        </div>
-      ))}
+      {/* 全册一张表：模块是一列不是分组，翻页在表格自己身上。
+          点行展开看这条的详情（这条干什么/步骤/注意），展开渲染沿用 CasebookDetail。 */}
+      <Table
+        rowKey="id"
+        columns={CB_COLUMNS}
+        dataSource={rows}
+        size="small"
+        locale={{ emptyText: '没有符合条件的用例。' }}
+        pagination={{
+          current: page,
+          pageSize,
+          total: shown,
+          onChange: (pg, size) => { setPage(pg); setPageSize(size) },
+          showSizeChanger: true,
+          pageSizeOptions: ['20', '50', '100', '200'],
+          showTotal: (t, [a, b]) => `第 ${a}-${b} 条 / 共 ${t} 条`,
+          size: 'small',
+        }}
+        expandable={{
+          expandedRowRender: c => <CasebookDetail c={c} />,
+          expandRowByClick: true,
+        }}
+      />
     </div>
   )
 }
