@@ -210,7 +210,12 @@ async def check_deliverable(session: AsyncSession, case_id: str) -> dict:
         risks.append({"kind": "status_behind", "detail": detail})
 
     # 预期结果里写了 UI 落点，但这条不做 UI 维度 → 那句话没人验
-    if target == "spec_api" and re.search(r"详情页|列表页|页面|回显|界面", case.expected_result or ""):
+    #
+    # **「回显」不在这张表里**：它在接口用例里绝大多数指「上游/httpbin 把请求原样回显」，
+    # 是数据层的事，接口断言就能验；当成 UI 词会对一大批纯接口用例误报。
+    # 反过来真正的 UI 落点词（控件/渲染/回填/点击/跳转）原来一个没有，反倒漏报。
+    if target == "spec_api" and re.search(
+            r"详情页|列表页|页面|界面|控件|渲染|回填|点击|跳转", case.expected_result or ""):
         notes.append({"kind": "ui_wording_in_spec_api",
                       "detail": "预期结果里提到了页面/回显，但 target_level=spec_api 不做 UI 维度。"
                                 "接口层若已断言对应字段就算覆盖了数据层，页面渲染那一层没人验 —— "

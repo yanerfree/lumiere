@@ -266,7 +266,23 @@ async def get_case(session: AsyncSession, case_id: str) -> dict | None:
     case = await case_service.get_case(session, uuid.UUID(case_id))
     if not case:
         return None
-    return _case_to_dict(case)
+    # **回读要能对齐回写。** lum_update_case 能写的字段（target_level、bug_refs、tags、
+    # blocked_external、预期确认落款），这里原来一个都读不回来 —— CC 写完无从确认自己
+    # 到底写进去没有，只能靠"没报错"猜。落款走 expected_confirmed_actor（CC 自由文本），
+    # 不是 users 外键那个 expected_confirmed_by。
+    at = getattr(case, "expected_confirmed_at", None)
+    return {
+        **_case_to_dict(case),
+        "targetLevel": case.target_level,
+        "targetLevelReason": case.target_level_reason,
+        "blockedExternal": case.blocked_external,
+        "bugRefs": case.bug_refs or [],
+        "tags": case.tags or [],
+        "reflections": case.reflections,
+        "expectedConfirmedBy": getattr(case, "expected_confirmed_actor", None),
+        "expectedConfirmedNote": case.expected_confirmed_note,
+        "expectedConfirmedAt": at.isoformat() if at else None,
+    }
 
 
 async def create_case(

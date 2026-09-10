@@ -136,8 +136,28 @@ _BOOL_STRINGS = {"true", "false", "True", "False"}
 # 断言的期望值/字段路径**只有一个取法**，跟执行器共用 —— 显示和判定各挑一个键名，
 # 就是「期望 200，实际 200，判失败」那个 bug 的形状（见 expected_of 的说明）。
 from app.services.api_test_runner import (  # noqa: E402
-    _DEFAULT_OP as _DEF_OP, expected_of as _exp_of, field_of as _field_of,
+    _DEFAULT_OP as _DEF_OP, _VALID_OPS as _VALID_OPS,
+    expected_of as _exp_of, field_of as _field_of,
 )
+
+# operator 常见拼写 → 执行器认的写法。写 equals/eq 而不是 == 的话，执行器会判
+# 「不认识的操作符」永远失败（见 api_test_runner._VALID_OPS 的注释），在这里就改过来。
+_OP_ALIASES = {
+    "equals": "==", "eq": "==", "=": "==", "===": "==", "is": "==",
+    "not_equals": "!=", "notequals": "!=", "ne": "!=", "neq": "!=", "<>": "!=",
+}
+
+
+def _strip_field_prefix(fld):
+    """剥掉字段路径的 `$.` / `$[` 前缀。执行器按 `data.id` 取值，写成 JSONPath 的
+    `$.data.id` 会取不到 → 静默判红，报错还看不出是前缀的锅。"""
+    if isinstance(fld, str):
+        f = fld.strip()
+        if f.startswith("$."):
+            return f[2:]
+        if f.startswith("$["):
+            return f[1:]
+    return fld
 
 # 这些 operator 必须有期望值，没有就**永远判不过** —— 拦在入库
 _NEEDS_EXPECTED = {
@@ -181,10 +201,14 @@ def _canon_assertion(a: dict) -> dict:
         return a
     out = dict(a)
     a_type = out.get("type")
-    op = out.get("operator") or _DEF_OP.get(a_type, "==")
+    raw_op = out.get("operator")
+    if isinstance(raw_op, str) and raw_op in _OP_ALIASES:
+        raw_op = _OP_ALIASES[raw_op]
+        out["operator"] = raw_op          # 归一后落库，别让 equals 这类留在库里
+    op = raw_op or _DEF_OP.get(a_type, "==")
     exp = _exp_of(out)
     if a_type == "body_field":
-        fld = _field_of(out, op)
+        fld = _strip_field_prefix(_field_of(out, op))
         out.pop("value", None)
         if fld is not None:
             out["field"] = fld
@@ -223,6 +247,34 @@ def _unevaluatable_assertions(seq: int, st: dict) -> list[dict]:
             out.append({"step": seq, "name": name, "assertion": a,
                         "why": f"{a_type} {op} 必须有期望值（expected 或 value），"
                                f"这条一个都没给 —— 跑起来永远判不过。"})
+    return out
+
+
+def _bad_type_assertions(seq: int, st: dict) -> list[dict]:
+    """断言的 type / operator 执行器根本不认 —— 回推就拦，别等真跑才发现。
+
+    执行器运行时会报「不认识的断言类型/操作符」（api_test_runner._VALID_OPS），
+    但那要真跑一趟才暴露；不跑的话这条**必然红**的断言就静静躺在回归池里，
+    静态审都看不出来。实测 CC 写过 `type=jsonpath`、`operator=equals` —— 前者不是
+    平台支持的类型，后者该写 `==`。equals/eq 这类拼写在 _canon_assertion 里已经
+    改成 == 了，这里拦的是**改不动的真错**（自造类型、白名单外的算子）。
+    """
+    out = []
+    for a in (st.get("assertions") or []):
+        if not isinstance(a, dict):
+            continue
+        a_type = a.get("type")
+        name = st.get("name") or f"step{seq}"
+        valid = _VALID_OPS.get(a_type)
+        if valid is None:
+            out.append({"step": seq, "name": name, "assertion": a,
+                        "why": f"断言类型「{a_type}」执行器不认；只支持 "
+                               f"{'、'.join(_VALID_OPS)}。"})
+            continue
+        op = a.get("operator") or _DEF_OP.get(a_type, "==")
+        if op not in valid:
+            out.append({"step": seq, "name": name, "assertion": a,
+                        "why": f"{a_type} 不支持操作符「{op}」；只认 {'、'.join(valid)}。"})
     return out
 
 
@@ -1459,6 +1511,13 @@ async def sync_orchestrated_scenario(
     warnings: list[dict] = []
     bad_types: list[dict] = []
     dead_asserts: list[dict] = []
+    bad_asserts: list[dict] = []
+    # 超长字段：直接写库会撞 varchar 上限，抛底层 SQL 报错并**回显全部绑定参数**
+    # （可能带鉴权头/凭据），所以在入库前拦下、只回显前 60 字。见 7c588b58。
+    too_long: list[dict] = []
+    if isinstance(title, str) and len(title) > 200:
+        too_long.append({"step": 0, "field": "title", "limit": 200,
+                         "length": len(title), "value": title[:60] + "…"})
     extracted: set[str] = set()
     for i, st in enumerate(norm):
         refs = _collect_refs(st.get("url"), st.get("headers"), st.get("body"), st.get("assertions"))
@@ -1482,6 +1541,14 @@ async def sync_orchestrated_scenario(
         bad_types.extend(_typo_assertions(i + 1, st))
         # 期望值/字段路径压根没给 → 硬拦（必然红，且报错看不懂）。见 _unevaluatable_assertions。
         dead_asserts.extend(_unevaluatable_assertions(i + 1, st))
+        # type/operator 执行器不认（自造类型、白名单外算子）→ 硬拦。见 _bad_type_assertions。
+        bad_asserts.extend(_bad_type_assertions(i + 1, st))
+        # 步骤字段超 varchar 上限 → 硬拦（否则抛原始 SQL + 回显绑定参数）。见 7c588b58。
+        for _fld, _lim in (("name", 200), ("group_name", 100), ("url", 500)):
+            _v = st.get(_fld)
+            if isinstance(_v, str) and len(_v) > _lim:
+                too_long.append({"step": i + 1, "field": _fld, "limit": _lim,
+                                 "length": len(_v), "value": _v[:60] + "…"})
         # 异步下发的断言没开重试 → 软警告。见 _needs_retry。
         r = _needs_retry(i + 1, st)
         if r:
@@ -1510,6 +1577,26 @@ async def sync_orchestrated_scenario(
                     "（in 的话 value 是数组）；响应字段写 {\"type\":\"body_field\","
                     "\"field\":\"data.status\",\"operator\":\"==\",\"expected\":\"pending\"}。"
                     "expected / value 两种键名执行器都认，但**总得给一个**。",
+        }
+
+    if too_long:
+        return {
+            "error": "有字段超长，已拒绝入库 —— 直接写库会抛底层 SQL 报错并回显全部绑定"
+                     "参数（可能带鉴权头/凭据），所以先在这里拦下。",
+            "tooLong": too_long,
+            "hint": "步骤名≤200、分组名≤100、URL≤500、标题≤200 字符。名字太长多半是把"
+                    "预期/说明塞进了名字 —— 挪到断言或 group_name 里。",
+        }
+
+    if bad_asserts:
+        return {
+            "error": "有断言的类型/操作符执行器不认，已拒绝入库 —— 跑起来会判「永远失败」，"
+                     "而且不真跑就发现不了。",
+            "badAssertions": bad_asserts,
+            "hint": "type 只认 status / body_contains / body_field；operator 各类型白名单："
+                    "status 用 ==、!=、in；body_contains 用 contains、not_contains；"
+                    "body_field 用 ==、!=、not_empty、is_empty、not_exists、contains、"
+                    "not_contains、length、>、<、>=、<=。字段路径写 data.id，别加 $. 前缀。",
         }
 
     if bad_types:
