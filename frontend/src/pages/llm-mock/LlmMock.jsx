@@ -18,6 +18,15 @@ const { TextArea } = Input
 
 const MONO = 'var(--font-mono)'
 
+// 开认证时自动塞一个「长得像正式 API Key」的 key（sk- 开头，48 位）——
+// 打开就能直接用，用户可再改。只是随机串，不做任何校验。
+const genApiKey = () => {
+  const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  let s = ''
+  for (let i = 0; i < 48; i++) s += chars[Math.floor(Math.random() * chars.length)]
+  return 'sk-' + s
+}
+
 const fmtHeaders = (h) => {
   if (!h || typeof h !== 'object' || !Object.keys(h).length) return '-'
   try { return JSON.stringify(h, null, 2) } catch { return String(h) }
@@ -143,12 +152,14 @@ export default function LlmMock() {
       'responseBody', 'responseMode', 'presetMode', 'delayMs', 'sseChunkDelayMs', 'tokenMode',
       'customPromptTokens', 'customCompletionTokens', 'modelMode', 'customModel', 'responseFormat',
       // 这三个不加进来，开了智能应答保存按钮不会亮，改了等于没改
-      'streamMode', 'sseChunkSize', 'smartEnabled', 'smartRole', 'smartBodyMarker']
+      'streamMode', 'sseChunkSize', 'smartEnabled', 'smartRole', 'smartBodyMarker',
+      'authType']
     for (const k of keys) {
       if (routeForm[k] !== originalForm[k]) return true
     }
     if (JSON.stringify(routeForm.toolCalls) !== JSON.stringify(originalForm.toolCalls)) return true
     if (JSON.stringify(routeForm.responseHeaders) !== JSON.stringify(originalForm.responseHeaders)) return true
+    if (JSON.stringify(routeForm.authConfig) !== JSON.stringify(originalForm.authConfig)) return true
     return false
   }, [routeForm, originalForm])
 
@@ -609,6 +620,100 @@ export default function LlmMock() {
               服务未启动，启动后显示完整访问地址
             </div>
           )}
+
+          {/* ━━ 请求认证：默认关，开了才校验请求头（跟「协议 Mock」同一套） ━━
+              开认证时自动塞一个 sk- 开头的 key，可编辑；请求带错/没带就返回 401 */}
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: '#1d2129', marginBottom: 8 }}>请求认证</div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 6 }}>认证方式</div>
+            <Select value={routeForm.authType || 'none'} disabled={locked}
+              onChange={v => setRouteForm(f => {
+                if (v === 'none') return { ...f, authType: 'none', authConfig: null }
+                const cfg = { ...(f.authConfig || {}) }
+                // 打开认证时补一个像正式 API Key 的默认值，用户可再改
+                if (v === 'bearer' && !cfg.token) cfg.token = genApiKey()
+                if (v === 'apikey') { if (!cfg.headerName) cfg.headerName = 'Authorization'; if (!cfg.key) cfg.key = genApiKey() }
+                if (v === 'custom_header' && !cfg.headerName) cfg.headerName = 'X-API-Key'
+                return { ...f, authType: v, authConfig: cfg }
+              })}
+              size="small" style={{ width: '100%' }}
+              options={[
+                { value: 'none', label: '无认证' },
+                { value: 'bearer', label: 'Bearer Token' },
+                { value: 'basic', label: 'Basic Auth' },
+                { value: 'apikey', label: 'API Key' },
+                { value: 'jwt', label: 'JWT 验证' },
+                { value: 'custom_header', label: '自定义 Header' },
+              ]} />
+            {routeForm.authType === 'bearer' && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Token（请求头 Authorization: Bearer &lt;token&gt;）</div>
+                <Input spellCheck={false} disabled={locked} value={routeForm.authConfig?.token || ''}
+                  onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, token: e.target.value } }))}
+                  placeholder="输入 Bearer Token" style={{ fontFamily: MONO, fontSize: 12 }} />
+              </div>
+            )}
+            {routeForm.authType === 'basic' && (
+              <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>用户名</div>
+                  <Input disabled={locked} value={routeForm.authConfig?.username || ''}
+                    onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, username: e.target.value } }))}
+                    placeholder="username" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>密码</div>
+                  <Input.Password disabled={locked} value={routeForm.authConfig?.password || ''}
+                    onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, password: e.target.value } }))}
+                    placeholder="password" />
+                </div>
+              </div>
+            )}
+            {routeForm.authType === 'apikey' && (
+              <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Header 名称</div>
+                  <Input disabled={locked} value={routeForm.authConfig?.headerName || ''}
+                    onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, headerName: e.target.value } }))}
+                    placeholder="Authorization" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Key 值</div>
+                  <Input spellCheck={false} disabled={locked} value={routeForm.authConfig?.key || ''}
+                    onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, key: e.target.value } }))}
+                    placeholder="your-api-key" style={{ fontFamily: MONO, fontSize: 12 }} />
+                </div>
+              </div>
+            )}
+            {routeForm.authType === 'jwt' && (
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Secret（HS256 签名验证，留空则只检查格式和过期时间）</div>
+                <Input spellCheck={false} disabled={locked} value={routeForm.authConfig?.secret || ''}
+                  onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, secret: e.target.value } }))}
+                  placeholder="your-jwt-secret（可选）" style={{ fontFamily: MONO, fontSize: 12 }} />
+                <div style={{ fontSize: 11, color: '#86909c', marginTop: 6 }}>验证逻辑：JWT 格式 → exp 过期检查 → 签名校验（如填了 secret）</div>
+              </div>
+            )}
+            {routeForm.authType === 'custom_header' && (
+              <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Header 名称</div>
+                  <Input disabled={locked} value={routeForm.authConfig?.headerName || ''}
+                    onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, headerName: e.target.value } }))}
+                    placeholder="X-Custom-Auth" />
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 11, color: '#86909c', marginBottom: 4 }}>Header 值</div>
+                  <Input spellCheck={false} disabled={locked} value={routeForm.authConfig?.headerValue || ''}
+                    onChange={e => setRouteForm(f => ({ ...f, authConfig: { ...f.authConfig, headerValue: e.target.value } }))}
+                    placeholder="expected-value" style={{ fontFamily: MONO, fontSize: 12 }} />
+                </div>
+              </div>
+            )}
+            {routeForm.authType && routeForm.authType !== 'none' && (
+              <div style={{ fontSize: 11, color: '#0ea5a0', marginTop: 6 }}>请求必须携带正确的认证信息，否则返回 401</div>
+            )}
+          </div>
 
           {/* ━━ 智能应答：独立一区 ━━
               它一开就接管下面整片响应配置，所以不能跟那些配置混排 ——

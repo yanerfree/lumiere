@@ -37,6 +37,9 @@ class MockRouteCreate(BaseSchema):
     smart_enabled: bool = False
     smart_role: str = Field(default="auto", pattern="^(auto|upstream|checker)$")
     smart_body_marker: str | None = Field(default=None, max_length=200)
+    # 认证：默认 none（不拦）。开了才校验请求头。跟「协议 Mock」同一套，值不做格式校验。
+    auth_type: str = Field(default="none")
+    auth_config: dict | None = None
 
 
 class MockRouteUpdate(BaseSchema):
@@ -65,6 +68,8 @@ class MockRouteUpdate(BaseSchema):
     smart_enabled: bool | None = None
     smart_role: str | None = Field(default=None, pattern="^(auto|upstream|checker)$")
     smart_body_marker: str | None = Field(default=None, max_length=200)
+    auth_type: str | None = None
+    auth_config: dict | None = None
 
 
 class MockRouteResponse(BaseSchema):
@@ -96,6 +101,8 @@ class MockRouteResponse(BaseSchema):
     smart_enabled: bool
     smart_role: str
     smart_body_marker: str | None
+    auth_type: str
+    auth_config: dict | None
     hit_count: int
     last_hit_at: datetime | None
     created_at: datetime
