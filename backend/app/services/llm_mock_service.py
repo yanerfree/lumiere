@@ -168,8 +168,11 @@ async def get_log(session: AsyncSession, log_id: uuid.UUID) -> MockRequestLog | 
     return await session.get(MockRequestLog, log_id)
 
 
-async def clear_logs(session: AsyncSession) -> int:
-    result = await session.execute(delete(MockRequestLog))
+async def clear_logs(session: AsyncSession, route_id: uuid.UUID | None = None) -> int:
+    stmt = delete(MockRequestLog)
+    if route_id:
+        stmt = stmt.where(MockRequestLog.route_id == route_id)
+    result = await session.execute(stmt)
     await session.flush()
     return result.rowcount
 

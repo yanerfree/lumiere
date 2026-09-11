@@ -258,8 +258,13 @@ async def get_log_detail(log_id: uuid.UUID, session: AsyncSession = Depends(get_
 
 
 @router.delete("/logs")
-async def clear_logs(session: AsyncSession = Depends(get_db)):
-    count = await svc.clear_logs(session)
+async def clear_logs(
+    route_id: uuid.UUID | None = Query(None),
+    session: AsyncSession = Depends(get_db),
+):
+    # route_id 传了就只清这一条 mock 的日志（对齐页面上「本条 mock」的查看范围），
+    # 不传照旧清全部。
+    count = await svc.clear_logs(session, route_id=route_id)
     return {"ok": True, "deleted": count}
 
 

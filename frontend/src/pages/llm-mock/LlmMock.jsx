@@ -81,6 +81,9 @@ export default function LlmMock() {
   const [logDrawerOpen, setLogDrawerOpen] = useState(false)
   const [logDetailLoading, setLogDetailLoading] = useState(false)
   const [logFilter, setLogFilter] = useState('all')
+  // 日志默认只看「当前选中的这条路由」的请求 —— 不然所有 mock 的日志混在一起，
+  // 看不出哪条是这个 mock 收到的（语义缓存那种一次要发 embeddings + chat 两条路由，混着尤其乱）
+  const [logScope, setLogScope] = useState('current')
   const [serviceStatus, setServiceStatus] = useState({ running: false, port: 28100, captureEnabled: true, routesCount: 0, routesEnabled: 0, totalRequests: 0 })
   const [saving, setSaving] = useState(false)
   const [activeTab, setActiveTab] = useState('config')
@@ -112,6 +115,7 @@ export default function LlmMock() {
       const p = page || logPage
       const params = new URLSearchParams({ limit: String(logPageSize), offset: String((p - 1) * logPageSize) })
       if (logFilter !== 'all') params.set('status', logFilter)
+      if (logScope === 'current' && selectedRouteId) params.set('route_id', selectedRouteId)
       const r = await api.get(`/llm-mock/logs?${params}`)
       const d = r.data || r
       setLogs(d.data || d || [])
@@ -119,7 +123,8 @@ export default function LlmMock() {
     } catch {}
   }
 
-  useEffect(() => { setLogPage(1); fetchLogs(1) }, [logFilter])
+  // 切筛选、切「本条/全部」、或换选中的路由，都要把日志重新拉一遍并回到第一页
+  useEffect(() => { setLogPage(1); setExpandedLogId(null); fetchLogs(1) }, [logFilter, logScope, selectedRouteId])
 
   useEffect(() => {
     if (routes.length > 0 && !selectedRouteId) selectRoute(routes[0])
@@ -359,7 +364,11 @@ export default function LlmMock() {
   }
 
   const handleClearLogs = async () => {
-    try { await api.delete('/llm-mock/logs'); message.success('日志已清空'); setExpandedLogId(null); setExpandedLogDetail(null); setLogs([]); setLogsTotal(0); setLogPage(1); fetchLogs(1) } catch {}
+    // 看「本条 mock」就只清这一条的日志，看「全部」才清全部 —— 和上面的查看范围对齐，
+    // 免得在只看一条时点清空却把所有 mock 的日志都抹了
+    const scoped = logScope === 'current' && selectedRouteId
+    const url = scoped ? `/llm-mock/logs?route_id=${selectedRouteId}` : '/llm-mock/logs'
+    try { await api.delete(url); message.success('日志已清空'); setExpandedLogId(null); setExpandedLogDetail(null); setLogs([]); setLogsTotal(0); setLogPage(1); fetchLogs(1) } catch {}
   }
 
   const handleReplay = async (logId) => {
@@ -867,6 +876,22 @@ export default function LlmMock() {
               message="响应内容不是数字数组，会被忽略：当前按输入文本确定性生成向量。想固定返回请填 [0.1, 0.2, 0.3] 这样的数组，或清空。" />
           )}
 
+          {/* SIM 指令说明 —— 语义缓存测试专用。默认按字面相似度生成向量，同义词分数偏低、
+              反义词若字重合又偏高，测不出「命中」也测不出「反义误命中」。SIM 指令让测试者
+              把相似度精确钉死，不靠字面。写在发给这条 mock 的文本里，不是配在这个页面上。*/}
+          {isEmbedding && responseModeValue !== 'random' && (
+            <Alert type="info" showIcon style={{ fontSize: 12, marginBottom: 16 }}
+              message="测语义缓存命中/未命中：在发给这条 mock 的文本里加 SIM 指令，精确钉住相似度"
+              description={
+                <div style={{ fontSize: 11, lineHeight: 1.9 }}>
+                  <div>· <code>SIM:q1</code> —— 归到「q1」这组，和同组文本相似度 <b>1.0</b>（同义词都标同一个键就必命中）</div>
+                  <div>· <code>SIM:q1@0.97</code> —— 和「q1」组相似 <b>0.97</b>（卡在阈值上下沿，测边界）</div>
+                  <div>· 不同键之间相似度 <b>≈0</b> —— 反义词「删除用户 / 不要删除用户」各标一个键（如 <code>SIM:a</code> / <code>SIM:b</code>）就必未命中，字面再像也不会误命中</div>
+                  <div style={{ color: '#86909c', marginTop: 4 }}>不加 SIM 时照旧按输入文本自动生成向量，老用法不受影响。</div>
+                </div>
+              } />
+          )}
+
           {/* 响应内容 + 预览 — 左右分栏 */}
           {responseModeValue !== 'random' && (
             <div style={{ display: 'flex', gap: 12, minHeight: 0 }}>
@@ -1025,8 +1050,19 @@ export default function LlmMock() {
         padding: '8px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)', flexShrink: 0,
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>共 {logsTotal} 条</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>
+          共 {logsTotal} 条
+          {logScope === 'current' && (
+            <span style={{ fontSize: 11, fontWeight: 400, color: '#86909c', marginLeft: 6 }}>
+              · 仅当前 mock{routeForm?.name ? `（${routeForm.name}）` : ''}
+            </span>
+          )}
+        </span>
         <Space size={4}>
+          <Radio.Group value={logScope} onChange={e => setLogScope(e.target.value)} size="small">
+            <Radio.Button value="current">本条 mock</Radio.Button>
+            <Radio.Button value="all">全部</Radio.Button>
+          </Radio.Group>
           <Radio.Group value={logFilter} onChange={e => setLogFilter(e.target.value)} size="small">
             <Radio.Button value="all">全部</Radio.Button>
             <Radio.Button value="ok">OK</Radio.Button>
@@ -1034,7 +1070,12 @@ export default function LlmMock() {
           </Radio.Group>
           <Button icon={<ReloadOutlined />} size="small" type="text" onClick={() => fetchLogs()} />
           <Button icon={<ExportOutlined />} size="small" type="text" onClick={handleExportLogs} />
-          <Popconfirm title="确认清空？" onConfirm={handleClearLogs}>
+          <Popconfirm
+            title={logScope === 'current' && selectedRouteId
+              ? `清空「${routeForm?.name || '当前 mock'}」的日志？`
+              : '清空全部 mock 的日志？'}
+            onConfirm={handleClearLogs}
+          >
             <Button icon={<ClearOutlined />} size="small" type="text" danger />
           </Popconfirm>
         </Space>
