@@ -78,6 +78,12 @@ class MockRoute(Base):
     response_type: Mapped[str] = mapped_column(String(20), nullable=False, default="text")
     tool_calls: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
+    # 认证 —— 默认 none（不拦），开了才在进入应答逻辑之前校验请求头。
+    # 和「协议 Mock」（api_mock_routes）同一套：auth_type + auth_config(JSONB)。
+    # 支持 bearer / basic / apikey / custom_header / jwt，校验逻辑在 llm_mock_manager._check_auth。
+    auth_type: Mapped[str] = mapped_column(String(20), nullable=False, default="none", server_default="none")
+    auth_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     # 统计
     hit_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

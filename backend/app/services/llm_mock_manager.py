@@ -272,6 +272,20 @@ class MockServerManager:
             )
 
         route_dict = self._route_to_dict(matched_route)
+
+        # 认证：开了才校验（默认 none 直接放行）。放在应答逻辑最前 —— 不匹配直接 401，
+        # 不进智能应答 / 流式判定，也不消耗 hit_count。校验口径和「协议 Mock」一致。
+        auth_error = self._check_auth(request, route_dict)
+        if auth_error:
+            t_done = time.perf_counter()
+            if self.capture_enabled:
+                await self._log_request(
+                    route_dict, request, request_body, method, path,
+                    401, '{"error":"Unauthorized"}', {},
+                    match_ms, (t_done - t0) * 1000, 0.0, (t_done - t0) * 1000,
+                )
+            return auth_error
+
         # 智能应答开着就由它接管：响应内容 / 状态码 / finish_reason / 流式全部由请求里的
         # 指令决定。放在最前面是因为 status_code 会影响下面的流式判定和日志。
         # 关着就是一条静态 mock，所有请求都回路由上配的那段 response_body。
@@ -461,7 +475,80 @@ class MockServerManager:
             "smart_enabled": route.smart_enabled,
             "smart_role": route.smart_role,
             "smart_body_marker": route.smart_body_marker,
+            "auth_type": route.auth_type,
+            "auth_config": route.auth_config,
         }
+
+    def _check_auth(self, request: Request, route_dict: dict) -> JSONResponse | None:
+        """路由级认证校验。默认 none 直接放行；不匹配回 401。
+        和「协议 Mock」（api_mock_manager._check_auth）同一套口径，方便两个 mock 互相对照。"""
+        auth_type = route_dict.get("auth_type", "none")
+        if auth_type == "none":
+            return None
+        cfg = route_dict.get("auth_config") or {}
+        auth_header = request.headers.get("authorization", "")
+
+        if auth_type == "bearer":
+            expected = cfg.get("token", "")
+            if not expected or not auth_header.lower().startswith("bearer ") or auth_header[7:].strip() != expected:
+                return JSONResponse({"error": "Unauthorized", "message": "Invalid or missing Bearer token"}, status_code=401)
+
+        elif auth_type == "basic":
+            import base64
+            username = cfg.get("username", "")
+            password = cfg.get("password", "")
+            if not username:
+                return JSONResponse({"error": "Unauthorized", "message": "Auth not configured"}, status_code=401)
+            expected = base64.b64encode(f"{username}:{password}".encode()).decode()
+            if not auth_header.lower().startswith("basic ") or auth_header[6:].strip() != expected:
+                return JSONResponse({"error": "Unauthorized", "message": "Invalid Basic credentials"}, status_code=401)
+
+        elif auth_type == "apikey":
+            header_name = cfg.get("headerName", "X-API-Key")
+            expected_key = cfg.get("key", "")
+            if not expected_key:
+                return JSONResponse({"error": "Unauthorized", "message": "Auth not configured"}, status_code=401)
+            actual = request.headers.get(header_name.lower(), "")
+            if actual != expected_key:
+                return JSONResponse({"error": "Unauthorized", "message": f"Invalid or missing {header_name}"}, status_code=401)
+
+        elif auth_type == "custom_header":
+            header_name = cfg.get("headerName", "")
+            expected_value = cfg.get("headerValue", "")
+            if not header_name or not expected_value:
+                return JSONResponse({"error": "Unauthorized", "message": "Auth not configured"}, status_code=401)
+            actual = request.headers.get(header_name.lower(), "")
+            if actual != expected_value:
+                return JSONResponse({"error": "Unauthorized", "message": f"Invalid or missing {header_name}"}, status_code=401)
+
+        elif auth_type == "jwt":
+            import base64, hmac, hashlib, time as _time
+            secret = cfg.get("secret", "")
+            if not auth_header.lower().startswith("bearer "):
+                return JSONResponse({"error": "Unauthorized", "message": "Missing Bearer JWT token"}, status_code=401)
+            jwt_token = auth_header[7:].strip()
+            parts = jwt_token.split(".")
+            if len(parts) != 3:
+                return JSONResponse({"error": "Unauthorized", "message": "Invalid JWT format"}, status_code=401)
+            try:
+                pad = lambda s: s + "=" * (4 - len(s) % 4) if len(s) % 4 else s
+                payload_str = base64.urlsafe_b64decode(pad(parts[1])).decode("utf-8")
+                import json as _json
+                payload_data = _json.loads(payload_str)
+            except Exception:
+                return JSONResponse({"error": "Unauthorized", "message": "Invalid JWT payload"}, status_code=401)
+            exp = payload_data.get("exp")
+            if exp and isinstance(exp, (int, float)) and exp < _time.time():
+                return JSONResponse({"error": "Unauthorized", "message": "JWT token expired"}, status_code=401)
+            if secret:
+                signing_input = f"{parts[0]}.{parts[1]}".encode()
+                expected_sig = base64.urlsafe_b64encode(
+                    hmac.new(secret.encode(), signing_input, hashlib.sha256).digest()
+                ).rstrip(b"=").decode()
+                if parts[2] != expected_sig:
+                    return JSONResponse({"error": "Unauthorized", "message": "JWT signature mismatch"}, status_code=401)
+
+        return None
 
     async def _debug_log(self, limit: int, path: str | None) -> dict:
         """最近若干条请求的摘要。见路由声明处的安全说明：不含请求头 / 完整报文。"""
