@@ -413,6 +413,12 @@ textarea.ant-input {
 .ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled) {
   background: var(--primary) !important;
   border-color: var(--primary) !important;
+  /* 背景被改成青色后，antd 默认的选中文字色还是青色 —— 青字压青底就看不见了。
+     统一改成白字，跟主按钮（白字压青底）一个观感。这条是全局的，所有 Radio 按钮组一起生效。 */
+  color: #fff !important;
+}
+.ant-radio-button-wrapper-checked:not(.ant-radio-button-wrapper-disabled):hover {
+  color: #fff !important;
 }
 
 /* --- Switch --- */

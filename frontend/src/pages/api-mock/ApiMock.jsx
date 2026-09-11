@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, Fragment, lazy, Suspense } from 'react'
 import {
   Button, Space, Input, Select, Tag, Radio, Popconfirm, Tooltip, Badge, Pagination,
-  Empty, Typography, InputNumber, Switch, message, Drawer, Alert, Modal, Spin
+  Empty, Typography, InputNumber, Switch, message, Drawer, Alert, Modal, Spin, Checkbox
 } from 'antd'
 import {
   PlusOutlined, DeleteOutlined, SaveOutlined, PlayCircleOutlined, PauseCircleOutlined,
@@ -73,6 +73,97 @@ const CT_COLOR = (ct) => {
   return 'default'
 }
 
+// ─── 把选中的 mock 路由导出成 OpenAPI 3.0.3 文档 ───
+// 用途：导出后可导入到智能体/MCP 侧，每条路由变成一个可调用的「工具」。
+// mock 路由本身只有「方法+路径+一段固定响应」，没有参数定义，所以参数一栏留空，
+// 响应 schema 从那段响应体尽力推断出来。
+
+// OpenAPI 只认这几个方法；ANY / 其它一律落到 get（mock 对任意方法都应答，用 get 能调通）。
+const OPENAPI_METHODS = new Set(['get', 'put', 'post', 'delete', 'options', 'head', 'patch', 'trace'])
+const toOpenApiMethod = (m) => {
+  const low = (m || 'get').toLowerCase()
+  return OPENAPI_METHODS.has(low) ? low : 'get'
+}
+
+// operationId 要求全局唯一且是标识符 —— 用「方法+路径」拼一个 ASCII slug，路径天然唯一。
+const makeOperationId = (route) => {
+  const slug = `${route.method || 'get'}_${route.path || ''}`
+    .replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase()
+  return slug || 'op'
+}
+
+// 尽力从一个已解析的 JSON 值推断 OpenAPI schema
+const inferSchema = (value) => {
+  if (value === null || value === undefined) return { type: 'object', nullable: true }
+  if (Array.isArray(value)) return { type: 'array', items: value.length ? inferSchema(value[0]) : {} }
+  const t = typeof value
+  if (t === 'number') return { type: Number.isInteger(value) ? 'integer' : 'number' }
+  if (t === 'boolean') return { type: 'boolean' }
+  if (t === 'string') return { type: 'string' }
+  if (t === 'object') {
+    const properties = {}
+    for (const k of Object.keys(value)) properties[k] = inferSchema(value[k])
+    return { type: 'object', properties }
+  }
+  return {}
+}
+
+// 由一条路由的响应体 + Content-Type 构造 responses.<code>.content
+const buildResponseContent = (route) => {
+  const ct = route.contentType || 'application/json'
+  const body = route.responseBody || ''
+  if (ct.includes('json')) {
+    try {
+      const parsed = JSON.parse(body)
+      return { [ct]: { schema: inferSchema(parsed), example: parsed } }
+    } catch {
+      // 响应体是带 $(...) 占位的模板、解析不了 —— schema 给宽松对象，不塞非法的 example
+      return { [ct]: { schema: { type: 'object' } } }
+    }
+  }
+  return { [ct]: { schema: { type: 'string' }, ...(body ? { example: body } : {}) } }
+}
+
+const buildOpenApiDoc = (selectedRoutes, serverUrl) => {
+  const paths = {}
+  for (const r of selectedRoutes) {
+    const p = r.path || '/'
+    const method = toOpenApiMethod(r.method)
+    const status = String(r.statusCode || 200)
+    if (!paths[p]) paths[p] = {}
+    paths[p][method] = {
+      operationId: makeOperationId(r),
+      summary: r.name || `${(r.method || 'GET').toUpperCase()} ${p}`,
+      description: `Mock 路由「${r.name || ''}」：${(r.method || 'GET').toUpperCase()} ${p}，返回 ${status}`,
+      responses: {
+        [status]: { description: r.name || '成功', content: buildResponseContent(r) },
+      },
+    }
+  }
+  return {
+    openapi: '3.0.3',
+    info: {
+      title: 'API Mock 导出',
+      version: '1.0.0',
+      description: `从 Lumiere 协议 Mock 导出的 ${selectedRoutes.length} 个接口`,
+    },
+    servers: [{ url: serverUrl }],
+    paths,
+  }
+}
+
+const downloadJson = (obj, filename) => {
+  const blob = new Blob([JSON.stringify(obj, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  document.body.removeChild(a)
+  URL.revokeObjectURL(url)
+}
+
 const WsMockPanel = lazy(() => import('./WsMockPanel'))
 const TcpMockPanel = lazy(() => import('./TcpMockPanel'))
 const UdpMockPanel = lazy(() => import('./UdpMockPanel'))
@@ -133,6 +224,7 @@ function HttpMockPanel() {
   const [routes, setRoutes] = useState([])
   const [selectedRouteId, setSelectedRouteId] = useState(null)
   const [dragIdx, setDragIdx] = useState(null)
+  const [exportIds, setExportIds] = useState([])  // 勾选待导出的路由 id
   const [routeForm, setRouteForm] = useState(null)
   const [originalForm, setOriginalForm] = useState(null)
   const [presets, setPresets] = useState([])
@@ -404,6 +496,26 @@ function HttpMockPanel() {
   }
 
   const handleExportLogs = () => window.open('/api/api-mock/logs/export', '_blank')
+
+  // 勾选/取消勾选一条路由（用于导出）
+  const toggleExport = (id, checked) => {
+    setExportIds(prev => checked ? [...prev, id] : prev.filter(x => x !== id))
+  }
+  // 表头全选/全不选
+  const toggleExportAll = (checked) => {
+    setExportIds(checked ? routes.map(r => r.id) : [])
+  }
+  // 把勾选的路由导出成 OpenAPI 3.0.3 JSON，浏览器直接下载
+  const handleExportOpenApi = () => {
+    const picked = routes.filter(r => exportIds.includes(r.id))
+    if (!picked.length) { message.warning('请先勾选要导出的路由'); return }
+    const port = serviceStatus.port || 28200
+    const serverUrl = `http://${window.location.hostname}:${port}`
+    const doc = buildOpenApiDoc(picked, serverUrl)
+    const date = new Date().toISOString().slice(0, 10)
+    downloadJson(doc, `api-mock-openapi-${date}.json`)
+    message.success(`已导出 ${picked.length} 个接口`)
+  }
 
   const handleOpenLogDetail = async (logId) => {
     setExpandedLogId(logId)
@@ -1112,10 +1224,27 @@ function HttpMockPanel() {
             padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)',
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
           }}>
-            <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>路由</span>
-            <Tooltip title="新建路由">
-              <Button type="primary" ghost icon={<PlusOutlined />} size="small" onClick={handleCreateRoute} />
-            </Tooltip>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Tooltip title="全选 / 全不选">
+                <Checkbox
+                  checked={routes.length > 0 && exportIds.length === routes.length}
+                  indeterminate={exportIds.length > 0 && exportIds.length < routes.length}
+                  onChange={e => toggleExportAll(e.target.checked)}
+                />
+              </Tooltip>
+              <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>路由</span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <Tooltip title="把勾选的路由导出成 OpenAPI 文件">
+                <Button
+                  type="text" size="small" icon={<ExportOutlined />}
+                  disabled={!exportIds.length} onClick={handleExportOpenApi}
+                >导出{exportIds.length ? `(${exportIds.length})` : ''}</Button>
+              </Tooltip>
+              <Tooltip title="新建路由">
+                <Button type="primary" ghost icon={<PlusOutlined />} size="small" onClick={handleCreateRoute} />
+              </Tooltip>
+            </div>
           </div>
           <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px' }}>
             {routes.map((r, i) => {
@@ -1139,43 +1268,58 @@ function HttpMockPanel() {
                     borderTop: '2px solid transparent',
                     opacity: isDragging ? 0.4 : 1,
                     transition: 'opacity .15s',
+                    display: 'flex', alignItems: 'flex-start', gap: 8,
                   }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Tooltip title="拖动调整顺序">
-                      <HolderOutlined style={{ fontSize: 11, color: '#c8c8c8', cursor: 'grab', flexShrink: 0 }} />
-                    </Tooltip>
-                    {isDef && <LockOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />}
-                    {r.locked && (
-                      <Tooltip title="已锁定，不可编辑">
-                        <LockFilled style={{ fontSize: 11, color: '#ff7d00', flexShrink: 0 }} />
-                      </Tooltip>
-                    )}
-                    <Tag style={{
-                      margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 8,
-                      fontWeight: 600, color: METHOD_COLOR(r.method), borderColor: METHOD_COLOR(r.method),
-                      background: 'transparent',
-                    }}>{r.method}</Tag>
-                    <span style={{
-                      flex: 1, fontSize: 11, fontFamily: MONO,
-                      color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                    }}>{r.path}</span>
-                  </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
-                    <span style={{ fontSize: 12, color: sel ? '#1d2129' : '#86909c', fontWeight: sel ? 500 : 400 }}>{r.name}</span>
+                  {/* 勾选框：点它只切换勾选，不选中该行、不触发拖动 */}
+                  <span
+                    onClick={e => e.stopPropagation()}
+                    draggable
+                    onDragStart={e => { e.preventDefault(); e.stopPropagation() }}
+                    style={{ paddingTop: 1, flexShrink: 0 }}
+                  >
+                    <Checkbox
+                      checked={exportIds.includes(r.id)}
+                      onChange={e => toggleExport(r.id, e.target.checked)}
+                    />
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <Tag style={{
-                        margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px',
-                        color: STATUS_COLOR(r.statusCode), borderColor: STATUS_COLOR(r.statusCode),
-                        background: 'transparent', borderRadius: 8,
-                      }}>{r.statusCode}</Tag>
-                      <Tag color={CT_COLOR(r.contentType)} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 6 }}>
-                        {CT_SHORT(r.contentType)}
-                      </Tag>
-                      {r.authType && r.authType !== 'none' && (
-                        <Tooltip title={`认证: ${r.authType}`}>
-                          <LockOutlined style={{ fontSize: 11, color: '#ff7d00' }} />
+                      <Tooltip title="拖动调整顺序">
+                        <HolderOutlined style={{ fontSize: 11, color: '#c8c8c8', cursor: 'grab', flexShrink: 0 }} />
+                      </Tooltip>
+                      {isDef && <LockOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />}
+                      {r.locked && (
+                        <Tooltip title="已锁定，不可编辑">
+                          <LockFilled style={{ fontSize: 11, color: '#ff7d00', flexShrink: 0 }} />
                         </Tooltip>
                       )}
+                      <Tag style={{
+                        margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 8,
+                        fontWeight: 600, color: METHOD_COLOR(r.method), borderColor: METHOD_COLOR(r.method),
+                        background: 'transparent',
+                      }}>{r.method}</Tag>
+                      <span style={{
+                        flex: 1, fontSize: 11, fontFamily: MONO,
+                        color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      }}>{r.path}</span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
+                      <span style={{ fontSize: 12, color: sel ? '#1d2129' : '#86909c', fontWeight: sel ? 500 : 400 }}>{r.name}</span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <Tag style={{
+                          margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px',
+                          color: STATUS_COLOR(r.statusCode), borderColor: STATUS_COLOR(r.statusCode),
+                          background: 'transparent', borderRadius: 8,
+                        }}>{r.statusCode}</Tag>
+                        <Tag color={CT_COLOR(r.contentType)} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 6 }}>
+                          {CT_SHORT(r.contentType)}
+                        </Tag>
+                        {r.authType && r.authType !== 'none' && (
+                          <Tooltip title={`认证: ${r.authType}`}>
+                            <LockOutlined style={{ fontSize: 11, color: '#ff7d00' }} />
+                          </Tooltip>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </div>
