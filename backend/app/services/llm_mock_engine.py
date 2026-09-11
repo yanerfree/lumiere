@@ -857,6 +857,61 @@ def semantic_vector(text: str, dim: int) -> list[float]:
     return [round(v / norm, 6) for v in vec]
 
 
+# ───── SIM 指令：让测试者精确钉住两个 prompt 的余弦相似度 ─────
+# 为什么要它：上面那套按 token 哈希的相似度本质上是「数重合的字」——
+#   · 同义换说法（「今天几号」/「今天是几号」）字面差一个字，相似度就掉到默认阈值 0.95 以下，
+#     正路（该命中的缓存）在默认配置下压根测不出命中；
+#   · 反义只差一个字（「删除用户」/「不要删除用户」）字面几乎一样，相似度反而很高，
+#     于是把语义相反的答案当缓存命中给出去 —— 这是语义缓存最危险的错，字面相似度根本测不到。
+# SIM 指令绕开字面：相似度只由 key + score 决定，跟句子长什么样无关。
+#   在发给网关的 prompt 里写   SIM:<key>          → 该 key 的锚向量本身（自相似 1.0，同 key 无 score 必命中）
+#                            SIM:<key>@0.96     → 与该 key 锚向量余弦恰为 0.96 的向量
+# 于是：同义命中 = 两句都写 SIM:q1（1.0）；卡边界 = SIM:q1 对 SIM:q1@0.94（未命中）/@0.96（命中）；
+#       反义危险 = SIM:del@0.10 强制拉低，哪怕字面几乎一样。
+_SIM_RE = re.compile(r"SIM:([A-Za-z0-9_.\-]+)(?:@(1(?:\.0+)?|0?\.\d+|0|1))?")
+
+
+def _unit_from_seed(seed: str, dim: int) -> list[float]:
+    """由种子确定性生成一个单位向量（稠密、近似各向同性）。同一种子跨进程恒定。"""
+    raw = hashlib.shake_256(seed.encode("utf-8")).digest(dim * 2)
+    ints = struct.unpack(f"<{dim}h", raw)
+    norm = math.sqrt(sum(i * i for i in ints)) or 1.0
+    return [i / norm for i in ints]
+
+
+def parse_sim_directive(text: str) -> tuple[str, float] | None:
+    """从输入文本里解析 SIM 指令，返回 (key, score) 或 None。score 缺省 = 1.0。"""
+    if not text:
+        return None
+    m = _SIM_RE.search(text)
+    if not m:
+        return None
+    score = float(m.group(2)) if m.group(2) else 1.0
+    return m.group(1), max(0.0, min(1.0, score))
+
+
+def controlled_vector(key: str, score: float, dim: int) -> list[float]:
+    """构造一个与「key 的锚向量」余弦相似度恰为 score 的向量。
+    锚向量只由 key 决定，所以同 key、都不带 score 的两个输入必然 1.0 相似（缓存必命中）；
+    带 score 的那个则被精确放到离锚 arccos(score) 的角度上。
+    做法：b = score·a + sqrt(1-score²)·u，其中 u 是与 a 正交的确定性单位向量（Gram-Schmidt）。
+    此时 a·b = score（a·a=1、a·u=0），且 |b|=1。
+    """
+    a = _unit_from_seed(f"sim-anchor:{key}", dim)
+    if score >= 1.0:
+        return [round(v, 6) for v in a]
+    # 另取一个种子向量，减掉它在 a 上的分量，得到与 a 正交的单位向量
+    r = _unit_from_seed(f"sim-ortho:{key}", dim)
+    dot = sum(ai * ri for ai, ri in zip(a, r))
+    u = [ri - dot * ai for ri, ai in zip(r, a)]
+    un = math.sqrt(sum(x * x for x in u)) or 1.0
+    u = [x / un for x in u]
+    coeff = math.sqrt(max(0.0, 1.0 - score * score))
+    b = [score * ai + coeff * ui for ai, ui in zip(a, u)]
+    bn = math.sqrt(sum(x * x for x in b)) or 1.0
+    return [round(x / bn, 6) for x in b]
+
+
 def _random_vector(dim: int) -> list[float]:
     vec = [random.gauss(0, 1) for _ in range(dim)]
     norm = math.sqrt(sum(v * v for v in vec)) or 1.0
@@ -913,7 +968,11 @@ def build_embeddings_response(route: dict, request_body: dict) -> tuple[dict, di
 
     data = []
     for idx, text in enumerate(inputs):
-        if fixed:
+        sim = None if fixed else parse_sim_directive(text)
+        if sim:
+            # 显式指令优先于路由级 random —— SIM 是这次请求里明写的意图，比路由开关更具体
+            vec = controlled_vector(sim[0], sim[1], dim)
+        elif fixed:
             vec = fixed
         elif random_mode:
             vec = _random_vector(dim)
