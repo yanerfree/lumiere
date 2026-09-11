@@ -666,6 +666,9 @@ export default function MCPTools() {
   const [branchId] = useBranch(projectId)
   const mcpUrl = `http://${window.location.hostname}:18800/mcp/`
   const [apiKeys, setApiKeys] = useState([])
+  // 系统 admin 看得到全项目所有人的 Key（后端 list 接口回 adminView=true）。
+  // 普通人只回自己的，此时归属人恒为自己、不必单列一列。
+  const [adminView, setAdminView] = useState(false)
   const [tools, setTools] = useState([])
   const [createModalOpen, setCreateModalOpen] = useState(false)
   const [newKeyName, setNewKeyName] = useState('')
@@ -685,7 +688,7 @@ export default function MCPTools() {
     if (!projectId) return
     fetchKeys(); fetchTools(); fetchProfiles(); fetchScope()
   }, [projectId, branchId])
-  const fetchKeys = async () => { try { setApiKeys((await api.get('/mcp-keys')).data || []) } catch { /* 拦截器已弹错，这里不重复报 */ } }
+  const fetchKeys = async () => { try { const r = await api.get('/mcp-keys'); setApiKeys(r.data || []); setAdminView(!!r.adminView) } catch { /* 拦截器已弹错，这里不重复报 */ } }
   // 工具目录来自后端注册表，不再前端硬编码（曾经写死 20 条、后端实际 32 条）
   const fetchTools = async () => { try { setTools((await api.get('/mcp-keys/tools')).data || []) } catch { /* 同上 */ } }
   const fetchProfiles = async () => {
@@ -875,6 +878,10 @@ export default function MCPTools() {
                                 {/* 范围由后端算好回来（生效 / 被项目挡掉 / 名单过期 分开说）——
                                     前端自己拿 scope 和 k.allowedTools 再算一遍的话，两处口径迟早分叉。 */}
                                 <KeyScopeTags sc={k.scope} stale={staleFor(profiles, k.allowedTools)} />
+                                {/* 管理员视图才有别人的 Key，标出归属人；自己的不标（避免满屏"我"）。 */}
+                                {adminView && !k.mine && (
+                                  <Tag color="default" style={{ fontSize: 11, lineHeight: '16px', padding: '0 6px', margin: 0 }}>归属 {k.owner || '—'}</Tag>
+                                )}
                               </div>
                               <Text type="secondary" style={{ fontSize: 12 }}>
                                 {/* 时间格式走全站统一的 formatTime，别再各页一套 toLocaleString */}
@@ -926,6 +933,9 @@ export default function MCPTools() {
                             <span style={{ fontSize: 13, fontWeight: 600, color: '#1d2129' }}>{k.name}</span>
                             <Text code style={{ fontSize: 11, color: '#8c919e' }}>{k.prefix}...</Text>
                             <KeyScopeTags sc={k.scope} stale={staleFor(profiles, k.allowedTools)} />
+                            {adminView && !k.mine && (
+                              <Tag color="default" style={{ fontSize: 11, lineHeight: '16px', padding: '0 6px', margin: 0 }}>归属 {k.owner || '—'}</Tag>
+                            )}
                           </Space>
                           <Space size={4}>
                             {canManage && (
@@ -1039,7 +1049,7 @@ export default function MCPTools() {
             <Text type="secondary" style={{ fontSize: 13, display: 'block', marginBottom: 16 }}>
               给这个连接取个名字。这个名字会<b>直接显示在「操作日志」的操作人一列</b>
               （形如 <code>admin · CC · 小李的开发机</code>）—— Key 只能给自己建，
-              所以归属人永远是你，<b>认得出是哪台 Claude Code 全靠这个名字</b>。
+              你新建的这把归属人就是你，<b>认得出是哪台 Claude Code 全靠这个名字</b>。
             </Text>
             <Input placeholder="如：小李的开发机、CI 流水线" value={newKeyName} onChange={e => setNewKeyName(e.target.value)} size="large" />
 

@@ -279,13 +279,27 @@ async def list_api_keys(
     session: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    result = await session.execute(
-        select(McpApiKey)
-        .where(McpApiKey.user_id == current_user.id, McpApiKey.is_active == True)
-        .order_by(McpApiKey.created_at.desc())
-    )
+    # 系统 admin 看**全部** Key（口径同本文件 _assert_can_bind_project 的 admin 绕过、
+    # 同 require_project_role）：这页原来只按 user_id 过滤，于是管理员用 A 账号登录
+    # 看不到 B 账号建的 Key，和"管理员能看所有"对不上。普通用户仍只看自己的。
+    is_admin = current_user.role == "admin"
+    stmt = select(McpApiKey).where(McpApiKey.is_active == True)
+    if not is_admin:
+        stmt = stmt.where(McpApiKey.user_id == current_user.id)
+    result = await session.execute(stmt.order_by(McpApiKey.created_at.desc()))
     keys = list(result.scalars().all())
     views = await _scope_views(session, keys)
+    # 归属人：管理员看别人的 Key 时得知道这是谁建的（这页原来假设"归属永远是你"、
+    # 没有这一列）。一次查出用到的用户名，别逐把 Key 查库。
+    owner_ids = {k.user_id for k in keys}
+    owners: dict = {}
+    if owner_ids:
+        owners = {
+            u.id: u.username
+            for u in (await session.execute(
+                select(User).where(User.id.in_(owner_ids))
+            )).scalars().all()
+        }
     return {"data": [{
         "id": str(k.id),
         "name": k.name,
@@ -295,7 +309,11 @@ async def list_api_keys(
         "createdAt": k.created_at.isoformat(),
         "lastUsedAt": k.last_used_at.isoformat() if k.last_used_at else None,
         "scope": views[k.id],
-    } for k in keys]}
+        "owner": owners.get(k.user_id),
+        "mine": k.user_id == current_user.id,
+    } for k in keys],
+        # 前端据此决定要不要显示「归属人」列、以及能不能吊销别人的 Key
+        "adminView": is_admin}
 
 
 @router.delete("/{key_id}")
@@ -305,7 +323,8 @@ async def revoke_api_key(
     current_user: User = Depends(get_current_user),
 ):
     key = await session.get(McpApiKey, key_id)
-    if not key or key.user_id != current_user.id:
+    # 系统 admin 可吊销任意一把（口径同上面的列表）；普通用户只能吊销自己的。
+    if not key or (key.user_id != current_user.id and current_user.role != "admin"):
         return {"error": "Key not found"}
     key.is_active = False
     await session.commit()

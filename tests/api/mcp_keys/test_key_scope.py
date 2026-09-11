@@ -193,3 +193,74 @@ class TestKeyScope:
         row = await _one(client, h, d["id"])
         assert row["scope"]["followsProject"] is expect_follow
         assert row["scope"]["totalTools"] > 0
+
+
+class TestAdminSeeAll:
+    """系统 admin 在「连接管理」看得到 / 吊销得了**所有人**的 Key。
+
+    这页原来只按 user_id 过滤，管理员换个账号登录就看不到别人建的 Key，
+    和"管理员能看所有"对不上。普通用户仍只看/只吊销自己的 —— 这条别被
+    悄悄改回去（改回按 user_id 过滤的话，管理员那半边会安静地少一批 Key，
+    不报错，只是列表变短）。
+    """
+
+    async def test_管理员看得到别人建的key并标出归属人(self, client, db_session):
+        a = await _admin(db_session, username="see_all_a")
+        b = await _admin(db_session, username="see_all_b")
+        pa = await create_test_project(client, a, "看全-A")
+        pb = await create_test_project(client, b, "看全-B")
+        ka = await _new_key(client, a, project_id=pa, name="key-of-a")
+        kb = await _new_key(client, b, project_id=pb, name="key-of-b")
+
+        r = await client.get("/api/mcp-keys", headers=b)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["adminView"] is True
+        rows = {k["id"]: k for k in body["data"]}
+        # B 看得到 A 建的那把，且标着归属人是 A、不是自己
+        assert ka["id"] in rows, "管理员没看到别人建的 Key"
+        assert rows[ka["id"]]["owner"] == "see_all_a"
+        assert rows[ka["id"]]["mine"] is False
+        # 自己那把标 mine=True
+        assert rows[kb["id"]]["mine"] is True
+
+    async def test_普通用户只看自己的(self, client, db_session):
+        a = await _admin(db_session, username="scope_owner")
+        pa = await create_test_project(client, a, "看全-普通")
+        ka = await _new_key(client, a, project_id=pa, name="admin-key")
+
+        u = await create_test_user(db_session, username="plain_user", role="user")
+        hu, _ = make_auth_headers(u)
+        r = await client.get("/api/mcp-keys", headers=hu)
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["adminView"] is False
+        ids = {k["id"] for k in body["data"]}
+        assert ka["id"] not in ids, "普通用户不该看到别人的 Key"
+
+    async def test_管理员吊销得了别人的key(self, client, db_session):
+        a = await _admin(db_session, username="revoke_owner")
+        b = await _admin(db_session, username="revoke_admin")
+        pa = await create_test_project(client, a, "看全-吊销")
+        ka = await _new_key(client, a, project_id=pa, name="victim-key")
+
+        r = await client.delete(f"/api/mcp-keys/{ka['id']}", headers=b)
+        assert r.status_code == 200, r.text
+        assert "error" not in r.json(), r.text
+        # 吊销后从列表消失（is_active=False 被过滤）
+        r2 = await client.get("/api/mcp-keys", headers=a)
+        assert ka["id"] not in {k["id"] for k in r2.json()["data"]}
+
+    async def test_普通用户吊销不了别人的key(self, client, db_session):
+        a = await _admin(db_session, username="guard_owner")
+        pa = await create_test_project(client, a, "看全-吊销守卫")
+        ka = await _new_key(client, a, project_id=pa, name="protected-key")
+
+        u = await create_test_user(db_session, username="guard_user", role="user")
+        hu, _ = make_auth_headers(u)
+        r = await client.delete(f"/api/mcp-keys/{ka['id']}", headers=hu)
+        # 非本人非 admin：口径同"查不到"，不泄露它存在
+        assert r.json().get("error") == "Key not found"
+        # 那把 Key 仍在（没被误吊销）
+        r2 = await client.get("/api/mcp-keys", headers=a)
+        assert ka["id"] in {k["id"] for k in r2.json()["data"]}
