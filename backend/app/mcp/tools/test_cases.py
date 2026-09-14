@@ -25,6 +25,31 @@ def _case_to_dict(c) -> dict:
     }
 
 
+def _case_row(c) -> dict:
+    """列表/写回用的**精简投影** —— 不带 steps / preconditions / expectedResult 这三段长文本。
+
+    这三段是整个用例里最占地方的：一页列表最多 100 条，每条都拖着完整步骤，
+    回给 CC 的上下文一次就是几十 KB，而列表的用途是**找用例、确认编号、看某模块有哪些** ——
+    根本用不到步骤细节；真要看某条的步骤，走 lum_get_case（它照旧回全量）。
+    写回（create/update）同理：这三段是调用方**刚传进来**的，原样回显只是把上下文塞大一遍。
+    留一个 stepCount 让调用方确认步数（建/改会自动拆粗步骤，条数变了看它 + _qualityWarnings）。
+
+    这是把 lum_get_api_test 的 outline 思路（列表给梗概、详情单独取）搬到用例上 ——
+    外部 CC 的回推会话一直在压缩，根因就是这类"列表带全文"的响应反复累积。
+    """
+    return {
+        "id": str(c.id),
+        "caseCode": c.case_code,
+        "title": c.title,
+        "type": c.type,
+        "priority": c.priority,
+        "folderId": str(c.folder_id) if c.folder_id else None,
+        "stepCount": len(c.steps or []),
+        "automationStatus": c.automation_status,
+        "source": c.source,
+    }
+
+
 async def _module_tree(session: AsyncSession, branch_id) -> list[dict]:
     """全项目的模块清单 `[{name, parent}]`。
 
@@ -223,7 +248,9 @@ async def list_cases(
     )).scalars().all()
 
     return {
-        "cases": [{**_case_to_dict(c), "targetLevel": c.target_level,
+        # 列表用精简投影：不带 steps/preconditions/expectedResult（要看细节走 lum_get_case）。
+        # 这一页最多 100 条，每条拖着完整步骤就是外部会话反复被压缩的主因。
+        "cases": [{**_case_row(c), "targetLevel": c.target_level,
                    "owes": _owes(c),
                    # 关联 bug 的三样一起给：清单、还卡着吗、该不该重跑
                    "bugRefs": [f"{r.get('ref')}({r.get('status')})"
@@ -235,7 +262,8 @@ async def list_cases(
         "total": total,
         "page": page,
         "pageSize": page_size,
-        "usage": "owes 列出这条还欠哪几维。断点续跑：pending_only=true 只拿还欠着的，"
+        "usage": "每条只给梗概（stepCount 是步数，看步骤细节走 lum_get_case）。"
+                 "owes 列出这条还欠哪几维。断点续跑：pending_only=true 只拿还欠着的，"
                  "做完一维就回推一维，对应维度状态会自己往前走。"
                  "bug_state='blocked' 拿「关联的 bug 还没验回来」那批（跟 git 上已关闭的 "
                  "issue 取交集就是你该回来调的）；'fixed' 是抓到过 bug 已验回来的痕迹。",
@@ -381,7 +409,10 @@ async def create_case(
         case.expected_confirmed_actor = (expected_confirmed_by or "未署名").strip()[:100]
         case.expected_confirmed_at = datetime.now(timezone.utc)
     await session.commit()
-    result = {**_case_to_dict(case), "targetLevel": case.target_level}
+    # 写回用精简投影：steps/preconditions/expectedResult 是调用方刚传进来的，原样回显
+    # 只是把上下文塞大一遍。stepCount 让调用方确认步数（粗步骤会自动拆，条数变了
+    # 看它 + 下面的 _qualityWarnings）；要核对入库全文走 lum_get_case。
+    result = {**_case_row(case), "targetLevel": case.target_level}
     if case.expected_confirmed_at:
         result["expectedConfirmed"] = {
             "by": case.expected_confirmed_actor,
@@ -606,7 +637,10 @@ async def update_case(
                                  fields=substantive, step_count=len(case.steps or []))
     await session.commit()
 
-    result = {**_case_to_dict(case), "targetLevel": case.target_level,
+    # 写回用精简投影：不回显 steps/preconditions/expectedResult 全文（改了什么调用方自己
+    # 清楚，要核对入库结果走 lum_get_case）。changed 说明改了哪几个字段，stepCount 让
+    # 调用方确认改后步数（改步骤会自动拆粗步骤，条数可能变）。
+    result = {**_case_row(case), "targetLevel": case.target_level,
               "targetLevelReason": case.target_level_reason, "changed": changed}
     # 落款状态回显 —— 只写不回的话 CC 没法确认「预期已确认」这一步到底落没落。
     # 改了步骤/预期时 case_service.update_case 会把它清成 None，这里就不会回显，
