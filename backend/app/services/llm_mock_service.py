@@ -181,6 +181,28 @@ async def count_logs(session: AsyncSession) -> int:
     return await session.scalar(select(func.count(MockRequestLog.id))) or 0
 
 
+async def log_stats(
+    session: AsyncSession,
+    *,
+    route_id: uuid.UUID | None = None,
+    search: str | None = None,
+) -> dict[str, int]:
+    """当前范围（可按路由 / 搜索词过滤）下的日志计数：正确 vs 错误。
+    页面上「统计有两个：一个正确一个错误」就取这里 —— 数字不随「全部/OK/Error」
+    筛选按钮变化，永远是这一范围的真实总量，否则点了 Error 再看数字会自我循环。"""
+    base = select(func.count(MockRequestLog.id))
+    if route_id:
+        base = base.where(MockRequestLog.route_id == route_id)
+    if search:
+        pattern = f"%{search}%"
+        base = base.where(
+            MockRequestLog.path.ilike(pattern) | MockRequestLog.request_model.ilike(pattern)
+        )
+    ok = await session.scalar(base.where(MockRequestLog.status_code < 400)) or 0
+    error = await session.scalar(base.where(MockRequestLog.status_code >= 400)) or 0
+    return {"total": ok + error, "ok": ok, "error": error}
+
+
 async def trim_logs(session: AsyncSession, max_count: int) -> None:
     total = await count_logs(session)
     if total <= max_count:

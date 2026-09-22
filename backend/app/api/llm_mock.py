@@ -180,6 +180,14 @@ async def delete_custom_preset(preset_id: uuid.UUID, session: AsyncSession = Dep
 
 # ───── 服务控制 ─────
 
+@router.get("/models")
+async def get_builtin_models():
+    """内置模型清单 —— 就是 mock 服务 `/v1/models` 会返回的那份，直接复用同一个构造函数。
+    走这条（而不是让页面跨端口去打 mock 的 /v1/models）的原因：mock 服务停着时页面也要
+    看得到「有哪些默认模型」，否则「加个 /v1/models 返回默认模型」这件事在页面上依然是隐形的。"""
+    return mock_server._build_models_response()
+
+
 @router.get("/status", response_model=MockServiceStatus)
 async def get_status(session: AsyncSession = Depends(get_db)):
     routes = await svc.list_routes(session)
@@ -247,6 +255,17 @@ async def export_logs(session: AsyncSession = Depends(get_db)):
     logs, _ = await svc.list_logs(session, limit=10000)
     data = [MockLogDetailResponse.model_validate(l, from_attributes=True).model_dump(mode="json") for l in logs]
     return JSONResponse(data, headers={"Content-Disposition": "attachment; filename=mock-logs.json"})
+
+
+# ⚠ 和 /logs/export 一样，必须声明在 /logs/{log_id} **前面**，否则 "stats" 会被当成
+# log_id 去解析 UUID，页面上的「正确/错误」两个数就永远拉不到（静默 422）。
+@router.get("/logs/stats")
+async def get_log_stats(
+    route_id: uuid.UUID | None = Query(None),
+    search: str | None = Query(None),
+    session: AsyncSession = Depends(get_db),
+):
+    return await svc.log_stats(session, route_id=route_id, search=search)
 
 
 @router.get("/logs/{log_id}", response_model=MockLogDetailResponse)
