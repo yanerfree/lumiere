@@ -7,7 +7,8 @@ import {
   PlusOutlined, DeleteOutlined, SaveOutlined, PlayCircleOutlined, PauseCircleOutlined,
   ReloadOutlined, ExportOutlined, ClearOutlined, CopyOutlined, ThunderboltOutlined,
   LockOutlined, LockFilled, UnlockOutlined, HolderOutlined,
-  SettingOutlined, CheckOutlined, SendOutlined, LinkOutlined, StarOutlined
+  SettingOutlined, CheckOutlined, SendOutlined, LinkOutlined, StarOutlined,
+  InfoCircleOutlined, QuestionCircleOutlined, AppstoreOutlined
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -70,6 +71,33 @@ const NEW_ROUTE_PRESETS = [
 // 「置灰但看得见」是刻意的 —— 这块以前是个黑盒 bool，看不见改不了，所以被拆过一次。
 const SMART_ROLE_LABEL = { auto: '自动判断', upstream: '上游模型', checker: '护栏检查模型' }
 
+// 这条路由「是拿来测什么的」—— 一句大白话，从配置反推，不用额外存字段。
+// 目的：不懂的人扫一眼列表就知道每条 mock 在验哪种情况，而不是盯着一堆状态码猜。
+const routePurpose = (r) => {
+  if (!r) return ''
+  if (r.smartEnabled) {
+    const checker = r.smartRole === 'checker'
+      || /\/(checker|check|guard|guardrail|moderation)/i.test(r.path || '')
+    return checker
+      ? '智能应答·护栏：看网关把什么内容喂给了"AI 审核"'
+      : '智能应答·上游：一条路由按请求里的指令演多种场景'
+  }
+  if (r.responseType === 'embedding') return '向量接口：测语义缓存命中/未命中'
+  if (r.responseType === 'tool_calls') return '工具调用：测网关能不能解析出函数调用'
+  if (r.responseType === 'refusal') return '模型拒答：测拒绝理由的处理'
+  const sc = r.statusCode ?? 200
+  if (sc === 429) return '限流 429：测网关的重试 / 降级 / 熔断'
+  if (sc === 401) return '无效 Key 401：测鉴权失败的处理'
+  if (sc === 408) return '超时 408：测网关的超时处理'
+  if (sc >= 500) return '服务端 5xx：测网关容错 / 重试'
+  if (sc >= 400) return '客户端 4xx：测请求出错时的处理'
+  if (r.finishReason === 'length') return '截断响应：测顶到 token 上限的续写 / 提示'
+  if (r.finishReason === 'content_filter') return '内容过滤：测被安全策略拦下的处理'
+  if (r.streamMode === 'force_stream') return '强制流式：测网关的 fail-closed（该整包却给了流）'
+  if (r.streamMode === 'force_json') return '强制整包：测请求要流式却拿到整包'
+  return '正常文本响应：联调基线，测通路走不走得通'
+}
+
 export default function LlmMock() {
   const [routes, setRoutes] = useState([])
   const [selectedRouteId, setSelectedRouteId] = useState(null)
@@ -83,6 +111,8 @@ export default function LlmMock() {
   const [savePresetName, setSavePresetName] = useState('')
   const [logs, setLogs] = useState([])
   const [logsTotal, setLogsTotal] = useState(0)
+  // 当前范围下「正确/错误」两个数，不随筛选按钮变 —— 就是页面上要的那两个统计
+  const [logStats, setLogStats] = useState({ total: 0, ok: 0, error: 0 })
   const [logPage, setLogPage] = useState(1)
   const [logPageSize] = useState(50)
   const [expandedLogId, setExpandedLogId] = useState(null)
@@ -101,6 +131,11 @@ export default function LlmMock() {
   const [advancedSnapshot, setAdvancedSnapshot] = useState(null)
   const [copyText, setCopyText] = useState('复制')
   const [dragIdx, setDragIdx] = useState(null)
+  // 使用说明抽屉 + 内置模型（/v1/models）查看
+  const [helpOpen, setHelpOpen] = useState(false)
+  const [modelsOpen, setModelsOpen] = useState(false)
+  const [modelsData, setModelsData] = useState(null)
+  const [modelsLoading, setModelsLoading] = useState(false)
   const pollRef = useRef(null)
 
   useEffect(() => {
@@ -130,6 +165,20 @@ export default function LlmMock() {
       setLogs(d.data || d || [])
       setLogsTotal(d.total ?? (d.data || d || []).length)
     } catch {}
+    fetchLogStats()
+  }
+
+  // 正确/错误两个数：跟当前范围（本条 mock / 全部）一致，但**不带**筛选按钮的状态，
+  // 所以点了 OK 再看数字不会自我循环，永远是这一范围的真实总量
+  const fetchLogStats = async () => {
+    try {
+      const params = new URLSearchParams()
+      if (logScope === 'current' && selectedRouteId) params.set('route_id', selectedRouteId)
+      const qs = params.toString()
+      const r = await api.get(`/llm-mock/logs/stats${qs ? `?${qs}` : ''}`)
+      const d = r.data || r
+      setLogStats({ total: d.total ?? 0, ok: d.ok ?? 0, error: d.error ?? 0 })
+    } catch { /* 统计拉取失败不影响日志列表本身 */ }
   }
 
   // 切筛选、切「本条/全部」、或换选中的路由，都要把日志重新拉一遍并回到第一页
@@ -410,6 +459,30 @@ export default function LlmMock() {
     setCopyText('已复制 ✓'); setTimeout(() => setCopyText('复制'), 1500)
   }
 
+  // 内置模型：就是 mock 的 /v1/models 会返回的那份，从后端取（服务停着也看得到）
+  const openModels = async () => {
+    setModelsOpen(true)
+    if (modelsData) return
+    setModelsLoading(true)
+    try {
+      // /models 直接透传 OpenAI 的 {object:'list', data:[...]} 信封，不套平台的 {data} 外壳，
+      // 而 api.get 已把响应体解出来 —— 所以这里 r 就是那个信封，模型数组在 r.data。
+      // 别再 `r.data || r` 一层：那会把 r.data（数组本身）当成信封、再取一次 .data → 永远空。
+      const r = await api.get('/llm-mock/models')
+      const list = Array.isArray(r) ? r : (r?.data || [])
+      setModelsData(list)
+    } catch { setModelsData([]) } finally { setModelsLoading(false) }
+  }
+  // 按 owned_by 把模型分组，便于按厂商展示
+  const modelsByOwner = useMemo(() => {
+    const g = {}
+    for (const m of (modelsData || [])) {
+      const owner = m.owned_by || m.ownedBy || 'other'
+      ;(g[owner] = g[owner] || []).push(m.id)
+    }
+    return g
+  }, [modelsData])
+
   const responseModeValue = routeForm?.responseMode || 'default'
   const isEmbedding = routeForm?.responseType === 'embedding'
   const locked = !!routeForm?.locked
@@ -565,6 +638,16 @@ export default function LlmMock() {
               </Popconfirm>
             )}
           </Space>
+        </div>
+
+        {/* 这条 mock 测什么用 —— 一句大白话，进配置页先看清目的 */}
+        <div style={{
+          padding: '7px 16px', flexShrink: 0, fontSize: 12, color: '#4e5969',
+          background: 'rgba(78,138,240,0.06)', borderBottom: '1px solid rgba(0,0,0,0.04)',
+          display: 'flex', alignItems: 'center', gap: 6,
+        }}>
+          <InfoCircleOutlined style={{ color: '#4e8af0', fontSize: 13 }} />
+          <span><b style={{ color: '#1d2129' }}>用途：</b>{routePurpose(routeForm)}</span>
         </div>
 
         {/* 可滚动配置区 */}
@@ -1169,9 +1252,9 @@ export default function LlmMock() {
             <Radio.Button value="all">全部</Radio.Button>
           </Radio.Group>
           <Radio.Group value={logFilter} onChange={e => setLogFilter(e.target.value)} size="small">
-            <Radio.Button value="all">全部</Radio.Button>
-            <Radio.Button value="ok">OK</Radio.Button>
-            <Radio.Button value="error">Error</Radio.Button>
+            <Radio.Button value="all">全部 {logStats.total}</Radio.Button>
+            <Radio.Button value="ok"><span style={{ color: logFilter === 'ok' ? undefined : '#0ea5a0' }}>正确 {logStats.ok}</span></Radio.Button>
+            <Radio.Button value="error"><span style={{ color: logFilter === 'error' ? undefined : (logStats.error > 0 ? '#f5583a' : undefined) }}>错误 {logStats.error}</span></Radio.Button>
           </Radio.Group>
           <Button icon={<ReloadOutlined />} size="small" type="text" onClick={() => fetchLogs()} />
           <Button icon={<ExportOutlined />} size="small" type="text" onClick={handleExportLogs} />
@@ -1272,6 +1355,8 @@ export default function LlmMock() {
           </span>
         </div>
         <Space size={8}>
+          <Button size="small" icon={<QuestionCircleOutlined />} onClick={() => setHelpOpen(true)}>使用说明</Button>
+          <Button size="small" icon={<AppstoreOutlined />} onClick={openModels}>内置模型</Button>
           {serviceStatus.running && (
             <Button size="small" icon={<CopyOutlined />} onClick={() => {
               const url = `http://${window.location.hostname}:${serviceStatus.port}`
@@ -1360,6 +1445,10 @@ export default function LlmMock() {
                         background: 'transparent', borderRadius: 8,
                       }}>{r.statusCode}</Tag>
                     </div>
+                  </div>
+                  {/* 这条 mock 是拿来测什么的 —— 从配置推出来的一句大白话，不懂的人也看得懂 */}
+                  <div style={{ fontSize: 11, color: sel ? '#4e5969' : '#a9adb5', marginTop: 4, lineHeight: '15px' }}>
+                    {routePurpose(r)}
                   </div>
                 </div>
               )
@@ -1577,6 +1666,103 @@ export default function LlmMock() {
           onChange={e => setSavePresetName(e.target.value)}
           onPressEnter={handleSaveCustomPreset} autoFocus />
       </Modal>
+
+      {/* ━━━ 使用说明 ━━━ */}
+      <Drawer title="LLM Mock 使用说明" open={helpOpen} onClose={() => setHelpOpen(false)} width={560}>
+        <div style={{ fontSize: 13, color: '#4e5969', lineHeight: 1.8 }}>
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: '#1d2129', marginBottom: 6 }}>这个页面是干什么的</div>
+            <p style={{ margin: 0 }}>
+              它假扮成「大模型上游」。你要测的 AI 网关平时对接真模型（又慢又花钱、还时好时坏），
+              联调时把网关的上游地址指到这里，就能用一条条「路由」精确摆出各种情况让网关去碰：
+              正常回话、限流、超时、被内容安全拦下、流式 / 整包……全都可控、可复现。
+            </p>
+          </div>
+
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: '#1d2129', marginBottom: 6 }}>怎么让网关连过来</div>
+            <p style={{ margin: 0 }}>
+              点顶部「启动服务」，再点「复制端点」拿到地址
+              （<code style={{ fontFamily: MONO, color: '#0ea5a0' }}>http://本机:{serviceStatus.port || 28100}</code>），
+              把它填成被测网关的上游地址即可。左侧每一条就是一个「路由」，
+              名字下面那行灰字写着<b>这条是拿来测什么的</b>。
+            </p>
+          </div>
+
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: '#1d2129', marginBottom: 6 }}>
+              智能模式：一条路由演多种场景（发什么 → 收什么）
+            </div>
+            <p style={{ margin: '0 0 8px' }}>
+              普通路由是「固定回一份」。打开某条路由的「智能应答」后，<b>回什么由你在请求正文里写的指令决定</b> ——
+              不用为每种情况各建一条路由。常用指令：
+            </p>
+            <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse', marginBottom: 10 }}>
+              <tbody>
+                {(smartContract?.directives || []).map(d => (
+                  <tr key={d.key || 'none'} style={{ borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
+                    <td style={{ padding: '6px 10px 6px 0', whiteSpace: 'nowrap', verticalAlign: 'top', width: 130 }}>
+                      <code style={{ fontFamily: MONO, fontSize: 11, color: '#4e8af0' }}>{d.key || '（不带指令）'}</code>
+                    </td>
+                    <td style={{ padding: '6px 0', color: '#4e5969', lineHeight: 1.6 }}>{d.effect}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {smartContract?.defaultBody && (
+              <>
+                <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>发一条这样的请求（把指令写进 content 里）：</div>
+                <pre style={{ ...CODE_BLOCK_STYLE, margin: '0 0 10px', padding: 10, fontSize: 11, lineHeight: 1.6, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                  {smartContract.defaultBody}
+                </pre>
+              </>
+            )}
+            <p style={{ margin: 0, fontSize: 12, color: '#86909c' }}>
+              还有一个「护栏检查模型」角色：网关做内容安全时会先把待检正文喂给一个检查模型，
+              把某条路由的智能角色设成「护栏检查模型」，它就会<b>回显网关到底喂了多长、开头是什么</b> ——
+              这是唯一能看清这件事的地方。
+            </p>
+          </div>
+
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14, color: '#1d2129', marginBottom: 6 }}>内置模型清单（/v1/models）</div>
+            <p style={{ margin: 0 }}>
+              网关联调前常会先问一句「你有哪些模型」（<code style={{ fontFamily: MONO, color: '#0ea5a0' }}>GET /v1/models</code>），
+              这里已经内置了一份主流厂商的默认清单，不用自己配。点顶部「内置模型」就能看到全部。
+            </p>
+          </div>
+        </div>
+      </Drawer>
+
+      {/* ━━━ 内置模型 ━━━ */}
+      <Drawer
+        title={<span>内置模型 <span style={{ fontSize: 12, fontWeight: 400, color: '#86909c' }}>· GET /v1/models 会返回这些</span></span>}
+        open={modelsOpen} onClose={() => setModelsOpen(false)} width={480}
+      >
+        {modelsLoading ? (
+          <div style={{ textAlign: 'center', padding: 40 }}><Spin /></div>
+        ) : (modelsData && modelsData.length) ? (
+          <div>
+            <div style={{ fontSize: 12, color: '#86909c', marginBottom: 14 }}>
+              共 {modelsData.length} 个，按厂商分组。这份是内置的默认清单，服务停着也能查看。
+            </div>
+            {Object.entries(modelsByOwner).map(([owner, ids]) => (
+              <div key={owner} style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, color: '#1d2129', marginBottom: 6 }}>
+                  {owner} <span style={{ fontSize: 11, fontWeight: 400, color: '#c9cdd4' }}>{ids.length}</span>
+                </div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {ids.map(id => (
+                    <Tag key={id} style={{ margin: 0, fontFamily: MONO, fontSize: 11, borderRadius: 8 }}>{id}</Tag>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Empty description="拉取不到内置模型" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+        )}
+      </Drawer>
 
     </div>
   )
