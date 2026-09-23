@@ -390,6 +390,27 @@ _SMART: list[dict] = [
         "response_body": "",
     },
     {
+        "name": "Agent Loop（先调工具再终局）",
+        "path": "/loop/v1/chat/completions",
+        "purpose": "演一个会调工具的智能体：第一轮说要调工具，第二轮给终局答复 —— 验网关的多轮编排。",
+        "usage_hint": (
+            f"{_BASE_TIP}\n"
+            "这条是为 MODE:LOOP 备好的模板，**请求正文里仍要写 MODE:LOOP**（智能应答一律看请求，"
+            "不看页面配置）—— 路由只是把地址、角色、协议形状先配好，省掉每次重配一遍。\n"
+            "怎么转起来：请求里带上你的 tools 清单 + 正文写 MODE:LOOP。第一轮回 tool_calls，"
+            "网关拿着去真执行，把工具结果塞回来再问一次 → 第二轮回终局文本（故意带 VIOLATION，"
+            "这样才能验护栏有没有管到终局那一轮）。\n"
+            "调哪个工具：tool_choice 指名的优先，其次取 tools 里第一个，都没有才用兜底假名 "
+            "query_risk_profile —— 但兜底名不在你的 tools 里，网关执行会失败，"
+            "真实的工具执行链路就验不了，所以**务必把 tools 带上**。\n"
+            "看证据：请求日志点开那条 →「智能应答判定」里有第几轮（loopStage）和调了哪个工具（loopTool）。\n"
+            "局限：一次只回 1 个工具、只转 2 轮，入参按 schema 自动填最小值，指定不了请求头。"
+        ),
+        "smart_enabled": True,
+        "smart_role": "upstream",
+        "response_body": "",
+    },
+    {
         "name": "护栏检查模型",
         "path": "/checker/v1/chat/completions",
         "purpose": "冒充网关护栏调用的那个「AI 审核」模型 —— 看网关到底把什么喂给了它。",

@@ -50,7 +50,7 @@ const STATUS_COLOR = (sc) => {
 }
 
 const MODE_LABELS = { default: '默认响应', random: '随机响应', custom: '自定义' }
-const MODE_COLORS = { default: 'blue', random: 'purple', custom: 'cyan' }
+const MODE_COLORS = { default: 'default', random: 'purple', custom: 'cyan' }
 
 const NEW_ROUTE_PRESETS = [
   { name: '429 限频', path: '/mock-429/v1/chat/completions', presetMode: 'error_429_rpm', statusCode: 429, responseType: 'text', finishReason: 'stop', responseBody: 'Rate limit reached for gpt-4o on requests per min (RPM): Limit 500, Used 500, Requested 1.' },
@@ -711,10 +711,10 @@ export default function LlmMock() {
         {/* 这条 mock 测什么用 —— 一句大白话，进配置页先看清目的 */}
         <div style={{
           padding: '7px 16px', flexShrink: 0, fontSize: 12, color: '#4e5969',
-          background: 'rgba(78,138,240,0.06)', borderBottom: '1px solid rgba(0,0,0,0.04)',
+          background: 'rgba(14,165,160,0.06)', borderBottom: '1px solid rgba(0,0,0,0.04)',
           display: 'flex', alignItems: 'center', gap: 6,
         }}>
-          <InfoCircleOutlined style={{ color: '#4e8af0', fontSize: 13 }} />
+          <InfoCircleOutlined style={{ color: '#0ea5a0', fontSize: 13 }} />
           <span><b style={{ color: '#1d2129' }}>用途：</b>{routePurpose(routeForm)}</span>
         </div>
 
@@ -735,7 +735,7 @@ export default function LlmMock() {
               variant="borderless" disabled={locked} style={{ width: 100, flexShrink: 0 }} popupMatchSelectWidth={100}>
               {['GET', 'POST', 'PUT', 'DELETE', 'PATCH'].map(m => (
                 <Select.Option key={m} value={m}>
-                  <span style={{ fontWeight: 600, color: m === 'GET' ? '#0ea5a0' : m === 'POST' ? '#ff7d00' : m === 'DELETE' ? '#e8453c' : '#4e8af0' }}>{m}</span>
+                  <span style={{ fontWeight: 600, color: m === 'GET' ? '#0ea5a0' : m === 'POST' ? '#ff7d00' : m === 'DELETE' ? '#e8453c' : '#7c5cbf' }}>{m}</span>
                 </Select.Option>
               ))}
             </Select>
@@ -872,14 +872,14 @@ export default function LlmMock() {
           {!isEmbedding && (
             <div style={{
               marginBottom: 18, borderRadius: 12, overflow: 'hidden',
-              border: `1px solid ${smartOn ? 'rgba(78,138,240,0.35)' : 'rgba(0,0,0,0.08)'}`,
-              borderLeft: `3px solid ${smartOn ? '#4e8af0' : 'rgba(0,0,0,0.12)'}`,
-              background: smartOn ? 'rgba(78,138,240,0.05)' : 'transparent',
+              border: `1px solid ${smartOn ? 'rgba(124,92,191,0.3)' : 'rgba(0,0,0,0.08)'}`,
+              borderLeft: `3px solid ${smartOn ? '#7c5cbf' : 'rgba(0,0,0,0.12)'}`,
+              background: smartOn ? 'rgba(124,92,191,0.05)' : 'transparent',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap', padding: '10px 14px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <ThunderboltOutlined style={{ fontSize: 14, color: smartOn ? '#4e8af0' : '#c9cdd4' }} />
-                  <span style={{ fontSize: 13, fontWeight: 600, color: smartOn ? '#4e8af0' : '#4e5969' }}>智能应答</span>
+                  <ThunderboltOutlined style={{ fontSize: 14, color: smartOn ? '#7c5cbf' : '#c9cdd4' }} />
+                  <span style={{ fontSize: 13, fontWeight: 600, color: smartOn ? '#7c5cbf' : '#4e5969' }}>智能应答</span>
                   <Tooltip title="让这条路由的行为由「请求里写的指令」决定，而不是这个页面上的配置：请求正文里写 MODE:PII 就返回带敏感信息的输出，写 SAY:你好 就回「你好」。为什么要这样：配置在服务端的话，每换一个场景都要改配置、等下发、重来一遍，对照实验做不起来。开启后被它接管的配置会隐藏 —— 显示一堆改了不生效的框只会误导人。">
                     <span style={{ cursor: 'help', color: '#c9cdd4', fontSize: 12 }}>?</span>
                   </Tooltip>
@@ -909,9 +909,9 @@ export default function LlmMock() {
                   </Select>
                 </div>
                 <div style={{ fontSize: 11, color: '#86909c', paddingBottom: 4 }}>
-                  当前判定：<b style={{ color: '#4e8af0' }}>{SMART_ROLE_LABEL[smartRole]}</b>
+                  当前判定：<b style={{ color: '#7c5cbf' }}>{SMART_ROLE_LABEL[smartRole]}</b>
                   <span style={{ margin: '0 6px', color: '#c9cdd4' }}>|</span>
-                  协议形状 <b style={{ color: '#4e8af0' }}>{smartShape}</b>
+                  协议形状 <b style={{ color: '#7c5cbf' }}>{smartShape}</b>
                 </div>
                 {smartRole === 'checker' && (
                   <div>
@@ -933,7 +933,7 @@ export default function LlmMock() {
               {smartOn && (
                 <div style={{
                   padding: '8px 14px', fontSize: 11, color: '#4e5969', lineHeight: 1.8,
-                  borderTop: '1px solid rgba(78,138,240,0.2)', background: 'rgba(78,138,240,0.04)',
+                  borderTop: '1px solid rgba(124,92,191,0.18)', background: 'rgba(124,92,191,0.04)',
                 }}>
                   响应内容 / 状态码 / 响应类型 / 结束原因 / 响应模式 / 响应流式 / 延迟 已由<b>请求里的指令</b>决定，
                   改了不生效，所以收起来了 —— 右边列着它认哪些指令。
@@ -1245,7 +1245,7 @@ export default function LlmMock() {
                           {(smartContract?.directives || []).map(d => (
                             <tr key={d.key || 'none'} style={{ borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
                               <td style={{ padding: '7px 10px', whiteSpace: 'nowrap', verticalAlign: 'top', width: 120 }}>
-                                <code style={{ fontFamily: MONO, fontSize: 11, color: '#4e8af0' }}>
+                                <code style={{ fontFamily: MONO, fontSize: 11, color: '#7c5cbf' }}>
                                   {d.key || '（不带指令）'}
                                 </code>
                               </td>
@@ -1411,7 +1411,7 @@ export default function LlmMock() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <ThunderboltOutlined style={{ fontSize: 18, color: '#4e8af0' }} />
+            <ThunderboltOutlined style={{ fontSize: 18, color: '#0ea5a0' }} />
             <span style={{ fontWeight: 600, fontSize: 16, letterSpacing: 0.5 }}>LLM Mock</span>
           </div>
           <div style={{
@@ -1478,7 +1478,7 @@ export default function LlmMock() {
                     style={{
                       display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
                       padding: '6px 8px', borderRadius: 10, userSelect: 'none',
-                      background: g.builtin ? 'rgba(78,138,240,0.05)' : 'transparent',
+                      background: g.builtin ? 'rgba(14,165,160,0.05)' : 'transparent',
                     }}>
                     {open
                       ? <DownOutlined style={{ fontSize: 9, color: '#86909c' }} />
@@ -1486,7 +1486,7 @@ export default function LlmMock() {
                     <span style={{ fontSize: 12, fontWeight: 600, color: '#1d2129' }}>{g.label}</span>
                     {g.builtin && (
                       <Tooltip title="平台内置，开箱即用；已锁定，要改先解锁">
-                        <Tag color="blue" style={{ margin: 0, fontSize: 10, lineHeight: '15px', padding: '0 4px', borderRadius: 7 }}>内置</Tag>
+                        <Tag color="cyan" style={{ margin: 0, fontSize: 10, lineHeight: '15px', padding: '0 4px', borderRadius: 7 }}>内置</Tag>
                       </Tooltip>
                     )}
                     <span style={{ marginLeft: 'auto', fontSize: 11, color: '#a9adb5' }}>{g.items.length}</span>
@@ -1507,14 +1507,14 @@ export default function LlmMock() {
                   draggable={!r.builtin}
                   onClick={() => selectRoute(r)}
                   onDragStart={e => { if (r.builtin) { e.preventDefault(); return } e.dataTransfer.effectAllowed = 'move'; setDragIdx(i) }}
-                  onDragOver={e => { if (r.builtin) return; e.preventDefault(); e.currentTarget.style.borderTop = '2px solid #4e8af0' }}
+                  onDragOver={e => { if (r.builtin) return; e.preventDefault(); e.currentTarget.style.borderTop = '2px solid #0ea5a0' }}
                   onDragLeave={e => { e.currentTarget.style.borderTop = '2px solid transparent' }}
                   onDrop={e => { if (r.builtin) return; e.preventDefault(); e.currentTarget.style.borderTop = '2px solid transparent'; handleDropRoute(i) }}
                   onDragEnd={() => setDragIdx(null)}
                   style={{
                     padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
                     background: sel ? 'rgba(14,165,160,0.08)' : 'transparent',
-                    borderLeft: `3px solid ${sel ? '#4e8af0' : r.enabled ? '#0ea5a0' : 'rgba(0,0,0,0.1)'}`,
+                    borderLeft: `3px solid ${sel ? '#0ea5a0' : r.enabled ? 'rgba(14,165,160,0.35)' : 'rgba(0,0,0,0.1)'}`,
                     borderTop: '2px solid transparent',
                     opacity: isDragging ? 0.4 : 1,
                     transition: 'opacity .15s',
@@ -1539,7 +1539,7 @@ export default function LlmMock() {
                         <LockFilled style={{ fontSize: 11, color: '#ff7d00', flexShrink: 0 }} />
                       </Tooltip>
                     )}
-                    <Tag color={r.statusCode >= 400 ? 'red' : 'blue'} style={{
+                    <Tag color={r.statusCode >= 400 ? 'red' : 'cyan'} style={{
                       margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 8,
                     }}>{r.method}</Tag>
                     <span style={{
@@ -1552,7 +1552,7 @@ export default function LlmMock() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                       {r.smartEnabled && (
                         <Tooltip title="智能应答：行为由请求里的指令决定">
-                          <Tag color="blue" style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 8 }}>智能</Tag>
+                          <Tag color="purple" style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 8 }}>智能</Tag>
                         </Tooltip>
                       )}
                       <Tag style={{
@@ -1663,7 +1663,7 @@ export default function LlmMock() {
             <span style={{ fontSize: 15, fontWeight: 600 }}>请求详情</span>
             {expandedLogDetail && (
               <>
-                <span style={{ fontSize: 12, fontWeight: 700, color: '#4e8af0' }}>{expandedLogDetail.method}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: '#0ea5a0' }}>{expandedLogDetail.method}</span>
                 <span style={{ fontSize: 12, fontWeight: 700, color: STATUS_COLOR(expandedLogDetail.statusCode) }}>{expandedLogDetail.statusCode}</span>
                 <span style={{ fontFamily: MONO, fontSize: 12, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{expandedLogDetail.path}</span>
               </>
@@ -1707,7 +1707,7 @@ export default function LlmMock() {
                 <div style={{
                   display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 24px', fontSize: 12,
                   padding: '10px 12px', borderRadius: 12,
-                  background: 'rgba(78,138,240,0.06)', border: '1px solid rgba(78,138,240,0.2)',
+                  background: 'rgba(124,92,191,0.06)', border: '1px solid rgba(124,92,191,0.18)',
                 }}>
                   {(() => {
                     const m = expandedLogDetail.smartMeta
@@ -1834,7 +1834,7 @@ export default function LlmMock() {
                 {(smartContract?.directives || []).map(d => (
                   <tr key={d.key || 'none'} style={{ borderBottom: '1px solid rgba(0,0,0,0.04)' }}>
                     <td style={{ padding: '6px 10px 6px 0', whiteSpace: 'nowrap', verticalAlign: 'top', width: 130 }}>
-                      <code style={{ fontFamily: MONO, fontSize: 11, color: '#4e8af0' }}>{d.key || '（不带指令）'}</code>
+                      <code style={{ fontFamily: MONO, fontSize: 11, color: '#7c5cbf' }}>{d.key || '（不带指令）'}</code>
                     </td>
                     <td style={{ padding: '6px 0', color: '#4e5969', lineHeight: 1.6 }}>{d.effect}</td>
                   </tr>
