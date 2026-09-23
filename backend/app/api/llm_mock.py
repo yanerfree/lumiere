@@ -96,6 +96,14 @@ async def delete_route(route_id: uuid.UUID, session: AsyncSession = Depends(get_
     route = await svc.get_route(session, route_id)
     if not route:
         return JSONResponse({"error": "该路由不存在（可能已被删除），请刷新页面后重试"}, status_code=404)
+    if route.builtin:
+        # 内置的一律不许删 —— **解锁也不行**。它每次启动都会按定义补回来，
+        # 删掉的效果只是「重启前它不在、重启后它又回来了」，看着像平台自己乱加东西。
+        # 不想用就停用（解锁后可停），那是个能留住的状态。
+        return JSONResponse(
+            {"error": "内置路由不允许删除（解锁也不行）。不想用它就点右上角「解锁」再「停用」"},
+            status_code=400,
+        )
     if route.locked:
         return JSONResponse({"error": "路由已锁定，请先解锁后再删除"}, status_code=423)
     routes = await svc.list_routes(session)

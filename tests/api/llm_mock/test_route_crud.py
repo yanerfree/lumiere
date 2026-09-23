@@ -86,3 +86,37 @@ async def test_删一条不存在的路由给中文提示(client, db_session):
     r = await client.delete(f"/api/llm-mock/routes/{uuid.uuid4()}", headers=headers)
     assert r.status_code == 404, r.text
     assert "不存在" in r.json()["error"]
+
+
+# ───── 内置路由：不许删 ─────
+
+async def test_内置路由删不掉_解锁了也删不掉(client, db_session):
+    """内置的那批每次启动都会按定义补回来。真让人删掉，效果是
+    「重启前它不在、重启后它又回来了」—— 看着像平台自己乱加东西。
+    所以这道拦截不能挂在「锁」上：解锁是为了让人改配置，不是为了让人删。"""
+    headers = await _admin(db_session, "builtin_del_admin")
+    from app.models.llm_mock import MockRoute
+
+    # 垫一条普通路由，避开「至少保留一条」和「最早那条是默认路由」两条既有规则
+    keeper = MockRoute(name="占位", method="POST", path="/keeper/v1/chat/completions")
+    db_session.add(keeper)
+    await db_session.flush()
+
+    row = MockRoute(
+        name="内置·协议基线", method="POST", path="/builtin-del/v1/chat/completions",
+        builtin=True, locked=True, category="protocol",
+    )
+    db_session.add(row)
+    await db_session.flush()
+
+    r = await client.delete(f"/api/llm-mock/routes/{row.id}", headers=headers)
+    assert r.status_code == 400, r.text
+    assert "内置" in r.text
+
+    # 解锁之后照样删不掉
+    row.locked = False
+    await db_session.flush()
+    r2 = await client.delete(f"/api/llm-mock/routes/{row.id}", headers=headers)
+    assert r2.status_code == 400, r2.text
+
+    assert await db_session.get(MockRoute, row.id) is not None

@@ -8,7 +8,8 @@ import {
   ReloadOutlined, ExportOutlined, ClearOutlined, CopyOutlined, ThunderboltOutlined,
   LockOutlined, LockFilled, UnlockOutlined, HolderOutlined,
   SettingOutlined, CheckOutlined, SendOutlined, LinkOutlined, StarOutlined,
-  InfoCircleOutlined, QuestionCircleOutlined, AppstoreOutlined
+  InfoCircleOutlined, QuestionCircleOutlined, AppstoreOutlined,
+  DownOutlined, RightOutlined
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -71,10 +72,30 @@ const NEW_ROUTE_PRESETS = [
 // 「置灰但看得见」是刻意的 —— 这块以前是个黑盒 bool，看不见改不了，所以被拆过一次。
 const SMART_ROLE_LABEL = { auto: '自动判断', upstream: '上游模型', checker: '护栏检查模型' }
 
-// 这条路由「是拿来测什么的」—— 一句大白话，从配置反推，不用额外存字段。
-// 目的：不懂的人扫一眼列表就知道每条 mock 在验哪种情况，而不是盯着一堆状态码猜。
+// 内置套件的分组 —— 顺序、名称、口径的唯一出处在后端 app/services/llm_mock_builtin.py，
+// 这里只负责显示。后端新加一档而这里没跟上时，那档会落到「自建路由」组里，不会凭空消失。
+const CATEGORY_ORDER = ['protocol', 'shape', 'error', 'smart', 'auth']
+const CATEGORY_LABELS = {
+  protocol: '协议基线',
+  shape: '响应形态',
+  error: '故障与限流',
+  smart: '智能应答',
+  auth: '认证',
+}
+const CATEGORY_DESC = {
+  protocol: '各家官方路径的正常应答，先验通路',
+  shape: '都是 200，但内容形态不同，最容易被漏处理',
+  error: '各种失败：参数错 / 限流 / 超时 / 5xx',
+  smart: '一条路由按请求里的指令演多种场景',
+  auth: '验网关有没有把上游密钥正确带上去',
+}
+
+// 这条路由「是拿来测什么的」。内置路由用后端存好的文案（`purpose`），
+// 自建路由才从配置反推 —— 反推只在能说出**具体**东西时才开口：
+// 原来有一句「正常文本响应」的兜底，几十条长得一模一样，等于没写，所以去掉了。
 const routePurpose = (r) => {
   if (!r) return ''
+  if (r.purpose) return r.purpose
   if (r.smartEnabled) {
     const checker = r.smartRole === 'checker'
       || /\/(checker|check|guard|guardrail|moderation)/i.test(r.path || '')
@@ -95,7 +116,7 @@ const routePurpose = (r) => {
   if (r.finishReason === 'content_filter') return '内容过滤：测被安全策略拦下的处理'
   if (r.streamMode === 'force_stream') return '强制流式：测网关的 fail-closed（该整包却给了流）'
   if (r.streamMode === 'force_json') return '强制整包：测请求要流式却拿到整包'
-  return '正常文本响应：联调基线，测通路走不走得通'
+  return ''
 }
 
 export default function LlmMock() {
@@ -131,6 +152,9 @@ export default function LlmMock() {
   const [advancedSnapshot, setAdvancedSnapshot] = useState(null)
   const [copyText, setCopyText] = useState('复制')
   const [dragIdx, setDragIdx] = useState(null)
+  // 内置分组的展开状态：内置默认收起（它们是"备着用"的，不该把自建路由挤到屏幕外），
+  // 自建默认展开。用户点过之后以点的为准。
+  const [openGroups, setOpenGroups] = useState({})
   // 使用说明抽屉 + 内置模型（/v1/models）查看
   const [helpOpen, setHelpOpen] = useState(false)
   const [modelsOpen, setModelsOpen] = useState(false)
@@ -161,9 +185,12 @@ export default function LlmMock() {
       if (logFilter !== 'all') params.set('status', logFilter)
       if (logScope === 'current' && selectedRouteId) params.set('route_id', selectedRouteId)
       const r = await api.get(`/llm-mock/logs?${params}`)
-      const d = r.data || r
-      setLogs(d.data || d || [])
-      setLogsTotal(d.total ?? (d.data || d || []).length)
+      // ⚠ 接口回的是 { data: [...], total: N }，request.js 不拆信封。
+      // 之前写成 `r.data || r` 再取 .total，取到的是数组（没有 total），
+      // 于是「共 N 条」= 本页条数，永远 ≤ 每页 50 —— 分页条也就永远不出现。
+      const list = Array.isArray(r) ? r : (r?.data || [])
+      setLogs(list)
+      setLogsTotal(Array.isArray(r) ? list.length : (r?.total ?? list.length))
     } catch {}
     fetchLogStats()
   }
@@ -185,7 +212,9 @@ export default function LlmMock() {
   useEffect(() => { setLogPage(1); setExpandedLogId(null); fetchLogs(1) }, [logFilter, logScope, selectedRouteId])
 
   useEffect(() => {
-    if (routes.length > 0 && !selectedRouteId) selectRoute(routes[0])
+    // 进来默认选自己建的那条，不选内置 —— 内置组默认收起，选中它会把整组撑开，
+    // 而且右边一上来就是「已锁定、只读」，看着像权限被收了。没有自建路由时才退回第一条。
+    if (routes.length > 0 && !selectedRouteId) selectRoute(routes.find(r => !r.builtin) || routes[0])
   }, [routes])
 
   const selectRoute = useCallback((route) => {
@@ -287,6 +316,38 @@ export default function LlmMock() {
   }
 
   // 拖动调整路由顺序：本地乐观更新 + 持久化 sort_order
+  // 左栏分组 —— 按 category 算，**不按顺序算**：拖动会重写 sort_order，
+  // 拿顺序当分组依据的话，用户拖一次分组就散了。
+  const routeGroups = useMemo(() => {
+    const known = new Set(CATEGORY_ORDER)
+    const builtinGroups = CATEGORY_ORDER
+      .map(key => ({
+        key,
+        label: CATEGORY_LABELS[key],
+        desc: CATEGORY_DESC[key],
+        builtin: true,
+        items: routes.filter(r => r.builtin && r.category === key),
+      }))
+      .filter(g => g.items.length > 0)
+    const rest = routes.filter(r => !r.builtin || !known.has(r.category))
+    return [
+      ...builtinGroups,
+      { key: 'custom', label: '自建路由', desc: '你自己加的', builtin: false, items: rest },
+    ].filter(g => g.items.length > 0)
+  }, [routes])
+
+  // 选中的那条在哪个组 —— 它所在的组自动展开，否则点进去之后列表里看不到自己选的是谁
+  const selectedGroupKey = useMemo(() => {
+    const r = routes.find(x => x.id === selectedRouteId)
+    if (!r) return null
+    return r.builtin && CATEGORY_ORDER.includes(r.category) ? r.category : 'custom'
+  }, [routes, selectedRouteId])
+
+  const isGroupOpen = (g) => {
+    if (openGroups[g.key] !== undefined) return openGroups[g.key]
+    return !g.builtin || g.key === selectedGroupKey
+  }
+
   const handleDropRoute = async (targetIdx) => {
     const from = dragIdx
     setDragIdx(null)
@@ -297,7 +358,9 @@ export default function LlmMock() {
     setRoutes(next)
     try {
       await api.put('/llm-mock/routes/reorder', {
-        items: next.map((r, i) => ({ id: r.id, sortOrder: i })),
+        // 只报自建的顺序。内置那批的排序值由后端发版时统一给（一律排在自建前面），
+        // 顺手把它们一起重排会在下次重启时被冲回去 —— 那种「我排好了、它自己变回来」最难查。
+        items: next.flatMap((r, i) => (r.builtin ? [] : [{ id: r.id, sortOrder: i }])),
       })
       await fetchRoutes()
     } catch { await fetchRoutes() }
@@ -628,7 +691,12 @@ export default function LlmMock() {
             <Tooltip title={locked ? '已锁定，请先解锁' : ''}>
               <Button size="small" onClick={handleOpenAdvanced} disabled={locked}>高级</Button>
             </Tooltip>
-            {isDefault ? (
+            {routeForm.builtin ? (
+              // 内置的永远不给删（解锁也不给）：删了下次启动又会补回来，白删一场还吓人一跳
+              <Tooltip title="内置路由不可删除。不想用就解锁后「停用」">
+                <Button icon={<DeleteOutlined />} size="small" disabled />
+              </Tooltip>
+            ) : isDefault ? (
               <Tooltip title="默认路由不可删除"><Button icon={<DeleteOutlined />} size="small" disabled /></Tooltip>
             ) : locked ? (
               <Tooltip title="已锁定，请先解锁"><Button icon={<DeleteOutlined />} size="small" danger disabled /></Tooltip>
@@ -1310,7 +1378,14 @@ export default function LlmMock() {
               </tr>
             ))}
             {logs.length === 0 && (
-              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40, color: '#c9cdd4', fontSize: 12 }}>暂无请求日志</td></tr>
+              <tr><td colSpan={9} style={{ textAlign: 'center', padding: 40, color: '#c9cdd4', fontSize: 12 }}>
+                {logScope === 'current' && serviceStatus.totalRequests > 0 ? (
+                  <>
+                    这条 mock 还没有收到请求
+                    <Button type="link" size="small" onClick={() => setLogScope('all')}>看全部 {serviceStatus.totalRequests} 条</Button>
+                  </>
+                ) : '暂无请求日志'}
+              </td></tr>
             )}
           </tbody>
         </table>
@@ -1351,7 +1426,10 @@ export default function LlmMock() {
             </span>
           </div>
           <span style={{ fontSize: 12, color: '#86909c' }}>
-            {serviceStatus.routesEnabled}/{serviceStatus.routesCount} 路由 · {serviceStatus.totalRequests} 请求
+            {serviceStatus.routesEnabled}/{serviceStatus.routesCount} 路由 ·{' '}
+            <Tooltip title="全部 mock 累计收到的请求数（页签上的数字只算当前这条）">
+              <span style={{ borderBottom: '1px dotted rgba(0,0,0,0.2)', cursor: 'help' }}>{serviceStatus.totalRequests} 请求</span>
+            </Tooltip>
           </span>
         </div>
         <Space size={8}>
@@ -1390,20 +1468,48 @@ export default function LlmMock() {
             </Tooltip>
           </div>
           <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px' }}>
-            {routes.map((r, i) => {
+            {routeGroups.map(g => {
+              const open = isGroupOpen(g)
+              return (
+                <div key={g.key} style={{ marginBottom: 6 }}>
+                  {/* 分组头：内置的默认收起，点一下展开 */}
+                  <div
+                    onClick={() => setOpenGroups(o => ({ ...o, [g.key]: !open }))}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+                      padding: '6px 8px', borderRadius: 10, userSelect: 'none',
+                      background: g.builtin ? 'rgba(78,138,240,0.05)' : 'transparent',
+                    }}>
+                    {open
+                      ? <DownOutlined style={{ fontSize: 9, color: '#86909c' }} />
+                      : <RightOutlined style={{ fontSize: 9, color: '#86909c' }} />}
+                    <span style={{ fontSize: 12, fontWeight: 600, color: '#1d2129' }}>{g.label}</span>
+                    {g.builtin && (
+                      <Tooltip title="平台内置，开箱即用；已锁定，要改先解锁">
+                        <Tag color="blue" style={{ margin: 0, fontSize: 10, lineHeight: '15px', padding: '0 4px', borderRadius: 7 }}>内置</Tag>
+                      </Tooltip>
+                    )}
+                    <span style={{ marginLeft: 'auto', fontSize: 11, color: '#a9adb5' }}>{g.items.length}</span>
+                  </div>
+                  {!open && g.desc && (
+                    <div style={{ fontSize: 11, color: '#a9adb5', padding: '0 8px 4px 22px', lineHeight: '15px' }}>{g.desc}</div>
+                  )}
+                  {open && g.items.map((r) => {
+              const i = routes.indexOf(r)
               const sel = selectedRouteId === r.id
               const isDef = r.id === defaultRouteId
               const mode = r.responseMode || 'default'
               const isDragging = dragIdx === i
+              const purpose = routePurpose(r)
               return (
                 <div
                   key={r.id}
-                  draggable
+                  draggable={!r.builtin}
                   onClick={() => selectRoute(r)}
-                  onDragStart={e => { e.dataTransfer.effectAllowed = 'move'; setDragIdx(i) }}
-                  onDragOver={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid #4e8af0' }}
+                  onDragStart={e => { if (r.builtin) { e.preventDefault(); return } e.dataTransfer.effectAllowed = 'move'; setDragIdx(i) }}
+                  onDragOver={e => { if (r.builtin) return; e.preventDefault(); e.currentTarget.style.borderTop = '2px solid #4e8af0' }}
                   onDragLeave={e => { e.currentTarget.style.borderTop = '2px solid transparent' }}
-                  onDrop={e => { e.preventDefault(); e.currentTarget.style.borderTop = '2px solid transparent'; handleDropRoute(i) }}
+                  onDrop={e => { if (r.builtin) return; e.preventDefault(); e.currentTarget.style.borderTop = '2px solid transparent'; handleDropRoute(i) }}
                   onDragEnd={() => setDragIdx(null)}
                   style={{
                     padding: '10px 12px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
@@ -1414,10 +1520,20 @@ export default function LlmMock() {
                     transition: 'opacity .15s',
                   }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <Tooltip title="拖动调整顺序">
-                      <HolderOutlined style={{ fontSize: 11, color: '#c8c8c8', cursor: 'grab', flexShrink: 0 }} />
-                    </Tooltip>
-                    {isDef && <LockOutlined style={{ fontSize: 11, color: '#c9cdd4' }} />}
+                    {r.builtin ? (
+                      <Tooltip title="内置路由，顺序固定">
+                        <span style={{ display: 'inline-block', width: 11, flexShrink: 0 }} />
+                      </Tooltip>
+                    ) : (
+                      <Tooltip title="拖动调整顺序">
+                        <HolderOutlined style={{ fontSize: 11, color: '#c8c8c8', cursor: 'grab', flexShrink: 0 }} />
+                      </Tooltip>
+                    )}
+                    {isDef && (
+                      <Tooltip title="默认路由：没有别的路由匹配得上时兜底用，不能删">
+                        <LockOutlined style={{ fontSize: 11, color: '#c9cdd4', flexShrink: 0 }} />
+                      </Tooltip>
+                    )}
                     {r.locked && (
                       <Tooltip title="已锁定，不可编辑">
                         <LockFilled style={{ fontSize: 11, color: '#ff7d00', flexShrink: 0 }} />
@@ -1446,10 +1562,15 @@ export default function LlmMock() {
                       }}>{r.statusCode}</Tag>
                     </div>
                   </div>
-                  {/* 这条 mock 是拿来测什么的 —— 从配置推出来的一句大白话，不懂的人也看得懂 */}
-                  <div style={{ fontSize: 11, color: sel ? '#4e5969' : '#a9adb5', marginTop: 4, lineHeight: '15px' }}>
-                    {routePurpose(r)}
-                  </div>
+                  {/* 这条 mock 是拿来测什么的 */}
+                  {purpose && (
+                    <div style={{ fontSize: 11, color: sel ? '#4e5969' : '#a9adb5', marginTop: 4, lineHeight: '15px' }}>
+                      {purpose}
+                    </div>
+                  )}
+                </div>
+              )
+                  })}
                 </div>
               )
             })}
@@ -1465,7 +1586,7 @@ export default function LlmMock() {
             <div style={{ display: 'flex', gap: 0 }}>
               {[
                 { key: 'config', label: '路由配置' },
-                { key: 'logs', label: <>请求日志 <Tag style={{ margin: '0 0 0 4px', fontSize: 11, borderRadius: 12, lineHeight: '18px', padding: '0 6px' }}>{serviceStatus.totalRequests}</Tag></> },
+                { key: 'logs', label: <>请求日志 <Tooltip title={logScope === 'current' ? '当前这条 mock 的请求数（想看所有 mock，进去点「全部」）' : '全部 mock 的请求数'}><Tag style={{ margin: '0 0 0 4px', fontSize: 11, borderRadius: 12, lineHeight: '18px', padding: '0 6px' }}>{logStats.total}</Tag></Tooltip></> },
               ].map(t => (
                 <div key={t.key} onClick={() => setActiveTab(t.key)} style={{
                   padding: '10px 16px', cursor: 'pointer', fontSize: 14, position: 'relative',
@@ -1686,6 +1807,17 @@ export default function LlmMock() {
               （<code style={{ fontFamily: MONO, color: '#0ea5a0' }}>http://本机:{serviceStatus.port || 28100}</code>），
               把它填成被测网关的上游地址即可。左侧每一条就是一个「路由」，
               名字下面那行灰字写着<b>这条是拿来测什么的</b>。
+            </p>
+          </div>
+
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontWeight: 600, fontSize: 14, color: '#1d2129', marginBottom: 6 }}>开箱即用的那几组（灰锁标着「内置」）</div>
+            <p style={{ margin: 0 }}>
+              左侧上面五组是平台自带的，<b>路径都按各家官方的写法配好了</b>，网关那边照抄地址就能用，不用改。
+              分别是：各家协议的正常应答、七种响应形态（工具调用 / 被截断 / 被内容安全拦 / 拒答 / 硬要流式 / 硬要整包 / 带敏感信息）、
+              十一种失败（4xx / 429 限流 / 超时慢 / 5xx）、智能应答、认证。
+              它们<b>默认锁着</b>不让改，怕顺手改坏了别人也在用；要改就点右上角「解锁」。
+              你自己建的在下面「自建路由」那组，跟以前一样。
             </p>
           </div>
 

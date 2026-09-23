@@ -80,6 +80,12 @@ class MockRouteResponse(BaseSchema):
     enabled: bool
     locked: bool
     sort_order: int
+    # 内置套件标记 —— 只读，不在 Create/Update 里开口子：
+    # 能自己贴「我是内置」的标签，这个标签就不再说明任何事。
+    builtin: bool = False
+    category: str | None = None
+    purpose: str | None = None
+    usage_hint: str | None = None
     delay_ms: int
     status_code: int
     response_format: str

@@ -27,6 +27,15 @@ class MockRoute(Base):
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # 内置套件 —— 平台随版本发的那批「开箱即用」路由（app/services/llm_mock_builtin.py）。
+    # builtin=True 的在页面上单独成组、默认锁定；自建路由 builtin=False、category 为空。
+    # purpose/usage_hint 是**写好的文案**，不是前端从配置反推的句子 ——
+    # 反推那版对「正常文本」这类配置只有一句兜底话，几十条长得一样，等于没写。
+    builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    category: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    purpose: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    usage_hint: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # 基础配置
     delay_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     status_code: Mapped[int] = mapped_column(Integer, nullable=False, default=200)

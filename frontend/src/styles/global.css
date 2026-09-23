@@ -141,10 +141,14 @@ code, kbd, samp,
   backdrop-filter: blur(12px) !important;
   -webkit-backdrop-filter: blur(12px) !important;
 }
+/* 悬浮**不许挪动元素**。抬 2px 看着好看，但光标压在下边缘时：
+   抬起来 → 光标落到元素外 → 掉回去 → 又碰上，来回几次 = 肉眼看见的抖动。
+   （2026-09-22 实测：llm-mock 页「保存」按钮压下边缘，:hover 链在
+     BUTTON → .ant-space-item → BUTTON 之间来回跳。）
+   要「浮起来」的观感靠阴影变深，那个不改变几何、不会自己把自己甩开。 */
 .ant-card:hover {
   background: var(--panel-bg-hover) !important;
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.06) !important;
-  transform: translateY(-2px);
 }
 .ant-card .ant-card-head {
   border-bottom: 1px solid rgba(0,0,0,0.03) !important;
@@ -173,10 +177,10 @@ code, kbd, samp,
   color: #fff !important;
   letter-spacing: 0.5px !important;
 }
+/* 同上：不挪动，只加深阴影 */
 .ant-btn.ant-btn-color-primary.ant-btn-variant-solid:hover {
   background: linear-gradient(135deg, #0ea5a0, #0d908c) !important;
   box-shadow: 0 4px 14px rgba(14,165,160,0.25) !important;
-  transform: translateY(-1px) !important;
 }
 
 /* 默认按钮（outlined） */

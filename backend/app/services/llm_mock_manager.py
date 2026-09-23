@@ -152,10 +152,13 @@ class MockServerManager:
 
         mgr = self
 
+        # 模型清单。内容由服务直接给（跟着平台版本走，不读路由的响应体），
+        # 但命中数和请求日志仍然记在「GET /v1/models」那条路由上 ——
+        # 不记的话页面上那条永远显示 0 次，看着像根本没人调过它。
         @app.get("/v1/models")
         @app.get("/{prefix:path}/v1/models")
-        async def list_models(prefix: str = ""):
-            return mgr._build_models_response()
+        async def list_models(request: Request, prefix: str = ""):
+            return await mgr._handle_models(request)
 
         # 探活。没有它的话，「上游到底活着没有」只能靠发一条业务请求去试，
         # 而那条请求会进请求日志、把「上游收到几次」这类断言搞脏。
@@ -184,6 +187,40 @@ class MockServerManager:
             return await mgr._handle_request(request, f"/{path}")
 
         return app
+
+    async def _handle_models(self, request: Request) -> JSONResponse:
+        """模型清单的应答 + 记账。带前缀的 /xxx/v1/models 也算到同一条路由头上。"""
+        t0 = time.perf_counter()
+        body = self._build_models_response()
+        route_dict: dict = {"id": None, "name": "模型列表", "finish_reason": None}
+        try:
+            from sqlalchemy import func as _func, select as _select
+
+            from app.models.llm_mock import MockRoute as _MockRoute
+            async with async_session_factory() as session:
+                row = (
+                    await session.execute(
+                        _select(_MockRoute).where(
+                            _func.upper(_MockRoute.method) == "GET",
+                            _MockRoute.path == "/v1/models",
+                        )
+                    )
+                ).scalars().first()
+                if row is not None:
+                    route_dict["id"] = row.id
+                    route_dict["name"] = row.name
+                    await svc.increment_hit(session, row.id)
+                    await session.commit()
+        except Exception:
+            logger.exception("模型清单记账失败")
+        t_done = time.perf_counter()
+        if self.capture_enabled:
+            await self._log_request(
+                route_dict, request, {}, request.method, request.url.path,
+                200, json.dumps(body, ensure_ascii=False), {},
+                0.0, (t_done - t0) * 1000, 0.0, (t_done - t0) * 1000,
+            )
+        return JSONResponse(body)
 
     def _build_models_response(self) -> dict:
         catalog = {

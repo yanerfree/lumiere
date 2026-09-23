@@ -238,6 +238,13 @@ async def _restore_mock_services():
     from app.services.tcp_mock_manager import tcp_mock_server
     from app.services.udp_mock_manager import udp_mock_server
     from app.services.grpc_mock_manager import grpc_mock_server
+    # 内置路由套件：只新增/补元信息，不改已有路由的行为，也不删任何东西。
+    # 放在 start() 之前，服务起来时清单就是齐的。
+    try:
+        from app.services.llm_mock_builtin import seed_builtin_routes
+        await seed_builtin_routes()
+    except Exception as e:
+        _startup_logger.warning("LLM Mock 内置路由落地失败: %s", e)
     try:
         if mock_server._load_state():
             _startup_logger.info("自动恢复 LLM Mock 服务 (端口 %d)", mock_server.port)
