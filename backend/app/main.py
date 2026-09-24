@@ -34,6 +34,7 @@ from app.api.skill_run import router as skill_run_router
 from app.api.mcp_mock import router as mcp_mock_router
 from app.api.protocol_mock import router as protocol_mock_router
 from app.api.oauth2_mock import router as oauth2_mock_router
+from app.api.demo_shop import router as demo_shop_router
 from app.api.load_test import router as load_test_router
 from app.api.case_file import router as case_file_router
 from app.api.api_test import router as api_test_router
@@ -301,6 +302,13 @@ async def _restore_mock_services():
             await oauth2_mock_server.start()
     except Exception as e:
         _startup_logger.warning("OAuth2 Mock 自动恢复失败: %s", e)
+    try:
+        from app.services.demo_shop_manager import demo_shop_manager
+        if demo_shop_manager._load_state():
+            _startup_logger.info("自动恢复订单服务 (端口 %d)", demo_shop_manager.port)
+            await demo_shop_manager.start()
+    except Exception as e:
+        _startup_logger.warning("订单服务自动恢复失败: %s", e)
 
 app = FastAPI(
     title="测试管理平台 API",
@@ -397,6 +405,7 @@ app.include_router(skill_run_router, dependencies=_SCOPED)
 app.include_router(mcp_mock_router, dependencies=_TOOLS)
 app.include_router(protocol_mock_router, dependencies=_TOOLS)
 app.include_router(oauth2_mock_router, dependencies=_TOOLS)
+app.include_router(demo_shop_router, dependencies=_TOOLS)
 app.include_router(load_test_router, dependencies=_TOOLS)
 app.include_router(api_test_router, dependencies=_SCOPED)
 app.include_router(scenario_gen_router, dependencies=_SCOPED)

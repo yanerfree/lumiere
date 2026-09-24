@@ -8,7 +8,7 @@ import {
   ThunderboltOutlined, ToolOutlined, SendOutlined,
   NodeIndexOutlined, SearchOutlined, DownOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
-  DeploymentUnitOutlined, CommentOutlined,
+  DeploymentUnitOutlined, CommentOutlined, ShoppingCartOutlined,
 } from '@ant-design/icons'
 import { api, reviveSession } from './utils/request'
 import { useLang } from './utils/i18n.jsx'
@@ -39,6 +39,7 @@ import ApiMock from './pages/api-mock/ApiMock'
 import ProxyProbe from './pages/proxy-probe/ProxyProbe'
 import McpMock from './pages/mcp-mock/McpMock'
 import OAuth2Mock from './pages/oauth2-mock/OAuth2Mock'
+import DemoShop from './pages/demo-shop/DemoShop'
 import Toolbox from './pages/toolbox/Toolbox'
 import HttpClient from './pages/http-client/HttpClient'
 import LoadTest from './pages/load-test/LoadTest'
@@ -238,6 +239,7 @@ function AppLayout() {
         { key: '/tools/llm-mock', icon: <RobotOutlined />, label: t('menu.llmMock'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/mcp-mock', icon: <ApiOutlined />, label: t('menu.mcpMock'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/oauth2-mock', icon: <SafetyCertificateOutlined />, label: t('menu.oauth2Mock'), perm: PERM.SYS_TOOLS_USE },
+        { key: '/tools/demo-shop', icon: <ShoppingCartOutlined />, label: t('menu.demoShop'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: t('menu.proxyProbe'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox'), perm: PERM.SYS_TOOLS_USE },
@@ -470,6 +472,7 @@ function AppLayout() {
             <Route path="/tools/proxy-probe" element={<ProxyProbe />} />
             <Route path="/tools/mcp-mock" element={<McpMock />} />
             <Route path="/tools/oauth2-mock" element={<OAuth2Mock />} />
+            <Route path="/tools/demo-shop" element={<DemoShop />} />
             <Route path="/tools/toolbox" element={<Toolbox />} />
             <Route path="/tools/http-client" element={<HttpClient />} />
             <Route path="/tools/load-test" element={<LoadTest />} />

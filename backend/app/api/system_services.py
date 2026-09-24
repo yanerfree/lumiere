@@ -170,6 +170,7 @@ async def list_services(
     from app.services.mcp_mock_manager import mcp_mock_server
     from app.services.oauth2_mock_manager import oauth2_mock_server
     from app.services.proxy_probe_manager import proxy_probe
+    from app.services.demo_shop_manager import demo_shop_manager
     from app.services.tcp_mock_manager import tcp_mock_server
     from app.services.udp_mock_manager import udp_mock_server
     from app.services.ws_mock_manager import ws_mock_server
@@ -240,6 +241,9 @@ async def list_services(
     tools = [
         _inproc("proxy-probe", "代理观测", proxy_probe,
                 "验证「配了出站代理，请求是否真的走了代理」", "/tools/proxy-probe", "代理观测"),
+        _inproc("demo-shop", "订单服务 Demo", demo_shop_manager,
+                "真落库的样例被测系统（下单/发货/取消，会扣库存）。不是 Mock：同一个请求打两次结果会不一样",
+                "/tools/demo-shop", "订单服务"),
     ]
 
     ai_hint = "bash deploy/start-ai-services.sh"
