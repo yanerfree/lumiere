@@ -177,15 +177,30 @@ class DemoShopManager:
 
     # ── 请求日志 ──
     def _log(self, method: str, path: str, status: int, ms: float, actor: str,
-             req_body: str | None, resp_snippet: str | None):
+             req_body: str | None, resp_snippet: str | None, *,
+             query: str = "", req_headers: dict | None = None,
+             resp_headers: dict | None = None, ip: str = "", user_agent: str = "",
+             content_type: str = "", resp_bytes: int = 0):
         self.logs.appendleft({
             "id": f"{time.time_ns()}",
             "ts": datetime.now(timezone.utc).isoformat(),
             "method": method,
             "path": path,
+            # 带问号那一串单独留一份：路径上不带的话，「只看这条接口」那个筛选
+            # 要拿路径去套模板，而 ?keyword=x 会让它套不上。
+            "query": query,
             "status": status,
             "durationMs": round(ms, 1),
             "actor": actor or "-",
+            # 请求头**原样记**，Authorization 不打码：这个被测系统的账号密码就印在
+            # 页面上，打码挡不住任何人，却会挡住这条日志最有用的那件事 ——
+            # 「这次到底带没带 token、带的是谁的」。
+            "requestHeaders": req_headers or {},
+            "responseHeaders": resp_headers or {},
+            "ip": ip,
+            "userAgent": user_agent,
+            "contentType": content_type,
+            "respBytes": resp_bytes,
             "requestBody": (req_body or "")[:2000],
             "responseSnippet": (resp_snippet or "")[:2000],
         })
@@ -223,7 +238,14 @@ class DemoShopManager:
             mgr._log(request.method, request.url.path, response.status_code, ms,
                      user["username"] if user else "",
                      body.decode("utf-8", errors="replace") if body else None,
-                     raw.decode("utf-8", errors="replace") if raw else None)
+                     raw.decode("utf-8", errors="replace") if raw else None,
+                     query=request.url.query or "",
+                     req_headers=dict(request.headers),
+                     resp_headers=dict(response.headers),
+                     ip=request.client.host if request.client else "",
+                     user_agent=request.headers.get("user-agent", ""),
+                     content_type=response.headers.get("content-type", ""),
+                     resp_bytes=len(raw))
             return Response(content=raw, status_code=response.status_code,
                             headers=dict(response.headers), media_type=response.media_type)
 

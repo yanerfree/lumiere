@@ -32,7 +32,20 @@ ENDPOINTS: list[dict] = [
         "name": "登录拿 token",
         "summary": "拿到 token，后面每个请求都要带它",
         "auth": "none", "query": [], "pathParams": [],
+        # 这条接口的「账号」在**请求体**里，不在 Authorization 头里。
+        # 不标出来的话，页面上那个「用哪个账号发」在这条上是**死的** ——
+        # 点管理员/店员，body 一个字不变，发出去永远是同一个账号。
+        # 看着像开关坏了，其实是这条接口压根不读那个头。
+        "bodyAccount": True,
         "body": '{\n  "username": "admin",\n  "password": "admin123"\n}',
+        "bodySchema": {
+            "type": "object",
+            "required": ["username", "password"],
+            "properties": {
+                "username": {"type": "string", "description": "账号，只有 admin / clerk 两个"},
+                "password": {"type": "string", "description": "密码"},
+            },
+        },
         "sampleResponse": '{\n  "token": "…",\n  "username": "admin",\n  "role": "admin"\n}',
         "errors": [
             {"status": 401, "code": "BAD_CREDENTIALS",
@@ -55,10 +68,10 @@ ENDPOINTS: list[dict] = [
         "summary": "可以按关键字搜、可以只看在售的",
         "auth": "user", "pathParams": [],
         "query": [
-            {"name": "keyword", "sample": "", "desc": "按商品名或 SKU 模糊搜"},
-            {"name": "onlyActive", "sample": "", "desc": "填 true 就只返回在售的"},
-            {"name": "page", "sample": "1", "desc": "页码"},
-            {"name": "pageSize", "sample": "50", "desc": "每页条数"},
+            {"name": "keyword", "sample": "", "desc": "按商品名或 SKU 模糊搜", "type": "string", "required": False},
+            {"name": "onlyActive", "sample": "", "desc": "填 true 就只返回在售的", "type": "boolean", "required": False},
+            {"name": "page", "sample": "1", "desc": "页码", "type": "integer", "required": False},
+            {"name": "pageSize", "sample": "50", "desc": "每页条数", "type": "integer", "required": False},
         ],
         "body": None,
         "sampleResponse": '{\n  "data": [{"sku": "SKU-001", "name": "机械键盘 87 键", "price": "399.00", "stock": 50, "active": true}],\n  "total": 9\n}',
@@ -70,7 +83,7 @@ ENDPOINTS: list[dict] = [
         "name": "商品详情",
         "summary": "按商品编号查一个",
         "auth": "user", "query": [], "body": None,
-        "pathParams": [{"name": "sku", "sample": "SKU-001", "desc": "商品编号"}],
+        "pathParams": [{"name": "sku", "sample": "SKU-001", "desc": "商品编号", "type": "string", "required": True}],
         "sampleResponse": '{\n  "sku": "SKU-001",\n  "name": "机械键盘 87 键",\n  "stock": 50,\n  "active": true\n}',
         "errors": [
             {"status": 404, "code": "PRODUCT_NOT_FOUND", "when": "这个 SKU 不存在"},
@@ -83,8 +96,19 @@ ENDPOINTS: list[dict] = [
         "name": "改商品",
         "summary": "改价、补库存、上下架 —— 只有管理员能改",
         "auth": "admin", "query": [],
-        "pathParams": [{"name": "sku", "sample": "SKU-001", "desc": "商品编号"}],
+        "pathParams": [{"name": "sku", "sample": "SKU-001", "desc": "商品编号", "type": "string", "required": True}],
         "body": '{\n  "price": "429.00",\n  "stock": 80,\n  "active": true\n}',
+        # 一个必填都没有：给什么改什么，没给的字段原样不动（PATCH 的语义）。
+        "bodySchema": {
+            "type": "object",
+            "required": [],
+            "properties": {
+                "name": {"type": "string", "description": "商品名"},
+                "price": {"type": "string", "description": "单价，字符串形式的两位小数，不能为负"},
+                "stock": {"type": "integer", "description": "库存，不能为负"},
+                "active": {"type": "boolean", "description": "在售 / 下架"},
+            },
+        },
         "sampleResponse": '{\n  "sku": "SKU-001",\n  "price": "429.00",\n  "stock": 80\n}',
         "errors": [
             {"status": 403, "code": "FORBIDDEN", "when": "店员账号来改"},
@@ -99,10 +123,10 @@ ENDPOINTS: list[dict] = [
         "summary": "可以按状态筛、按订单号或客户名搜",
         "auth": "user", "pathParams": [],
         "query": [
-            {"name": "status", "sample": "", "desc": "pending / paid / shipped / completed / cancelled"},
-            {"name": "keyword", "sample": "", "desc": "订单号或客户名"},
-            {"name": "page", "sample": "1", "desc": "页码"},
-            {"name": "pageSize", "sample": "20", "desc": "每页条数"},
+            {"name": "status", "sample": "", "desc": "pending / paid / shipped / completed / cancelled", "type": "string", "required": False},
+            {"name": "keyword", "sample": "", "desc": "订单号或客户名", "type": "string", "required": False},
+            {"name": "page", "sample": "1", "desc": "页码", "type": "integer", "required": False},
+            {"name": "pageSize", "sample": "20", "desc": "每页条数", "type": "integer", "required": False},
         ],
         "body": None,
         "sampleResponse": '{\n  "data": [{"orderNo": "SO202609240001", "status": "pending", "totalAmount": "399.00"}],\n  "total": 1\n}',
@@ -114,7 +138,7 @@ ENDPOINTS: list[dict] = [
         "name": "订单详情",
         "summary": "连每一行商品一起返回",
         "auth": "user", "query": [], "body": None,
-        "pathParams": [{"name": "order_no", "sample": "SO202609240001", "desc": "订单号"}],
+        "pathParams": [{"name": "order_no", "sample": "SO202609240001", "desc": "订单号", "type": "string", "required": True}],
         "sampleResponse": '{\n  "orderNo": "SO202609240001",\n  "status": "pending",\n  "items": [{"sku": "SKU-001", "quantity": 1}]\n}',
         "errors": [
             {"status": 404, "code": "ORDER_NOT_FOUND", "when": "订单号不存在"},
@@ -123,11 +147,33 @@ ENDPOINTS: list[dict] = [
     },
     {
         "key": "order_create",
+        "successStatus": 201,
         "method": "POST", "path": "/api/orders", "group": "订单",
         "name": "下单",
         "summary": "会真的扣库存，成功返回 201",
         "auth": "user", "query": [], "pathParams": [],
         "body": '{\n  "customerName": "张三",\n  "customerPhone": "13800000000",\n  "remark": "",\n  "items": [\n    {"sku": "SKU-001", "quantity": 1}\n  ]\n}',
+        "bodySchema": {
+            "type": "object",
+            "required": ["customerName", "items"],
+            "properties": {
+                "customerName": {"type": "string", "description": "客户名，不能为空"},
+                "customerPhone": {"type": "string", "description": "手机号，可以不填"},
+                "remark": {"type": "string", "description": "备注，可以不填"},
+                "items": {
+                    "type": "array", "minItems": 1, "description": "买哪些，至少一行",
+                    "items": {
+                        "type": "object",
+                        "required": ["sku", "quantity"],
+                        "properties": {
+                            "sku": {"type": "string", "description": "商品编号"},
+                            "quantity": {"type": "integer", "minimum": 1, "maximum": 99,
+                                         "description": "数量，1 到 99"},
+                        },
+                    },
+                },
+            },
+        },
         "sampleResponse": '{\n  "orderNo": "SO202609240001",\n  "status": "pending",\n  "totalAmount": "399.00"\n}',
         "errors": [
             {"status": 409, "code": "OUT_OF_STOCK", "when": "库存不够，报错里带还剩几件（拿 SKU-008 试，它库存就是 0）"},
@@ -142,8 +188,18 @@ ENDPOINTS: list[dict] = [
         "name": "改订单",
         "summary": "改客户名 / 手机 / 备注 —— 只有待支付的能改",
         "auth": "user", "query": [],
-        "pathParams": [{"name": "order_no", "sample": "SO202609240001", "desc": "订单号"}],
+        "pathParams": [{"name": "order_no", "sample": "SO202609240001", "desc": "订单号", "type": "string", "required": True}],
         "body": '{\n  "customerName": "李四",\n  "customerPhone": "13900000000",\n  "remark": "换个收件人"\n}',
+        # 三个都选填：只改传上来的那几个字段。
+        "bodySchema": {
+            "type": "object",
+            "required": [],
+            "properties": {
+                "customerName": {"type": "string", "description": "客户名"},
+                "customerPhone": {"type": "string", "description": "手机号"},
+                "remark": {"type": "string", "description": "备注"},
+            },
+        },
         "sampleResponse": '{\n  "orderNo": "SO202609240001",\n  "customerName": "李四"\n}',
         "errors": [
             {"status": 409, "code": "ORDER_NOT_EDITABLE", "when": "已经支付过了还来改"},
@@ -157,8 +213,8 @@ ENDPOINTS: list[dict] = [
         "summary": "pay 支付 / ship 发货 / complete 完成 / cancel 取消",
         "auth": "user", "query": [],
         "pathParams": [
-            {"name": "order_no", "sample": "SO202609240001", "desc": "订单号"},
-            {"name": "action", "sample": "pay", "desc": "pay / ship / complete / cancel"},
+            {"name": "order_no", "sample": "SO202609240001", "desc": "订单号", "type": "string", "required": True},
+            {"name": "action", "sample": "pay", "desc": "pay / ship / complete / cancel", "type": "string", "required": True},
         ],
         "body": None,
         "sampleResponse": '{\n  "orderNo": "SO202609240001",\n  "status": "paid"\n}',
@@ -174,7 +230,7 @@ ENDPOINTS: list[dict] = [
         "name": "删订单",
         "summary": "只有管理员能删；待支付 / 已支付的会把库存还回去",
         "auth": "admin", "query": [], "body": None,
-        "pathParams": [{"name": "order_no", "sample": "SO202609240001", "desc": "订单号"}],
+        "pathParams": [{"name": "order_no", "sample": "SO202609240001", "desc": "订单号", "type": "string", "required": True}],
         "sampleResponse": '{\n  "deleted": true,\n  "orderNo": "SO202609240001",\n  "restockedItems": 1\n}',
         "errors": [
             {"status": 403, "code": "FORBIDDEN", "when": "店员账号来删 —— 注意是 403 不是 401"},

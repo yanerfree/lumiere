@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps.db import get_db
 from app.services import demo_shop_catalog as catalog
+from app.services import demo_shop_openapi as openapi_builder
 from app.services import demo_shop_service as svc
 from app.services.demo_shop_manager import (
     ACCOUNTS, UNLOGGED_PATHS, demo_shop_manager as mgr,
@@ -96,6 +97,23 @@ async def list_endpoints():
             "unloggedPaths": list(UNLOGGED_PATHS),
         },
     }
+
+
+@router.get("/openapi.json")
+async def export_openapi(keys: str = Query("", description="逗号分隔，只导这几条；留空导全部")):
+    """「导出」按钮下载的那份标准 OpenAPI，给别的系统导入用。
+
+    ⚠ 不要改成转发被测系统自己的 `/openapi.json`。那份是空壳 ——
+    路由上请求体写的是 `payload: dict`，自动生成出来没有必填字段、没有错误码、
+    没有鉴权声明，导进 Apifox/Postman 之后照着它发的请求几乎必然 422，
+    而那边只会显示"接口返回 422"，看着像接口坏了。
+    """
+    picked = [k.strip() for k in keys.split(",") if k.strip()] or None
+    doc = openapi_builder.build_openapi(f"http://localhost:{mgr.port}", picked)
+    return JSONResponse(doc, headers={
+        # 让浏览器直接当文件存下来，而不是在标签页里渲染一坨 JSON
+        "Content-Disposition": 'attachment; filename="demo-shop-openapi.json"',
+    })
 
 
 # ── 服务控制 ──

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import {
   Button, Space, Input, Tag, Badge, Table, message, Tooltip, Drawer, Radio,
-  Popconfirm, Empty, Alert, Typography,
+  Popconfirm, Empty, Alert, Typography, Checkbox,
 } from 'antd'
 import {
   PlayCircleOutlined, PauseCircleOutlined, ReloadOutlined, CopyOutlined,
@@ -10,6 +10,7 @@ import {
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
+import { LogBlock } from '../../components/MockCodeBlock'
 
 const MONO = 'var(--font-mono)'
 
@@ -36,12 +37,51 @@ const IDENTITIES = [
   { key: 'bad', label: '乱填 token' },
 ]
 
+const BAD_TOKEN = '这是一个乱填的token'
+
+// 必填标记。红星是接口文档的通行画法，导出的 OpenAPI 里也是同一份 required —— 
+// 页面上标着必填、导出的文件里却是选填，对方系统照着生成的调用就会 422，
+// 所以两边都从清单那一份 `required` 来，不各写各的。
+const REQ = <span style={{ color: '#e8453c', marginLeft: 3 }}>*</span>
+// 请求体里哪些字段必填 —— 取的是导出用的那份 schema，页面和文件天然一致
+const bodyRequired = (e) => (e && e.bodySchema && e.bodySchema.required) || []
+
+// `/api/login` 这条接口的「账号」写在**请求体**里，不在 Authorization 头里
+// （后端清单上标成 bodyAccount）。所以这条上的「用哪个账号」必须去改请求体 ——
+// 照搬上面那组的话，点管理员/店员 body 一个字不变，发出去永远是同一个账号，
+// 看着像这个开关坏了，其实是这条接口压根不读那个头。
+const LOGIN_IDENTITIES = [
+  { key: 'admin', label: '管理员' },
+  { key: 'clerk', label: '店员' },
+  { key: 'wrongpass', label: '密码错的' },
+  { key: 'nouser', label: '账号不存在' },
+]
+
+const fmtHeaders = (h) => {
+  if (!h || typeof h !== 'object' || !Object.keys(h).length) return '-'
+  try { return JSON.stringify(h, null, 2) } catch { return String(h) }
+}
+
 const pretty = (text) => {
   try { return JSON.stringify(JSON.parse(text), null, 2) } catch { return text }
 }
 
 // 日志里的真实路径能不能算作这条接口。/api/orders/{order_no} 要吃得下
 // /api/orders/SO202609240001，否则「只看这条接口」永远是空的 —— 而空列表看着像没调过。
+// 反过来：从日志里的真实路径把参数抠回来，填进「测试」页的输入框。
+// /api/orders/{order_no} + /api/orders/SO2026001 → { order_no: 'SO2026001' }
+const extractPathVals = (pattern, actual) => {
+  const names = [...pattern.matchAll(/\{(\w+)\}/g)].map(m => m[1])
+  if (!names.length) return {}
+  const re = new RegExp('^' + pattern.replace(/[.*+?^${}()|[\]\\]/g, m => (m === '{' || m === '}' ? m : '\\' + m))
+    .replace(/\{\w+\}/g, '([^/]+)') + '$')
+  const m = re.exec((actual || '').split('?')[0])
+  if (!m) return {}
+  return Object.fromEntries(names.map((n, i) => {
+    try { return [n, decodeURIComponent(m[i + 1])] } catch { return [n, m[i + 1]] }
+  }))
+}
+
 const pathMatches = (pattern, actual) => {
   const re = new RegExp('^' + pattern.replace(/[.*+?^${}()|[\]\\]/g, m => (m === '{' || m === '}' ? m : '\\' + m))
     .replace(/\{\w+\}/g, '[^/]+') + '$')
@@ -58,6 +98,7 @@ export default function DemoShop() {
   const [logs, setLogs] = useState([])
   const [onlyThis, setOnlyThis] = useState(true)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [logDetail, setLogDetail] = useState(null)
 
   // 测试面板
   const [identity, setIdentity] = useState('admin')
@@ -68,6 +109,11 @@ export default function DemoShop() {
   const [resp, setResp] = useState(null)
   const tokenCache = useRef({})
   const pollRef = useRef(null)
+  // 「填回测试页」要在换完接口之后再覆盖输入框。用 ref 传，不用 setTimeout ——
+  // 定时器是赌 effect 先跑完，这个是等 effect 自己来取。
+  const pendingFill = useRef(null)
+  const [exportKeys, setExportKeys] = useState([])   // 勾选待导出的接口
+  const [exporting, setExporting] = useState(false)
 
   const ep = useMemo(() => endpoints.find(e => e.key === selKey) || null, [endpoints, selKey])
   const baseUrl = `http://${window.location.hostname}:${status.port}`
@@ -80,13 +126,16 @@ export default function DemoShop() {
     return () => clearInterval(pollRef.current)
   }, [])
 
-  // 换一条接口 = 整个测试面板按这条的样例重填，别把上一条的参数留在框里
+  // 换一条接口 = 整个测试面板按这条的样例重填，别把上一条的参数留在框里。
+  // 例外：从请求日志点「填回测试页」过来时，按那条日志的真实参数填。
   useEffect(() => {
     if (!ep) return
-    setPathVals(Object.fromEntries((ep.pathParams || []).map(p => [p.name, p.sample])))
-    setQueryVals(Object.fromEntries((ep.query || []).map(q => [q.name, q.sample])))
-    setBodyText(ep.body || '')
-    setIdentity(ep.auth === 'none' ? 'none' : 'admin')
+    const fill = pendingFill.current
+    pendingFill.current = null
+    setPathVals(fill ? fill.pathVals : Object.fromEntries((ep.pathParams || []).map(p => [p.name, p.sample])))
+    setQueryVals(fill ? fill.queryVals : Object.fromEntries((ep.query || []).map(q => [q.name, q.sample])))
+    setBodyText(fill ? fill.body : (ep.body || ''))
+    setIdentity(ep.bodyAccount ? 'admin' : ep.auth === 'none' ? 'none' : 'admin')
     setResp(null)
   }, [selKey])
 
@@ -138,6 +187,32 @@ export default function DemoShop() {
     } catch { message.error('重置失败') }
   }
 
+  // ── 导出成 OpenAPI ──
+
+  const toggleExport = (key, on) =>
+    setExportKeys(v => (on ? [...v, key] : v.filter(k => k !== key)))
+  const toggleExportAll = (on) => setExportKeys(on ? endpoints.map(e => e.key) : [])
+
+  // 文件是**后端按接口清单生成**的，不在这里拼。
+  // 被测系统自己那份 `/openapi.json` 是空壳（请求体声明成了任意对象），
+  // 导出去别人拿不到必填字段和错误码，照着它发的请求几乎必然 422。
+  const handleExport = async () => {
+    setExporting(true)
+    try {
+      // 走 api.download 而不是 window.open —— 后者不带平台登录态，会 401
+      const blob = await api.download(`/demo-shop/openapi.json?keys=${exportKeys.join(',')}`)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `demo-shop-openapi-${new Date().toISOString().slice(0, 10)}.json`
+      a.click()
+      URL.revokeObjectURL(url)
+      message.success(`已导出 ${exportKeys.length} 条接口，可直接导入 Apifox / Postman`)
+    } catch (e) {
+      message.error(`导出失败：${e.message}`)
+    } finally { setExporting(false) }
+  }
+
   // ── 发请求 ──
 
   const realPath = ep ? ep.path.replace(/\{(\w+)\}/g, (_, n) => encodeURIComponent(pathVals[n] ?? `{${n}}`)) : ''
@@ -146,6 +221,31 @@ export default function DemoShop() {
   ).toString()
   const fullUrl = ep ? `${baseUrl}${realPath}${queryString ? '?' + queryString : ''}` : ''
   const hasBody = ep && !['GET', 'DELETE'].includes(ep.method)
+
+  // `/api/login` 的账号在请求体里，这时候一个 token 都不该带 ——
+  // 带了它也不看，却会让人以为「选账号」是靠这个头起作用的。
+  const headerIdentity = ep && ep.bodyAccount ? 'none' : identity
+
+  const accountPwd = (u) => (status.accounts || []).find(a => a.username === u)?.password || ''
+
+  // 「用哪个账号登录」直接改写请求体。后两档是故意配错的，用来看 401。
+  const loginBody = (who) => {
+    const m = {
+      admin: { username: 'admin', password: accountPwd('admin') },
+      clerk: { username: 'clerk', password: accountPwd('clerk') },
+      wrongpass: { username: 'admin', password: '这个密码是错的' },
+      nouser: { username: '查无此人', password: 'whatever' },
+    }[who]
+    if (!m || !m.password) return null   // 账号还没拉回来，别把空密码写进框里
+    return JSON.stringify(m, null, 2)
+  }
+
+  const pickLoginIdentity = (who) => {
+    setIdentity(who)
+    const b = loginBody(who)
+    if (b) setBodyText(b)
+    else message.warning('账号还没拉回来，稍等一下再选')
+  }
 
   const getToken = async (who) => {
     if (tokenCache.current[who]) return tokenCache.current[who]
@@ -160,14 +260,37 @@ export default function DemoShop() {
     return j.token
   }
 
+  // 必填项没填就发出去，返回的是 404 或 422 —— 那两个正好也是这个被测系统
+  // **设计好的**返回，于是分不清是自己漏填了还是接口在报错。所以先拦一下。
+  const missingRequired = () => {
+    const miss = []
+    for (const p of ep?.pathParams || []) {
+      if (!String(pathVals[p.name] ?? '').trim()) miss.push(`路径参数 ${p.name}`)
+    }
+    for (const q of ep?.query || []) {
+      if (q.required && !String(queryVals[q.name] ?? '').trim()) miss.push(`查询参数 ${q.name}`)
+    }
+    for (const f of bodyRequired(ep)) {
+      let ok = false
+      try { const o = JSON.parse(bodyText || '{}'); ok = o[f] !== undefined && o[f] !== '' && o[f] !== null } catch { ok = true /* body 本身不是合法 JSON，交给接口去报，这里不越俎代庖 */ }
+      if (!ok) miss.push(`请求体 ${f}`)
+    }
+    return miss
+  }
+
   const handleSend = async () => {
     if (!ep) return
+    const miss = missingRequired()
+    if (miss.length) {
+      message.warning(`这几项是必填的，还空着：${miss.join('、')}`)
+      return
+    }
     setSending(true); setResp(null)
     const t0 = performance.now()
     try {
       const headers = {}
-      if (identity === 'admin' || identity === 'clerk') headers.Authorization = `Bearer ${await getToken(identity)}`
-      if (identity === 'bad') headers.Authorization = 'Bearer 这是一个乱填的token'
+      if (headerIdentity === 'admin' || headerIdentity === 'clerk') headers.Authorization = `Bearer ${await getToken(headerIdentity)}`
+      if (headerIdentity === 'bad') headers.Authorization = `Bearer ${BAD_TOKEN}`
       let body
       if (hasBody && bodyText.trim()) { headers['Content-Type'] = 'application/json'; body = bodyText }
       const r = await fetch(fullUrl, { method: ep.method, headers, body })
@@ -181,14 +304,29 @@ export default function DemoShop() {
     }
   }
 
-  const curl = () => {
+  // curl 里要放**真的** token，不是 `<token>` 占位符 —— 占位符粘到终端里必然 401，
+  // 而 401 正是这个被测系统的正常返回之一，于是分不清是自己没换 token 还是接口在挡人。
+  const buildCurl = async () => {
     const parts = [`curl -i -X ${ep.method} '${fullUrl}'`]
-    if (identity !== 'none') parts.push(`-H 'Authorization: Bearer <token>'`)
+    if (headerIdentity === 'admin' || headerIdentity === 'clerk') {
+      parts.push(`-H 'Authorization: Bearer ${await getToken(headerIdentity)}'`)
+    }
+    if (headerIdentity === 'bad') parts.push(`-H 'Authorization: Bearer ${BAD_TOKEN}'`)
     if (hasBody && bodyText.trim()) {
       parts.push(`-H 'Content-Type: application/json'`)
       parts.push(`-d '${bodyText.replace(/\n\s*/g, '')}'`)
     }
     return parts.join(' \\\n  ')
+  }
+
+  const copyCurl = async () => {
+    try {
+      copyToClipboard(await buildCurl())
+      message.success(headerIdentity === 'admin' || headerIdentity === 'clerk'
+        ? 'curl 已复制，token 也带上了（8 小时后过期，过期再复制一次）' : 'curl 已复制')
+    } catch {
+      message.error('换 token 失败 —— 服务没启动的话先点右上角「启动服务」')
+    }
   }
 
   // 返回码撞上清单里写好的报错时，直接告诉人这是设计好的，不是坏了
@@ -221,9 +359,25 @@ export default function DemoShop() {
         padding: '10px 14px', borderBottom: '1px solid rgba(0,0,0,0.04)',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
       }}>
-        <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>接口</span>
-        <Tooltip title="这些是真服务上实际开着的接口，页面上不能加、不能删、不能改路径">
-          <Tag style={{ margin: 0, fontSize: 11 }} icon={<LockFilled style={{ fontSize: 10 }} />}>固定 {endpoints.length} 条</Tag>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Tooltip title="全选 / 全不选">
+            <Checkbox
+              checked={endpoints.length > 0 && exportKeys.length === endpoints.length}
+              indeterminate={exportKeys.length > 0 && exportKeys.length < endpoints.length}
+              onChange={e => toggleExportAll(e.target.checked)}
+            />
+          </Tooltip>
+          <Tooltip title={`这些是真服务上实际开着的 ${endpoints.length} 条接口，页面上不能加、不能删、不能改路径`}>
+            <span style={{ fontWeight: 600, fontSize: 13, color: '#1d2129' }}>
+              <LockFilled style={{ fontSize: 10, color: '#c9cdd4', marginRight: 4 }} />接口
+            </span>
+          </Tooltip>
+        </div>
+        <Tooltip title="把勾选的接口导出成标准 OpenAPI 文件，可直接导入 Apifox / Postman / 别的系统">
+          <Button type="text" size="small" icon={<ExportOutlined />} loading={exporting}
+            disabled={!exportKeys.length} onClick={handleExport}>
+            导出{exportKeys.length ? `(${exportKeys.length})` : ''}
+          </Button>
         </Tooltip>
       </div>
       <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px' }}>
@@ -237,7 +391,14 @@ export default function DemoShop() {
                   padding: '9px 10px', marginBottom: 4, borderRadius: 12, cursor: 'pointer',
                   background: sel ? 'rgba(14,165,160,0.07)' : 'transparent',
                   borderLeft: `3px solid ${sel ? '#0ea5a0' : 'rgba(0,0,0,0.08)'}`,
+                  display: 'flex', alignItems: 'flex-start', gap: 8,
                 }}>
+                  {/* 勾选框只管勾选，别把这一条也选中 —— 不拦住冒泡的话，勾一下右边整块内容跟着跳走 */}
+                  <span onClick={ev => ev.stopPropagation()} style={{ paddingTop: 1, flexShrink: 0 }}>
+                    <Checkbox checked={exportKeys.includes(e.key)}
+                      onChange={ev => toggleExport(e.key, ev.target.checked)} />
+                  </span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <Tag style={{
                       margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 8,
@@ -254,6 +415,7 @@ export default function DemoShop() {
                     <Tag color={AUTH_META[e.auth].color} style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 5px', borderRadius: 8 }}>
                       {AUTH_META[e.auth].label}
                     </Tag>
+                  </div>
                   </div>
                 </div>
               )
@@ -321,10 +483,12 @@ export default function DemoShop() {
 
         {!!(ep.pathParams || []).length && (
           <>
-            <div style={sectionTitle}>路径参数</div>
+            <div style={sectionTitle}>路径参数（都必填 —— 它就长在地址里，不填地址都拼不出来）</div>
             <Table size="small" pagination={false} rowKey="name" dataSource={ep.pathParams} columns={[
-              { title: '名字', dataIndex: 'name', width: 130, render: v => <code style={{ fontFamily: MONO }}>{'{'}{v}{'}'}</code> },
-              { title: '样例', dataIndex: 'sample', width: 180, render: v => <code style={{ fontFamily: MONO }}>{v}</code> },
+              { title: '名字', dataIndex: 'name', width: 120, render: v => <code style={{ fontFamily: MONO }}>{'{'}{v}{'}'}</code> },
+              { title: '必填', dataIndex: 'required', width: 60, render: () => <Tag color="red" style={{ margin: 0, fontSize: 11 }}>必填</Tag> },
+              { title: '类型', dataIndex: 'type', width: 80, render: v => <span style={{ fontFamily: MONO, fontSize: 12, color: '#86909c' }}>{v || 'string'}</span> },
+              { title: '样例', dataIndex: 'sample', width: 150, render: v => <code style={{ fontFamily: MONO }}>{v}</code> },
               { title: '说明', dataIndex: 'desc' },
             ]} />
           </>
@@ -332,14 +496,40 @@ export default function DemoShop() {
 
         {!!(ep.query || []).length && (
           <>
-            <div style={sectionTitle}>查询参数（都可以不填）</div>
+            {/* 标题别写死「都可以不填」—— 哪天加一个必填的查询参数，这句话会变成
+                一条不报错的假说明，人照着它漏填，然后去查一个不存在的 bug。让它跟着数据走。 */}
+            <div style={sectionTitle}>查询参数{(ep.query || []).some(q => q.required) ? '' : '（都可以不填）'}</div>
             <Table size="small" pagination={false} rowKey="name" dataSource={ep.query} columns={[
-              { title: '名字', dataIndex: 'name', width: 130, render: v => <code style={{ fontFamily: MONO }}>{v}</code> },
-              { title: '默认', dataIndex: 'sample', width: 180, render: v => <code style={{ fontFamily: MONO }}>{v || '—'}</code> },
+              { title: '名字', dataIndex: 'name', width: 120, render: v => <code style={{ fontFamily: MONO }}>{v}</code> },
+              { title: '必填', dataIndex: 'required', width: 60, render: v => (v
+                ? <Tag color="red" style={{ margin: 0, fontSize: 11 }}>必填</Tag>
+                : <span style={{ color: '#c9cdd4', fontSize: 12 }}>选填</span>) },
+              { title: '类型', dataIndex: 'type', width: 80, render: v => <span style={{ fontFamily: MONO, fontSize: 12, color: '#86909c' }}>{v || 'string'}</span> },
+              { title: '默认', dataIndex: 'sample', width: 150, render: v => <code style={{ fontFamily: MONO }}>{v || '—'}</code> },
               { title: '说明', dataIndex: 'desc' },
             ]} />
           </>
         )}
+
+        {ep.bodySchema && !!Object.keys(ep.bodySchema.properties || {}).length && (<>
+          <div style={sectionTitle}>请求体字段</div>
+          <Table size="small" pagination={false} rowKey="name"
+            dataSource={Object.entries(ep.bodySchema.properties).map(([name, f]) => ({
+              name, ...f, required: bodyRequired(ep).includes(name),
+            }))} columns={[
+              { title: '名字', dataIndex: 'name', width: 130, render: v => <code style={{ fontFamily: MONO }}>{v}</code> },
+              { title: '必填', dataIndex: 'required', width: 60, render: v => (v
+                ? <Tag color="red" style={{ margin: 0, fontSize: 11 }}>必填</Tag>
+                : <span style={{ color: '#c9cdd4', fontSize: 12 }}>选填</span>) },
+              { title: '类型', dataIndex: 'type', width: 80, render: v => <span style={{ fontFamily: MONO, fontSize: 12, color: '#86909c' }}>{v}</span> },
+              { title: '说明', dataIndex: 'description' },
+            ]} />
+          {!bodyRequired(ep).length && (
+            <div style={{ fontSize: 12, color: '#86909c', marginTop: 6 }}>
+              这条一个必填都没有：给哪个字段就改哪个，没给的原样不动。
+            </div>
+          )}
+        </>)}
 
         {ep.body && (<>
           <div style={sectionTitle}>请求体样例</div>
@@ -392,22 +582,45 @@ export default function DemoShop() {
           </div>
         </div>
 
-        <div style={{ marginBottom: 12 }}>
-          <div style={fieldLabel}>用哪个账号发</div>
-          <Radio.Group size="small" value={identity} onChange={e => setIdentity(e.target.value)}
-            options={IDENTITIES.map(i => ({ value: i.key, label: i.label }))} optionType="button" />
-          <span style={{ fontSize: 12, color: '#86909c', marginLeft: 10 }}>
-            {ep.auth === 'none' ? '这条不用登录，带不带都行'
-              : identity === 'none' ? '预期会返回 401'
-              : identity === 'bad' ? '预期会返回 401'
-              : ep.auth === 'admin' && identity === 'clerk' ? '店员没这个权限，预期 403'
-              : '会先自动登录换 token，再带上去'}
-          </span>
-        </div>
+        {ep.bodyAccount ? (
+          <div style={{ marginBottom: 12 }}>
+            <div style={fieldLabel}>用哪个账号登录</div>
+            <Radio.Group size="small" value={identity} onChange={e => pickLoginIdentity(e.target.value)}
+              options={LOGIN_IDENTITIES.map(i => ({ value: i.key, label: i.label }))} optionType="button" />
+            <span style={{ fontSize: 12, color: '#86909c', marginLeft: 10 }}>
+              {identity === 'wrongpass' || identity === 'nouser'
+                ? '预期 401 —— 账号不存在和密码错返回同一句话'
+                : '预期 200，返回一个 token'}
+            </span>
+            <div style={{ fontSize: 12, color: '#c9cdd4', marginTop: 4 }}>
+              这条接口不看 token，账号写在下面的<b>请求体</b>里 —— 选一下，请求体会跟着改。
+            </div>
+          </div>
+        ) : ep.auth === 'none' ? (
+          <div style={{ marginBottom: 12 }}>
+            <div style={fieldLabel}>用哪个账号发</div>
+            <Tag icon={<LockFilled style={{ fontSize: 10 }} />} style={{ margin: 0, fontSize: 11 }}>这条用不上</Tag>
+            <span style={{ fontSize: 12, color: '#86909c', marginLeft: 10 }}>
+              这条接口不看身份，带谁的 token 结果都一样，所以这里不给选。
+            </span>
+          </div>
+        ) : (
+          <div style={{ marginBottom: 12 }}>
+            <div style={fieldLabel}>用哪个账号发</div>
+            <Radio.Group size="small" value={identity} onChange={e => setIdentity(e.target.value)}
+              options={IDENTITIES.map(i => ({ value: i.key, label: i.label }))} optionType="button" />
+            <span style={{ fontSize: 12, color: '#86909c', marginLeft: 10 }}>
+              {identity === 'none' ? '预期会返回 401'
+                : identity === 'bad' ? '预期会返回 401'
+                : ep.auth === 'admin' && identity === 'clerk' ? '店员没这个权限，预期 403'
+                : '会先自动登录换 token，再带上去'}
+            </span>
+          </div>
+        )}
 
         {(ep.pathParams || []).map(p => (
           <div key={p.name} style={{ marginBottom: 10 }}>
-            <div style={fieldLabel}>路径参数 {'{'}{p.name}{'}'} <span style={{ color: '#c9cdd4' }}>· {p.desc}</span></div>
+            <div style={fieldLabel}>路径参数 {'{'}{p.name}{'}'}{REQ} <span style={{ color: '#c9cdd4' }}>· {p.desc}</span></div>
             <Input size="small" style={{ fontFamily: MONO }} value={pathVals[p.name] ?? ''}
               onChange={e => setPathVals(v => ({ ...v, [p.name]: e.target.value }))} />
           </div>
@@ -415,10 +628,10 @@ export default function DemoShop() {
 
         {!!(ep.query || []).length && (
           <div style={{ marginBottom: 10 }}>
-            <div style={fieldLabel}>查询参数（留空就不带）</div>
+            <div style={fieldLabel}>查询参数（选填的留空就不带）</div>
             {ep.query.map(q => (
               <div key={q.name} style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
-                <code style={{ width: 110, fontFamily: MONO, fontSize: 12, color: '#4e5969' }}>{q.name}</code>
+                <code style={{ width: 110, fontFamily: MONO, fontSize: 12, color: '#4e5969' }}>{q.name}{q.required ? REQ : ''}</code>
                 <Input size="small" style={{ flex: 1, fontFamily: MONO }} placeholder={q.desc}
                   value={queryVals[q.name] ?? ''} onChange={e => setQueryVals(v => ({ ...v, [q.name]: e.target.value }))} />
               </div>
@@ -428,7 +641,14 @@ export default function DemoShop() {
 
         {hasBody && (
           <div style={{ marginBottom: 12 }}>
-            <div style={fieldLabel}>请求体{ep.body ? '' : '（这条接口不需要，留空即可）'}</div>
+            <div style={fieldLabel}>
+              请求体{ep.body ? '' : '（这条接口不需要，留空即可）'}
+              {!!bodyRequired(ep).length && (
+                <span style={{ fontWeight: 400, color: '#86909c', marginLeft: 8 }}>
+                  必填字段：{bodyRequired(ep).map(f => <code key={f} style={{ fontFamily: MONO, color: '#e8453c', marginRight: 6 }}>{f}</code>)}
+                </span>
+              )}
+            </div>
             <Input.TextArea spellCheck={false} rows={ep.body ? 8 : 2} value={bodyText}
               onChange={e => setBodyText(e.target.value)} style={{ fontFamily: MONO, fontSize: 12 }} />
           </div>
@@ -436,7 +656,7 @@ export default function DemoShop() {
 
         <Space style={{ marginBottom: 14 }}>
           <Button type="primary" icon={<SendOutlined />} loading={sending} onClick={handleSend}>发送请求</Button>
-          <Button size="small" icon={<CopyOutlined />} onClick={() => { copyToClipboard(curl()); message.success('已复制 curl 命令') }}>复制成 curl</Button>
+          <Button size="small" icon={<CopyOutlined />} onClick={copyCurl}>复制成 curl</Button>
         </Space>
 
         {resp && (
@@ -465,6 +685,28 @@ export default function DemoShop() {
     )
   }
 
+  // 把一条日志填回「测试」页。**故意不做「重放」** —— 这是真系统，
+  // 一键重放一条 DELETE 就是真删一单，而人点的时候以为只是在看日志。
+  // 填回去、让人自己按「发送请求」，这一步差别就是「知不知道自己要动数据」。
+  const fillIntoTest = (log) => {
+    const target = endpoints.find(e => e.method === log.method && pathMatches(e.path, log.path))
+    if (!target) { message.warning('这条日志对不上清单里任何一条接口'); return }
+    const fill = {
+      pathVals: extractPathVals(target.path, log.path),
+      queryVals: Object.fromEntries(new URLSearchParams(log.query || '')),
+      body: log.requestBody || target.body || '',
+    }
+    setLogDetail(null)
+    if (target.key === selKey) {
+      // 已经选中的就是它 —— selKey 不变，换接口那个 effect 不会跑，得自己填
+      setPathVals(fill.pathVals); setQueryVals(fill.queryVals); setBodyText(fill.body); setResp(null)
+    } else {
+      pendingFill.current = fill
+      setSelKey(target.key)
+    }
+    setTab('test')
+  }
+
   // ─── 右栏 · 请求日志 ───
 
   const renderLogs = () => (
@@ -491,21 +733,13 @@ export default function DemoShop() {
           columns={[
             { title: '时间', dataIndex: 'ts', width: 160, render: v => <span style={{ fontSize: 12, color: '#86909c' }}>{new Date(v).toLocaleString('zh-CN')}</span> },
             { title: '方法', dataIndex: 'method', width: 80, render: v => <b style={{ fontFamily: MONO, fontSize: 12, color: METHOD_COLOR(v) }}>{v}</b> },
-            { title: '路径', dataIndex: 'path', ellipsis: true, render: v => <span style={{ fontFamily: MONO, fontSize: 12 }}>{v}</span> },
+            { title: '路径', dataIndex: 'path', ellipsis: true, render: (v, r) => <span style={{ fontFamily: MONO, fontSize: 12 }}>{v}{r.query ? `?${r.query}` : ''}</span> },
             { title: '状态码', dataIndex: 'status', width: 80, render: v => <b style={{ fontFamily: MONO, color: CODE_COLOR(v) }}>{v}</b> },
             { title: '耗时', dataIndex: 'durationMs', width: 80, align: 'right', render: v => <span style={{ fontFamily: MONO, fontSize: 12 }}>{v}ms</span> },
             { title: '调用人', dataIndex: 'actor', width: 90 },
+            { title: '', width: 60, align: 'right', render: () => <a style={{ fontSize: 12 }}>详情</a> },
           ]}
-          expandable={{
-            expandedRowRender: r => (
-              <div style={{ fontFamily: MONO, fontSize: 12 }}>
-                <div style={{ color: '#86909c', marginBottom: 4 }}>请求内容</div>
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', maxHeight: 160, overflow: 'auto' }}>{pretty(r.requestBody) || '（无请求体）'}</pre>
-                <div style={{ color: '#86909c', margin: '8px 0 4px' }}>返回内容</div>
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>{pretty(r.responseSnippet) || '（无）'}</pre>
-              </div>
-            ),
-          }}
+          onRow={r => ({ onClick: () => setLogDetail(r), style: { cursor: 'pointer' } })}
           locale={{
             emptyText: <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={
               unlogged ? '这条接口故意不记日志，见上面那条说明'
@@ -576,6 +810,64 @@ export default function DemoShop() {
         </div>
       </div>
 
+      {/* ━━━ 请求详情（格式照「API Mock → 请求日志」那份，只是这边是真接口）━━━ */}
+      <Drawer open={!!logDetail} onClose={() => setLogDetail(null)} width={680}
+        title={logDetail && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <span style={{ fontSize: 15, fontWeight: 600 }}>请求详情</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: METHOD_COLOR(logDetail.method) }}>{logDetail.method}</span>
+            <span style={{ fontSize: 12, fontWeight: 700, color: CODE_COLOR(logDetail.status) }}>{logDetail.status}</span>
+            <span style={{ fontFamily: MONO, fontSize: 12, color: '#4e5969', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{logDetail.path}</span>
+          </div>
+        )}
+        extra={logDetail && (
+          <Tooltip title="把这次的参数和请求体填回「测试」页，要不要再发一次由你按">
+            <Button size="small" icon={<SendOutlined />} onClick={() => fillIntoTest(logDetail)}>填回测试页</Button>
+          </Tooltip>
+        )}>
+        {logDetail && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 24px', fontSize: 12 }}>
+              {[
+                ['时间', new Date(logDetail.ts).toLocaleString('zh-CN', { hour12: false })],
+                ['Content-Type', logDetail.contentType || '-'],
+                ['来源 IP', logDetail.ip || '-'],
+                ['调用人', logDetail.actor || '（没带 token）'],
+                ['总耗时', `${logDetail.durationMs} ms`],
+                ['返回大小', `${logDetail.respBytes ?? 0} 字节`],
+              ].map(([k, v]) => (
+                <div key={k} style={{ display: 'flex', gap: 8, minWidth: 0 }}>
+                  <span style={{ color: '#86909c', flexShrink: 0 }}>{k}</span>
+                  <span style={{ color: '#1d2129', fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v}</span>
+                </div>
+              ))}
+            </div>
+            {logDetail.query && (
+              <div style={{ fontSize: 12 }}>
+                <span style={{ color: '#86909c', marginRight: 8 }}>查询参数</span>
+                <code style={{ fontFamily: MONO }}>{logDetail.query}</code>
+              </div>
+            )}
+
+            <div>
+              <LogBlock title="请求头" content={fmtHeaders(logDetail.requestHeaders)}
+                onCopy={() => { copyToClipboard(fmtHeaders(logDetail.requestHeaders)); message.success('已复制') }} />
+              <div style={{ fontSize: 11, color: '#c9cdd4', marginTop: 6 }}>
+                token 原样记着、没打码 —— 这个被测系统的账号密码就印在「怎么用」里，
+                打码挡不住任何人，却会挡住这条日志最有用的那件事：这次到底带没带 token、带的是谁的。
+              </div>
+            </div>
+
+            <LogBlock title="请求体" content={pretty(logDetail.requestBody) || '-'}
+              onCopy={() => { copyToClipboard(logDetail.requestBody || ''); message.success('已复制') }} />
+            <LogBlock title="响应头" content={fmtHeaders(logDetail.responseHeaders)}
+              onCopy={() => { copyToClipboard(fmtHeaders(logDetail.responseHeaders)); message.success('已复制') }} />
+            <LogBlock title="响应体" content={pretty(logDetail.responseSnippet) || '-'}
+              onCopy={() => { copyToClipboard(logDetail.responseSnippet || ''); message.success('已复制') }} />
+          </div>
+        )}
+      </Drawer>
+
       <Drawer open={helpOpen} onClose={() => setHelpOpen(false)} width={560} title="订单服务怎么用">
         <Typography.Paragraph>
           这是平台自带的一个<b>真的小后端</b>，接口一条条列在左边。和隔壁 Mock 的区别：
@@ -594,6 +886,9 @@ export default function DemoShop() {
           先调 <Typography.Text code>POST /api/login</Typography.Text> 拿 token，之后每个请求带
           <Typography.Text code>Authorization: Bearer &lt;token&gt;</Typography.Text>。
           在「测试」页选「用哪个账号发」，页面会自动帮你换好 token。
+          <br />
+          <b>登录这一条不一样</b>：它的账号写在请求体里、不看 token，所以那页上是
+          「用哪个账号登录」，选完直接改下面的请求体。
         </Typography.Paragraph>
         <Table size="small" pagination={false} rowKey="username" dataSource={status.accounts || []}
           columns={[

@@ -240,3 +240,194 @@ def test_不记日志的接口页面上会说明():
            / "demo_shop_manager.py").read_text(encoding="utf-8")
     assert "if request.url.path in UNLOGGED_PATHS:" in src, \
         "中间件又写回字面量了 —— 改一处漏一处，页面上的说明就成了假话"
+
+
+# ───── 「用哪个账号」这个开关不能是死的 ─────
+
+def test_账号写在请求体里的接口标了出来():
+    """`/api/login` 的账号在**请求体**里，不在 Authorization 头里。
+
+    不标的下场是**静默**的：页面上「用哪个账号发」在这条上点了没反应 ——
+    body 一个字不变，发出去永远是同一个账号，看着像这个开关坏了，
+    其实是这条接口压根不读那个头。（2026-09-24 用户实际撞到。）
+    """
+    by_path = {(e["method"], e["path"]): e for e in catalog.ENDPOINTS}
+    assert by_path[("POST", "/api/login")].get("bodyAccount") is True
+    flagged = sorted(e["path"] for e in catalog.ENDPOINTS if e.get("bodyAccount"))
+    assert flagged == ["/api/login"], "只有登录那条是这样的，别的标了就是标错了"
+
+    src = FRONTEND.read_text(encoding="utf-8")
+    assert "ep.bodyAccount" in src, "页面没读这个标记 —— 标了等于没标"
+
+
+def test_复制的curl带真token():
+    """占位符 `Bearer <token>` 粘到终端里必然 401 —— 而 401 正是这个被测系统
+    的正常返回之一，于是分不清「自己没换 token」和「接口在挡人」。"""
+    src = FRONTEND.read_text(encoding="utf-8")
+    assert "Authorization: Bearer <token>" not in src, "curl 又写回占位符了"
+    assert "await getToken(headerIdentity)" in src, "curl 没去换真 token"
+
+
+# ───── 请求详情 ─────
+
+def test_请求日志记全了详情页要用的字段():
+    """详情抽屉照 Mock 页那份排的，少记一个字段就是页面上一栏空白，
+    而空白看着像「这次请求真的没带这东西」，不像「我们没记」。"""
+    mgr = demo_shop_manager
+    before = len(mgr.logs)
+    mgr._log("POST", "/api/orders", 201, 12.3, "admin", '{"a":1}', '{"b":2}',
+             query="k=v", req_headers={"authorization": "Bearer real-token"},
+             resp_headers={"content-type": "application/json"},
+             ip="127.0.0.1", user_agent="ua", content_type="application/json",
+             resp_bytes=7)
+    try:
+        rec = mgr.logs[0]
+        for k in ("ts", "method", "path", "query", "status", "durationMs", "actor",
+                  "requestHeaders", "responseHeaders", "ip", "userAgent",
+                  "contentType", "respBytes", "requestBody", "responseSnippet"):
+            assert k in rec, f"日志少记了 {k}"
+        # 不打码是故意的：账号密码就印在页面「怎么用」里，打码挡不住任何人，
+        # 却会挡住这条日志最有用的那件事 —— 这次到底带没带 token、带的是谁的。
+        assert rec["requestHeaders"]["authorization"] == "Bearer real-token"
+    finally:
+        mgr.logs.popleft()
+    assert len(mgr.logs) == before
+
+
+def test_请求日志不给一键重放():
+    """Mock 那边「重放」是安全的 —— 它只是让 mock 再答一次。
+    这边是**真系统**：重放一条 DELETE 就是真删一单，而人点的时候以为只是在看日志。
+    所以这里只「填回测试页」，发不发由人自己按。
+    """
+    src = FRONTEND.read_text(encoding="utf-8")
+    assert "填回测试页" in src
+    # 注释里当然会提到「重放」（那里写的正是为什么不做），所以先把注释剥掉再查
+    code = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("//"))
+    assert "重放" not in code, "真系统上不给一键重放 —— 那是在替人做删数据的决定"
+
+
+# ── 导出 OpenAPI ──
+
+def _real_route_map():
+    """真实路由 → (函数签名, status_code)，用来跟清单对账。"""
+    import inspect
+    app = demo_shop_manager._create_app()
+    out = {}
+    for r in app.routes:
+        path, methods = getattr(r, "path", None), getattr(r, "methods", None)
+        if not path or not methods:
+            continue
+        for m in methods:
+            if m not in ("HEAD", "OPTIONS"):
+                out[(m, path)] = (inspect.signature(r.endpoint), getattr(r, "status_code", None))
+    return out
+
+
+def test_必填和类型是跟真实函数签名对过的():
+    """导出的文件里必填标错，对方系统照着生成的调用就必然 422 —— 而那边只会显示
+    「接口返回 422」，看着像接口坏了。所以必填不能手写一遍完事，得跟真实签名对账：
+    **函数参数没有默认值 = 必填**。
+    """
+    real = _real_route_map()
+    for e in catalog.ENDPOINTS:
+        sig, _ = real[(e["method"], e["path"])]
+        for p in e["pathParams"]:
+            assert p.get("required") is True, f"{e['path']} 的路径参数 {p['name']} 必须标必填"
+            assert p.get("type"), f"{e['path']} 的路径参数 {p['name']} 没写类型"
+        for q in e.get("query") or []:
+            param = sig.parameters.get(q["name"])
+            assert param is not None, f"{e['path']} 清单里有个查询参数 {q['name']}，真实签名里没有"
+            real_required = param.default is param.empty
+            assert bool(q.get("required")) == real_required, \
+                f"{e['path']} 的 {q['name']}：清单说{'必填' if q.get('required') else '选填'}，真实签名相反"
+            assert q.get("type"), f"{e['path']} 的查询参数 {q['name']} 没写类型"
+
+
+def test_成功状态码是跟真实路由对过的():
+    """下单成功是 201 不是 200。导出的文件里写 200，对方系统就会把真正的成功当成失败。"""
+    real = _real_route_map()
+    for e in catalog.ENDPOINTS:
+        _, code = real[(e["method"], e["path"])]
+        assert e.get("successStatus", 200) == (code or 200), \
+            f"{e['method']} {e['path']}：清单写 {e.get('successStatus', 200)}，真实路由是 {code}"
+
+
+def test_请求体schema和样例对得上():
+    """schema 说必填、样例里却没有这个字段 —— 页面上照样例点「发送」会被自己的必填校验
+    拦下来，看着像页面坏了。有请求体的接口必须两样都有。
+    """
+    for e in catalog.ENDPOINTS:
+        schema, body = e.get("bodySchema"), e.get("body")
+        assert bool(schema) == bool(body), f"{e['path']}：bodySchema 和 body 样例必须同时有或同时没有"
+        if not schema:
+            continue
+        props = schema.get("properties") or {}
+        sample = json.loads(body)
+        for f in schema.get("required", []):
+            assert f in props, f"{e['path']} 的必填字段 {f} 没写进 properties"
+            assert f in sample, f"{e['path']} 的必填字段 {f} 样例里没给"
+        for f in props:
+            assert props[f].get("type"), f"{e['path']} 的 {f} 没写类型"
+            assert props[f].get("description"), f"{e['path']} 的 {f} 没写说明"
+
+
+def test_导出的openapi是份能用的文档():
+    """导出去是给别的系统导入的，所以这里按导入方会检查的点验：
+    版本、服务器地址、鉴权声明、operationId 唯一、路径参数一律 required。
+    """
+    from app.services.demo_shop_openapi import build_openapi
+    doc = build_openapi("http://localhost:29000")
+    assert doc["openapi"].startswith("3.0")
+    assert doc["servers"][0]["url"] == "http://localhost:29000"
+    assert doc["components"]["securitySchemes"]["bearerAuth"]["scheme"] == "bearer"
+
+    ops = [op for item in doc["paths"].values() for op in item.values()]
+    assert len(ops) == len(catalog.ENDPOINTS), "导出的操作条数和清单对不上"
+    ids = [op["operationId"] for op in ops]
+    assert len(ids) == len(set(ids)), "operationId 重了，导入方会互相覆盖"
+    for op in ops:
+        assert op["summary"] and op["description"], f"{op['operationId']} 少了名字或说明"
+        assert op["responses"], f"{op['operationId']} 一条返回都没写"
+        for p in op.get("parameters", []):
+            if p["in"] == "path":
+                assert p["required"] is True, "路径参数写成选填是非法文档，有的导入工具会整份拒收"
+
+
+def test_要登录的接口导出时带了鉴权声明():
+    """漏了这个，对方系统生成的调用不带 token，全是 401，而那边会以为是账号不对。"""
+    from app.services.demo_shop_openapi import build_openapi
+    doc = build_openapi("http://x")
+    for e in catalog.ENDPOINTS:
+        op = doc["paths"][e["path"]][e["method"].lower()]
+        if e["auth"] == "none":
+            assert "security" not in op, f"{e['path']} 不用登录，不该带鉴权声明"
+        else:
+            assert op["security"] == [{"bearerAuth": []}], f"{e['path']} 漏了鉴权声明"
+
+
+def test_只导勾选的那几条():
+    from app.services.demo_shop_openapi import build_openapi
+    doc = build_openapi("http://x", ["order_create", "order_detail"])
+    ids = {op["operationId"] for item in doc["paths"].values() for op in item.values()}
+    assert ids == {"order_create", "order_detail"}
+
+
+def test_导出的错误码没被同状态码顶掉():
+    """下单的 409 有两种（缺货 / 已下架）。OpenAPI 里一个状态码只能有一条返回，
+    合并时后写的顶掉先写的是不报错的，只是少了一半信息 —— 在这儿拦。
+    """
+    from app.services.demo_shop_openapi import build_openapi
+    doc = build_openapi("http://x", ["order_create"])
+    desc = doc["paths"]["/api/orders"]["post"]["responses"]["409"]["description"]
+    assert "OUT_OF_STOCK" in desc and "PRODUCT_INACTIVE" in desc
+
+
+def test_页面上的导出按钮接到后端那份():
+    """前端**不许**自己拼一份 OpenAPI。拼了就是两份真相，改了清单只有一边跟着变。"""
+    jsx = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages"
+           / "demo-shop" / "DemoShop.jsx").read_text(encoding="utf-8")
+    assert "/demo-shop/openapi.json" in jsx, "导出按钮没接后端那份文档"
+    assert '"openapi": "3.0' not in jsx and "openapi: '3.0" not in jsx, \
+        "前端自己拼了一份 OpenAPI —— 只能有一份出处"
+    # 走 api.download 才带得上平台登录态；window.open 不带，会 401
+    assert "api.download(`/demo-shop/openapi.json" in jsx
