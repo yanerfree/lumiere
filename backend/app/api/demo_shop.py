@@ -16,8 +16,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps.db import get_db
+from app.services import demo_shop_catalog as catalog
 from app.services import demo_shop_service as svc
-from app.services.demo_shop_manager import ACCOUNTS, demo_shop_manager as mgr
+from app.services.demo_shop_manager import (
+    ACCOUNTS, UNLOGGED_PATHS, demo_shop_manager as mgr,
+)
 from app.services.demo_shop_service import DemoShopError
 
 router = APIRouter(prefix="/api/demo-shop", tags=["demo-shop"])
@@ -56,6 +59,43 @@ class ProductUpdate(BaseModel):
 
 class ServiceConfig(BaseModel):
     port: int | None = Field(None, ge=1024, le=65535)
+
+
+# ── 接口清单 ──
+
+@router.get("/endpoints")
+async def list_endpoints():
+    """页面左边那一列：这个被测系统真实开放的每一条接口。
+
+    出处是 `demo_shop_catalog.ENDPOINTS`，有封样测试拿它和真实注册的路由做双向差集 ——
+    清单和实际对不上是**不报错**的那类错（页面上多一条调不通的、或少一条没人知道的）。
+    """
+    # 状态机是**算出来的**，不是在前端另抄一份：抄了就会悄悄长歪
+    # （页面少一条 → 那个动作看着像没做；多一条 → 点下去 409，看着像后端坏了）。
+    transitions = [
+        {"action": a, "actionLabel": svc.ACTION_LABELS.get(a, a),
+         "from": s, "fromLabel": svc.STATUS_LABELS.get(s, s),
+         "to": t, "toLabel": svc.STATUS_LABELS.get(t, t)}
+        for a, table in svc.ALLOWED_TRANSITIONS.items()
+        for s, t in table.items()
+    ]
+    return {
+        "data": catalog.ENDPOINTS,
+        "groupOrder": catalog.GROUP_ORDER,
+        "accounts": [
+            {"username": u, "password": a["password"], "role": a["role"],
+             "displayName": a["displayName"]}
+            for u, a in ACCOUNTS.items()
+        ],
+        "rules": {
+            "statusLabels": svc.STATUS_LABELS,
+            "transitions": transitions,
+            "maxQuantity": svc.MAX_QUANTITY,
+            # 这几条故意不记日志。不告诉页面的话，「请求日志」空着会被当成
+            # 「还没调过」，然后有人去查一个根本不存在的 bug。
+            "unloggedPaths": list(UNLOGGED_PATHS),
+        },
+    }
 
 
 # ── 服务控制 ──

@@ -10,81 +10,47 @@
 （抛了就是 500 而不是 401）、迁移链不能断。
 """
 import base64
+import json
 import re
 import time
 from pathlib import Path
 
 import pytest
 
+from app.services import demo_shop_catalog as catalog
 from app.services import demo_shop_service as svc
 from app.services.demo_shop_manager import (
-    ACCOUNTS, DEFAULT_PORT, _sign, make_token, parse_token,
+    ACCOUNTS, DEFAULT_PORT, UNLOGGED_PATHS, _sign, demo_shop_manager,
+    make_token, parse_token,
 )
 
 FRONTEND = Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "demo-shop" / "DemoShop.jsx"
 
 
-def _js_object(source: str, name: str) -> str:
-    """从 jsx 里抠出 `const <name> = { ... }` 那一段（按花括号配对切，不用正则贪心）。"""
-    start = source.index(f"const {name} = {{") + len(f"const {name} = ")
-    depth = 0
-    for i in range(start, len(source)):
-        if source[i] == "{":
-            depth += 1
-        elif source[i] == "}":
-            depth -= 1
-            if depth == 0:
-                return source[start:i + 1]
-    raise AssertionError(f"{name} 在 {FRONTEND.name} 里没找到")
+# ───── 规则只有一份：页面不许自己抄一张表 ─────
 
+def test_状态流转表是后端算出来发给页面的():
+    """页面上那张「哪一步能点什么」是接口发过去的，不是前端另抄一份。
 
-def _keys(block: str) -> list[str]:
-    """取一层花括号内的顶层键名。"""
-    out, depth = [], 0
-    for line in block.splitlines():
-        stripped = line.strip()
-        if depth == 1:
-            m = re.match(r"^([A-Za-z_][\w]*)\s*:", stripped)
-            if m:
-                out.append(m.group(1))
-        depth += line.count("{") - line.count("}")
-    return out
+    抄一份的下场是**静默**的：抄少一条 → 那个动作看着像没做；抄多一条 → 点下去 409，
+    看着像后端坏了。所以这里盯着两件事：算出来的表和后端规则逐条相等，
+    以及前端**没有**偷偷留一张自己的表。
+    """
+    from app.api.demo_shop import list_endpoints
+    import asyncio
 
+    payload = asyncio.run(list_endpoints())
+    got = {(t["action"], t["from"], t["to"]) for t in payload["rules"]["transitions"]}
+    want = {(a, s, t) for a, table in svc.ALLOWED_TRANSITIONS.items()
+            for s, t in table.items()}
+    assert got == want, "发给页面的流转表和后端规则对不上"
+    assert payload["rules"]["statusLabels"] == svc.STATUS_LABELS
+    assert payload["rules"]["maxQuantity"] == svc.MAX_QUANTITY
 
-# ───── 前后端两张表必须一致 ─────
-
-def test_页面上的状态标签和后端一字不差():
     src = FRONTEND.read_text(encoding="utf-8")
-    block = _js_object(src, "STATUS_META")
-    assert _keys(block) == svc.STATUSES, "前端 STATUS_META 的状态和后端 STATUSES 对不上"
-    for status, label in svc.STATUS_LABELS.items():
-        assert f"'{label}'" in block, f"前端缺状态「{label}」（{status}）的中文"
-
-
-def test_页面上每个状态能点的按钮和后端允许的流转一致():
-    src = FRONTEND.read_text(encoding="utf-8")
-    block = _js_object(src, "NEXT_ACTIONS")
-    assert _keys(block) == svc.STATUSES, "前端 NEXT_ACTIONS 少列或多列了状态"
-
-    # 后端视角：每个状态实际允许哪几个动作
-    expect = {s: set() for s in svc.STATUSES}
-    for action, table in svc.ALLOWED_TRANSITIONS.items():
-        for src_status in table:
-            expect[src_status].add(action)
-
-    # 前端视角：每个状态那一格里出现的 key
-    actual = {}
-    for status in svc.STATUSES:
-        seg = block.split(f"{status}:", 1)[1]
-        seg = seg.split("],", 1)[0] if "]" in seg.split("\n}", 1)[0] else seg
-        actual[status] = set(re.findall(r"key:\s*'(\w+)'", seg.split("]")[0]))
-
-    assert actual == expect, f"按钮表对不上：页面 {actual} vs 后端 {expect}"
-
-
-def test_前端填数量的上限跟后端一致():
-    src = FRONTEND.read_text(encoding="utf-8")
-    assert f"max={{{svc.MAX_QUANTITY}}}" in src, "前端 InputNumber 的 max 和后端 MAX_QUANTITY 对不上"
+    for name in ("NEXT_ACTIONS", "STATUS_META", "ALLOWED_TRANSITIONS"):
+        assert f"const {name}" not in src, \
+            f"页面又自己抄了一张 {name} —— 规则只能有一份，从 /demo-shop/endpoints 拿"
 
 
 # ───── 端口 ─────
@@ -181,6 +147,72 @@ def test_路由挂在测试工具权限下():
     assert "app.include_router(demo_shop_router, dependencies=_TOOLS)" in main
 
 
+def _real_routes() -> set[tuple[str, str]]:
+    """真实跑起来的那个服务上注册了哪些 (方法, 路径)。"""
+    app = demo_shop_manager._create_app()
+    out: set[tuple[str, str]] = set()
+    for r in app.routes:
+        path = getattr(r, "path", None)
+        methods = getattr(r, "methods", None)
+        if not path or not methods or path in catalog.EXCLUDED_PATHS:
+            continue
+        for m in methods:
+            if m in ("HEAD", "OPTIONS"):
+                continue
+            out.add((m, path))
+    return out
+
+
+def test_接口清单和真实路由一条不差():
+    """页面左边那一列的唯一出处是 catalog，它和真实注册的路由必须双向相等。
+
+    对不上是**静默**的：清单多一条 → 页面上摆着一条永远 404 的接口；
+    清单少一条 → 那条接口谁也不知道它存在。两种都不报错，所以在这儿拦。
+    """
+    listed = {(e["method"], e["path"]) for e in catalog.ENDPOINTS}
+    real = _real_routes()
+    assert listed - real == set(), f"清单里有、服务上没有：{sorted(listed - real)}"
+    assert real - listed == set(), f"服务上有、清单里漏了：{sorted(real - listed)}"
+
+
+def test_接口清单每条都填全了():
+    keys = {"key", "method", "path", "group", "name", "summary",
+            "auth", "query", "pathParams", "body", "sampleResponse", "errors"}
+    seen: set[str] = set()
+    for e in catalog.ENDPOINTS:
+        assert keys <= set(e), f"{e.get('path')} 少字段：{sorted(keys - set(e))}"
+        assert e["auth"] in ("none", "user", "admin"), f"{e['path']} 的 auth 不是那三档"
+        assert e["key"] not in seen, f"key 重了：{e['key']}"
+        seen.add(e["key"])
+        assert e["group"] in catalog.GROUP_ORDER, f"{e['path']} 的分组不在排序表里"
+        # 路径里有 {x} 就必须在 pathParams 里给出样例值，否则页面上发出去是个字面量 {x}
+        holes = set(re.findall(r"\{(\w+)\}", e["path"]))
+        assert holes == {p["name"] for p in e["pathParams"]}, \
+            f"{e['path']} 的路径参数对不上：{holes}"
+        for p in e["pathParams"]:
+            assert p["sample"], f"{e['path']} 的 {p['name']} 没给样例值"
+
+
+def test_要登录的接口清单里都标了():
+    """auth 标错了，页面上「用哪个账号」那一栏就会给错默认值，而请求照发不误。"""
+    by_path = {(e["method"], e["path"]): e for e in catalog.ENDPOINTS}
+    assert by_path[("GET", "/health")]["auth"] == "none"
+    assert by_path[("POST", "/api/login")]["auth"] == "none"
+    for k in (("DELETE", "/api/orders/{order_no}"),
+              ("PATCH", "/api/products/{sku}"),
+              ("POST", "/api/admin/reset")):
+        assert by_path[k]["auth"] == "admin", f"{k} 应该是只有管理员能调"
+
+
+def test_清单里的样例body是合法json():
+    """页面把它直接塞进请求体输入框，写歪了用户点「发送」就是 422，还以为是接口坏了。"""
+    for e in catalog.ENDPOINTS:
+        for field in ("body", "sampleResponse"):
+            raw = e.get(field)
+            if raw:
+                json.loads(raw)
+
+
 def test_前端菜单和路由都接上了():
     app_jsx = FRONTEND.parents[2] / "App.jsx"
     src = app_jsx.read_text(encoding="utf-8")
@@ -188,3 +220,23 @@ def test_前端菜单和路由都接上了():
     assert 'path="/tools/demo-shop"' in src, "路由没接，点菜单会白屏"
     i18n = FRONTEND.parents[2] / "utils" / "i18n.jsx"
     assert i18n.read_text(encoding="utf-8").count("'menu.demoShop'") == 2, "中英文菜单名要各有一条"
+
+
+def test_不记日志的接口页面上会说明():
+    """`/health` 故意不进请求日志，这件事必须发给页面。
+
+    不发的下场：那一栏永远空着，看起来像「这条接口还没被调过」——
+    于是有人去查一个根本不存在的 bug。名单只能有一份，中间件和页面用同一个常量。
+    """
+    from app.api.demo_shop import list_endpoints
+    import asyncio
+
+    payload = asyncio.run(list_endpoints())
+    assert payload["rules"]["unloggedPaths"] == list(UNLOGGED_PATHS)
+    assert "/health" in UNLOGGED_PATHS
+
+    # 中间件必须用这个常量，不许再抄一份字面量
+    src = (Path(__file__).resolve().parents[1] / "app" / "services"
+           / "demo_shop_manager.py").read_text(encoding="utf-8")
+    assert "if request.url.path in UNLOGGED_PATHS:" in src, \
+        "中间件又写回字面量了 —— 改一处漏一处，页面上的说明就成了假话"

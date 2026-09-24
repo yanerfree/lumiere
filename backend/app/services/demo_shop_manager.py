@@ -40,6 +40,11 @@ _STATE_FILE = Path(__file__).resolve().parent.parent.parent / ".mock_state" / "d
 
 DEFAULT_PORT = 29000
 
+# 这几条不进请求日志：健康检查会被反复轮询，一条真实业务请求转眼就被它冲出屏幕。
+# ⚠ 这份名单要发给页面（见 `/api/demo-shop/endpoints`）—— 否则「请求日志」那一栏
+# 空着，看起来像「这条接口还没被调过」，而实际是调了、只是故意没记。
+UNLOGGED_PATHS = ("/health", "/openapi.json")
+
 # 内置账号。明文是故意的 —— 这是个给人练手的被测系统，账号要能直接写进用例里。
 # 真系统别这么干，这里就是要让「密码错了返回什么」「换个角色能不能删」测得出来。
 ACCOUNTS = {
@@ -208,7 +213,7 @@ class DemoShopManager:
                 body = await request.body()
             response = await call_next(request)
             ms = (time.perf_counter() - t0) * 1000
-            if request.url.path in ("/health", "/openapi.json"):
+            if request.url.path in UNLOGGED_PATHS:
                 return response
             # 响应体要先收完再原样发出去。不收的话日志里「返回了什么」永远是空的，
             # 而一栏永远空着的日志比没有这一栏更坏：它看起来像"这次真的没返回内容"。
