@@ -95,9 +95,18 @@ export default function DemoShop() {
       const r = await api.get('/demo-shop/endpoints')
       const list = r.data || []
       setEndpoints(list)
-      setGroupOrder(r.groupOrder || [])
+      const order = r.groupOrder || []
+      setGroupOrder(order)
       setRules(r.rules || null)
-      if (list.length && !selKey) setSelKey(list[0].key)
+      // 默认选中的必须是**左边那一列最上面那条**，不是数组里第一条 ——
+      // 数组第一条是 /health，它排在最后一组，于是页面一打开右边显示着它、
+      // 左边却没有一条是高亮的，看着像"什么都没选中"。
+      if (list.length && !selKey) {
+        const first = order.length
+          ? (order.map(g => list.find(e => e.group === g)).find(Boolean) || list[0])
+          : list[0]
+        setSelKey(first.key)
+      }
     } catch { message.error('接口清单读取失败') }
   }
   const fetchStatus = async () => {
