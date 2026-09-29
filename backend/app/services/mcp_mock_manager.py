@@ -1,269 +1,205 @@
-"""MCP Mock 服务管理器 — 管理独立大端口 28300 的 MCP Mock 服务（避开 ELK 等常用端口段）"""
+"""MCP Mock 服务管理器 —— **一个端口（28300）上挂 N 个 MCP 服务**。
+
+地址形状：`http://<host>:28300/<slug>/mcp`
+
+为什么不是一服务一端口：28xxx 那一段（28100~28900）在 `app/main.py` 的 lifespan 里
+已经全部绑掉了，再要端口就得往外扩段，而扩段是部署那边的事（防火墙、容器端口映射）。
+路径前缀不占新端口，加服务不用动任何部署配置。
+
+跟老版本（单服务 + JSON 文件）比，三件事变了：
+
+1. **工具参数是真有类型的。** 老实现把每个参数 `exec` 成 `str = ""`，
+   于是页面上标的 integer/array **纯属装饰** —— 客户端 `tools/list` 拿到的
+   永远是一串可选字符串，测不出「传错类型对方认不认」。
+   现在用自定义 `Tool` 子类，`parameters` 直接就是我们自己拼的 JSON Schema。
+2. **认证在服务级。** 不认证 / Bearer Token / 自定义 API Key 请求头，
+   由一层 ASGI 网关在进 MCP 之前拦。
+3. **入参校验有三档松紧**（严格/宽松/不校验），我们自己校验 ——
+   fastmcp 只对「从函数签名推出来的」工具自动校验，我们这种它不管，
+   这正好，否则「宽松」「不校验」两档根本做不出来。
+
+⚠ 工具清单是**建 app 时**一次性注册进 FastMCP 的，改了数据库不会影响已经跑着的实例，
+   所以增删工具/改服务设置都要 `reload()`（停+起）。但**响应内容是每次调用现查库的**，
+   改返回值不用重载 —— 那是最常改的东西，每改一次断一次连太贵。
+"""
 from __future__ import annotations
 
 import asyncio
-import copy
+import contextlib
 import json
 import logging
 import time
 import uuid
-from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger("mcp_mock")
 
 _STATE_FILE = Path(__file__).resolve().parent.parent.parent / ".mock_state" / "mcp_mock.json"
-_TOOLS_FILE = Path(__file__).resolve().parent.parent.parent / ".mock_state" / "mcp_mock_tools.json"
 
-# ── 默认工具 ──────────────────────────────────
+DEFAULT_ERROR_MESSAGE = "Mock error: tool call failed"
 
-DEFAULT_TOOLS = [
-    {
-        "name": "lum_list_cases",
-        "description": "列出测试用例",
-        "params": {"branch_id": "string", "page": "integer", "page_size": "integer", "keyword": "string", "folder_id": "string", "priority": "string", "case_type": "string"},
-        "mode": "success",
-        "enabled": True,
-        "customData": None,
-        "customIsError": False,
-        "successData": {
-            "cases": [
-                {"id": "mock-001", "caseCode": "TC-DEMO-00001", "title": "用户登录-正常流程", "type": "api", "priority": "P0"},
-                {"id": "mock-002", "caseCode": "TC-DEMO-00002", "title": "用户登录-密码错误", "type": "api", "priority": "P1"},
+
+def _transport_arg(transport: str) -> str:
+    """数据库里存的传输名 → fastmcp `http_app(transport=)` 认的值。"""
+    return "sse" if transport == "sse" else "http"
+
+
+class _AuthGate:
+    """服务级认证网关 —— 在请求进 MCP 之前拦一道。
+
+    ⚠ 认证失败**必须**是 401 而不是 403：MCP 客户端（以及 OAuth 那一套）看的是 401
+      才会去补认证头，403 会被当成「认证对了但没权限」，于是客户端不会重试，
+      人看到的现象是「配了 token 也连不上」。
+    """
+
+    def __init__(self, app, snapshot: dict):
+        self.app = app
+        self.snap = snapshot  # {"auth_type", "auth_config", "name"}
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            return await self.app(scope, receive, send)
+        why = self._check(scope)
+        if why is None:
+            return await self.app(scope, receive, send)
+        body = json.dumps({"error": "unauthorized", "message": why}, ensure_ascii=False).encode()
+        await send({
+            "type": "http.response.start",
+            "status": 401,
+            "headers": [
+                (b"content-type", b"application/json; charset=utf-8"),
+                (b"content-length", str(len(body)).encode()),
+                (b"www-authenticate", b'Bearer realm="lumiere-mcp-mock"'),
             ],
-            "total": 2, "page": 1, "pageSize": 50,
-        },
-    },
-    {
-        "name": "lum_get_case",
-        "description": "获取用例详情",
-        "params": {"case_id": "string"},
-        "mode": "success",
-        "enabled": True,
-        "customData": None,
-        "customIsError": False,
-        "successData": {"id": "mock-001", "caseCode": "TC-DEMO-00001", "title": "用户登录-正常流程", "type": "api", "priority": "P0", "steps": [{"action": "POST /api/auth/login", "expected": "返回 200"}]},
-    },
-    {
-        "name": "lum_create_case",
-        "description": "创建测试用例",
-        "params": {"branch_id": "string", "title": "string", "module": "string", "case_type": "string", "priority": "string", "preconditions": "string", "steps": "array", "expected_result": "string"},
-        "mode": "success",
-        "enabled": True,
-        "customData": None,
-        "customIsError": False,
-        "successData": {"id": "mock-new", "caseCode": "TC-MOCK-00001", "title": "(mock) 新建的用例", "type": "api", "priority": "P2"},
-    },
-    {
-        "name": "lum_get_folder_tree",
-        "description": "获取文件夹树",
-        "params": {"branch_id": "string"},
-        "mode": "success",
-        "enabled": True,
-        "customData": None,
-        "customIsError": False,
-        "successData": [
-            {"id": "folder-1", "name": "用户管理", "depth": 1, "caseCount": 5, "children": [{"id": "folder-2", "name": "登录", "depth": 2, "caseCount": 3, "children": []}]},
-            {"id": "folder-3", "name": "项目管理", "depth": 1, "caseCount": 8, "children": []},
-        ],
-    },
-    {
-        "name": "lum_list_api_tree",
-        "description": "获取 API 接口树",
-        "params": {"project_id": "string"},
-        "mode": "success",
-        "enabled": True,
-        "customData": None,
-        "customIsError": False,
-        "successData": [
-            {"id": "api-1", "type": "folder", "name": "用户模块", "method": None, "url": None},
-            {"id": "api-2", "type": "endpoint", "name": "用户登录", "method": "POST", "url": "/api/auth/login"},
-            {"id": "api-3", "type": "endpoint", "name": "获取用户列表", "method": "GET", "url": "/api/users"},
-        ],
-    },
-    {
-        "name": "lum_get_api_node",
-        "description": "获取 API 节点详情",
-        "params": {"node_id": "string"},
-        "mode": "success",
-        "enabled": True,
-        "customData": None,
-        "customIsError": False,
-        "successData": {"id": "api-2", "type": "endpoint", "name": "用户登录", "method": "POST", "url": "/api/auth/login", "headers": {"Content-Type": "application/json"}, "body": {"username": "string", "password": "string"}},
-    },
-    {
-        "name": "lum_list_environments",
-        "description": "列出测试环境",
-        "params": {},
-        "mode": "success",
-        "enabled": True,
-        "customData": None,
-        "customIsError": False,
-        "successData": [{"id": "env-1", "name": "development", "description": "开发环境"}, {"id": "env-2", "name": "staging", "description": "预发布环境"}],
-    },
-    {
-        "name": "lum_get_merged_variables",
-        "description": "获取合并变量",
-        "params": {"env_id": "string"},
-        "mode": "success",
-        "enabled": True,
-        "customData": None,
-        "customIsError": False,
-        "successData": {"BASE_URL": "http://localhost:8000", "AUTH_TOKEN": "mock-jwt-xxx", "DB_HOST": "localhost"},
-    },
-]
+        })
+        await send({"type": "http.response.body", "body": body})
 
-DEFAULT_ERROR = {"error": "Mock error: tool call failed", "code": "MOCK_ERROR"}
+    def _check(self, scope) -> str | None:
+        auth_type = self.snap.get("auth_type") or "none"
+        if auth_type == "none":
+            return None
+        cfg = self.snap.get("auth_config") or {}
+        headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+        if auth_type == "bearer":
+            want = str(cfg.get("token") or "")
+            got = headers.get("authorization", "")
+            if not got:
+                return "缺少 Authorization 请求头，这个服务要求 Bearer Token"
+            prefix, _, value = got.partition(" ")
+            if prefix.lower() != "bearer":
+                return "Authorization 请求头要写成 `Bearer <token>`"
+            if not want or value.strip() != want:
+                return "Bearer Token 不对"
+            return None
+        if auth_type == "apikey":
+            header_name = str(cfg.get("headerName") or "X-API-Key")
+            want = str(cfg.get("apiKey") or "")
+            got = headers.get(header_name.lower())
+            if not got:
+                return f"缺少 {header_name} 请求头，这个服务要求 API Key"
+            if not want or got.strip() != want:
+                return f"{header_name} 的值不对"
+            return None
+        return None
+
+
+def _build_tool_class():
+    """延迟建类 —— fastmcp 的 import 有点重，模块导入时别拖着。"""
+    from fastmcp.exceptions import ToolError
+    from fastmcp.tools.tool import Tool, ToolResult
+
+    class MockTool(Tool):
+        """一个 Mock 工具。参数 schema 是我们自己拼的，执行时现查库。"""
+
+        server_id: Any = None
+        tool_id: Any = None
+        server_slug: str = ""
+        validate_mode: str = "strict"
+        param_defs: Any = None
+
+        async def run(self, arguments: dict) -> ToolResult:
+            from app.services.mcp_mock_validate import validate_arguments
+
+            t0 = time.perf_counter()
+            errors, cleaned = validate_arguments(self.param_defs, arguments, self.validate_mode)
+            if errors:
+                detail = "；".join(errors)
+                await mcp_mock_server.record_call(
+                    server_id=self.server_id, tool_name=self.name, arguments=arguments,
+                    response={"error": detail}, source="mock-server", mode="validate",
+                    is_error=True, t0=t0, reject_kind="validate", reject_detail=detail,
+                )
+                raise ToolError(f"参数校验不通过：{detail}")
+
+            cfg = await mcp_mock_server.fetch_tool_runtime(self.tool_id)
+            if cfg is None:
+                raise ToolError(f"工具 {self.name} 已经被删掉了，请重新加载工具列表")
+
+            if cfg["delay_ms"] > 0:
+                await asyncio.sleep(min(cfg["delay_ms"], 60000) / 1000)
+
+            payload, is_error, err_msg = _compute(cfg)
+            await mcp_mock_server.record_call(
+                server_id=self.server_id, tool_name=self.name, arguments=cleaned,
+                response=payload if not is_error else {"error": err_msg},
+                source="mock-server", mode=cfg["mode"], is_error=is_error, t0=t0,
+            )
+            if is_error:
+                raise ToolError(err_msg)
+            structured = payload if isinstance(payload, dict) else {"result": payload}
+            return ToolResult(
+                content=json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+                structured_content=structured,
+            )
+
+    return MockTool
+
+
+def _compute(cfg: dict) -> tuple[Any, bool, str]:
+    """按 mode 算这次该返回什么。返回 (数据, 是不是错误, 错误文案)。"""
+    mode = cfg.get("mode") or "success"
+    if mode == "error":
+        return None, True, cfg.get("error_message") or DEFAULT_ERROR_MESSAGE
+    if mode == "custom":
+        data = cfg.get("custom_data")
+        if data is None:
+            data = cfg.get("success_data")
+        if data is None:
+            data = {"result": "ok"}
+        if cfg.get("custom_is_error"):
+            msg = data.get("error", json.dumps(data, ensure_ascii=False)) if isinstance(data, dict) else str(data)
+            return None, True, str(msg)
+        return data, False, ""
+    data = cfg.get("success_data")
+    return ({"result": "ok"} if data is None else data), False, ""
 
 
 class McpMockServerManager:
     def __init__(self):
         self.port: int = 28300
         self.host: str = "0.0.0.0"
-        self.transport: str = "streamable-http"
         self._server = None
         self._task: asyncio.Task | None = None
-        self._tools: list[dict] = []
-        self._call_logs: deque[dict] = deque(maxlen=500)
-        self._load_tools()
+        # 上次起服务时的服务快照，页面上的地址列表照它显示
+        self._mounted: list[dict] = []
 
-    # ── 工具管理 ──
-
-    def _load_tools(self):
-        try:
-            if _TOOLS_FILE.exists():
-                self._tools = json.loads(_TOOLS_FILE.read_text())
-                return
-        except Exception:
-            pass
-        self._tools = copy.deepcopy(DEFAULT_TOOLS)
-        self._save_tools()
-
-    def _save_tools(self):
-        try:
-            _TOOLS_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _TOOLS_FILE.write_text(json.dumps(self._tools, ensure_ascii=False, indent=2))
-        except Exception:
-            pass
-
-    def get_tools(self) -> list[dict]:
-        return self._tools
-
-    def get_tool(self, name: str) -> dict | None:
-        return next((t for t in self._tools if t["name"] == name), None)
-
-    def add_tool(self, tool_data: dict) -> dict:
-        tool = {
-            "name": tool_data["name"],
-            "description": tool_data.get("description", ""),
-            # 不填参数时传进来的是 None，得落成 {} —— 否则起服务时迭代 None 会炸
-            "params": tool_data.get("params") or {},
-            "mode": "success",
-            "enabled": True,
-            "locked": False,
-            "customData": None,
-            "customIsError": False,
-            "successData": tool_data.get("successData", {"result": "ok"}),
-        }
-        self._tools.append(tool)
-        self._save_tools()
-        return tool
-
-    def update_tool(self, name: str, data: dict) -> dict | None:
-        tool = self.get_tool(name)
-        if not tool:
-            return None
-        for k in ("description", "mode", "enabled", "locked", "customData", "customIsError", "successData", "params"):
-            if k in data:
-                tool[k] = data[k]
-        self._save_tools()
-        return tool
-
-    def toggle_lock(self, name: str) -> dict | None:
-        tool = self.get_tool(name)
-        if not tool:
-            return None
-        # 老的 mcp_mock_tools.json 里没有 locked 键，取默认值再翻转
-        tool["locked"] = not tool.get("locked", False)
-        self._save_tools()
-        return tool
-
-    def delete_tool(self, name: str) -> bool:
-        idx = next((i for i, t in enumerate(self._tools) if t["name"] == name), None)
-        if idx is None:
-            return False
-        self._tools.pop(idx)
-        self._save_tools()
-        return True
-
-    # ── Mock 响应 ──
-
-    def compute_response(self, tool_name: str):
-        tool = self.get_tool(tool_name)
-        if not tool:
-            return None
-        mode = tool["mode"]
-        if mode == "success":
-            return tool.get("successData", {"result": "ok"})
-        elif mode == "error":
-            return copy.deepcopy(DEFAULT_ERROR)
-        elif mode == "custom":
-            data = tool.get("customData") or tool.get("successData", {"result": "ok"})
-            if tool.get("customIsError"):
-                msg = data.get("error", str(data)) if isinstance(data, dict) else str(data)
-                return {"error": msg, "code": "MOCK_CUSTOM_ERROR"}
-            return data
-        return None
-
-    # ── 日志 ──
-
-    def log_call(self, tool_name: str, arguments: dict, response, source: str, mode: str, is_error: bool, t0: float):
-        elapsed = round((time.perf_counter() - t0) * 1000, 1)
-        resp_str = json.dumps(response, ensure_ascii=False, default=str)
-        self._call_logs.appendleft({
-            "id": str(uuid.uuid4())[:8],
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "tool": tool_name,
-            "arguments": arguments,
-            "response": resp_str[:5000],
-            "source": source,
-            "mode": mode,
-            "isError": is_error,
-            "elapsedMs": elapsed,
-        })
-
-    def get_logs(self, tool: str | None = None, status: str | None = None, limit: int = 50, offset: int = 0):
-        logs = list(self._call_logs)
-        if tool:
-            logs = [l for l in logs if l["tool"] == tool]
-        if status == "ok":
-            logs = [l for l in logs if not l["isError"]]
-        elif status == "error":
-            logs = [l for l in logs if l["isError"]]
-        return logs[offset:offset + limit], len(logs)
-
-    def clear_logs(self) -> int:
-        count = len(self._call_logs)
-        self._call_logs.clear()
-        return count
-
-    # ── 服务管理 ──
+    # ── 状态 ──
 
     def _save_state(self, running: bool):
         try:
             _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-            _STATE_FILE.write_text(json.dumps({"running": running, "port": self.port, "transport": self.transport}))
-        except Exception:
+            _STATE_FILE.write_text(json.dumps({"running": running, "port": self.port}))
+        except Exception:  # noqa: BLE001
             pass
 
     def _load_state(self) -> bool:
         try:
             data = json.loads(_STATE_FILE.read_text())
-            self.transport = data.get("transport", "streamable-http")
             self.port = data.get("port", self.port)
             return data.get("running", False)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return False
 
     @property
@@ -275,16 +211,198 @@ class McpMockServerManager:
             self._server = None
             self._task = None
             return False
-        return getattr(self._server, 'started', False)
+        return getattr(self._server, "started", False)
+
+    @property
+    def mounted(self) -> list[dict]:
+        return self._mounted
+
+    def base_url(self, host: str | None = None) -> str:
+        return f"http://{host or 'localhost'}:{self.port}"
+
+    def url_for(self, slug: str, host: str | None = None) -> str:
+        return f"{self.base_url(host)}/{slug}/mcp"
+
+    # ── 调用时要用的数据（跑在 Mock 服务那个协程里）──
+
+    async def fetch_tool_runtime(self, tool_id) -> dict | None:
+        """现查这个工具的返回配置。改返回值不用重载，就靠这一下。"""
+        from app.deps.db import async_session_factory
+        from app.models.mcp_mock import McpMockTool
+
+        try:
+            async with async_session_factory() as session:
+                tool = await session.get(McpMockTool, tool_id)
+                if tool is None:
+                    return None
+                return {
+                    "mode": tool.mode,
+                    "success_data": tool.success_data,
+                    "custom_data": tool.custom_data,
+                    "custom_is_error": tool.custom_is_error,
+                    "error_message": tool.error_message,
+                    "delay_ms": tool.delay_ms or 0,
+                }
+        except Exception:  # noqa: BLE001
+            logger.exception("MCP Mock 读工具配置失败")
+            return None
+
+    async def record_call(
+        self, *, server_id, tool_name: str, arguments: dict | None, response: Any,
+        source: str, mode: str, is_error: bool, t0: float,
+        reject_kind: str | None = None, reject_detail: str | None = None,
+    ) -> None:
+        """写一条调用日志。**写失败绝不能把这次调用打挂** —— 日志是旁路。"""
+        from app.deps.db import async_session_factory
+        from app.services import mcp_mock_service as svc
+
+        elapsed = round((time.perf_counter() - t0) * 1000, 1)
+        try:
+            body = json.dumps(response, ensure_ascii=False, default=str)[:20000]
+        except Exception:  # noqa: BLE001
+            body = str(response)[:20000]
+        try:
+            async with async_session_factory() as session:
+                await svc.create_log(session, {
+                    "server_id": server_id,
+                    "tool_name": tool_name,
+                    "arguments": arguments if isinstance(arguments, dict) else {"_raw": str(arguments)},
+                    "response": body,
+                    "source": source,
+                    "mode": mode,
+                    "is_error": is_error,
+                    "reject_kind": reject_kind,
+                    "reject_detail": reject_detail,
+                    "elapsed_ms": elapsed,
+                    "timestamp": datetime.now(timezone.utc),
+                })
+                if server_id is not None and source == "mock-server":
+                    await svc.bump_call(session, server_id)
+                await svc.trim_logs(session)
+                await session.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("MCP Mock 写调用日志失败")
+
+    # ── 建 app ──
+
+    async def _snapshot(self) -> list[dict]:
+        """从库里读出「现在该挂哪些服务、每个服务有哪些工具」。"""
+        from app.deps.db import async_session_factory
+        from app.services import mcp_mock_service as svc
+        from app.services.mcp_mock_validate import normalize_params
+
+        out: list[dict] = []
+        async with async_session_factory() as session:
+            for s in await svc.list_servers(session):
+                if not s.enabled:
+                    continue
+                tools = [t for t in await svc.list_tools(session, s.id) if t.enabled]
+                out.append({
+                    "id": s.id,
+                    "slug": s.slug,
+                    "name": s.name,
+                    "instructions": s.instructions or "",
+                    "transport": s.transport,
+                    "auth_type": s.auth_type,
+                    "auth_config": s.auth_config,
+                    "validate_mode": s.validate_mode,
+                    "tools": [{
+                        "id": t.id,
+                        "name": t.name,
+                        "description": t.description or t.name,
+                        "params": normalize_params(t.params),
+                    } for t in tools],
+                })
+        return out
+
+    def _build_parent(self, snapshot: list[dict]):
+        from fastmcp import FastMCP
+        from starlette.applications import Starlette
+        from starlette.responses import JSONResponse
+        from starlette.routing import Mount, Route
+
+        MockTool = _build_tool_class()
+        from app.services.mcp_mock_validate import build_schema
+
+        children: list[Any] = []
+        routes: list[Any] = []
+        mounted: list[dict] = []
+
+        for snap in snapshot:
+            mcp = FastMCP(
+                name=snap["name"] or snap["slug"],
+                instructions=snap["instructions"] or f"Lumiere MCP Mock —— {snap['name']}",
+            )
+            for t in snap["tools"]:
+                try:
+                    mcp.add_tool(MockTool(
+                        name=t["name"],
+                        description=t["description"],
+                        parameters=build_schema(t["params"], snap["validate_mode"]),
+                        server_id=snap["id"],
+                        tool_id=t["id"],
+                        server_slug=snap["slug"],
+                        validate_mode=snap["validate_mode"],
+                        param_defs=t["params"],
+                    ))
+                except Exception:  # noqa: BLE001
+                    # **一个工具配坏了，代价应该是这一个用不了，不是整个服务起不来。**
+                    logger.exception("MCP Mock 工具 %s/%s 注册失败，跳过", snap["slug"], t["name"])
+
+            child = mcp.http_app(path="/mcp", transport=_transport_arg(snap["transport"]))
+            children.append(child)
+            routes.append(Mount(f"/{snap['slug']}", app=_AuthGate(child, snap)))
+            mounted.append({
+                "id": str(snap["id"]),
+                "slug": snap["slug"],
+                "name": snap["name"],
+                "transport": snap["transport"],
+                "authType": snap["auth_type"],
+                "validateMode": snap["validate_mode"],
+                "toolCount": len(snap["tools"]),
+                "path": f"/{snap['slug']}/mcp",
+            })
+
+        async def _index(_request):
+            return JSONResponse({
+                "service": "Lumiere MCP Mock",
+                "servers": [{
+                    "name": m["name"], "slug": m["slug"], "url": f"/{m['slug']}/mcp",
+                    "transport": m["transport"], "auth": m["authType"], "tools": m["toolCount"],
+                } for m in mounted],
+            })
+
+        routes.append(Route("/", _index))
+
+        @contextlib.asynccontextmanager
+        async def lifespan(_app):
+            # 每个子 MCP app 自己有 lifespan（会话管理器就在里面起）。
+            # 挂到父 Starlette 底下之后**父的 lifespan 不会自动跑子的** ——
+            # 少这一段的表现是：连接建得上，但 initialize 之后一调工具就挂，
+            # 报的是 "Task group is not initialized"，看着像 fastmcp 的 bug。
+            async with contextlib.AsyncExitStack() as stack:
+                for sub in children:
+                    await stack.enter_async_context(sub.router.lifespan_context(sub))
+                yield
+
+        self._mounted = mounted
+        return Starlette(routes=routes, lifespan=lifespan)
+
+    # ── 起停 ──
 
     async def start(self) -> None:
         if self.running:
             return
-        app = self._create_app()
+        snapshot = await self._snapshot()
+        app = self._build_parent(snapshot)
+
         import uvicorn
         config = uvicorn.Config(app, host=self.host, port=self.port, log_level="warning")
         server = uvicorn.Server(config)
-        from app.services._mock_server_util import guarded_serve
+        from app.services._mock_server_util import guarded_serve, unlatch_sse_shutdown
+        # 起之前再掰一次：上一轮停服留下的全局「要退出了」标志会让新服务的
+        # 每个 MCP 响应当场断流（细节见 unlatch_sse_shutdown 的注释）。
+        unlatch_sse_shutdown()
         task = asyncio.create_task(guarded_serve(server, "MCP Mock"))
         self._task = task
         task.add_done_callback(self._on_task_done)
@@ -297,19 +415,22 @@ class McpMockServerManager:
                 self._task = None
                 raise RuntimeError(f"MCP Mock 启动失败，端口 {self.port} 可能被占用")
             await asyncio.sleep(0.1)
-        logger.info("MCP Mock 服务已启动 %s:%d", self.host, self.port)
+        logger.info("MCP Mock 服务已启动 %s:%d，挂了 %d 个服务", self.host, self.port, len(snapshot))
         self._save_state(True)
 
     async def stop(self) -> None:
         if self._server is not None:
-            self._server.should_exit = True
+            dead = self._server
+            dead.should_exit = True
             if self._task:
-                try:
+                with contextlib.suppress(Exception):
                     await asyncio.wait_for(self._task, timeout=5)
-                except (asyncio.TimeoutError, Exception):
-                    pass
             self._server = None
             self._task = None
+            # 收尾必做：把 sse_starlette 那个进程级的「要退出了」开关掰回去，
+            # 否则**整个后端**（含 :18800 上的 MCP）的 SSE 响应从此全断。
+            from app.services._mock_server_util import unlatch_sse_shutdown
+            unlatch_sse_shutdown(dead)
             logger.info("MCP Mock 服务已停止")
             self._save_state(False)
 
@@ -325,20 +446,18 @@ class McpMockServerManager:
             return True
 
     async def reload(self) -> dict:
-        """工具增删改之后，让**已经跑着的**服务重新加载一遍。
+        """服务/工具清单改了之后，让**已经跑着的**服务重新加载一遍。
 
-        FastMCP 的工具是在 `_create_app()` 里一次性注册进去的，改 `self._tools`
-        不会影响已经跑起来的那个实例。实测：页面上加一个工具，对面 CC 的
-        `tools/list` 里根本没有 —— 人看到的现象是"工具建了但用不了"，
-        而页面没有任何地方提示要重启。
+        工具是在 `_build_parent()` 里一次性注册进 FastMCP 的，改库不会影响
+        已经跑起来的实例。实测过：页面上加一个工具，对面 CC 的 `tools/list` 里
+        根本没有 —— 人看到的现象是「工具建了但用不了」，而页面没有任何地方提示要重启。
 
         重载 = 停 + 起。**停完立刻起会撞上端口还没释放**（实测踩过：一次重载之后
-        服务再也没起来，页面显示已停止）。所以重试几次；真起不回来要如实报出去，
-        不能悄悄留下一个停掉的服务 —— 那比不重载更糟。
+        服务再也没起来，页面显示已停止）。所以重试几次；真起不回来要如实报出去。
 
         返回 {"reloaded": bool, "reloadError": str|None}。键名不叫 error —— Mock 这一族
         用 `{"error": "..."}` 表示**这次操作失败了**，而重载失败时改动其实已经存下了，
-        混用会让前端把"删成功了但没重载"报成"删除失败"。
+        混用会让前端把「删成功了但没重载」报成「删除失败」。
         """
         if not self.running:
             return {"reloaded": False, "reloadError": None}
@@ -369,61 +488,6 @@ class McpMockServerManager:
             logger.error("MCP Mock 服务异常退出: %s", exc)
         self._server = None
         self._task = None
-
-    def _create_app(self):
-        from fastmcp import FastMCP
-
-        mcp = FastMCP(
-            name="Lumiere-mock",
-            instructions="Lumiere MCP Mock Server — 返回可配置的模拟数据，用于 MCP 客户端联调测试。",
-        )
-
-        mgr = self
-
-        def _dispatch(tn):
-            t0 = time.perf_counter()
-            resp = mgr.compute_response(tn)
-            if resp is None:
-                resp = {"result": "ok"}
-            is_error = isinstance(resp, dict) and resp.get("code") in ("MOCK_ERROR", "MOCK_CUSTOM_ERROR")
-            tool = mgr.get_tool(tn)
-            mode = tool["mode"] if tool else "success"
-            mgr.log_call(tn, {}, resp, "mock-server", mode, is_error, t0)
-            if is_error:
-                raise RuntimeError(resp.get("error", "Mock error"))
-            return resp
-
-        import keyword
-        for tool_cfg in self._tools:
-            if not tool_cfg.get("enabled", True):
-                continue
-            tool_name = tool_cfg["name"]
-            tool_desc = f"[Mock] {tool_cfg.get('description', tool_name)}"
-            # `.get("params", {})` 不够：建工具时不填参数会**把 params 存成 None**
-            # （键在、值是 None，默认值用不上），迭代 None 直接 TypeError，
-            # 于是整个 MCP Mock 再也起不来 —— 页面上只显示"已停止"，没人知道为什么。
-            # 实测踩过：建一个不带参数的工具，服务就此永久起不来。
-            tool_params = tool_cfg.get("params") or {}
-
-            # 安全：函数 def 名/参数名只允许合法标识符（非法则降级为占位名/剔除），
-            # 避免带连字符等的工具名产生 SyntaxError 把整个 MCP Mock 启动永久打死，
-            # 也杜绝代码注入；真实工具名始终经 mcp.tool(name=) 传入、经 ns 传给 _dispatch。
-            safe_name = tool_name if isinstance(tool_name, str) and tool_name.isidentifier() else "_mock_tool"
-            valid_params = [k for k in tool_params if isinstance(k, str) and k.isidentifier() and not keyword.iskeyword(k)]
-            param_str = ", ".join(f'{k}: str = ""' for k in valid_params)
-            func_code = f"async def {safe_name}({param_str}):\n    return _dispatch(_tn)\n"
-            ns = {"_dispatch": _dispatch, "_tn": tool_name}
-            try:
-                exec(func_code, ns)
-                fn = ns[safe_name]
-                fn.__doc__ = tool_desc
-                mcp.tool(name=tool_name, description=tool_desc)(fn)
-            except Exception:  # noqa: BLE001
-                # 上面已经把已知的两种脏数据挡掉了，但兜底仍然要有：
-                # **一个工具配坏了，代价应该是这一个用不了，不是整个 Mock 服务起不来**。
-                logger.exception("MCP Mock 工具 %s 注册失败，跳过它继续起服务", tool_name)
-
-        return mcp.http_app(path="/", transport=self.transport)
 
 
 mcp_mock_server = McpMockServerManager()

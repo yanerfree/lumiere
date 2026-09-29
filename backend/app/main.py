@@ -265,6 +265,13 @@ async def _restore_mock_services():
             await proxy_probe.start()
     except Exception as e:
         _startup_logger.warning("代理观测监听器自动恢复失败: %s", e)
+    # MCP Mock 预置服务：补齐 + 刷新描述，不删不覆盖行为配置。
+    # 必须在 start() 之前 —— 工具清单是建 app 时一次性注册的，晚一步预置服务就挂不上去。
+    try:
+        from app.services.mcp_mock_presets import seed_preset_servers
+        await seed_preset_servers()
+    except Exception as e:
+        _startup_logger.warning("MCP Mock 预置服务落地失败: %s", e)
     try:
         if mcp_mock_server._load_state():
             _startup_logger.info("自动恢复 MCP Mock 服务 (端口 %d)", mcp_mock_server.port)

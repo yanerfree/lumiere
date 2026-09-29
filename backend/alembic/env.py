@@ -46,6 +46,9 @@ from app.models.review_batch import ReviewBatch, ReviewBatchItem  # noqa: F401
 from app.models.endpoint_diff import (  # noqa: F401 — 版本升级·分支对账清单
     EndpointDiffBatch, EndpointDiffHit,
 )
+from app.models.mcp_mock import (  # noqa: F401 — MCP Mock 多服务
+    McpMockServer, McpMockTool, McpMockLog,
+)
 
 config = context.config
 if config.config_file_name is not None:
