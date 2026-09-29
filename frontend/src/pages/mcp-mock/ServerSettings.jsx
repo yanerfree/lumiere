@@ -170,7 +170,7 @@ export default function ServerSettings({
             <div style={{ marginTop: 8 }}>
               <div style={label}>Token</div>
               <Input size="small" spellCheck={false} style={{ fontFamily: MONO }} disabled={ro}
-                value={cfg.token || ''} placeholder="lumiere-mock-token-2026"
+                value={cfg.token || ''} placeholder="例：mcd-demo-token-2026"
                 onChange={e => setCfg({ token: e.target.value })} />
               <div style={hint}>对面要在请求头里带 <code>Authorization: Bearer {cfg.token || '<token>'}</code>，不带或带错一律 401。</div>
             </div>
@@ -187,7 +187,7 @@ export default function ServerSettings({
               <div style={{ flex: 1 }}>
                 <div style={label}>Key</div>
                 <Input size="small" spellCheck={false} style={{ fontFamily: MONO }} disabled={ro}
-                  value={cfg.apiKey || ''} placeholder="lumiere-mock-apikey-2026"
+                  value={cfg.apiKey || ''} placeholder="例：amap-demo-key-2026"
                   onChange={e => setCfg({ apiKey: e.target.value })} />
                 <div style={hint}>对面要在请求头里带 <code>{cfg.headerName || 'X-API-Key'}: {cfg.apiKey || '<key>'}</code>。</div>
               </div>

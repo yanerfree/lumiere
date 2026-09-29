@@ -59,6 +59,11 @@ class McpMockServer(Base):
     locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # 预置内容的版本号（见 services/mcp_mock_presets.py 的 PRESET_REV）。
+    # 只对 builtin 服务有意义：版本号对不上 = 平台改过预置内容，启动时整套刷新。
+    # **但只刷还锁着的** —— 人解锁接管之后只记版本号、不动内容，理由见那边的注释。
+    preset_rev: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
     call_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_call_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
