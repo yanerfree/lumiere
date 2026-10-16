@@ -8,7 +8,7 @@ import {
   ThunderboltOutlined, ToolOutlined, SendOutlined,
   NodeIndexOutlined, SearchOutlined, DownOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
-  DeploymentUnitOutlined, CommentOutlined, ShoppingCartOutlined,
+  DeploymentUnitOutlined, CommentOutlined, ShoppingCartOutlined, BookOutlined,
 } from '@ant-design/icons'
 import { api, reviveSession } from './utils/request'
 import { useLang } from './utils/i18n.jsx'
@@ -244,7 +244,9 @@ function AppLayout() {
         { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: t('menu.proxyProbe'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox'), perm: PERM.SYS_TOOLS_USE },
-        { key: '/tools/load-test', icon: <ThunderboltOutlined />, label: t('menu.loadTest'), perm: PERM.SYS_TOOLS_USE },
+        // 「压力测试」2026-10-16 按用户要求从菜单摘掉，页面和路由 /tools/load-test 还在（老书签照样能进）。
+        // 「我的记录」不挂 perm：人人都有自己的记录，游客也能看（写由后端闸门挡）。
+        { key: '/notes', icon: <BookOutlined />, label: t('menu.myNotes') },
       ],
     },
     {
@@ -323,8 +325,6 @@ function AppLayout() {
   const userMenu = {
     items: [
       ...(roleTitle ? [{ key: 'role', label: `角色：${roleTitle}`, disabled: true }, { type: 'divider' }] : []),
-      // 「我的记录」放这里不放侧边栏：侧边栏的分组和排序是用户指定的，个人的东西归个人菜单
-      { key: 'notes', label: '我的记录', onClick: () => navigate('/notes') },
       { key: 'changePwd', label: '修改密码', onClick: () => { pwdForm.resetFields(); setPwdOpen(true) } },
       { type: 'divider' },
       { key: 'logout', label: '退出登录', onClick: handleLogout },
