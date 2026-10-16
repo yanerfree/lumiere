@@ -51,6 +51,7 @@ import AICapabilities from './pages/settings/AICapabilities'
 import SkillManage from './pages/settings/SkillManage'
 import MCPTools from './pages/settings/MCPTools'
 import SystemServices from './pages/settings/SystemServices'
+import MyNotes from './pages/notes/MyNotes'
 
 const { Header, Sider, Content } = Layout
 
@@ -312,19 +313,23 @@ function AppLayout() {
     } catch { /* request.js 已展示错误 */ } finally { setPwdLoading(false) }
   }
 
+  // 顶栏显示**用户名**（2026-10-16 用户要求）：此前管理员/游客显示的是角色称呼，
+  // 两个管理员账号在顶栏长得一模一样，分不清当前登的是谁。角色挪进下拉菜单第一行。
+  // 角色仍按 systemRole 取，不按用户名猜 —— 恰好叫 admin 的普通用户不该被称作管理员。
+  const ROLE_TITLE = { admin: '管理员', user: '普通用户', guest: '游客' }
+  const displayName = user.username || '用户'
+  const roleTitle = ROLE_TITLE[systemRole]
+
   const userMenu = {
     items: [
+      ...(roleTitle ? [{ key: 'role', label: `角色：${roleTitle}`, disabled: true }, { type: 'divider' }] : []),
+      // 「我的记录」放这里不放侧边栏：侧边栏的分组和排序是用户指定的，个人的东西归个人菜单
+      { key: 'notes', label: '我的记录', onClick: () => navigate('/notes') },
       { key: 'changePwd', label: '修改密码', onClick: () => { pwdForm.resetFields(); setPwdOpen(true) } },
       { type: 'divider' },
       { key: 'logout', label: '退出登录', onClick: handleLogout },
     ]
   }
-
-  // 按**系统角色**取称呼，不按用户名。此前写的是 username === 'admin' ——
-  // 于是第二个管理员账号显示成自己的用户名、而一个恰好叫 admin 的普通用户
-  // 会被称作「管理员」。角色是事实，用户名只是巧合。
-  const ROLE_TITLE = { admin: '管理员', guest: '游客' }
-  const displayName = ROLE_TITLE[systemRole] ?? (user.username || '用户')
 
   return (
     <Layout className="app-layout-root" style={{ minHeight: '100vh' }}>
@@ -427,6 +432,7 @@ function AppLayout() {
           <Routes>
             <Route path="/" element={<Navigate to="/projects" replace />} />
             <Route path="/projects" element={<ProjectList />} />
+            <Route path="/notes" element={<MyNotes />} />
             <Route path="/projects/:projectId/cases" element={<CaseManagement />} />
             <Route path="/projects/:projectId/review-report" element={<ReviewReport />} />
             <Route path="/projects/:projectId/cases/:caseId" element={<CaseDetail />} />

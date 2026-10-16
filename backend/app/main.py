@@ -51,6 +51,7 @@ from app.api.qa_catalog import router as qa_catalog_router
 from app.api.qa_page_survey import router as qa_page_survey_router
 from app.api.system_services import router as system_services_router
 from app.api.me import router as me_router
+from app.api.notes import router as notes_router
 from app.api.assistant import router as assistant_router
 from app.core.middleware import CamelCaseResponse, TraceIdMiddleware
 from app.core import permissions as perms
@@ -433,6 +434,7 @@ app.include_router(qa_catalog_router)
 app.include_router(qa_page_survey_router)
 app.include_router(system_services_router, dependencies=_AUTHED)
 app.include_router(me_router)
+app.include_router(notes_router)
 # AI 助手：能力面按登录用户权限过滤，各端点自带 get_current_user + 执行前复检
 app.include_router(assistant_router)
 
