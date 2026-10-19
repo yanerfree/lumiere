@@ -60,6 +60,32 @@ function toCode(item, lang) {
   return toCurl(item)
 }
 
+// ── Headers 批量编辑：一行一个「参数名: 参数值」，行首 // 表示停用，行尾「 // 」后面是备注 ──
+// 备注的分隔要求 // 前面有空白，否则 http://x 这种值会被从中间劈开
+const BULK_DESC_RE = /\s+\/\/\s?(.*)$/
+function headersToBulk(headers) {
+  return (headers || []).filter(h => h.key || h.value || h.desc).map(h => {
+    let line = `${h.key || ''}: ${h.value || ''}`
+    if (h.desc) line += ` // ${h.desc}`
+    return h.enabled === false ? `// ${line}` : line
+  }).join('\n')
+}
+function bulkToHeaders(text) {
+  return text.split('\n').map(raw => {
+    let line = raw.trim()
+    if (!line) return null
+    let enabled = true
+    if (line.startsWith('//')) { enabled = false; line = line.slice(2).trim() }
+    let desc = ''
+    const m = line.match(BULK_DESC_RE)
+    if (m) { desc = m[1].trim(); line = line.slice(0, m.index) }
+    const idx = line.indexOf(':')
+    const key = (idx >= 0 ? line.slice(0, idx) : line).trim()
+    const value = idx >= 0 ? line.slice(idx + 1).trim() : ''
+    return { key, value, desc, enabled }
+  }).filter(Boolean)
+}
+
 export default function HttpClient() {
   const [items, setItems] = useState([])
   const [openTabs, setOpenTabs] = useState([])
@@ -79,6 +105,7 @@ export default function HttpClient() {
   const [dragOverId, setDragOverId] = useState(null)
   const [dragPos, setDragPos] = useState(null)
   const [reqTab, setReqTab] = useState('params')
+  const [headerBulk, setHeaderBulk] = useState(null)  // 非 null = 批量编辑中，存的是文本框原文
   const [respTab, setRespTab] = useState('body')
   const [importOpen, setImportOpen] = useState(false)
   const [importCurl, setImportCurl] = useState('')
@@ -94,6 +121,8 @@ export default function HttpClient() {
   useEffect(() => { fetchItems(); fetchHistory() }, [])
 
   const activeItem = openTabs.find(t => t.id === activeTabId) || null
+  // 切到别的请求就退出批量编辑，否则文本框里还是上一个请求的内容
+  useEffect(() => { setHeaderBulk(null) }, [activeTabId])
   const updateTabField = (id, field, value) => {
     setOpenTabs(tabs => tabs.map(t => t.id === id ? { ...t, [field]: value, _dirty: true } : t))
     if (saveTimerRef.current[id]) clearTimeout(saveTimerRef.current[id])
@@ -596,16 +625,34 @@ export default function HttpClient() {
                   )}
                   {reqTab === 'headers' && (<>
                     <div style={{ display: 'flex', gap: 4, marginBottom: 6, alignItems: 'center' }}>
-                      <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={() => updateTabField(activeItem.id, 'headers', [...(activeItem.headers || []), { key: '', value: '', enabled: true }])}>添加</Button>
-                      {[{ k: 'Content-Type', v: 'application/json' }, { k: 'Authorization', v: 'Bearer ' }, { k: 'Accept', v: 'application/json' }].map(p =>
-                        <Tag key={p.k} style={{ cursor: 'pointer', fontSize: 11 }} onClick={() => updateTabField(activeItem.id, 'headers', [...(activeItem.headers || []), { key: p.k, value: p.v, enabled: true }])}>{p.k}</Tag>
-                      )}
+                      {headerBulk === null && (<>
+                        <Button size="small" type="dashed" icon={<PlusOutlined />} onClick={() => updateTabField(activeItem.id, 'headers', [...(activeItem.headers || []), { key: '', value: '', enabled: true }])}>添加</Button>
+                        {[{ k: 'Content-Type', v: 'application/json' }, { k: 'Authorization', v: 'Bearer ' }, { k: 'Accept', v: 'application/json' }].map(p =>
+                          <Tag key={p.k} style={{ cursor: 'pointer', fontSize: 11 }} onClick={() => updateTabField(activeItem.id, 'headers', [...(activeItem.headers || []), { key: p.k, value: p.v, enabled: true }])}>{p.k}</Tag>
+                        )}
+                      </>)}
+                      {headerBulk !== null && <span style={{ fontSize: 11, color: '#86909c' }}>一行一个「参数名: 参数值」，行首加 // 停用，行尾「 // 」后写备注</span>}
+                      <span style={{ flex: 1 }} />
+                      <Tooltip title="中文会自动编码后发送，「实际请求」里能看到编码后的值">
+                        <span style={{ fontSize: 11, color: '#c9cdd4', cursor: 'default' }}>支持中文</span>
+                      </Tooltip>
+                      <Button size="small" type="link" data-testid="header-bulk-toggle" style={{ fontSize: 12, padding: '0 4px' }}
+                        onClick={() => setHeaderBulk(headerBulk === null ? headersToBulk(activeItem.headers) : null)}>
+                        {headerBulk === null ? '批量编辑' : '退出批量编辑'}
+                      </Button>
                     </div>
+                    {headerBulk !== null ? (
+                      <TextArea spellCheck={false} data-testid="header-bulk-text" value={headerBulk} rows={6}
+                        placeholder={'Content-Type: application/json // 请求体格式\nX-User: 张三\n// X-Debug: 1'}
+                        style={{ fontFamily: MONO, fontSize: 12 }}
+                        onChange={e => { setHeaderBulk(e.target.value); updateTabField(activeItem.id, 'headers', bulkToHeaders(e.target.value)) }} />
+                    ) : (
                     <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
                       <thead><tr style={{ background: 'rgba(0,0,0,0.02)' }}>
                         <th style={{ width: 30 }}></th>
-                        <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c', width: '35%' }}>参数名</th>
+                        <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c', width: '30%' }}>参数名</th>
                         <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c' }}>参数值</th>
+                        <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c', width: '25%' }}>备注</th>
                         <th style={{ width: 30 }}></th>
                       </tr></thead>
                       <tbody>{(activeItem.headers || []).map((h, i) => (
@@ -618,10 +665,13 @@ export default function HttpClient() {
                             onChange={e => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], key: e.target.value }; updateTabField(activeItem.id, 'headers', hs) }} /></td>
                           <td style={{ padding: '2px 4px' }}><Input spellCheck={false} size="small" variant="borderless" value={h.value} placeholder="Value" style={{ fontFamily: MONO, fontSize: 11 }}
                             onChange={e => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], value: e.target.value }; updateTabField(activeItem.id, 'headers', hs) }} /></td>
+                          <td style={{ padding: '2px 4px' }}><Input spellCheck={false} size="small" variant="borderless" value={h.desc || ''} placeholder="备注" style={{ fontSize: 11 }}
+                            onChange={e => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], desc: e.target.value }; updateTabField(activeItem.id, 'headers', hs) }} /></td>
                           <td><Button size="small" type="text" danger style={{ padding: '0 4px', fontSize: 11 }} onClick={() => updateTabField(activeItem.id, 'headers', activeItem.headers.filter((_, idx) => idx !== i))}>×</Button></td>
                         </tr>
                       ))}</tbody>
                     </table>
+                    )}
                   </>)}
                   {reqTab === 'body' && (
                     <div style={{ position: 'relative', display: 'flex' }}>

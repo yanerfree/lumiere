@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import uuid
+from urllib.parse import quote
 from collections import deque
 from datetime import datetime, timezone
 
@@ -151,7 +152,7 @@ async def batch_sort(body: BatchSortRequest, session: AsyncSession = Depends(get
 @router.post("/send")
 async def send_request(req: SendRequest):
     try:
-        headers = dict(req.headers) if req.headers else {}
+        headers = _encode_headers(req.headers)
         t0 = time.perf_counter()
         async with httpx.AsyncClient(timeout=req.timeout, follow_redirects=True, verify=False) as client:
             resp = await client.request(
@@ -216,6 +217,17 @@ async def clear_history():
 
 
 # ── 工具 ──
+
+def _encode_non_ascii(s: str) -> str:
+    """只把非 ASCII 字符按 UTF-8 做 %XX 编码，ASCII 部分原样不动（已有的 %20 之类不会被二次编码）。"""
+    return "".join(c if ord(c) < 128 else quote(c, safe="") for c in s)
+
+
+def _encode_headers(raw: dict | None) -> dict:
+    """请求头只能是 ASCII，填了中文 httpx 直接抛 UnicodeEncodeError、整条请求发不出去。
+    这里跟 Apifox/Postman 一样自动转成 %XX，「实际请求」页签里看到的就是编码后的值。"""
+    return {_encode_non_ascii(str(k)): _encode_non_ascii(str(v)) for k, v in (raw or {}).items()}
+
 
 async def _nest_error(
     session: AsyncSession, item_type: str, parent_id: uuid.UUID | None, item_id: uuid.UUID | None
