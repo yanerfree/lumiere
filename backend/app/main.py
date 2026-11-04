@@ -44,6 +44,7 @@ from app.api.knowledge import router as knowledge_router
 from app.api.screenshots import router as screenshots_router
 from app.api.toolbox import router as toolbox_router
 from app.api.http_client import router as http_client_router
+from app.api.node_pool import router as node_pool_router
 from app.api.scenario_gen import router as scenario_gen_router
 from app.api.mcp_keys import router as mcp_keys_router
 from app.api.mcp_keys import project_scope_router as mcp_scope_router
@@ -426,6 +427,7 @@ app.include_router(knowledge_router)
 app.include_router(screenshots_router)
 app.include_router(toolbox_router, dependencies=_TOOLS)
 app.include_router(http_client_router, dependencies=_TOOLS)
+app.include_router(node_pool_router, dependencies=_TOOLS)
 app.include_router(mcp_keys_router)
 # 项目级 MCP 工具范围（角色校验挂在各 handler 上，不在这里加 dependencies）
 app.include_router(mcp_scope_router)

@@ -40,6 +40,7 @@ const MESSAGES = {
     'menu.oauth2Mock': 'OAuth2 Mock',
     'menu.demoShop': '订单服务',
     'menu.proxyProbe': '代理观测',
+    'menu.nodePool': '节点池测试',
     'menu.automationData': '自动化数据',
     'menu.i18nDict': '国际化词典',
     // 一级菜单标题。按功能实际作用在什么上分，不按名字听起来像什么 —— 理由写在 App.jsx
@@ -124,6 +125,7 @@ const MESSAGES = {
     'menu.oauth2Mock': 'OAuth2 Mock',
     'menu.demoShop': 'Order Service',
     'menu.proxyProbe': 'Proxy Capture',
+    'menu.nodePool': 'Node Pool Test',
     'menu.automationData': 'Automation Data',
     'menu.i18nDict': 'i18n Dictionary',
     'menu.group.design': 'Test Design',

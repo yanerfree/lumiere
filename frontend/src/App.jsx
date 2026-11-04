@@ -8,7 +8,7 @@ import {
   ThunderboltOutlined, ToolOutlined, SendOutlined,
   NodeIndexOutlined, SearchOutlined, DownOutlined,
   GlobalOutlined, SafetyCertificateOutlined, DatabaseOutlined, TranslationOutlined,
-  DeploymentUnitOutlined, CommentOutlined, ShoppingCartOutlined, BookOutlined,
+  DeploymentUnitOutlined, CommentOutlined, ShoppingCartOutlined, BookOutlined, ClusterOutlined,
 } from '@ant-design/icons'
 import { api, reviveSession } from './utils/request'
 import { useLang } from './utils/i18n.jsx'
@@ -37,6 +37,7 @@ import QaCatalog from './pages/qa/QaCatalog'
 import LlmMock from './pages/llm-mock/LlmMock'
 import ApiMock from './pages/api-mock/ApiMock'
 import ProxyProbe from './pages/proxy-probe/ProxyProbe'
+import NodePool from './pages/node-pool/NodePool'
 import McpMock from './pages/mcp-mock/McpMock'
 import OAuth2Mock from './pages/oauth2-mock/OAuth2Mock'
 import DemoShop from './pages/demo-shop/DemoShop'
@@ -242,6 +243,7 @@ function AppLayout() {
         { key: '/tools/oauth2-mock', icon: <SafetyCertificateOutlined />, label: t('menu.oauth2Mock'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/demo-shop', icon: <ShoppingCartOutlined />, label: t('menu.demoShop'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/proxy-probe', icon: <NodeIndexOutlined />, label: t('menu.proxyProbe'), perm: PERM.SYS_TOOLS_USE },
+        { key: '/tools/node-pool', icon: <ClusterOutlined />, label: t('menu.nodePool'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/http-client', icon: <SendOutlined />, label: t('menu.httpClient'), perm: PERM.SYS_TOOLS_USE },
         { key: '/tools/toolbox', icon: <ToolOutlined />, label: t('menu.toolbox'), perm: PERM.SYS_TOOLS_USE },
         // 「压力测试」2026-10-16 按用户要求从菜单摘掉，页面和路由 /tools/load-test 还在（老书签照样能进）。
@@ -476,6 +478,7 @@ function AppLayout() {
             <Route path="/tools/llm-mock" element={<LlmMock />} />
             <Route path="/tools/api-mock" element={<ApiMock />} />
             <Route path="/tools/proxy-probe" element={<ProxyProbe />} />
+            <Route path="/tools/node-pool" element={<NodePool />} />
             <Route path="/tools/mcp-mock" element={<McpMock />} />
             <Route path="/tools/oauth2-mock" element={<OAuth2Mock />} />
             <Route path="/tools/demo-shop" element={<DemoShop />} />
