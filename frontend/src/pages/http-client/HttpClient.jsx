@@ -104,7 +104,7 @@ export default function HttpClient() {
   const [requestTimeout, setRequestTimeout] = useState(120)
   const [sendCount, setSendCount] = useState(1)       // 共发几次
   const [sendPerRound, setSendPerRound] = useState(1) // 一次几条（每轮同时发几条）
-  const [showBatchRows, setShowBatchRows] = useState(false)
+  const [showBatchRows, setShowBatchRows] = useState(true)   // 逐条默认展开
   const [history, setHistory] = useState([])
   const [showHistory, setShowHistory] = useState(false)
   const [editingNameId, setEditingNameId] = useState(null)
@@ -761,20 +761,33 @@ export default function HttpClient() {
                           <span style={{ color: '#86909c' }}>总用时 {b.elapsedMs}ms</span>
                           <span style={{ color: '#86909c' }}>状态码：{Object.entries(b.statusCodes || {}).map(([k, v]) => `${k}×${v}`).join('  ')}</span>
                           <span style={{ flex: 1 }} />
-                          <a onClick={() => setShowBatchRows(v => !v)}>{showBatchRows ? '收起逐条' : '看逐条'}</a>
+                          <a onClick={() => setShowBatchRows(v => !v)}>{showBatchRows ? '收起逐条' : '展开逐条'}</a>
+                          <Popconfirm title="清空这次的结果？" description="只清页面上这次的结果，发送记录里那一行还在" okText="清空" cancelText="取消"
+                            onConfirm={() => setResponses(rs => ({ ...rs, [activeItem.id]: null }))}>
+                            <a style={{ color: '#e8453c' }}>清空</a>
+                          </Popconfirm>
                         </div>
                         {showBatchRows && (
-                          <table style={{ width: '100%', marginTop: 8, fontSize: 11, borderCollapse: 'collapse' }}>
-                            <thead><tr style={{ color: '#86909c', textAlign: 'left' }}><th style={{ padding: '2px 6px' }}>第几条</th><th style={{ padding: '2px 6px' }}>第几轮</th><th style={{ padding: '2px 6px' }}>状态码</th><th style={{ padding: '2px 6px' }}>用时</th><th style={{ padding: '2px 6px' }}>出错原因</th></tr></thead>
-                            <tbody>{b.rows.map(r => (
-                              <tr key={r.seq} style={{ borderTop: '1px solid rgba(0,0,0,0.04)' }}>
-                                <td style={{ padding: '2px 6px' }}>{r.seq}</td><td style={{ padding: '2px 6px' }}>{r.round}</td>
-                                <td style={{ padding: '2px 6px', fontFamily: MONO, color: r.statusCode && r.statusCode < 400 ? undefined : '#e8453c' }}>{r.statusCode ?? '-'}</td>
-                                <td style={{ padding: '2px 6px' }}>{r.elapsed ?? '-'}ms</td>
-                                <td style={{ padding: '2px 6px', color: '#e8453c' }}>{r.error || ''}</td>
-                              </tr>
-                            ))}</tbody>
-                          </table>
+                          // 条数多时在这一块里自己滚，最多占约 8 行高，下面的响应体始终露出来
+                          <div style={{ marginTop: 8, maxHeight: 200, overflow: 'auto', background: 'rgba(255,255,255,0.6)', borderRadius: 6 }}>
+                            <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
+                              <thead><tr style={{ color: '#86909c', textAlign: 'left' }}>
+                                <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 }, width: 60 }}>第几条</th>
+                                <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 }, width: 60 }}>第几轮</th>
+                                <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 }, width: 70 }}>状态码</th>
+                                <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 }, width: 90 }}>用时</th>
+                                <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 } }}>出错原因</th>
+                              </tr></thead>
+                              <tbody>{b.rows.map(r => (
+                                <tr key={r.seq} style={{ borderTop: '1px solid rgba(0,0,0,0.04)' }}>
+                                  <td style={{ padding: '2px 6px' }}>{r.seq}</td><td style={{ padding: '2px 6px' }}>{r.round}</td>
+                                  <td style={{ padding: '2px 6px', fontFamily: MONO, color: r.statusCode && r.statusCode < 400 ? undefined : '#e8453c' }}>{r.statusCode ?? '-'}</td>
+                                  <td style={{ padding: '2px 6px' }}>{r.elapsed ?? '-'}ms</td>
+                                  <td style={{ padding: '2px 6px', color: '#e8453c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.error || ''}>{r.error || ''}</td>
+                                </tr>
+                              ))}</tbody>
+                            </table>
+                          </div>
                         )}
                         <div style={{ color: '#86909c', marginTop: 4 }}>下面显示的是最后一条的响应</div>
                       </div>
