@@ -7,7 +7,7 @@ import {
   ClockCircleOutlined, ReloadOutlined, ClearOutlined,
   FolderAddOutlined, FileAddOutlined, FolderOutlined, EditOutlined,
   PlusOutlined, ImportOutlined, CodeOutlined, SaveOutlined, CheckOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined
+  MenuFoldOutlined, MenuUnfoldOutlined, ArrowUpOutlined, ArrowDownOutlined
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -58,6 +58,15 @@ function toCode(item, lang) {
     return `fetch('${url}', {\n${opts.join(',\n')}\n}).then(r => r.json()).then(console.log)`
   }
   return toCurl(item)
+}
+
+// 列表里第 i 行往上(-1)/往下(+1)挪一格，返回新数组
+function moveRow(list, i, delta) {
+  const j = i + delta
+  if (j < 0 || j >= list.length) return list
+  const out = [...list]
+  ;[out[i], out[j]] = [out[j], out[i]]
+  return out
 }
 
 // ── Headers 批量编辑：一行一个「参数名: 参数值」，行首 // 表示停用，行尾「 // 」后面是备注 ──
@@ -665,7 +674,7 @@ export default function HttpClient() {
                         <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c', width: '30%' }}>参数名</th>
                         <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c' }}>参数值</th>
                         <th style={{ padding: '4px 8px', textAlign: 'left', fontSize: 11, color: '#86909c', width: '25%' }}>备注</th>
-                        <th style={{ width: 30 }}></th>
+                        <th style={{ width: 96 }}></th>
                       </tr></thead>
                       <tbody>{(activeItem.headers || []).map((h, i) => (
                         <tr key={i} style={{ borderBottom: '1px solid rgba(0,0,0,0.03)', opacity: h.enabled === false ? 0.4 : 1 }}>
@@ -679,7 +688,15 @@ export default function HttpClient() {
                             onChange={e => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], value: e.target.value }; updateTabField(activeItem.id, 'headers', hs) }} /></td>
                           <td style={{ padding: '2px 4px' }}><Input spellCheck={false} size="small" variant="borderless" value={h.desc || ''} placeholder="备注" style={{ fontSize: 11 }}
                             onChange={e => { const hs = [...activeItem.headers]; hs[i] = { ...hs[i], desc: e.target.value }; updateTabField(activeItem.id, 'headers', hs) }} /></td>
-                          <td><Button size="small" type="text" danger style={{ padding: '0 4px', fontSize: 11 }} onClick={() => updateTabField(activeItem.id, 'headers', activeItem.headers.filter((_, idx) => idx !== i))}>×</Button></td>
+                          <td style={{ whiteSpace: 'nowrap' }}>
+                            <Tooltip title="上移"><Button size="small" type="text" icon={<ArrowUpOutlined />} disabled={i === 0} style={{ padding: '0 3px', fontSize: 11 }}
+                              onClick={() => updateTabField(activeItem.id, 'headers', moveRow(activeItem.headers, i, -1))} /></Tooltip>
+                            <Tooltip title="下移"><Button size="small" type="text" icon={<ArrowDownOutlined />} disabled={i === activeItem.headers.length - 1} style={{ padding: '0 3px', fontSize: 11 }}
+                              onClick={() => updateTabField(activeItem.id, 'headers', moveRow(activeItem.headers, i, 1))} /></Tooltip>
+                            <Tooltip title="复制这一行（插在下面，先不勾选，改好值再勾上）"><Button size="small" type="text" icon={<CopyOutlined />} style={{ padding: '0 3px', fontSize: 11 }}
+                              onClick={() => { const hs = [...activeItem.headers]; hs.splice(i + 1, 0, { ...h, enabled: false }); updateTabField(activeItem.id, 'headers', hs) }} /></Tooltip>
+                            <Tooltip title="删除"><Button size="small" type="text" danger style={{ padding: '0 4px', fontSize: 11 }} onClick={() => updateTabField(activeItem.id, 'headers', activeItem.headers.filter((_, idx) => idx !== i))}>×</Button></Tooltip>
+                          </td>
                         </tr>
                       ))}</tbody>
                     </table>
