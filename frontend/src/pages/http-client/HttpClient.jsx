@@ -93,6 +93,9 @@ export default function HttpClient() {
   const [responses, setResponses] = useState({})
   const [sending, setSending] = useState({})
   const [requestTimeout, setRequestTimeout] = useState(120)
+  const [sendCount, setSendCount] = useState(1)       // 共发几次
+  const [sendPerRound, setSendPerRound] = useState(1) // 一次几条（每轮同时发几条）
+  const [showBatchRows, setShowBatchRows] = useState(false)
   const [history, setHistory] = useState([])
   const [showHistory, setShowHistory] = useState(false)
   const [editingNameId, setEditingNameId] = useState(null)
@@ -295,9 +298,9 @@ export default function HttpClient() {
       if (!finalUrl) { message.warning('请输入 URL'); setSending(s => ({ ...s, [id]: false })); return }
       if (!/^https?:\/\//i.test(finalUrl)) finalUrl = 'http://' + finalUrl
       const hdrs = {}; (activeItem.headers || []).forEach(h => { if (h.enabled !== false && h.key?.trim()) hdrs[h.key.trim()] = h.value || '' })
-      const res = await api.post('/http-client/send', { method: activeItem.method, url: finalUrl, headers: Object.keys(hdrs).length ? hdrs : null, body: ['POST','PUT','PATCH'].includes(activeItem.method) && activeItem.body?.trim() ? activeItem.body.trim() : null, timeout: requestTimeout })
+      const res = await api.post('/http-client/send', { method: activeItem.method, url: finalUrl, headers: Object.keys(hdrs).length ? hdrs : null, body: ['POST','PUT','PATCH'].includes(activeItem.method) && activeItem.body?.trim() ? activeItem.body.trim() : null, timeout: requestTimeout, count: sendCount, perRound: sendPerRound, name: activeItem.name })
       const d = res.data?.data || res.data || res
-      if (d.error || res.error) { setResponses(r => ({ ...r, [id]: { error: d.error || res.error } })); return }
+      if (d.error || res.error) { setResponses(r => ({ ...r, [id]: { error: d.error || res.error, batch: d.batch } })); fetchHistory(); return }
       setResponses(r => ({ ...r, [id]: d })); fetchHistory()
     } catch (e) { setResponses(r => ({ ...r, [id]: { error: e.message } })) }
     finally { setSending(s => ({ ...s, [id]: false })) }
@@ -510,7 +513,7 @@ export default function HttpClient() {
         </div>
         <Space size={8}>
           <Button size="small" icon={<ImportOutlined />} onClick={() => setImportOpen(true)}>导入 cURL</Button>
-          <Button size="small" icon={<ClockCircleOutlined />} type={showHistory ? 'primary' : 'default'} onClick={() => { setShowHistory(!showHistory); if (!showHistory) fetchHistory() }}>历史</Button>
+          <Button size="small" icon={<ClockCircleOutlined />} type={showHistory ? 'primary' : 'default'} onClick={() => { setShowHistory(!showHistory); if (!showHistory) fetchHistory() }}>发送记录</Button>
         </Space>
       </div>
 
@@ -592,6 +595,15 @@ export default function HttpClient() {
                   </Tooltip>
                   <Button type="primary" icon={isSending ? <LoadingOutlined /> : <SendOutlined />} loading={isSending} onClick={handleSend} size="small"
                     style={{ background: '#0ea5a0', borderColor: '#0ea5a0', paddingLeft: 16, paddingRight: 16 }}>发送</Button>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12, color: '#4e5969' }}>
+                  <span>共发几次</span>
+                  <InputNumber value={sendCount} onChange={v => setSendCount(v || 1)} min={1} max={1000} precision={0}
+                    size="small" style={{ width: 80 }} />
+                  <span style={{ marginLeft: 8 }}>一次几条</span>
+                  <InputNumber value={sendPerRound} onChange={v => setSendPerRound(v || 1)} min={1} max={50} precision={0}
+                    size="small" style={{ width: 70 }} />
+                  <span style={{ color: '#c9cdd4' }}>每一轮同时发「一次几条」，这一轮都回来了再发下一轮；都填 1 就是普通发一次</span>
                 </div>
               </div>
 
@@ -720,6 +732,37 @@ export default function HttpClient() {
                   </>)}
                 </div>
                 <div ref={respScrollRef} style={{ flex: 1, overflow: 'auto', padding: '8px 16px' }}>
+                  {resp?.batch && (() => {
+                    const b = resp.batch
+                    return (
+                      <div style={{ marginBottom: 10, padding: '8px 12px', background: 'rgba(14,165,160,0.06)', borderRadius: 8, fontSize: 12 }}>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' }}>
+                          <span style={{ fontWeight: 600 }}>共发 {b.total} 次 · 一次 {b.perRound} 条 · {b.rounds} 轮</span>
+                          <span style={{ color: '#0ea5a0' }}>成功 {b.success}</span>
+                          <span style={{ color: b.failed ? '#e8453c' : '#86909c' }}>失败 {b.failed}</span>
+                          <span style={{ color: '#86909c' }}>平均 {b.avgMs ?? '-'}ms（最快 {b.minMs ?? '-'} / 最慢 {b.maxMs ?? '-'}）</span>
+                          <span style={{ color: '#86909c' }}>总用时 {b.elapsedMs}ms</span>
+                          <span style={{ color: '#86909c' }}>状态码：{Object.entries(b.statusCodes || {}).map(([k, v]) => `${k}×${v}`).join('  ')}</span>
+                          <span style={{ flex: 1 }} />
+                          <a onClick={() => setShowBatchRows(v => !v)}>{showBatchRows ? '收起逐条' : '看逐条'}</a>
+                        </div>
+                        {showBatchRows && (
+                          <table style={{ width: '100%', marginTop: 8, fontSize: 11, borderCollapse: 'collapse' }}>
+                            <thead><tr style={{ color: '#86909c', textAlign: 'left' }}><th style={{ padding: '2px 6px' }}>第几条</th><th style={{ padding: '2px 6px' }}>第几轮</th><th style={{ padding: '2px 6px' }}>状态码</th><th style={{ padding: '2px 6px' }}>用时</th><th style={{ padding: '2px 6px' }}>出错原因</th></tr></thead>
+                            <tbody>{b.rows.map(r => (
+                              <tr key={r.seq} style={{ borderTop: '1px solid rgba(0,0,0,0.04)' }}>
+                                <td style={{ padding: '2px 6px' }}>{r.seq}</td><td style={{ padding: '2px 6px' }}>{r.round}</td>
+                                <td style={{ padding: '2px 6px', fontFamily: MONO, color: r.statusCode && r.statusCode < 400 ? undefined : '#e8453c' }}>{r.statusCode ?? '-'}</td>
+                                <td style={{ padding: '2px 6px' }}>{r.elapsed ?? '-'}ms</td>
+                                <td style={{ padding: '2px 6px', color: '#e8453c' }}>{r.error || ''}</td>
+                              </tr>
+                            ))}</tbody>
+                          </table>
+                        )}
+                        <div style={{ color: '#86909c', marginTop: 4 }}>下面显示的是最后一条的响应</div>
+                      </div>
+                    )
+                  })()}
                   {resp ? (resp.error ? (
                     <div style={{ color: '#e8453c', padding: 12, background: 'rgba(232,69,60,0.06)', borderRadius: 8, fontSize: 12 }}>{resp.error}</div>
                   ) : (<>
@@ -781,24 +824,30 @@ export default function HttpClient() {
         {showHistory && (
           <div style={{ width: 260, flexShrink: 0, background: 'var(--panel-bg)', backdropFilter: 'blur(16px)', borderRadius: 16, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <div style={{ padding: '6px 10px', borderBottom: '1px solid rgba(0,0,0,0.04)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>历史 ({history.length})</span>
+              <span style={{ fontSize: 13, fontWeight: 600 }}>我的发送记录 ({history.length})</span>
               <Space size={4}>
                 <Button type="text" size="small" icon={<ReloadOutlined />} onClick={fetchHistory} />
-                <Popconfirm title="清空？" onConfirm={async () => { await api.delete('/http-client/history'); setHistory([]) }}><Button type="text" size="small" icon={<ClearOutlined />} danger /></Popconfirm>
+                <Popconfirm title="清空我的发送记录？" onConfirm={async () => { await api.delete('/http-client/history'); setHistory([]) }}><Button type="text" size="small" icon={<ClearOutlined />} danger /></Popconfirm>
               </Space>
             </div>
             <div style={{ flex: 1, overflow: 'auto' }}>
               {history.map(h => (
                 <div key={h.id} style={{ padding: '6px 10px', borderBottom: '1px solid rgba(0,0,0,0.03)', fontSize: 11 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span><Tag color={MC[h.method]} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{h.method}</Tag>{' '}<Tag color={h.statusCode < 400 ? 'cyan' : 'red'} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{h.statusCode}</Tag></span>
-                    <span style={{ color: '#c9cdd4', fontSize: 11 }}>{h.elapsed}ms</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ color: '#4e5969' }}>{h.timestamp ? new Date(h.timestamp).toLocaleString('zh-CN', { hour12: false }) : ''}</span>
+                    <Tag color={MC[h.method]} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{h.method}</Tag>
                   </div>
-                  <div style={{ fontFamily: MONO, fontSize: 11, color: '#4e5969', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.url}</div>
-                  <div style={{ fontSize: 11, color: '#c9cdd4' }}>{new Date(h.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}</div>
+                  {h.name && <div style={{ fontWeight: 500, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{h.name}</div>}
+                  <div style={{ fontFamily: MONO, fontSize: 11, color: '#86909c', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={h.url}>{h.url}</div>
+                  <div style={{ marginTop: 2, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span>共 {h.total} 次 · 一次 {h.perRound} 条</span>
+                    <span style={{ color: '#0ea5a0' }}>成功 {h.success}</span>
+                    {h.failed > 0 && <span style={{ color: '#e8453c' }}>失败 {h.failed}</span>}
+                    {h.avgMs != null && <span style={{ color: '#c9cdd4' }}>{h.avgMs}ms</span>}
+                  </div>
                 </div>
               ))}
-              {history.length === 0 && <div style={{ textAlign: 'center', padding: 20, color: '#c9cdd4', fontSize: 12 }}>暂无历史</div>}
+              {history.length === 0 && <div style={{ textAlign: 'center', padding: 20, color: '#c9cdd4', fontSize: 12 }}>还没有发送记录</div>}
             </div>
           </div>
         )}

@@ -1,29 +1,30 @@
 """HTTP 请求客户端 API — 请求集合管理 + 代理发送 + 历史"""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timezone
 import uuid
 from urllib.parse import quote
-from collections import deque
-from datetime import datetime, timezone
 
 import httpx
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import select, delete, update
+from sqlalchemy import select, delete, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.deps.db import get_db
+from app.deps.auth import get_current_user
 from app.models.http_request import HttpRequest
+from app.models.http_send_log import KEEP_PER_USER, HttpSendLog
+from app.models.user import User
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/http-client", tags=["http-client"])
-
-_history: deque[dict] = deque(maxlen=200)
 
 
 # ── Schemas ──
@@ -61,6 +62,9 @@ class SendRequest(BaseModel):
     headers: dict | None = None
     body: str | None = None
     timeout: int = Field(default=120, ge=1, le=600)
+    count: int = Field(default=1, ge=1, le=1000)      # 共发几次
+    perRound: int = Field(default=1, ge=1, le=50)     # 一次几条（每轮同时发几条）
+    name: str | None = None                           # 请求名，记录里好认
 
 
 # ── 请求集合 CRUD ──
@@ -149,70 +153,150 @@ async def batch_sort(body: BatchSortRequest, session: AsyncSession = Depends(get
 
 # ── 发送请求 ──
 
+async def _send_once(client: httpx.AsyncClient, req: "SendRequest", headers: dict) -> dict:
+    """发一条。成功返回完整响应；连不上/超时等返回 {"error": ...}。"""
+    t0 = time.perf_counter()
+    try:
+        resp = await client.request(
+            method=req.method.upper(),
+            url=req.url,
+            headers=headers,
+            content=req.body.encode("utf-8") if req.body else None,
+        )
+    except httpx.ConnectError as e:
+        return {"error": f"连接失败: {e}", "elapsed": round((time.perf_counter() - t0) * 1000, 1)}
+    except httpx.TimeoutException:
+        return {"error": f"请求超时 ({req.timeout}s)", "elapsed": round((time.perf_counter() - t0) * 1000, 1)}
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)[:300], "elapsed": round((time.perf_counter() - t0) * 1000, 1)}
+    elapsed = round((time.perf_counter() - t0) * 1000, 1)
+    try:
+        resp_body = resp.text
+    except Exception:
+        resp_body = f"[Binary {len(resp.content)} bytes]"
+    return {
+        "statusCode": resp.status_code,
+        "headers": dict(resp.headers),
+        "body": resp_body[:200000],
+        "elapsed": elapsed,
+        "size": len(resp.content),
+        "actualRequest": {
+            "method": req.method.upper(),
+            "url": str(resp.request.url) if resp.request else req.url,
+            "headers": dict(resp.request.headers) if resp.request else headers,
+            "body": req.body,
+        },
+    }
+
+
 @router.post("/send")
-async def send_request(req: SendRequest):
+async def send_request(
+    req: SendRequest,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    """发请求。`count`=共发几次，`perRound`=一次几条：每一轮同时发 perRound 条，
+    这一轮全回来了再发下一轮，直到发满 count 条。都是 1 时就是普通的发一次。
+
+    响应区展示**最后一条**的完整响应；count>1 时另带 `batch` 汇总。
+    每次点「发送」在发送记录里记一行（只记摘要，见 models/http_send_log.py）。
+    """
     try:
         headers = _encode_headers(req.headers)
-        t0 = time.perf_counter()
-        async with httpx.AsyncClient(timeout=req.timeout, follow_redirects=True, verify=False) as client:
-            resp = await client.request(
-                method=req.method.upper(),
-                url=req.url,
-                headers=headers,
-                content=req.body.encode("utf-8") if req.body else None,
-            )
-        elapsed = round((time.perf_counter() - t0) * 1000, 1)
-        resp_headers = dict(resp.headers)
-        try:
-            resp_body = resp.text
-        except Exception:
-            resp_body = f"[Binary {len(resp.content)} bytes]"
-
-        actual_req_headers = dict(resp.request.headers) if resp.request else headers
-
-        result = {
-            "statusCode": resp.status_code,
-            "headers": resp_headers,
-            "body": resp_body[:200000],
-            "elapsed": elapsed,
-            "size": len(resp.content),
-            "actualRequest": {
-                "method": req.method.upper(),
-                "url": str(resp.request.url) if resp.request else req.url,
-                "headers": actual_req_headers,
-                "body": req.body,
-            },
-        }
-
-        _history.appendleft({
-            "id": str(uuid.uuid4())[:8],
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "method": req.method.upper(),
-            "url": req.url,
-            "statusCode": resp.status_code,
-            "elapsed": elapsed,
-            "size": len(resp.content),
-        })
-
-        return {"data": result}
-    except httpx.ConnectError as e:
-        return {"error": f"连接失败: {e}"}
-    except httpx.TimeoutException:
-        return {"error": f"请求超时 ({req.timeout}s)"}
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return {"error": str(e)[:300]}
+    total, per_round = req.count, min(req.perRound, req.count)
+    rows: list[dict] = []
+    last: dict | None = None
+    t_start = time.perf_counter()
+    async with httpx.AsyncClient(
+        timeout=req.timeout, follow_redirects=True, verify=False,
+        limits=httpx.Limits(max_connections=per_round, max_keepalive_connections=per_round),
+    ) as client:
+        seq = 0
+        rnd = 0
+        while seq < total:
+            rnd += 1
+            n = min(per_round, total - seq)
+            results = await asyncio.gather(*(_send_once(client, req, headers) for _ in range(n)))
+            for r in results:
+                seq += 1
+                rows.append({"seq": seq, "round": rnd, "statusCode": r.get("statusCode"),
+                             "elapsed": r.get("elapsed"), "size": r.get("size"), "error": r.get("error")})
+            last = results[-1]
+    elapsed_all = int((time.perf_counter() - t_start) * 1000)
+
+    codes: dict[str, int] = {}
+    for r in rows:
+        k = str(r["statusCode"]) if r["statusCode"] is not None else "出错"
+        codes[k] = codes.get(k, 0) + 1
+    ok = sum(1 for r in rows if r["statusCode"] is not None and r["statusCode"] < 400)
+    times = [r["elapsed"] for r in rows if r["elapsed"] is not None]
+    avg = int(sum(times) / len(times)) if times else None
+    summary = {
+        "total": total, "perRound": per_round, "rounds": rnd, "success": ok, "failed": total - ok,
+        "statusCodes": codes, "avgMs": avg,
+        "minMs": int(min(times)) if times else None, "maxMs": int(max(times)) if times else None,
+        "elapsedMs": elapsed_all, "rows": rows,
+    }
+
+    session.add(HttpSendLog(
+        user_id=user.id, name=(req.name or None) and req.name[:200], method=req.method.upper(),
+        url=req.url[:2000], total=total, per_round=per_round, success=ok, failed=total - ok,
+        status_codes=codes, avg_ms=avg, elapsed_ms=elapsed_all,
+        # 用发完那一刻的真实时间，别用库的 now() —— 那是事务开始时间，同一事务里几条会一样，排序就乱了
+        created_at=datetime.now(timezone.utc),
+    ))
+    await session.flush()
+    await _prune_logs(session, user.id)
+    logger.info("http-client 发送 user=%s %s %s 共%d次 一次%d条 成功%d 失败%d",
+                user.username, req.method.upper(), req.url[:200], total, per_round, ok, total - ok)
+
+    if total == 1:
+        if "error" in last:
+            return {"error": last["error"]}
+        return {"data": last}
+    data = dict(last) if "error" not in last else {"error": last["error"]}
+    data["batch"] = summary
+    return {"data": data}
 
 
-# ── 历史 ──
+async def _prune_logs(session: AsyncSession, user_id: uuid.UUID) -> None:
+    keep = (
+        select(HttpSendLog.id).where(HttpSendLog.user_id == user_id)
+        .order_by(HttpSendLog.created_at.desc()).limit(KEEP_PER_USER)
+    )
+    await session.execute(
+        delete(HttpSendLog).where(HttpSendLog.user_id == user_id, HttpSendLog.id.not_in(keep))
+    )
+
+
+# ── 发送记录（只看自己的） ──
 
 @router.get("/history")
-async def get_history(limit: int = Query(50, ge=1, le=200)):
-    return {"data": list(_history)[:limit], "total": len(_history)}
+async def get_history(
+    limit: int = Query(100, ge=1, le=KEEP_PER_USER),
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+):
+    rows = (await session.execute(
+        select(HttpSendLog).where(HttpSendLog.user_id == user.id)
+        .order_by(HttpSendLog.created_at.desc()).limit(limit)
+    )).scalars().all()
+    total = (await session.execute(
+        select(func.count()).select_from(HttpSendLog).where(HttpSendLog.user_id == user.id)
+    )).scalar_one()
+    return {"data": [{
+        "id": str(r.id), "timestamp": r.created_at.isoformat() if r.created_at else None,
+        "name": r.name, "method": r.method, "url": r.url,
+        "total": r.total, "perRound": r.per_round, "success": r.success, "failed": r.failed,
+        "statusCodes": r.status_codes or {}, "avgMs": r.avg_ms, "elapsedMs": r.elapsed_ms,
+    } for r in rows], "total": total}
 
 
 @router.delete("/history")
-async def clear_history():
-    _history.clear()
+async def clear_history(user: User = Depends(get_current_user), session: AsyncSession = Depends(get_db)):
+    await session.execute(delete(HttpSendLog).where(HttpSendLog.user_id == user.id))
     return {"ok": True}
 
 
