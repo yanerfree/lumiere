@@ -100,3 +100,18 @@ async def test_次数条数有上限(client, two_users, ok_url):
     assert r.status_code == 422
     r = await client.post("/api/http-client/send", headers=ha, json={"method": "GET", "url": ok_url, "perRound": 51})
     assert r.status_code == 422
+
+
+async def test_间隔_每轮之间等够_默认不等(client, two_users, ok_url):
+    ha, _ = two_users
+    d = (await client.post("/api/http-client/send", headers=ha, json={
+        "method": "GET", "url": ok_url, "count": 3, "perRound": 1, "interval": 0.4})).json()
+    b = d["data"]["batch"]
+    assert b["interval"] == 0.4 and b["rounds"] == 3
+    assert b["elapsedMs"] >= 800          # 3 轮之间等 2 次
+    d = (await client.post("/api/http-client/send", headers=ha, json={
+        "method": "GET", "url": ok_url, "count": 3, "perRound": 1})).json()
+    b = d["data"]["batch"]
+    assert b["interval"] is None and b["elapsedMs"] < 800
+    r = await client.post("/api/http-client/send", headers=ha, json={"method": "GET", "url": ok_url, "interval": -1})
+    assert r.status_code == 422

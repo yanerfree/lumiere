@@ -104,6 +104,7 @@ export default function HttpClient() {
   const [requestTimeout, setRequestTimeout] = useState(120)
   const [sendCount, setSendCount] = useState(1)       // 共发几次
   const [sendPerRound, setSendPerRound] = useState(1) // 一次几条（每轮同时发几条）
+  const [sendInterval, setSendInterval] = useState(null) // 间隔几秒，空 = 不等
   const [showBatchRows, setShowBatchRows] = useState(true)   // 逐条默认展开
   const [history, setHistory] = useState([])
   const [showHistory, setShowHistory] = useState(false)
@@ -307,7 +308,7 @@ export default function HttpClient() {
       if (!finalUrl) { message.warning('请输入 URL'); setSending(s => ({ ...s, [id]: false })); return }
       if (!/^https?:\/\//i.test(finalUrl)) finalUrl = 'http://' + finalUrl
       const hdrs = {}; (activeItem.headers || []).forEach(h => { if (h.enabled !== false && h.key?.trim()) hdrs[h.key.trim()] = h.value || '' })
-      const res = await api.post('/http-client/send', { method: activeItem.method, url: finalUrl, headers: Object.keys(hdrs).length ? hdrs : null, body: ['POST','PUT','PATCH'].includes(activeItem.method) && activeItem.body?.trim() ? activeItem.body.trim() : null, timeout: requestTimeout, count: sendCount, perRound: sendPerRound, name: activeItem.name })
+      const res = await api.post('/http-client/send', { method: activeItem.method, url: finalUrl, headers: Object.keys(hdrs).length ? hdrs : null, body: ['POST','PUT','PATCH'].includes(activeItem.method) && activeItem.body?.trim() ? activeItem.body.trim() : null, timeout: requestTimeout, count: sendCount, perRound: sendPerRound, interval: sendInterval || null, name: activeItem.name })
       const d = res.data?.data || res.data || res
       if (d.error || res.error) { setResponses(r => ({ ...r, [id]: { error: d.error || res.error, batch: d.batch } })); fetchHistory(); return }
       setResponses(r => ({ ...r, [id]: d })); fetchHistory()
@@ -606,13 +607,18 @@ export default function HttpClient() {
                     style={{ background: '#0ea5a0', borderColor: '#0ea5a0', paddingLeft: 16, paddingRight: 16 }}>发送</Button>
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12, color: '#4e5969' }}>
-                  <span>共发几次</span>
+                  <span style={{ whiteSpace: 'nowrap' }}>共发几次</span>
                   <InputNumber value={sendCount} onChange={v => setSendCount(v || 1)} min={1} max={1000} precision={0}
-                    size="small" style={{ width: 80 }} />
-                  <span style={{ marginLeft: 8 }}>一次几条</span>
+                    size="small" style={{ width: 80, flexShrink: 0 }} />
+                  <span style={{ marginLeft: 8, whiteSpace: 'nowrap' }}>一次几条</span>
                   <InputNumber value={sendPerRound} onChange={v => setSendPerRound(v || 1)} min={1} max={50} precision={0}
-                    size="small" style={{ width: 70 }} />
-                  <span style={{ color: '#c9cdd4' }}>每一轮同时发「一次几条」，这一轮都回来了再发下一轮；都填 1 就是普通发一次</span>
+                    size="small" style={{ width: 70, flexShrink: 0 }} />
+                  <span style={{ marginLeft: 8, whiteSpace: 'nowrap' }}>间隔</span>
+                  <InputNumber value={sendInterval} onChange={v => setSendInterval(v || null)} min={0} max={3600} step={0.5}
+                    placeholder="无" size="small" style={{ width: 90, flexShrink: 0 }} suffix="秒" />
+                  <span title="每一轮同时发「一次几条」，这一轮都回来了、隔「间隔」秒再发下一轮；间隔不填就不等"
+                    style={{ color: '#c9cdd4', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    每一轮同时发「一次几条」，这一轮都回来了、隔「间隔」秒再发下一轮；间隔不填就不等</span>
                 </div>
               </div>
 
@@ -754,7 +760,7 @@ export default function HttpClient() {
                     return (
                       <div style={{ marginBottom: 10, padding: '8px 12px', background: 'rgba(14,165,160,0.06)', borderRadius: 8, fontSize: 12 }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' }}>
-                          <span style={{ fontWeight: 600 }}>共发 {b.total} 次 · 一次 {b.perRound} 条 · {b.rounds} 轮</span>
+                          <span style={{ fontWeight: 600 }}>共发 {b.total} 次 · 一次 {b.perRound} 条 · {b.rounds} 轮{b.interval ? ` · 每轮间隔 ${b.interval} 秒` : ''}</span>
                           <span style={{ color: '#0ea5a0' }}>成功 {b.success}</span>
                           <span style={{ color: b.failed ? '#e8453c' : '#86909c' }}>失败 {b.failed}</span>
                           <span style={{ color: '#86909c' }}>平均 {b.avgMs ?? '-'}ms（最快 {b.minMs ?? '-'} / 最慢 {b.maxMs ?? '-'}）</span>

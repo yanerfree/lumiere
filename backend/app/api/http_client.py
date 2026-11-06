@@ -64,6 +64,7 @@ class SendRequest(BaseModel):
     timeout: int = Field(default=120, ge=1, le=600)
     count: int = Field(default=1, ge=1, le=1000)      # 共发几次
     perRound: int = Field(default=1, ge=1, le=50)     # 一次几条（每轮同时发几条）
+    interval: float | None = Field(default=None, ge=0, le=3600)  # 间隔几秒：上一轮回来后等多久再发下一轮，空 = 不等
     name: str | None = None                           # 请求名，记录里好认
 
 
@@ -196,7 +197,7 @@ async def send_request(
     session: AsyncSession = Depends(get_db),
 ):
     """发请求。`count`=共发几次，`perRound`=一次几条：每一轮同时发 perRound 条，
-    这一轮全回来了再发下一轮，直到发满 count 条。都是 1 时就是普通的发一次。
+    这一轮全回来了（再等 `interval` 秒，没填就不等）再发下一轮，直到发满 count 条。都是 1 时就是普通的发一次。
 
     响应区展示**最后一条**的完整响应；count>1 时另带 `batch` 汇总。
     每次点「发送」在发送记录里记一行（只记摘要，见 models/http_send_log.py）。
@@ -216,6 +217,8 @@ async def send_request(
         seq = 0
         rnd = 0
         while seq < total:
+            if rnd and req.interval:
+                await asyncio.sleep(req.interval)
             rnd += 1
             n = min(per_round, total - seq)
             results = await asyncio.gather(*(_send_once(client, req, headers) for _ in range(n)))
@@ -234,7 +237,7 @@ async def send_request(
     times = [r["elapsed"] for r in rows if r["elapsed"] is not None]
     avg = int(sum(times) / len(times)) if times else None
     summary = {
-        "total": total, "perRound": per_round, "rounds": rnd, "success": ok, "failed": total - ok,
+        "total": total, "perRound": per_round, "rounds": rnd, "interval": req.interval or None, "success": ok, "failed": total - ok,
         "statusCodes": codes, "avgMs": avg,
         "minMs": int(min(times)) if times else None, "maxMs": int(max(times)) if times else None,
         "elapsedMs": elapsed_all, "rows": rows,
