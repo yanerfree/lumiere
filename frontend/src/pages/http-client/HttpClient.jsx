@@ -95,36 +95,46 @@ function bulkToHeaders(text) {
   }).filter(Boolean)
 }
 
+// ── 刷新后回到原样：开着的请求、当前请求、目录展开、发送设置等记在本浏览器（按登录用户分开存）──
+function viewKey() {
+  try { return 'httpClient.view.' + (JSON.parse(localStorage.getItem('user'))?.id || 'anon') } catch { return 'httpClient.view.anon' }
+}
+function loadView() {
+  try { return JSON.parse(localStorage.getItem(viewKey())) || {} } catch { return {} }
+}
+
 export default function HttpClient() {
+  const savedView = useRef(loadView()).current
+  const viewRestored = useRef(false)   // 标签页恢复完之前不写回，免得把上次的记录先冲成空的
   const [items, setItems] = useState([])
   const [openTabs, setOpenTabs] = useState([])
   const [activeTabId, setActiveTabId] = useState(null)
   const [responses, setResponses] = useState({})
   const [sending, setSending] = useState({})
-  const [requestTimeout, setRequestTimeout] = useState(120)
-  const [sendCount, setSendCount] = useState(1)       // 共发几次
-  const [sendPerRound, setSendPerRound] = useState(1) // 一次几条（每轮同时发几条）
-  const [sendInterval, setSendInterval] = useState(null) // 间隔几秒，空 = 不等
+  const [requestTimeout, setRequestTimeout] = useState(savedView.timeout ?? 120)
+  const [sendCount, setSendCount] = useState(savedView.count ?? 1)       // 共发几次
+  const [sendPerRound, setSendPerRound] = useState(savedView.perRound ?? 1) // 一次几条（每轮同时发几条）
+  const [sendInterval, setSendInterval] = useState(savedView.interval ?? null) // 间隔几秒，空 = 不等
   const [showBatchRows, setShowBatchRows] = useState(true)   // 逐条默认展开
   const [history, setHistory] = useState([])
-  const [showHistory, setShowHistory] = useState(false)
+  const [showHistory, setShowHistory] = useState(!!savedView.showHistory)
   const [editingNameId, setEditingNameId] = useState(null)
   const [editingNameValue, setEditingNameValue] = useState('')
-  const [expandedFolders, setExpandedFolders] = useState({})
+  const [expandedFolders, setExpandedFolders] = useState(savedView.expanded || {})
   const [hoverItemId, setHoverItemId] = useState(null)
   const [popupItemId, setPopupItemId] = useState(null)
-  const [selectedFolderId, setSelectedFolderId] = useState(null)
+  const [selectedFolderId, setSelectedFolderId] = useState(savedView.selectedFolderId ?? null)
   const [dragId, setDragId] = useState(null)
   const [dragOverId, setDragOverId] = useState(null)
   const [dragPos, setDragPos] = useState(null)
-  const [reqTab, setReqTab] = useState('params')
+  const [reqTab, setReqTab] = useState(savedView.reqTab || 'params')
   const [headerBulk, setHeaderBulk] = useState(null)  // 非 null = 批量编辑中，存的是文本框原文
   const [respTab, setRespTab] = useState('body')
   const [importOpen, setImportOpen] = useState(false)
   const [importCurl, setImportCurl] = useState('')
   const [codeOpen, setCodeOpen] = useState(false)
   const [codeLang, setCodeLang] = useState('curl')
-  const [navCollapsed, setNavCollapsed] = useState(false)
+  const [navCollapsed, setNavCollapsed] = useState(!!savedView.navCollapsed)
   const saveTimerRef = useRef({})
   const tabsRef = useRef(openTabs)
   tabsRef.current = openTabs
@@ -132,6 +142,29 @@ export default function HttpClient() {
   const fetchItems = useCallback(async () => { try { const r = await api.get('/http-client/requests'); setItems(r.data || []) } catch {} }, [])
   const fetchHistory = async () => { try { const r = await api.get('/http-client/history?limit=100'); setHistory(r.data?.data || r.data || []) } catch {} }
   useEffect(() => { fetchItems(); fetchHistory() }, [])
+
+  // 请求列表第一次拿到后，把上次开着的标签页按原顺序重新打开（已被删掉的跳过）
+  useEffect(() => {
+    if (viewRestored.current || !items.length) return
+    viewRestored.current = true
+    const byId = Object.fromEntries(items.map(i => [i.id, i]))
+    const tabs = (savedView.tabIds || []).map(id => byId[id]).filter(i => i && i.type !== 'folder')
+      .map(item => ({ id: item.id, name: item.name, method: item.method || 'GET', url: item.url || '', headers: item.headers || [{ key: '', value: '', enabled: true }], body: item.body || '', bodyType: item.bodyType || 'none', _dirty: false }))
+    if (tabs.length) {
+      setOpenTabs(tabs)
+      setActiveTabId(tabs.some(t => t.id === savedView.activeId) ? savedView.activeId : tabs[tabs.length - 1].id)
+    }
+  }, [items, savedView])
+  useEffect(() => {
+    if (!viewRestored.current) return
+    try {
+      localStorage.setItem(viewKey(), JSON.stringify({
+        tabIds: openTabs.map(t => t.id), activeId: activeTabId, expanded: expandedFolders, selectedFolderId,
+        showHistory, reqTab, navCollapsed,
+        timeout: requestTimeout, count: sendCount, perRound: sendPerRound, interval: sendInterval,
+      }))
+    } catch { /* 存不下就算了，不影响使用 */ }
+  }, [openTabs, activeTabId, expandedFolders, selectedFolderId, showHistory, reqTab, navCollapsed, requestTimeout, sendCount, sendPerRound, sendInterval])
 
   const activeItem = openTabs.find(t => t.id === activeTabId) || null
   // 切到别的请求就退出批量编辑，否则文本框里还是上一个请求的内容
