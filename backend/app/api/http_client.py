@@ -190,14 +190,184 @@ async def _send_once(client: httpx.AsyncClient, req: "SendRequest", headers: dic
     }
 
 
+class _BatchRun:
+    """一次「发送」：按轮发、每条回来就记一行，页面边发边看（见 /send-batch）。"""
+
+    def __init__(self, req: "SendRequest", headers: dict, user: User):
+        self.id = uuid.uuid4().hex[:12]
+        self.req, self.headers = req, headers
+        self.user_id, self.username = user.id, user.username
+        self.total, self.per_round = req.count, min(req.perRound, req.count)
+        self.rows: list[dict] = []
+        self.last: dict | None = None
+        self.rounds = 0
+        self.t_start = time.perf_counter()
+        self.elapsed_ms: int | None = None
+        self.done = False
+        self.cancelled = False
+        self.logged = False
+        self.finished_at: float | None = None
+        self.task: asyncio.Task | None = None
+
+    async def execute(self) -> None:
+        req = self.req
+        async with httpx.AsyncClient(
+            timeout=req.timeout, follow_redirects=True, verify=False,
+            limits=httpx.Limits(max_connections=self.per_round, max_keepalive_connections=self.per_round),
+        ) as client:
+            seq = 0
+            while seq < self.total and not self.cancelled:
+                if self.rounds and req.interval:
+                    # 分小段睡，点「停止」不用等完整个间隔
+                    end = time.monotonic() + req.interval
+                    while not self.cancelled and time.monotonic() < end:
+                        await asyncio.sleep(min(0.2, end - time.monotonic()))
+                    if self.cancelled:
+                        break
+                self.rounds += 1
+                rnd = self.rounds
+                n = min(self.per_round, self.total - seq)
+
+                async def one(my_seq: int):
+                    r = await _send_once(client, req, self.headers)
+                    # 每条回来就记，不等整轮
+                    self.rows.append({"seq": my_seq, "round": rnd, "statusCode": r.get("statusCode"),
+                                      "elapsed": r.get("elapsed"), "size": r.get("size"), "error": r.get("error")})
+                    self.last = r
+
+                await asyncio.gather(*(one(seq + k + 1) for k in range(n)))
+                seq += n
+        self.elapsed_ms = int((time.perf_counter() - self.t_start) * 1000)
+        self.done = True
+        self.finished_at = time.time()
+
+    def summary(self) -> dict:
+        rows = sorted(self.rows, key=lambda r: r["seq"])
+        codes: dict[str, int] = {}
+        for r in rows:
+            k = str(r["statusCode"]) if r["statusCode"] is not None else "出错"
+            codes[k] = codes.get(k, 0) + 1
+        ok = sum(1 for r in rows if r["statusCode"] is not None and r["statusCode"] < 400)
+        times = [r["elapsed"] for r in rows if r["elapsed"] is not None]
+        return {
+            "total": self.total, "sent": len(rows), "perRound": self.per_round, "rounds": self.rounds,
+            "interval": self.req.interval or None, "success": ok, "failed": len(rows) - ok,
+            "statusCodes": codes, "avgMs": int(sum(times) / len(times)) if times else None,
+            "minMs": int(min(times)) if times else None, "maxMs": int(max(times)) if times else None,
+            "elapsedMs": self.elapsed_ms if self.elapsed_ms is not None else int((time.perf_counter() - self.t_start) * 1000),
+            "running": not self.done, "cancelled": self.cancelled, "rows": rows,
+        }
+
+    async def log(self, session: AsyncSession) -> None:
+        """记一行发送记录（只记一次）。记的是实际发出去的条数 —— 中途停了就是停之前那些。"""
+        if self.logged or not self.done:
+            return
+        self.logged = True
+        sm = self.summary()
+        req = self.req
+        session.add(HttpSendLog(
+            user_id=self.user_id, name=(req.name or None) and req.name[:200], method=req.method.upper(),
+            url=req.url[:2000], total=sm["sent"], per_round=self.per_round, success=sm["success"], failed=sm["failed"],
+            status_codes=sm["statusCodes"], avg_ms=sm["avgMs"], elapsed_ms=sm["elapsedMs"],
+            # 用发完那一刻的真实时间，别用库的 now() —— 那是事务开始时间，同一事务里几条会一样，排序就乱了
+            created_at=datetime.now(timezone.utc),
+        ))
+        await session.flush()
+        await _prune_logs(session, self.user_id)
+        logger.info("http-client 发送 user=%s %s %s 共%d次(计划%d) 一次%d条 成功%d 失败%d",
+                    self.username, req.method.upper(), req.url[:200], sm["sent"], self.total,
+                    self.per_round, sm["success"], sm["failed"])
+
+    def payload(self) -> dict:
+        last = self.last
+        if last is None:
+            data: dict = {}
+        elif "error" in last:
+            data = {"error": last["error"]}
+        else:
+            data = dict(last)
+        data["batch"] = self.summary()
+        return data
+
+
+# 进行中/刚发完的批量发送，按 runId 找。只在本进程内存里 —— 后端重启就没了，发送记录在库里不受影响。
+_RUNS: dict[str, _BatchRun] = {}
+_RUN_KEEP_SECONDS = 600
+
+
+def _gc_runs() -> None:
+    now = time.time()
+    for rid in [k for k, r in _RUNS.items() if r.finished_at and now - r.finished_at > _RUN_KEEP_SECONDS]:
+        _RUNS.pop(rid, None)
+
+
+async def _run_in_background(run: _BatchRun) -> None:
+    try:
+        await run.execute()
+    except Exception as e:  # noqa: BLE001
+        logger.exception("http-client 批量发送异常: %s", e)
+        run.done, run.finished_at = True, time.time()
+    # 正常情况下页面下一次来问进度时就把记录记上了（用它那次请求的库会话）；
+    # 页面关了没人来问，就过一会儿自己记，别让这一次从发送记录里消失。
+    await asyncio.sleep(30)
+    if not run.logged:
+        try:
+            from app.deps.db import async_session_factory
+            async with async_session_factory() as s:
+                await run.log(s)
+                await s.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("http-client 发送记录补记失败: %s", e)
+
+
+@router.post("/send-batch")
+async def start_batch(req: SendRequest, user: User = Depends(get_current_user)):
+    """开始一次批量发送，马上返回 runId；页面拿它轮询 GET /send-batch/{runId}，每条回来就能看到。"""
+    try:
+        headers = _encode_headers(req.headers)
+    except Exception as e:  # noqa: BLE001
+        return {"error": str(e)[:300]}
+    _gc_runs()
+    run = _BatchRun(req, headers, user)
+    _RUNS[run.id] = run
+    run.task = asyncio.create_task(_run_in_background(run))
+    return {"data": {"runId": run.id}}
+
+
+def _own_run(run_id: str, user: User) -> _BatchRun | None:
+    run = _RUNS.get(run_id)
+    # 别人的 runId 一律当不存在
+    return run if run and run.user_id == user.id else None
+
+
+@router.get("/send-batch/{run_id}")
+async def batch_progress(run_id: str, user: User = Depends(get_current_user), session: AsyncSession = Depends(get_db)):
+    run = _own_run(run_id, user)
+    if run is None:
+        return JSONResponse({"error": "这次发送已经找不到了（后端重启过，或者已经过去很久）"}, status_code=404)
+    if run.done and not run.logged:
+        await run.log(session)
+    return {"data": run.payload()}
+
+
+@router.post("/send-batch/{run_id}/stop")
+async def stop_batch(run_id: str, user: User = Depends(get_current_user)):
+    run = _own_run(run_id, user)
+    if run is None:
+        return JSONResponse({"error": "这次发送已经找不到了"}, status_code=404)
+    run.cancelled = True
+    return {"ok": True}
+
+
 @router.post("/send")
 async def send_request(
     req: SendRequest,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ):
-    """发请求。`count`=共发几次，`perRound`=一次几条：每一轮同时发 perRound 条，
+    """发请求，发完才返回。`count`=共发几次，`perRound`=一次几条：每一轮同时发 perRound 条，
     这一轮全回来了（再等 `interval` 秒，没填就不等）再发下一轮，直到发满 count 条。都是 1 时就是普通的发一次。
+    页面上发多次走 /send-batch（边发边看），这条留给发一次和脚本调用。
 
     响应区展示**最后一条**的完整响应；count>1 时另带 `batch` 汇总。
     每次点「发送」在发送记录里记一行（只记摘要，见 models/http_send_log.py）。
@@ -206,62 +376,14 @@ async def send_request(
         headers = _encode_headers(req.headers)
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)[:300]}
-    total, per_round = req.count, min(req.perRound, req.count)
-    rows: list[dict] = []
-    last: dict | None = None
-    t_start = time.perf_counter()
-    async with httpx.AsyncClient(
-        timeout=req.timeout, follow_redirects=True, verify=False,
-        limits=httpx.Limits(max_connections=per_round, max_keepalive_connections=per_round),
-    ) as client:
-        seq = 0
-        rnd = 0
-        while seq < total:
-            if rnd and req.interval:
-                await asyncio.sleep(req.interval)
-            rnd += 1
-            n = min(per_round, total - seq)
-            results = await asyncio.gather(*(_send_once(client, req, headers) for _ in range(n)))
-            for r in results:
-                seq += 1
-                rows.append({"seq": seq, "round": rnd, "statusCode": r.get("statusCode"),
-                             "elapsed": r.get("elapsed"), "size": r.get("size"), "error": r.get("error")})
-            last = results[-1]
-    elapsed_all = int((time.perf_counter() - t_start) * 1000)
-
-    codes: dict[str, int] = {}
-    for r in rows:
-        k = str(r["statusCode"]) if r["statusCode"] is not None else "出错"
-        codes[k] = codes.get(k, 0) + 1
-    ok = sum(1 for r in rows if r["statusCode"] is not None and r["statusCode"] < 400)
-    times = [r["elapsed"] for r in rows if r["elapsed"] is not None]
-    avg = int(sum(times) / len(times)) if times else None
-    summary = {
-        "total": total, "perRound": per_round, "rounds": rnd, "interval": req.interval or None, "success": ok, "failed": total - ok,
-        "statusCodes": codes, "avgMs": avg,
-        "minMs": int(min(times)) if times else None, "maxMs": int(max(times)) if times else None,
-        "elapsedMs": elapsed_all, "rows": rows,
-    }
-
-    session.add(HttpSendLog(
-        user_id=user.id, name=(req.name or None) and req.name[:200], method=req.method.upper(),
-        url=req.url[:2000], total=total, per_round=per_round, success=ok, failed=total - ok,
-        status_codes=codes, avg_ms=avg, elapsed_ms=elapsed_all,
-        # 用发完那一刻的真实时间，别用库的 now() —— 那是事务开始时间，同一事务里几条会一样，排序就乱了
-        created_at=datetime.now(timezone.utc),
-    ))
-    await session.flush()
-    await _prune_logs(session, user.id)
-    logger.info("http-client 发送 user=%s %s %s 共%d次 一次%d条 成功%d 失败%d",
-                user.username, req.method.upper(), req.url[:200], total, per_round, ok, total - ok)
-
-    if total == 1:
-        if "error" in last:
-            return {"error": last["error"]}
-        return {"data": last}
-    data = dict(last) if "error" not in last else {"error": last["error"]}
-    data["batch"] = summary
-    return {"data": data}
+    run = _BatchRun(req, headers, user)
+    await run.execute()
+    await run.log(session)
+    if run.total == 1:
+        if "error" in run.last:
+            return {"error": run.last["error"]}
+        return {"data": run.last}
+    return {"data": run.payload()}
 
 
 async def _prune_logs(session: AsyncSession, user_id: uuid.UUID) -> None:

@@ -7,7 +7,7 @@ import {
   ClockCircleOutlined, ReloadOutlined, ClearOutlined,
   FolderAddOutlined, FileAddOutlined, FolderOutlined, EditOutlined,
   PlusOutlined, ImportOutlined, CodeOutlined, SaveOutlined, CheckOutlined,
-  MenuFoldOutlined, MenuUnfoldOutlined, ArrowUpOutlined, ArrowDownOutlined
+  MenuFoldOutlined, MenuUnfoldOutlined, ArrowUpOutlined, ArrowDownOutlined, StopOutlined
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -111,6 +111,7 @@ export default function HttpClient() {
   const [activeTabId, setActiveTabId] = useState(null)
   const [responses, setResponses] = useState({})
   const [sending, setSending] = useState({})
+  const [batchRuns, setBatchRuns] = useState({})   // 标签页 id → 正在批量发送的 runId
   const [requestTimeout, setRequestTimeout] = useState(savedView.timeout ?? 120)
   const [sendCount, setSendCount] = useState(savedView.count ?? 1)       // 共发几次
   const [sendPerRound, setSendPerRound] = useState(savedView.perRound ?? 1) // 一次几条（每轮同时发几条）
@@ -153,6 +154,8 @@ export default function HttpClient() {
     if (tabs.length) {
       setOpenTabs(tabs)
       setActiveTabId(tabs.some(t => t.id === savedView.activeId) ? savedView.activeId : tabs[tabs.length - 1].id)
+      const runs = Object.fromEntries(Object.entries(savedView.runs || {}).filter(([tid]) => tabs.some(t => t.id === tid)))
+      if (Object.keys(runs).length) setBatchRuns(runs)
     }
   }, [items, savedView])
   useEffect(() => {
@@ -162,9 +165,10 @@ export default function HttpClient() {
         tabIds: openTabs.map(t => t.id), activeId: activeTabId, expanded: expandedFolders, selectedFolderId,
         showHistory, reqTab, navCollapsed,
         timeout: requestTimeout, count: sendCount, perRound: sendPerRound, interval: sendInterval,
+        runs: batchRuns,   // 刷新时还在发的，刷新后接着看进度
       }))
     } catch { /* 存不下就算了，不影响使用 */ }
-  }, [openTabs, activeTabId, expandedFolders, selectedFolderId, showHistory, reqTab, navCollapsed, requestTimeout, sendCount, sendPerRound, sendInterval])
+  }, [openTabs, activeTabId, expandedFolders, selectedFolderId, showHistory, reqTab, navCollapsed, requestTimeout, sendCount, sendPerRound, sendInterval, batchRuns])
 
   const activeItem = openTabs.find(t => t.id === activeTabId) || null
   // 切到别的请求就退出批量编辑，否则文本框里还是上一个请求的内容
@@ -341,13 +345,55 @@ export default function HttpClient() {
       if (!finalUrl) { message.warning('请输入 URL'); setSending(s => ({ ...s, [id]: false })); return }
       if (!/^https?:\/\//i.test(finalUrl)) finalUrl = 'http://' + finalUrl
       const hdrs = {}; (activeItem.headers || []).forEach(h => { if (h.enabled !== false && h.key?.trim()) hdrs[h.key.trim()] = h.value || '' })
-      const res = await api.post('/http-client/send', { method: activeItem.method, url: finalUrl, headers: Object.keys(hdrs).length ? hdrs : null, body: ['POST','PUT','PATCH'].includes(activeItem.method) && activeItem.body?.trim() ? activeItem.body.trim() : null, timeout: requestTimeout, count: sendCount, perRound: sendPerRound, interval: sendInterval || null, name: activeItem.name })
+      const payload = { method: activeItem.method, url: finalUrl, headers: Object.keys(hdrs).length ? hdrs : null, body: ['POST','PUT','PATCH'].includes(activeItem.method) && activeItem.body?.trim() ? activeItem.body.trim() : null, timeout: requestTimeout, count: sendCount, perRound: sendPerRound, interval: sendInterval || null, name: activeItem.name }
+      if (sendCount > 1) {
+        // 发多次：后台发，页面每隔一会儿问一次进度 —— 每条回来就能看到，不用等全部发完
+        const r = await api.post('/http-client/send-batch', payload)
+        const runId = r.data?.runId
+        if (!runId) { setResponses(rs => ({ ...rs, [id]: { error: r.error || '没能开始发送' } })); setSending(s => ({ ...s, [id]: false })); return }
+        setBatchRuns(m => ({ ...m, [id]: runId }))
+        return  // 「发送中」由轮询结束时收起
+      }
+      const res = await api.post('/http-client/send', payload)
       const d = res.data?.data || res.data || res
       if (d.error || res.error) { setResponses(r => ({ ...r, [id]: { error: d.error || res.error, batch: d.batch } })); fetchHistory(); return }
       setResponses(r => ({ ...r, [id]: d })); fetchHistory()
-    } catch (e) { setResponses(r => ({ ...r, [id]: { error: e.message } })) }
-    finally { setSending(s => ({ ...s, [id]: false })) }
+      setSending(s => ({ ...s, [id]: false }))
+    } catch (e) { setResponses(r => ({ ...r, [id]: { error: e.message } })); setSending(s => ({ ...s, [id]: false })) }
   }
+  const stopBatch = async (id) => {
+    const runId = batchRuns[id]
+    if (runId) { try { await api.post(`/http-client/send-batch/${runId}/stop`) } catch { /* 已提示 */ } }
+  }
+  // 批量发送进度：每 0.7 秒问一次，发完（或停了）就收起「发送中」并刷新发送记录
+  useEffect(() => {
+    const entries = Object.entries(batchRuns)
+    if (!entries.length) return
+    let stopped = false
+    const tick = async () => {
+      for (const [tabId, runId] of entries) {
+        try {
+          const r = await api.get(`/http-client/send-batch/${runId}`, { silent: true })
+          if (stopped) return
+          const d = r.data || {}
+          setResponses(rs => ({ ...rs, [tabId]: d }))
+          if (!d.batch?.running) {
+            setBatchRuns(m => { const n = { ...m }; delete n[tabId]; return n })
+            setSending(s => ({ ...s, [tabId]: false }))
+            fetchHistory()
+          } else setSending(s => (s[tabId] ? s : { ...s, [tabId]: true }))
+        } catch (e) {
+          if (stopped) return
+          setResponses(rs => ({ ...rs, [tabId]: { error: e.message } }))
+          setBatchRuns(m => { const n = { ...m }; delete n[tabId]; return n })
+          setSending(s => ({ ...s, [tabId]: false }))
+        }
+      }
+    }
+    tick()
+    const t = setInterval(tick, 700)
+    return () => { stopped = true; clearInterval(t) }
+  }, [batchRuns])
 
   // 解析 URL 参数
   const urlParams = activeItem ? (() => {
@@ -636,8 +682,13 @@ export default function HttpClient() {
                       min={1} max={600} size="small" style={{ width: 80 }}
                       addonAfter="s" />
                   </Tooltip>
+                  {batchRuns[activeItem.id] ? (
+                    <Button danger size="small" icon={<StopOutlined />} onClick={() => stopBatch(activeItem.id)}
+                      style={{ paddingLeft: 16, paddingRight: 16 }}>停止</Button>
+                  ) : (
                   <Button type="primary" icon={isSending ? <LoadingOutlined /> : <SendOutlined />} loading={isSending} onClick={handleSend} size="small"
                     style={{ background: '#0ea5a0', borderColor: '#0ea5a0', paddingLeft: 16, paddingRight: 16 }}>发送</Button>
+                  )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12, color: '#4e5969' }}>
                   <span style={{ whiteSpace: 'nowrap' }}>共发几次</span>
@@ -793,7 +844,11 @@ export default function HttpClient() {
                     return (
                       <div style={{ marginBottom: 10, padding: '8px 12px', background: 'rgba(14,165,160,0.06)', borderRadius: 8, fontSize: 12 }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' }}>
-                          <span style={{ fontWeight: 600 }}>共发 {b.total} 次 · 一次 {b.perRound} 条 · {b.rounds} 轮{b.interval ? ` · 每轮间隔 ${b.interval} 秒` : ''}</span>
+                          {b.running && <LoadingOutlined style={{ color: '#0ea5a0' }} />}
+                          <span style={{ fontWeight: 600 }}>
+                            {b.running ? `正在发：已发 ${b.sent ?? b.rows.length} / ${b.total} 次` : (b.cancelled ? `已停止：发了 ${b.sent ?? b.rows.length} / ${b.total} 次` : `共发 ${b.total} 次`)}
+                            {` · 一次 ${b.perRound} 条 · ${b.rounds} 轮`}{b.interval ? ` · 每轮间隔 ${b.interval} 秒` : ''}
+                          </span>
                           <span style={{ color: '#0ea5a0' }}>成功 {b.success}</span>
                           <span style={{ color: b.failed ? '#e8453c' : '#86909c' }}>失败 {b.failed}</span>
                           <span style={{ color: '#86909c' }}>平均 {b.avgMs ?? '-'}ms（最快 {b.minMs ?? '-'} / 最慢 {b.maxMs ?? '-'}）</span>
@@ -808,7 +863,8 @@ export default function HttpClient() {
                         </div>
                         {showBatchRows && (
                           // 条数多时在这一块里自己滚，最多占约 8 行高，下面的响应体始终露出来
-                          <div style={{ marginTop: 8, maxHeight: 200, overflow: 'auto', background: 'rgba(255,255,255,0.6)', borderRadius: 6 }}>
+                          <div ref={el => { if (el && b.running) el.scrollTop = el.scrollHeight }}  // 发送中跟着最新一条往下滚
+                            style={{ marginTop: 8, maxHeight: 200, overflow: 'auto', background: 'rgba(255,255,255,0.6)', borderRadius: 6 }}>
                             <table style={{ width: '100%', fontSize: 11, borderCollapse: 'collapse', tableLayout: 'fixed' }}>
                               <thead><tr style={{ color: '#86909c', textAlign: 'left' }}>
                                 <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 }, width: 60 }}>第几条</th>

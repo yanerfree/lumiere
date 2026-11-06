@@ -115,3 +115,46 @@ async def test_间隔_每轮之间等够_默认不等(client, two_users, ok_url)
     assert b["interval"] is None and b["elapsedMs"] < 800
     r = await client.post("/api/http-client/send", headers=ha, json={"method": "GET", "url": ok_url, "interval": -1})
     assert r.status_code == 422
+
+
+async def _poll(client, h, run_id, timeout=20):
+    import asyncio
+    t = 0.0
+    while True:
+        d = (await client.get(f"/api/http-client/send-batch/{run_id}", headers=h)).json()["data"]
+        if not d["batch"]["running"] or t > timeout:
+            return d
+        await asyncio.sleep(0.1)
+        t += 0.1
+
+
+async def test_边发边看_每条回来就能看到_发完记一行(client, two_users, ok_url):
+    import asyncio
+    ha, hb = two_users
+    rid = (await client.post("/api/http-client/send-batch", headers=ha, json={
+        "method": "GET", "url": ok_url, "count": 4, "perRound": 1, "interval": 0.3, "name": "边发边看"})).json()["data"]["runId"]
+    await asyncio.sleep(0.45)
+    mid = (await client.get(f"/api/http-client/send-batch/{rid}", headers=ha)).json()["data"]["batch"]
+    assert mid["running"] and 1 <= mid["sent"] < 4          # 还没发完就已经能看到前面几条
+    # 别人看不到这次发送
+    assert (await client.get(f"/api/http-client/send-batch/{rid}", headers=hb)).status_code == 404
+    d = await _poll(client, ha, rid)
+    b = d["batch"]
+    assert not b["running"] and b["sent"] == 4 and b["success"] == 4 and d["statusCode"] == 200
+    hist = (await client.get("/api/http-client/history", headers=ha)).json()
+    assert hist["total"] == 1 and hist["data"][0]["name"] == "边发边看" and hist["data"][0]["total"] == 4
+    await _poll(client, ha, rid)                              # 再问一次不会重复记
+    assert (await client.get("/api/http-client/history", headers=ha)).json()["total"] == 1
+
+
+async def test_中途停止_只记已发的(client, two_users, ok_url):
+    import asyncio
+    ha, _ = two_users
+    rid = (await client.post("/api/http-client/send-batch", headers=ha, json={
+        "method": "GET", "url": ok_url, "count": 50, "perRound": 1, "interval": 0.2})).json()["data"]["runId"]
+    await asyncio.sleep(0.5)
+    assert (await client.post(f"/api/http-client/send-batch/{rid}/stop", headers=ha)).status_code == 200
+    b = (await _poll(client, ha, rid))["batch"]
+    assert b["cancelled"] and not b["running"] and 1 <= b["sent"] < 50
+    hist = (await client.get("/api/http-client/history", headers=ha)).json()["data"]
+    assert hist[0]["total"] == b["sent"]
