@@ -26,6 +26,10 @@ class HttpRequest(Base):
     body_type: Mapped[str] = mapped_column(String(20), nullable=False, default="none")
     auth_type: Mapped[str] = mapped_column(String(20), nullable=False, default="none")
     auth_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    # http = 普通请求；mcp = MCP 请求（请求体由页面按「调用方式」自动生成，发送时可自动打招呼拿会话号）
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, default="http", server_default="http")
+    # MCP 请求的页面设置：{method, toolName, arguments, uri, promptName, session}
+    mcp_config: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

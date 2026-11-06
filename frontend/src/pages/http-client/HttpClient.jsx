@@ -15,7 +15,55 @@ import { useTextSearch, TextSearchBar, highlightText, scrollMatchIntoView } from
 
 const { TextArea } = Input
 const MONO = 'var(--font-mono)'
-const MC = { GET: '#0ea5a0', POST: '#ff7d00', PUT: '#4e8af0', DELETE: '#e8453c', PATCH: '#7c5cbf', HEAD: '#86909c', OPTIONS: '#86909c' }
+const MC = { GET: '#0ea5a0', POST: '#ff7d00', PUT: '#4e8af0', DELETE: '#e8453c', PATCH: '#7c5cbf', HEAD: '#86909c', OPTIONS: '#86909c', MCP: '#7c5cbf' }
+
+// ── MCP 请求：选「调用方式」自动生成请求体，人只改地址和工具名 ──
+const MCP_METHODS = [
+  { value: 'tools/call', label: '调用工具（tools/call）' },
+  { value: 'tools/list', label: '列出工具（tools/list）' },
+  { value: 'initialize', label: '初始化（initialize）' },
+  { value: 'resources/list', label: '列出资源（resources/list）' },
+  { value: 'resources/read', label: '读取资源（resources/read）' },
+  { value: 'prompts/list', label: '列出提示词（prompts/list）' },
+  { value: 'prompts/get', label: '获取提示词（prompts/get）' },
+  { value: 'ping', label: '连通测试（ping）' },
+]
+const MCP_SESSIONS = [
+  { value: 'none', label: '不打招呼（不带会话号）' },
+  { value: 'batch', label: '整批同一会话（点一次发送算一批）' },
+  { value: 'each', label: '每条单独会话' },
+]
+const MCP_DEFAULT = { method: 'tools/call', toolName: '', arguments: '{}', uri: '', promptName: '', session: 'none' }
+const MCP_HEADERS = [
+  { key: 'Content-Type', value: 'application/json', enabled: true },
+  { key: 'Accept', value: 'application/json, text/event-stream', enabled: true },
+]
+function parseArgs(text) {
+  if (!text || !text.trim()) return {}
+  try { const v = JSON.parse(text); return v && typeof v === 'object' && !Array.isArray(v) ? v : null } catch { return null }
+}
+function buildMcpBody(cfg) {
+  const c = { ...MCP_DEFAULT, ...(cfg || {}) }
+  const msg = { jsonrpc: '2.0', id: 1, method: c.method }
+  const args = parseArgs(c.arguments) || {}
+  if (c.method === 'initialize') msg.params = { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'lumiere-http-client', version: '1.0' } }
+  else if (c.method === 'tools/call') msg.params = { name: c.toolName || '', arguments: args }
+  else if (c.method === 'resources/read') msg.params = { uri: c.uri || '' }
+  else if (c.method === 'prompts/get') msg.params = { name: c.promptName || '', arguments: args }
+  else if (c.method !== 'ping') msg.params = {}
+  return JSON.stringify(msg, null, 2)
+}
+// 必需的两个请求头没有就补上，已有的（不分大小写）不动
+function ensureMcpHeaders(headers) {
+  const hs = (headers || []).filter(h => h.key?.trim() || h.value?.trim())
+  const have = new Set(hs.map(h => h.key.trim().toLowerCase()))
+  return [...MCP_HEADERS.filter(h => !have.has(h.key.toLowerCase())), ...hs]
+}
+const tabFromItem = (item) => ({
+  id: item.id, name: item.name, method: item.method || 'GET', url: item.url || '',
+  headers: item.headers || [{ key: '', value: '', enabled: true }], body: item.body || '', bodyType: item.bodyType || 'none',
+  kind: item.kind || 'http', mcpConfig: item.mcpConfig || null, _dirty: false,
+})
 
 // ── cURL 工具 ──
 function parseCurl(curl) {
@@ -150,7 +198,7 @@ export default function HttpClient() {
     viewRestored.current = true
     const byId = Object.fromEntries(items.map(i => [i.id, i]))
     const tabs = (savedView.tabIds || []).map(id => byId[id]).filter(i => i && i.type !== 'folder')
-      .map(item => ({ id: item.id, name: item.name, method: item.method || 'GET', url: item.url || '', headers: item.headers || [{ key: '', value: '', enabled: true }], body: item.body || '', bodyType: item.bodyType || 'none', _dirty: false }))
+      .map(tabFromItem)
     if (tabs.length) {
       setOpenTabs(tabs)
       setActiveTabId(tabs.some(t => t.id === savedView.activeId) ? savedView.activeId : tabs[tabs.length - 1].id)
@@ -178,11 +226,20 @@ export default function HttpClient() {
     if (saveTimerRef.current[id]) clearTimeout(saveTimerRef.current[id])
     saveTimerRef.current[id] = setTimeout(() => autoSave(id), 800)
   }
+  // 改 MCP 设置：同时重新生成请求体、补齐两个必需的请求头（「会话」只影响怎么发，不动请求体）
+  const updateMcp = (tab, patch) => {
+    const cfg = { ...MCP_DEFAULT, ...(tab.mcpConfig || {}), ...patch }
+    updateTabField(tab.id, 'mcpConfig', cfg)
+    if (!('session' in patch && Object.keys(patch).length === 1)) {
+      updateTabField(tab.id, 'body', buildMcpBody(cfg))
+      updateTabField(tab.id, 'headers', ensureMcpHeaders(tab.headers))
+    }
+  }
   const autoSave = async (id) => {
     const tab = tabsRef.current.find(t => t.id === id)
     if (!tab || !tab._dirty) return
     try {
-      await api.put(`/http-client/requests/${id}`, { name: tab.name, method: tab.method, url: tab.url, headers: tab.headers, body: tab.body, body_type: tab.bodyType })
+      await api.put(`/http-client/requests/${id}`, { name: tab.name, method: tab.method, url: tab.url, headers: tab.headers, body: tab.body, body_type: tab.bodyType, ...(tab.kind === 'mcp' ? { mcp_config: tab.mcpConfig } : {}) })
       setOpenTabs(tabs => tabs.map(t => t.id === id ? { ...t, _dirty: false } : t))
       fetchItems()
     } catch {}
@@ -190,7 +247,7 @@ export default function HttpClient() {
   const openRequest = (item) => {
     if (item.type === 'folder') return
     if (openTabs.find(t => t.id === item.id)) { setActiveTabId(item.id); return }
-    setOpenTabs(tabs => [...tabs, { id: item.id, name: item.name, method: item.method || 'GET', url: item.url || '', headers: item.headers || [{ key: '', value: '', enabled: true }], body: item.body || '', bodyType: item.bodyType || 'none', _dirty: false }])
+    setOpenTabs(tabs => [...tabs, tabFromItem(item)])
     setActiveTabId(item.id)
   }
   const closeTab = (id) => {
@@ -200,8 +257,17 @@ export default function HttpClient() {
     setOpenTabs(remaining)
     if (activeTabId === id) setActiveTabId(remaining.length ? remaining[remaining.length - 1].id : null)
   }
-  const handleCreate = async (type, parentId) => {
+  const handleCreate = async (type, parentId, kind = 'http') => {
     try {
+      if (type === 'request' && kind === 'mcp') {
+        const r = await api.post('/http-client/requests', { type, name: '新 MCP 请求', method: 'POST', kind: 'mcp', mcp_config: MCP_DEFAULT, parent_id: parentId || null })
+        const d = r.data || r
+        const extra = { headers: MCP_HEADERS, body: buildMcpBody(MCP_DEFAULT), bodyType: 'json' }
+        await api.put(`/http-client/requests/${d.id}`, { headers: extra.headers, body: extra.body, body_type: 'json' })
+        await fetchItems()
+        openRequest({ ...d, ...extra, mcpConfig: MCP_DEFAULT })
+        return
+      }
       const r = await api.post('/http-client/requests', { type, name: type === 'folder' ? '新文件夹' : '新请求', parent_id: parentId || null })
       await fetchItems()
       if (type === 'request') openRequest(r.data || r)
@@ -304,11 +370,11 @@ export default function HttpClient() {
   }
   const handleDuplicateItem = async (item) => {
     try {
-      const r = await api.post('/http-client/requests', { type: item.type, name: item.name + ' 副本', method: item.method, url: item.url, parent_id: item.parentId || null })
+      const r = await api.post('/http-client/requests', { type: item.type, name: item.name + ' 副本', method: item.method, url: item.url, kind: item.kind || 'http', mcp_config: item.mcpConfig || null, parent_id: item.parentId || null })
       const d = r.data || r
       if (item.type === 'folder') {
         const copyRequestInto = async (parentId, req) => {
-          const cr = await api.post('/http-client/requests', { type: 'request', name: req.name, method: req.method, url: req.url, parent_id: parentId })
+          const cr = await api.post('/http-client/requests', { type: 'request', name: req.name, method: req.method, url: req.url, kind: req.kind || 'http', mcp_config: req.mcpConfig || null, parent_id: parentId })
           const cd = cr.data || cr
           await api.put(`/http-client/requests/${cd.id}`, { headers: req.headers, body: req.body, body_type: req.bodyType })
         }
@@ -326,7 +392,7 @@ export default function HttpClient() {
         await api.put(`/http-client/requests/${d.id}`, { headers: item.headers, body: item.body, body_type: item.bodyType })
       }
       await fetchItems()
-      if (item.type !== 'folder') openRequest({ ...d, headers: item.headers, body: item.body })
+      if (item.type !== 'folder') openRequest({ ...d, headers: item.headers, body: item.body, bodyType: item.bodyType })
       else setExpandedFolders(s => ({ ...s, [d.id]: true }))
       message.success('已复制')
     } catch {}
@@ -345,7 +411,7 @@ export default function HttpClient() {
       if (!finalUrl) { message.warning('请输入 URL'); setSending(s => ({ ...s, [id]: false })); return }
       if (!/^https?:\/\//i.test(finalUrl)) finalUrl = 'http://' + finalUrl
       const hdrs = {}; (activeItem.headers || []).forEach(h => { if (h.enabled !== false && h.key?.trim()) hdrs[h.key.trim()] = h.value || '' })
-      const payload = { method: activeItem.method, url: finalUrl, headers: Object.keys(hdrs).length ? hdrs : null, body: ['POST','PUT','PATCH'].includes(activeItem.method) && activeItem.body?.trim() ? activeItem.body.trim() : null, timeout: requestTimeout, count: sendCount, perRound: sendPerRound, interval: sendInterval || null, name: activeItem.name }
+      const payload = { method: activeItem.method, url: finalUrl, headers: Object.keys(hdrs).length ? hdrs : null, body: ['POST','PUT','PATCH'].includes(activeItem.method) && activeItem.body?.trim() ? activeItem.body.trim() : null, timeout: requestTimeout, count: sendCount, perRound: sendPerRound, interval: sendInterval || null, name: activeItem.name, ...(activeItem.kind === 'mcp' ? { mcp: { session: activeItem.mcpConfig?.session || 'none' } } : {}) }
       if (sendCount > 1) {
         // 发多次：后台发，页面每隔一会儿问一次进度 —— 每条回来就能看到，不用等全部发完
         const r = await api.post('/http-client/send-batch', payload)
@@ -538,7 +604,7 @@ export default function HttpClient() {
           }}>
           {isFolder && <span style={{ fontSize: 11, color: '#c9cdd4', width: 12, textAlign: 'center' }}>{isExpanded ? '▾' : '▸'}</span>}
           {isFolder && <FolderOutlined style={{ color: '#ff7d00', fontSize: 12 }} />}
-          {!isFolder && <Tag color={MC[item.method]} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{item.method}</Tag>}
+          {!isFolder && <Tag color={MC[item.kind === 'mcp' ? 'MCP' : item.method]} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{item.kind === 'mcp' ? 'MCP' : item.method}</Tag>}
           {isEditing ? (
             <Input size="small" autoFocus value={editingNameValue} onChange={e => setEditingNameValue(e.target.value)}
               onBlur={() => handleRename(item.id, editingNameValue)} onPressEnter={() => handleRename(item.id, editingNameValue)}
@@ -546,7 +612,14 @@ export default function HttpClient() {
           ) : <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: isFolder ? '#1d2129' : '#4e5969', fontWeight: isFolder ? 500 : 400 }}>{item.name}</span>}
           {isHover && !isEditing && (
             <span style={{ display: 'flex', gap: 2, flexShrink: 0 }} onClick={e => e.stopPropagation()}>
-              {isFolder && <Tooltip title="新建请求"><PlusOutlined style={{ fontSize: 11, color: '#86909c', padding: 2 }} onClick={() => { handleCreate('request', item.id); setExpandedFolders(s => ({ ...s, [item.id]: true })) }} /></Tooltip>}
+              {isFolder && (
+                <Dropdown trigger={['click']} menu={{ items: [
+                  { key: 'http', label: 'HTTP 请求', onClick: () => { handleCreate('request', item.id); setExpandedFolders(s => ({ ...s, [item.id]: true })) } },
+                  { key: 'mcp', label: 'MCP 请求', onClick: () => { handleCreate('request', item.id, 'mcp'); setExpandedFolders(s => ({ ...s, [item.id]: true })) } },
+                ] }}>
+                  <Tooltip title="新建请求"><PlusOutlined style={{ fontSize: 11, color: '#86909c', padding: 2 }} onClick={e => e.stopPropagation()} /></Tooltip>
+                </Dropdown>
+              )}
               {/* 子目录里不给这个入口 —— 目录一共两层 */}
               {isFolder && !item.parentId && <Tooltip title="新建子目录"><FolderAddOutlined style={{ fontSize: 11, color: '#86909c', padding: 2 }} onClick={() => { handleCreate('folder', item.id); setExpandedFolders(s => ({ ...s, [item.id]: true })) }} /></Tooltip>}
               {moveTargets(item).length > 0 && (
@@ -575,6 +648,7 @@ export default function HttpClient() {
         {isFolder && isExpanded && children.length === 0 && (
           <div style={{ padding: `3px 8px 3px ${26 + depth * 16}px`, fontSize: 11, color: '#c9cdd4', display: 'flex', gap: 10 }}>
             <span style={{ cursor: 'pointer' }} onClick={() => handleCreate('request', item.id)}>+ 新建请求</span>
+            <span style={{ cursor: 'pointer' }} onClick={() => handleCreate('request', item.id, 'mcp')}>+ MCP 请求</span>
             {!item.parentId && <span style={{ cursor: 'pointer' }} onClick={() => handleCreate('folder', item.id)}>+ 新建子目录</span>}
           </div>
         )}
@@ -625,7 +699,12 @@ export default function HttpClient() {
         ) : (
           <div style={{ width: 240, flexShrink: 0, background: 'var(--panel-bg)', backdropFilter: 'blur(16px)', borderRadius: 16, display: 'flex', flexDirection: 'column', boxShadow: '0 2px 12px rgba(0,0,0,0.04)' }}>
             <div style={{ padding: '6px 8px', borderBottom: '1px solid rgba(0,0,0,0.04)', display: 'flex', gap: 4, alignItems: 'center' }}>
-              <Button type="primary" size="small" icon={<FileAddOutlined />} onClick={() => handleCreate('request', selectedFolderId)} style={{ flex: 1 }}>新建请求</Button>
+              <Dropdown trigger={['click']} menu={{ items: [
+                { key: 'http', label: 'HTTP 请求', onClick: () => handleCreate('request', selectedFolderId) },
+                { key: 'mcp', label: 'MCP 请求', onClick: () => handleCreate('request', selectedFolderId, 'mcp') },
+              ] }}>
+                <Button type="primary" size="small" icon={<FileAddOutlined />} style={{ flex: 1 }}>新建请求</Button>
+              </Dropdown>
               <Button size="small" icon={<FolderAddOutlined />} onClick={() => handleCreate('folder')}>文件夹</Button>
               <Tooltip title="收起导航">
                 <Button type="text" size="small" icon={<MenuFoldOutlined />} onClick={() => setNavCollapsed(true)} style={{ color: '#c9cdd4', flexShrink: 0 }} />
@@ -653,7 +732,7 @@ export default function HttpClient() {
                   color: activeTabId === t.id ? '#0ea5a0' : '#4e5969', fontWeight: activeTabId === t.id ? 600 : 400,
                   whiteSpace: 'nowrap', background: activeTabId === t.id ? 'rgba(230,81,0,0.05)' : 'transparent',
                 }}>
-                  <Tag color={MC[t.method]} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{t.method}</Tag>
+                  <Tag color={MC[t.kind === 'mcp' ? 'MCP' : t.method]} style={{ margin: 0, fontSize: 11, lineHeight: '14px', padding: '0 3px', borderRadius: 6 }}>{t.kind === 'mcp' ? 'MCP' : t.method}</Tag>
                   <span style={{ maxWidth: 100, overflow: 'hidden', textOverflow: 'ellipsis' }}>{t.name}</span>
                   {t._dirty && <span style={{ color: '#ff7d00', fontSize: 11 }}>●</span>}
                   <span onClick={e => { e.stopPropagation(); closeTab(t.id) }} style={{ marginLeft: 2, color: '#c9cdd4', fontSize: 11, cursor: 'pointer' }}>×</span>
@@ -669,10 +748,14 @@ export default function HttpClient() {
                 <Input value={activeItem.name} onChange={e => updateTabField(activeItem.id, 'name', e.target.value)}
                   variant="borderless" style={{ fontSize: 14, fontWeight: 600, padding: '0 0 4px 0', color: '#1d2129' }} />
                 <div style={{ display: 'flex', gap: 8 }}>
+                  {activeItem.kind === 'mcp' ? (
+                    <Tooltip title="MCP 请求固定用 POST 发"><div style={{ width: 110, textAlign: 'center', color: MC.MCP, fontWeight: 600, fontFamily: MONO, fontSize: 13, lineHeight: '24px', border: '1px solid rgba(124,92,191,0.3)', borderRadius: 6, background: 'rgba(124,92,191,0.06)' }}>MCP</div></Tooltip>
+                  ) : (
                   <Select value={activeItem.method} onChange={v => updateTabField(activeItem.id, 'method', v)} style={{ width: 110 }} size="small"
                     options={['GET','POST','PUT','DELETE','PATCH','HEAD','OPTIONS'].map(m => ({ value: m, label: <span style={{ color: MC[m], fontWeight: 600, fontFamily: MONO }}>{m}</span> }))} />
+                  )}
                   <Input spellCheck={false} value={activeItem.url} onChange={e => updateTabField(activeItem.id, 'url', e.target.value)}
-                    placeholder="输入请求 URL" style={{ flex: 1, fontFamily: MONO, fontSize: 13 }} onPressEnter={handleSend} size="small" />
+                    placeholder={activeItem.kind === 'mcp' ? 'MCP 服务地址，例如 http://host:port/mcp' : '输入请求 URL'} style={{ flex: 1, fontFamily: MONO, fontSize: 13 }} onPressEnter={handleSend} size="small" />
                   <Button size="small" disabled={!activeItem._dirty} onClick={() => autoSave(activeItem.id)} icon={<SaveOutlined />}>
                     {activeItem._dirty ? '保存' : '已保存'}
                   </Button>
@@ -690,7 +773,48 @@ export default function HttpClient() {
                     style={{ background: '#0ea5a0', borderColor: '#0ea5a0', paddingLeft: 16, paddingRight: 16 }}>发送</Button>
                   )}
                 </div>
+                {activeItem.kind === 'mcp' && (() => {
+                  const cfg = { ...MCP_DEFAULT, ...(activeItem.mcpConfig || {}) }
+                  const argsBad = ['tools/call', 'prompts/get'].includes(cfg.method) && parseArgs(cfg.arguments) === null
+                  const lbl = { whiteSpace: 'nowrap' }
+                  return (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12, color: '#4e5969', flexWrap: 'wrap' }}>
+                      <span style={lbl}>调用方式</span>
+                      <Select size="small" style={{ width: 210 }} value={cfg.method} options={MCP_METHODS} onChange={v => updateMcp(activeItem, { method: v })} />
+                      {cfg.method === 'tools/call' && (<>
+                        <span style={lbl}>工具名</span>
+                        <Input size="small" spellCheck={false} style={{ width: 180, fontFamily: MONO }} placeholder="例如 get_weather"
+                          value={cfg.toolName} onChange={e => updateMcp(activeItem, { toolName: e.target.value })} />
+                      </>)}
+                      {cfg.method === 'prompts/get' && (<>
+                        <span style={lbl}>提示词名</span>
+                        <Input size="small" spellCheck={false} style={{ width: 160, fontFamily: MONO }}
+                          value={cfg.promptName} onChange={e => updateMcp(activeItem, { promptName: e.target.value })} />
+                      </>)}
+                      {cfg.method === 'resources/read' && (<>
+                        <span style={lbl}>资源地址</span>
+                        <Input size="small" spellCheck={false} style={{ width: 240, fontFamily: MONO }} placeholder="例如 file:///readme.md"
+                          value={cfg.uri} onChange={e => updateMcp(activeItem, { uri: e.target.value })} />
+                      </>)}
+                      {['tools/call', 'prompts/get'].includes(cfg.method) && (<>
+                        <Tooltip title='JSON 对象，例如 {"city": "北京"}；不需要参数就留 {}'><span style={lbl}>参数</span></Tooltip>
+                        <Input size="small" spellCheck={false} style={{ width: 220, fontFamily: MONO }} status={argsBad ? 'error' : undefined}
+                          value={cfg.arguments} onChange={e => updateMcp(activeItem, { arguments: e.target.value })} />
+                        {argsBad && <span style={{ color: '#e8453c' }}>参数不是合法的 JSON 对象</span>}
+                      </>)}
+                    </div>
+                  )
+                })()}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6, fontSize: 12, color: '#4e5969' }}>
+                  {activeItem.kind === 'mcp' && (<>
+                    {/* 会话决定「怎么发」，和共发几次放一排 */}
+                    <span style={{ whiteSpace: 'nowrap' }}>会话</span>
+                    <Tooltip title="不打招呼：不带会话号，要求会话号的服务会直接拒绝；整批同一会话：点一次「发送」先打一次招呼，这一批都带同一个会话号；每条单独会话：每条都先打招呼，各用各的会话号">
+                      <Select size="small" style={{ width: 270, flexShrink: 0 }} value={activeItem.mcpConfig?.session || 'none'} options={MCP_SESSIONS}
+                        onChange={v => updateMcp(activeItem, { session: v })} />
+                    </Tooltip>
+                    <span style={{ width: 8 }} />
+                  </>)}
                   <span style={{ whiteSpace: 'nowrap' }}>共发几次</span>
                   <InputNumber value={sendCount} onChange={v => setSendCount(v || 1)} min={1} max={1000} precision={0}
                     size="small" style={{ width: 80, flexShrink: 0 }} />
@@ -834,6 +958,7 @@ export default function HttpClient() {
                     <Tag color={resp.statusCode < 300 ? 'cyan' : resp.statusCode < 400 ? 'blue' : 'red'} style={{ margin: 0, borderRadius: 8, fontFamily: MONO }}>{resp.statusCode}</Tag>
                     <span style={{ fontSize: 11, color: '#86909c', marginLeft: 6 }}>{resp.elapsed}ms</span>
                     <span style={{ fontSize: 11, color: '#86909c', marginLeft: 6 }}>{resp.size > 1024 ? `${(resp.size/1024).toFixed(1)}KB` : `${resp.size}B`}</span>
+                    {resp.mcpSessionId && <Tooltip title="这次打招呼拿到的会话号"><span style={{ fontSize: 11, color: MC.MCP, marginLeft: 6, fontFamily: MONO }}>会话 {resp.mcpSessionId}</span></Tooltip>}
                     <Button type="link" size="small" icon={<CopyOutlined />} style={{ fontSize: 11, padding: '0 0 0 8px' }}
                       onClick={() => copyToClipboard(resp.body).then(() => message.success('已复制'))}>复制</Button>
                   </>)}
@@ -871,6 +996,7 @@ export default function HttpClient() {
                                 <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 }, width: 60 }}>第几轮</th>
                                 <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 }, width: 70 }}>状态码</th>
                                 <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 }, width: 90 }}>用时</th>
+                                {b.rows.some(r => r.sessionId) && <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 }, width: 200 }}>会话号</th>}
                                 <th style={{ ...{ padding: '3px 6px', position: 'sticky', top: 0, background: '#eef7f6', fontWeight: 500 } }}>出错原因</th>
                               </tr></thead>
                               <tbody>{b.rows.map(r => (
@@ -878,6 +1004,7 @@ export default function HttpClient() {
                                   <td style={{ padding: '2px 6px' }}>{r.seq}</td><td style={{ padding: '2px 6px' }}>{r.round}</td>
                                   <td style={{ padding: '2px 6px', fontFamily: MONO, color: r.statusCode && r.statusCode < 400 ? undefined : '#e8453c' }}>{r.statusCode ?? '-'}</td>
                                   <td style={{ padding: '2px 6px' }}>{r.elapsed ?? '-'}ms</td>
+                                  {b.rows.some(x => x.sessionId) && <td style={{ padding: '2px 6px', fontFamily: MONO, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.sessionId || ''}>{r.sessionId || '-'}</td>}
                                   <td style={{ padding: '2px 6px', color: '#e8453c', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={r.error || ''}>{r.error || ''}</td>
                                 </tr>
                               ))}</tbody>

@@ -35,6 +35,8 @@ class RequestCreate(BaseModel):
     name: str = "新请求"
     method: str = "GET"
     url: str = ""
+    kind: str = "http"              # http / mcp
+    mcp_config: dict | None = None
 
 class RequestUpdate(BaseModel):
     name: str | None = None
@@ -47,6 +49,7 @@ class RequestUpdate(BaseModel):
     auth_config: dict | None = Field(default=None)
     parent_id: str | None = Field(default=None)
     sort_order: int | None = None
+    mcp_config: dict | None = Field(default=None)
 
 class SortItem(BaseModel):
     id: str
@@ -66,6 +69,20 @@ class SendRequest(BaseModel):
     perRound: int = Field(default=1, ge=1, le=50)     # 一次几条（每轮同时发几条）
     interval: float | None = Field(default=None, ge=0, le=3600)  # 间隔几秒：上一轮回来后等多久再发下一轮，空 = 不等
     name: str | None = None                           # 请求名，记录里好认
+    mcp: "McpOptions | None" = None                   # 有值 = 这是一条 MCP 请求
+
+
+class McpOptions(BaseModel):
+    """MCP 请求的发送选项。session：
+      none  —— 不打招呼，什么会话号都不带（默认）
+      batch —— 点一次「发送」打一次招呼，这一批共用一个会话号
+      each  —— 每一条都先打招呼，各用各的会话号
+    """
+    session: str = "none"
+    protocolVersion: str = "2025-03-26"
+
+
+SendRequest.model_rebuild()
 
 
 # ── 请求集合 CRUD ──
@@ -91,6 +108,8 @@ async def create_request(body: RequestCreate, session: AsyncSession = Depends(ge
         parent_id=uuid.UUID(body.parent_id) if body.parent_id else None,
         method=body.method,
         url=body.url,
+        kind="mcp" if body.kind == "mcp" else "http",
+        mcp_config=body.mcp_config,
     )
     session.add(item)
     await session.flush()
@@ -154,6 +173,62 @@ async def batch_sort(body: BatchSortRequest, session: AsyncSession = Depends(get
 
 # ── 发送请求 ──
 
+def _sse_to_json_text(text: str) -> str | None:
+    """MCP 服务常把回答包成一段一段的推送格式（text/event-stream）：取出每段 data 里的 JSON。
+    只有一段就直接给那一段，多段给数组；一段 JSON 都没有就返回 None（原样显示）。"""
+    msgs = []
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            raw = line[5:].strip()
+            if not raw:
+                continue
+            try:
+                msgs.append(json.loads(raw))
+            except Exception:  # noqa: BLE001
+                continue
+    if not msgs:
+        return None
+    return json.dumps(msgs[0] if len(msgs) == 1 else msgs, ensure_ascii=False, indent=2)
+
+
+_MCP_ACCEPT = "application/json, text/event-stream"
+
+
+async def _mcp_handshake(client: httpx.AsyncClient, req: "SendRequest", headers: dict) -> tuple[str | None, str | None, str | None]:
+    """打招呼：initialize → 拿 Mcp-Session-Id → notifications/initialized。
+    返回 (会话号, 协商出的协议版本, 出错原因)。服务端不发会话号（无状态服务）不算错，会话号为 None。"""
+    h = {**headers, "Content-Type": "application/json", "Accept": _MCP_ACCEPT}
+    h.pop("Mcp-Session-Id", None)
+    h.pop("mcp-session-id", None)
+    pv = req.mcp.protocolVersion if req.mcp else "2025-03-26"
+    init = {"jsonrpc": "2.0", "id": 0, "method": "initialize",
+            "params": {"protocolVersion": pv, "capabilities": {},
+                       "clientInfo": {"name": "lumiere-http-client", "version": "1.0"}}}
+    try:
+        r = await client.post(req.url, headers=h, json=init)
+    except Exception as e:  # noqa: BLE001
+        return None, None, f"打招呼失败：{e.__class__.__name__} {str(e)[:150]}"
+    if r.status_code >= 400:
+        return None, None, f"打招呼失败：服务返回 {r.status_code} {r.text[:150]}"
+    sid = r.headers.get("mcp-session-id")
+    try:
+        body_text = _sse_to_json_text(r.text) or r.text
+        res = json.loads(body_text)
+        if isinstance(res, list):
+            res = res[-1]
+        pv = (res.get("result") or {}).get("protocolVersion") or pv
+    except Exception:  # noqa: BLE001
+        pass
+    h2 = {**h, "MCP-Protocol-Version": pv}
+    if sid:
+        h2["Mcp-Session-Id"] = sid
+    try:
+        await client.post(req.url, headers=h2, json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+    except Exception as e:  # noqa: BLE001
+        return sid, pv, f"打招呼第二步失败：{e.__class__.__name__} {str(e)[:150]}"
+    return sid, pv, None
+
+
 async def _send_once(client: httpx.AsyncClient, req: "SendRequest", headers: dict) -> dict:
     """发一条。成功返回完整响应；连不上/超时等返回 {"error": ...}。"""
     t0 = time.perf_counter()
@@ -175,6 +250,8 @@ async def _send_once(client: httpx.AsyncClient, req: "SendRequest", headers: dic
         resp_body = resp.text
     except Exception:
         resp_body = f"[Binary {len(resp.content)} bytes]"
+    if req.mcp and "text/event-stream" in resp.headers.get("content-type", ""):
+        resp_body = _sse_to_json_text(resp_body) or resp_body
     return {
         "statusCode": resp.status_code,
         "headers": dict(resp.headers),
@@ -195,6 +272,14 @@ class _BatchRun:
 
     def __init__(self, req: "SendRequest", headers: dict, user: User):
         self.id = uuid.uuid4().hex[:12]
+        if req.mcp:
+            # MCP 要求声明两种回答格式都收；页面一般已经带了，这里兜底，大小写不同的同名头不重复加
+            low = {k.lower() for k in headers}
+            headers = {**headers}
+            if "accept" not in low:
+                headers["Accept"] = _MCP_ACCEPT
+            if "content-type" not in low:
+                headers["Content-Type"] = "application/json"
         self.req, self.headers = req, headers
         self.user_id, self.username = user.id, user.username
         self.total, self.per_round = req.count, min(req.perRound, req.count)
@@ -215,7 +300,20 @@ class _BatchRun:
             timeout=req.timeout, follow_redirects=True, verify=False,
             limits=httpx.Limits(max_connections=self.per_round, max_keepalive_connections=self.per_round),
         ) as client:
+            mode = (req.mcp.session if req.mcp else "none") or "none"
             seq = 0
+            batch_sid, batch_headers = None, self.headers
+            if mode == "batch":
+                batch_sid, pv, err = await _mcp_handshake(client, req, self.headers)
+                if err:
+                    # 招呼都打不通，这一批后面也不用发了：记一条失败就收
+                    self.rows.append({"seq": 1, "round": 1, "statusCode": None, "elapsed": None, "size": None,
+                                      "error": err, "sessionId": None})
+                    self.last = {"error": err}
+                    self.rounds = 1
+                    seq = self.total
+                else:
+                    batch_headers = _with_session(self.headers, batch_sid, pv)
             while seq < self.total and not self.cancelled:
                 if self.rounds and req.interval:
                     # 分小段睡，点「停止」不用等完整个间隔
@@ -229,10 +327,21 @@ class _BatchRun:
                 n = min(self.per_round, self.total - seq)
 
                 async def one(my_seq: int):
-                    r = await _send_once(client, req, self.headers)
+                    sid, hdrs, r = None, self.headers, None
+                    if mode == "each":
+                        sid, pv, err = await _mcp_handshake(client, req, self.headers)
+                        if err:
+                            r = {"error": err}
+                        else:
+                            hdrs = _with_session(self.headers, sid, pv)
+                    elif mode == "batch":
+                        sid, hdrs = batch_sid, batch_headers
+                    if r is None:
+                        r = await _send_once(client, req, hdrs)
                     # 每条回来就记，不等整轮
                     self.rows.append({"seq": my_seq, "round": rnd, "statusCode": r.get("statusCode"),
-                                      "elapsed": r.get("elapsed"), "size": r.get("size"), "error": r.get("error")})
+                                      "elapsed": r.get("elapsed"), "size": r.get("size"), "error": r.get("error"),
+                                      "sessionId": sid})
                     self.last = r
 
                 await asyncio.gather(*(one(seq + k + 1) for k in range(n)))
@@ -288,6 +397,15 @@ class _BatchRun:
             data = dict(last)
         data["batch"] = self.summary()
         return data
+
+
+def _with_session(headers: dict, sid: str | None, pv: str | None) -> dict:
+    h = {**headers}
+    if sid:
+        h["Mcp-Session-Id"] = sid
+    if pv:
+        h["MCP-Protocol-Version"] = pv
+    return h
 
 
 # 进行中/刚发完的批量发送，按 runId 找。只在本进程内存里 —— 后端重启就没了，发送记录在库里不受影响。
@@ -382,7 +500,10 @@ async def send_request(
     if run.total == 1:
         if "error" in run.last:
             return {"error": run.last["error"]}
-        return {"data": run.last}
+        data = dict(run.last)
+        if run.rows and run.rows[0].get("sessionId"):
+            data["mcpSessionId"] = run.rows[0]["sessionId"]
+        return {"data": data}
     return {"data": run.payload()}
 
 
@@ -483,6 +604,8 @@ def _to_dict(r: HttpRequest) -> dict:
         "bodyType": r.body_type,
         "authType": r.auth_type,
         "authConfig": r.auth_config,
+        "kind": r.kind or "http",
+        "mcpConfig": r.mcp_config,
         "createdAt": r.created_at.isoformat() if r.created_at else None,
         "updatedAt": r.updated_at.isoformat() if r.updated_at else None,
     }
