@@ -9,6 +9,7 @@ from pathlib import Path
 
 from app.deps.db import async_session_factory
 from app.services import tcp_mock_service as svc
+from app.services.tcp_match import is_match
 from app.models.protocol_mock import TcpMockHandler
 
 logger = logging.getLogger("tcp_mock")
@@ -93,18 +94,8 @@ class TcpMockServerManager:
                 )
 
                 if handler is None:
-                    # No matching handler — echo by default
-                    writer.write(data)
-                    await writer.drain()
-                    await self._log_event(
-                        handler_id=None,
-                        event_type="data_out",
-                        client_ip=client_ip,
-                        client_port=client_port,
-                        data_preview=data[:2000].decode("utf-8", errors="replace"),
-                        data_size=len(data),
-                    )
-                    continue
+                    # 没有匹配的处理器：不做任何应答，直接断开连接（配了才有，没配就没有）
+                    break
 
                 # Apply delay
                 if handler.delay_ms > 0:
@@ -125,16 +116,9 @@ class TcpMockServerManager:
                         response_data = (handler.response_data or "").encode("utf-8")
 
                 elif response_mode == "close":
-                    await self._log_event(
-                        handler_id=handler.id,
-                        event_type="disconnect",
-                        client_ip=client_ip,
-                        client_port=client_port,
-                    )
+                    # 断开事件由 finally 统一记录一次，这里只计命中并退出循环
                     await self._increment_hit(handler.id)
-                    writer.close()
-                    await writer.wait_closed()
-                    return
+                    break
 
                 else:
                     # Unknown mode — echo
@@ -176,29 +160,11 @@ class TcpMockServerManager:
 
     async def _match_handler(self, data: bytes) -> TcpMockHandler | None:
         try:
-            text = data.decode("utf-8", errors="replace").strip()
-            hex_str = data.hex()
-
             async with async_session_factory() as session:
                 handlers = await svc.list_handlers(session)
                 for h in handlers:
-                    if not h.enabled:
-                        continue
-
-                    if h.match_mode == "exact":
-                        if text == h.match_pattern or text == h.match_pattern.strip():
-                            return h
-
-                    elif h.match_mode == "hex":
-                        if hex_str == h.match_pattern.lower().replace(" ", ""):
-                            return h
-
-                    elif h.match_mode == "regex":
-                        try:
-                            if re.search(h.match_pattern, text):
-                                return h
-                        except re.error:
-                            continue
+                    if h.enabled and is_match(h.match_mode, h.match_pattern, data):
+                        return h
 
         except Exception:
             logger.exception("Failed to match TCP handler")

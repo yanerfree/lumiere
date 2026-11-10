@@ -21,6 +21,7 @@ from app.schemas.protocol_mock import (
 )
 from app.services import ws_mock_service as ws_svc
 from app.services import tcp_mock_service as tcp_svc
+from app.services.tcp_match import validate_match
 from app.services import udp_mock_service as udp_svc
 from app.services import grpc_mock_service as grpc_svc
 from app.services.ws_mock_manager import ws_mock_server
@@ -179,6 +180,9 @@ async def tcp_list_handlers(session: AsyncSession = Depends(get_db)):
 
 @router.post("/tcp/handlers", response_model=TcpHandlerResponse, status_code=201)
 async def tcp_create_handler(body: TcpHandlerCreate, session: AsyncSession = Depends(get_db)):
+    err = validate_match(body.match_mode, body.match_pattern)
+    if err:
+        return JSONResponse({"error": err}, status_code=422)
     row = await tcp_svc.create_handler(session, body)
     return TcpHandlerResponse.model_validate(row, from_attributes=True)
 
@@ -205,6 +209,12 @@ async def tcp_update_handler(handler_id: uuid.UUID, body: TcpHandlerUpdate, sess
         return JSONResponse({"error": "Handler not found"}, status_code=404)
     if existing.locked:
         return JSONResponse({"error": "处理器已锁定，请先解锁后再编辑"}, status_code=423)
+    err = validate_match(
+        body.match_mode if body.match_mode is not None else existing.match_mode,
+        body.match_pattern if body.match_pattern is not None else existing.match_pattern,
+    )
+    if err:
+        return JSONResponse({"error": err}, status_code=422)
     row = await tcp_svc.update_handler(session, handler_id, body)
     return TcpHandlerResponse.model_validate(row, from_attributes=True)
 
