@@ -17,8 +17,8 @@ const { TextArea } = Input
 const MONO = 'var(--font-mono)'
 const ACCENT = '#ff7d00'
 
-const MATCH_MODE_COLOR = { exact: 'blue', hex: 'purple', regex: 'cyan' }
-const MATCH_MODE_LABEL = { exact: 'Exact', hex: 'Hex', regex: 'Regex' }
+const MATCH_MODE_COLOR = { exact: 'blue', contains: 'geekblue', hex: 'purple', regex: 'cyan', any: 'orange' }
+const MATCH_MODE_LABEL = { exact: 'Exact', contains: 'Contains', hex: 'Hex', regex: 'Regex', any: 'Any' }
 const RESP_MODE_COLOR = { echo: 'green', fixed: 'blue', custom: 'cyan', close: 'red' }
 const RESP_MODE_LABEL = { echo: 'Echo', fixed: 'Fixed', custom: 'Custom', close: 'Close' }
 
@@ -304,18 +304,22 @@ export default function TcpMockPanel() {
               buttonStyle="solid" size="small"
               disabled={locked}
             >
-              <Radio.Button value="exact">Exact</Radio.Button>
-              <Radio.Button value="hex">Hex</Radio.Button>
-              <Radio.Button value="regex">Regex</Radio.Button>
+              <Radio.Button value="exact">Exact 精确</Radio.Button>
+              <Radio.Button value="contains">Contains 包含</Radio.Button>
+              <Radio.Button value="regex">Regex 正则</Radio.Button>
+              <Radio.Button value="hex">Hex 十六进制</Radio.Button>
+              <Radio.Button value="any">Any 任意内容</Radio.Button>
             </Radio.Group>
             <div style={{ fontSize: 11, color: '#c9cdd4', marginTop: 4 }}>
-              {(form.matchMode || 'exact') === 'exact' && '精确匹配接收到的数据'}
-              {form.matchMode === 'hex' && '十六进制匹配（如 FF FE 00 01）'}
-              {form.matchMode === 'regex' && '正则表达式匹配数据内容'}
+              {(form.matchMode || 'exact') === 'exact' && '收到的内容（去掉首尾空格换行）与规则完全一致才匹配，区分大小写'}
+              {form.matchMode === 'contains' && '收到的内容里包含规则文字就匹配，区分大小写'}
+              {form.matchMode === 'hex' && '按字节匹配，可写 FF FE 00 01 或 0xFF 0xFE，空格逗号冒号都行'}
+              {form.matchMode === 'regex' && '正则表达式，内容里「包含」符合的部分就匹配；要整条一致请写 ^...$'}
+              {form.matchMode === 'any' && '不管收到什么都匹配（兜底）。处理器按左侧从上到下依次判断，请放在最后'}
             </div>
           </div>
 
-          <div style={{ marginBottom: 16 }}>
+          {form.matchMode !== 'any' && <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 12, color: '#86909c', marginBottom: 4 }}>匹配规则</div>
             <TextArea spellCheck={false}
               value={form.matchPattern || ''}
@@ -324,7 +328,7 @@ export default function TcpMockPanel() {
               placeholder={form.matchMode === 'hex' ? 'FF FE 00 01' : form.matchMode === 'regex' ? '^HELLO.*' : '输入匹配内容'}
               disabled={locked}
             />
-          </div>
+          </div>}
 
           {/* Response mode */}
           <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'flex-end', flexWrap: 'wrap' }}>
