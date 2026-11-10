@@ -94,18 +94,8 @@ class TcpMockServerManager:
                 )
 
                 if handler is None:
-                    # No matching handler — echo by default
-                    writer.write(data)
-                    await writer.drain()
-                    await self._log_event(
-                        handler_id=None,
-                        event_type="data_out",
-                        client_ip=client_ip,
-                        client_port=client_port,
-                        data_preview=data[:2000].decode("utf-8", errors="replace"),
-                        data_size=len(data),
-                    )
-                    continue
+                    # 没有匹配的处理器：不做任何应答，直接断开连接（配了才有，没配就没有）
+                    break
 
                 # Apply delay
                 if handler.delay_ms > 0:
