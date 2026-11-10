@@ -89,7 +89,7 @@ def _repo_dir(project_id: str) -> Path:
 
 def _first_cell(line: str) -> str:
     """表格行的首列，剥掉反引号和加粗号。`| **AUT-01** |` → `AUT-01`。"""
-    parts = line.split("|")
+    parts = _UNESC_PIPE_RE.split(line)
     return parts[1].strip().strip("`*").strip() if len(parts) > 1 else ""
 
 
@@ -214,8 +214,17 @@ def _is_header_line(line: str) -> bool:
             and _first_cell(line).lower().replace(" ", "") in _HEADER_FIRST_CELL)
 
 
+_UNESC_PIPE_RE = re.compile(r"(?<!\\)\|")
+
+
 def _row_cells(line_rest: str) -> list[str]:
-    return [c.strip() for c in line_rest.split("|")]
+    """按**未转义**的 `|` 切格，`\\|` 还原成字面 `|`。
+
+    GFM 里单元格内写 `\\|` 是标准转义。原来直接 split("|") 会把转义的竖线也切开，
+    整行后面的列全部错位 —— 「层」那一列读成了半句备注，页面上冒出
+    `<node>`…这种假的执行层。
+    """
+    return [c.strip().replace("\\|", "|") for c in _UNESC_PIPE_RE.split(line_rest)]
 
 
 def _cell_at(cells: list[str], idx, width: int) -> str:
@@ -389,6 +398,13 @@ def parse_catalog(text: str, claimed_ids: set[str] | None = None) -> tuple[list[
     header_votes: dict[int, dict[str, int]] = {}
 
     for lineno, line in enumerate(text.splitlines(), 1):
+        # 域码表常写成并排四列：| `A` | 名 | `B` | 名 |。只认左半边会让右半边的域
+        # （GW/SUB/SYS/DEP…）在页面上只剩代码、没有中文名。
+        _cs = _row_cells(line.strip().strip("|")) if line.lstrip().startswith("|") else []
+        if len(_cs) == 4:
+            _m = re.fullmatch(r"`([A-Z][A-Z0-9]{1,5})`", _cs[2])
+            if _m and _cs[3]:
+                domains.setdefault(_m.group(1), {"name": _cs[3], "groups": [], "groupsRaw": ""})
         dm = _DOMAIN_RE.match(line)
         if dm:
             code = dm.group("code")
