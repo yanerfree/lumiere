@@ -50,7 +50,7 @@ class ReorderRequest(BaseSchema):
 
 
 def _set_status(note: UserNote, status: str) -> None:
-    """唯一改状态的入口：完成时记时刻，已经完成的再保存不刷新时刻，改回待完成就清空。"""
+    """唯一改状态的入口：完成时记时刻，已经完成的再保存不刷新时刻，改回进行中就清空。"""
     if note.kind != "todo":
         status = "pending"
     if status == "done" and note.status != "done":

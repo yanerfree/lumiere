@@ -147,18 +147,18 @@ export default function MyNotes() {
     },
     {
       title: '状态', dataIndex: 'status', width: 110,
-      filters: [{ text: '待完成', value: 'pending' }, { text: '已完成', value: 'done' }],
+      filters: [{ text: '进行中', value: 'pending' }, { text: '已完成', value: 'done' }],
       filteredValue: filters.status || null,
       onFilter: (v, r) => r.kind === 'todo' && r.status === v,
       render: (v, r) => r.kind === 'todo'
         ? (r.mine && canWrite
-            ? <Tooltip title={v === 'done' ? '点一下改回待完成' : '点一下标记已完成'}>
+            ? <Tooltip title={v === 'done' ? '点一下改回进行中' : '点一下标记已完成'}>
                 <span className={`note-pill ${v} clickable`} data-testid="note-status"
                   onClick={(e) => { e.stopPropagation(); patch(r, { status: v === 'done' ? 'pending' : 'done' }) }}>
-                  <i className="dot" />{v === 'done' ? '已完成' : '待完成'}
+                  <i className="dot" />{v === 'done' ? '已完成' : '进行中'}
                 </span>
               </Tooltip>
-            : <span className={`note-pill ${v}`} data-testid="note-status"><i className="dot" />{v === 'done' ? '已完成' : '待完成'}</span>)
+            : <span className={`note-pill ${v}`} data-testid="note-status"><i className="dot" />{v === 'done' ? '已完成' : '进行中'}</span>)
         : <span style={{ color: '#c9cdd4' }}>—</span>,
     },
     ...(isAdmin && showAuthor ? [{ title: '作者', dataIndex: 'username', width: 120 }] : []),
@@ -238,7 +238,7 @@ export default function MyNotes() {
             <div style={{ color: '#8c919e', fontSize: 12, marginBottom: 16 }}>
               <Space size={16} wrap>
                 {!viewing.mine && <span>作者：{viewing.username}</span>}
-                {viewing.kind === 'todo' && <span>状态：{viewing.status === 'done' ? '已完成' : '待完成'}</span>}
+                {viewing.kind === 'todo' && <span>状态：{viewing.status === 'done' ? '已完成' : '进行中'}</span>}
                 <span>创建于 {fmt(viewing.createdAt)}</span>
                 {viewing.kind === 'todo' && viewing.status === 'done' && viewing.completedAt && <span>完成于 {fmt(viewing.completedAt)}</span>}
                 <span>更新于 {fmt(viewing.updatedAt)}</span>
@@ -274,7 +274,7 @@ export default function MyNotes() {
           <Form.Item noStyle shouldUpdate={(a, b) => a.kind !== b.kind}>
             {({ getFieldValue }) => getFieldValue('kind') === 'todo' && (
               <Form.Item name="status" label="状态">
-                <Radio.Group options={[{ label: '待完成', value: 'pending' }, { label: '已完成', value: 'done' }]} data-testid="note-form-status" />
+                <Radio.Group options={[{ label: '进行中', value: 'pending' }, { label: '已完成', value: 'done' }]} data-testid="note-form-status" />
               </Form.Item>
             )}
           </Form.Item>

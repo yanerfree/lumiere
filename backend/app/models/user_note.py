@@ -35,7 +35,7 @@ class UserNote(Base):
     is_favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
     # 手动拖拽的顺位：小的在前；默认 0 → 没拖过的靠创建时间倒序，新建的自然排在组首
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    # 标记「已完成」的时刻；改回待完成就清空。note 恒为 NULL
+    # 标记「已完成」的时刻；改回进行中就清空。note 恒为 NULL
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

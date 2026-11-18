@@ -98,7 +98,7 @@ class TestNotesCompletedAt:
         # 编辑内容但仍是已完成：完成时间不刷新
         r = (await client.put(f"/api/notes/{t['id']}", json={"title": "写周报2", "kind": "todo", "status": "done"}, headers=h)).json()["data"]
         assert r["completedAt"] == first
-        # 改回待完成 → 清空
+        # 改回进行中 → 清空
         r = (await client.patch(f"/api/notes/{t['id']}", json={"status": "pending"}, headers=h)).json()["data"]
         assert r["completedAt"] is None
         # 新建时直接选已完成 → 有时间
