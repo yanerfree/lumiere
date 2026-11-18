@@ -7,13 +7,15 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.user import Base
 
 MAX_TITLE = 200
+KINDS = ('todo', 'note')
+STATUSES = ('pending', 'done')   # 只有 todo 用得上；note 恒为 pending，页面不显示
 
 
 class UserNote(Base):
@@ -28,5 +30,10 @@ class UserNote(Base):
     )
     title: Mapped[str] = mapped_column(String(MAX_TITLE), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False, default="", server_default="")
+    kind: Mapped[str] = mapped_column(String(10), nullable=False, default="note", server_default="note")
+    status: Mapped[str] = mapped_column(String(10), nullable=False, default="pending", server_default="pending")
+    is_favorite: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default=text("false"))
+    # 手动拖拽的顺位：小的在前；默认 0 → 没拖过的靠创建时间倒序，新建的自然排在组首
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
