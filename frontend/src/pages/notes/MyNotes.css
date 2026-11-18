@@ -26,3 +26,5 @@
 .note-fav:hover { background: #fff4e0; transform: scale(1.15); }
 
 .note-row-drag-over > td { box-shadow: inset 0 2px 0 #6366f1; }
+.note-pill.clickable { cursor: pointer; transition: filter .15s, transform .15s; }
+.note-pill.clickable:hover { filter: brightness(.95); transform: translateY(-1px); }

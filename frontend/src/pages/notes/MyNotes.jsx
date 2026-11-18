@@ -148,7 +148,14 @@ export default function MyNotes() {
       filteredValue: filters.status || null,
       onFilter: (v, r) => r.kind === 'todo' && r.status === v,
       render: (v, r) => r.kind === 'todo'
-        ? <span className={`note-pill ${v}`} data-testid="note-status"><i className="dot" />{v === 'done' ? '已完成' : '待完成'}</span>
+        ? (r.mine && canWrite
+            ? <Tooltip title={v === 'done' ? '点一下改回待完成' : '点一下标记已完成'}>
+                <span className={`note-pill ${v} clickable`} data-testid="note-status"
+                  onClick={(e) => { e.stopPropagation(); patch(r, { status: v === 'done' ? 'pending' : 'done' }) }}>
+                  <i className="dot" />{v === 'done' ? '已完成' : '待完成'}
+                </span>
+              </Tooltip>
+            : <span className={`note-pill ${v}`} data-testid="note-status"><i className="dot" />{v === 'done' ? '已完成' : '待完成'}</span>)
         : <span style={{ color: '#c9cdd4' }}>—</span>,
     },
     ...(isAdmin ? [{ title: '作者', dataIndex: 'username', width: 120 }] : []),
