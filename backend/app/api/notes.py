@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import uuid
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends
 from typing import Literal
 
@@ -47,6 +49,17 @@ class ReorderRequest(BaseSchema):
     ids: list[uuid.UUID] = Field(..., max_length=2000)
 
 
+def _set_status(note: UserNote, status: str) -> None:
+    """唯一改状态的入口：完成时记时刻，已经完成的再保存不刷新时刻，改回待完成就清空。"""
+    if note.kind != "todo":
+        status = "pending"
+    if status == "done" and note.status != "done":
+        note.completed_at = datetime.now(timezone.utc)
+    elif status != "done":
+        note.completed_at = None
+    note.status = status
+
+
 def _is_admin(user: User) -> bool:
     return user.role == "admin"
 
@@ -62,6 +75,7 @@ def _dump(note: UserNote, owner_name: str | None, me: User) -> dict:
         "status": note.status,
         "isFavorite": note.is_favorite,
         "mine": note.user_id == me.id,
+        "completedAt": note.completed_at.isoformat() if note.completed_at else None,
         "createdAt": note.created_at.isoformat() if note.created_at else None,
         "updatedAt": note.updated_at.isoformat() if note.updated_at else None,
     }
@@ -127,8 +141,8 @@ async def get_note(note_id: uuid.UUID, session: AsyncSession = Depends(get_db), 
 
 @router.post("", status_code=201)
 async def create_note(body: NoteRequest, session: AsyncSession = Depends(get_db), me: User = Depends(get_current_user)):
-    note = UserNote(user_id=me.id, title=body.title, content=body.content,
-                    kind=body.kind, status=body.status if body.kind == "todo" else "pending")
+    note = UserNote(user_id=me.id, title=body.title, content=body.content, kind=body.kind, status="pending")
+    _set_status(note, body.status)
     session.add(note)
     await session.commit()
     await session.refresh(note)
@@ -144,7 +158,7 @@ async def update_note(
     note.title = body.title
     note.content = body.content
     note.kind = body.kind
-    note.status = body.status if body.kind == "todo" else "pending"
+    _set_status(note, body.status)
     await session.commit()
     await session.refresh(note)
     return {"data": _dump(note, owner, me)}
@@ -161,7 +175,7 @@ async def patch_note(
     if body.status is not None:
         if note.kind != "todo":
             raise ForbiddenError(message="只有待办才有完成状态")
-        note.status = body.status
+        _set_status(note, body.status)
     await session.commit()
     await session.refresh(note)
     return {"data": _dump(note, owner, me)}

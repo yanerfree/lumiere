@@ -82,3 +82,28 @@ class TestNotesKindFavoriteSort:
         assert (await client.patch(f"/api/notes/{n['id']}", json={"isFavorite": True}, headers=hadm)).status_code == 403
         assert (await client.patch(f"/api/notes/{n['id']}", json={"isFavorite": True}, headers=hg)).status_code == 403
         assert (await client.post("/api/notes/reorder", json={"ids": []}, headers=hg)).status_code == 403
+
+
+class TestNotesCompletedAt:
+
+    @pytest.mark.asyncio
+    async def test_completed_at_set_kept_and_cleared(self, client, db_session):
+        u = await create_test_user(db_session, username="note_done_at")
+        h, _ = make_auth_headers(u)
+        t = await _new_note(client, h, title="写周报", kind="todo")
+        assert t["completedAt"] is None
+        r = (await client.patch(f"/api/notes/{t['id']}", json={"status": "done"}, headers=h)).json()["data"]
+        first = r["completedAt"]
+        assert first
+        # 编辑内容但仍是已完成：完成时间不刷新
+        r = (await client.put(f"/api/notes/{t['id']}", json={"title": "写周报2", "kind": "todo", "status": "done"}, headers=h)).json()["data"]
+        assert r["completedAt"] == first
+        # 改回待完成 → 清空
+        r = (await client.patch(f"/api/notes/{t['id']}", json={"status": "pending"}, headers=h)).json()["data"]
+        assert r["completedAt"] is None
+        # 新建时直接选已完成 → 有时间
+        d = await _new_note(client, h, title="已做完", kind="todo", status="done")
+        assert d["completedAt"]
+        # 改成笔记 → 清空
+        r = (await client.put(f"/api/notes/{d['id']}", json={"title": "已做完", "kind": "note"}, headers=h)).json()["data"]
+        assert r["completedAt"] is None and r["status"] == "pending"

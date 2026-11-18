@@ -25,6 +25,9 @@ export default function MyNotes() {
   const [mineOnly, setMineOnly] = useState(false)
   const [filters, setFilters] = useState({})        // 列头筛选（类型 / 状态），前端过滤
   const [overId, setOverId] = useState(null)
+  // 「作者」列默认藏起来（大多数时候看的是自己的），要看的人自己打开，记在本机浏览器里
+  const [showAuthor, setShowAuthor] = useState(() => localStorage.getItem('notes.showAuthor') === '1')
+  const toggleAuthor = (v) => { setShowAuthor(v); localStorage.setItem('notes.showAuthor', v ? '1' : '0') }
   const [dragId, setDragId] = useState(null)
 
   const [viewing, setViewing] = useState(null)      // 抽屉里正在看的那条
@@ -158,8 +161,14 @@ export default function MyNotes() {
             : <span className={`note-pill ${v}`} data-testid="note-status"><i className="dot" />{v === 'done' ? '已完成' : '待完成'}</span>)
         : <span style={{ color: '#c9cdd4' }}>—</span>,
     },
-    ...(isAdmin ? [{ title: '作者', dataIndex: 'username', width: 120 }] : []),
+    ...(isAdmin && showAuthor ? [{ title: '作者', dataIndex: 'username', width: 120 }] : []),
     { title: '创建时间', dataIndex: 'createdAt', width: 170, render: fmt },
+    {
+      title: '完成时间', dataIndex: 'completedAt', width: 170,
+      render: (v, r) => (r.kind === 'todo' && r.status === 'done' && v)
+        ? <span style={{ color: '#16a34a' }} data-testid="note-completed-at">{fmt(v)}</span>
+        : <span style={{ color: '#c9cdd4' }}>—</span>,
+    },
   ]
 
   return (
@@ -169,7 +178,9 @@ export default function MyNotes() {
         <Space>
           {isAdmin && (
             <Space size={6}>
-              <span style={{ color: '#8c919e', fontSize: 13 }}>只看我的</span>
+              <span style={{ color: '#8c919e', fontSize: 13 }}>显示作者</span>
+              <Switch size="small" checked={showAuthor} onChange={toggleAuthor} data-testid="notes-show-author" />
+              <span style={{ color: '#8c919e', fontSize: 13, marginLeft: 8 }}>只看我的</span>
               <Switch size="small" checked={mineOnly} onChange={setMineOnly} data-testid="notes-mine-only" />
             </Space>
           )}
@@ -229,6 +240,7 @@ export default function MyNotes() {
                 {!viewing.mine && <span>作者：{viewing.username}</span>}
                 {viewing.kind === 'todo' && <span>状态：{viewing.status === 'done' ? '已完成' : '待完成'}</span>}
                 <span>创建于 {fmt(viewing.createdAt)}</span>
+                {viewing.kind === 'todo' && viewing.status === 'done' && viewing.completedAt && <span>完成于 {fmt(viewing.completedAt)}</span>}
                 <span>更新于 {fmt(viewing.updatedAt)}</span>
               </Space>
             </div>
