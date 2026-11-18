@@ -30,3 +30,13 @@
 .note-pill.clickable:hover { filter: brightness(.95); transform: translateY(-1px); }
 .note-pill.pending { color: #8c919e; background: #f1f2f5; }
 .note-pill.doing   { color: #d97706; background: #fff4e0; }
+
+/* 状态胶囊：实心填充 + 白字，一眼分得出三档（类型胶囊保持浅色，两列不抢） */
+.note-pill[data-testid="note-status"] {
+  padding: 3px 14px; font-size: 13px; font-weight: 600; letter-spacing: .5px; color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .12);
+}
+.note-pill[data-testid="note-status"] .dot { background: #fff; }
+.note-pill[data-testid="note-status"].pending { background: #8c919e; }
+.note-pill[data-testid="note-status"].doing   { background: #f59e0b; }
+.note-pill[data-testid="note-status"].done    { background: #16a34a; }
