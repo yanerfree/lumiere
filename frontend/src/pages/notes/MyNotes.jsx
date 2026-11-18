@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Card, Table, Button, Input, Modal, Form, Drawer, Space, Switch, Popconfirm, Empty, Typography, Radio, Tag, Checkbox, Tooltip, message } from 'antd'
+import { Card, Table, Button, Input, Modal, Form, Drawer, Space, Switch, Popconfirm, Empty, Typography, Radio, Tag, Checkbox, Dropdown, Tooltip, message } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, StarFilled, StarOutlined, HolderOutlined } from '@ant-design/icons'
 import './MyNotes.css'
 import { api } from '../../utils/request'
@@ -11,6 +11,9 @@ import { usePermissions } from '../../utils/PermissionContext'
 // 游客是账号级只读，新建/编辑/删除按钮一律不出（后端非 GET 闸门也会 403）。
 
 const KIND_LABEL = { todo: '待办', note: '笔记' }
+// pending=未开始（新建待办的默认）  doing=进行中  done=已完成
+const STATUS_LABEL = { pending: '未开始', doing: '进行中', done: '已完成' }
+const STATUS_OPTIONS = Object.entries(STATUS_LABEL).map(([value, label]) => ({ value, label }))
 
 const fmt = (s) => (s ? new Date(s).toLocaleString('zh-CN', { hour12: false }) : '')
 
@@ -147,18 +150,22 @@ export default function MyNotes() {
     },
     {
       title: '状态', dataIndex: 'status', width: 110,
-      filters: [{ text: '进行中', value: 'pending' }, { text: '已完成', value: 'done' }],
+      filters: STATUS_OPTIONS.map(({ value, label }) => ({ text: label, value })),
       filteredValue: filters.status || null,
       onFilter: (v, r) => r.kind === 'todo' && r.status === v,
       render: (v, r) => r.kind === 'todo'
         ? (r.mine && canWrite
-            ? <Tooltip title={v === 'done' ? '点一下改回进行中' : '点一下标记已完成'}>
-                <span className={`note-pill ${v} clickable`} data-testid="note-status"
-                  onClick={(e) => { e.stopPropagation(); patch(r, { status: v === 'done' ? 'pending' : 'done' }) }}>
-                  <i className="dot" />{v === 'done' ? '已完成' : '进行中'}
+            ? <Dropdown trigger={['click']}
+                menu={{
+                  selectedKeys: [v],
+                  items: STATUS_OPTIONS.map(({ value, label }) => ({ key: value, label })),
+                  onClick: ({ key, domEvent }) => { domEvent.stopPropagation(); if (key !== v) patch(r, { status: key }) },
+                }}>
+                <span className={`note-pill ${v} clickable`} data-testid="note-status" onClick={(e) => e.stopPropagation()}>
+                  <i className="dot" />{STATUS_LABEL[v]}
                 </span>
-              </Tooltip>
-            : <span className={`note-pill ${v}`} data-testid="note-status"><i className="dot" />{v === 'done' ? '已完成' : '进行中'}</span>)
+              </Dropdown>
+            : <span className={`note-pill ${v}`} data-testid="note-status"><i className="dot" />{STATUS_LABEL[v]}</span>)
         : <span style={{ color: '#c9cdd4' }}>—</span>,
     },
     ...(isAdmin && showAuthor ? [{ title: '作者', dataIndex: 'username', width: 120 }] : []),
@@ -238,7 +245,7 @@ export default function MyNotes() {
             <div style={{ color: '#8c919e', fontSize: 12, marginBottom: 16 }}>
               <Space size={16} wrap>
                 {!viewing.mine && <span>作者：{viewing.username}</span>}
-                {viewing.kind === 'todo' && <span>状态：{viewing.status === 'done' ? '已完成' : '进行中'}</span>}
+                {viewing.kind === 'todo' && <span>状态：{STATUS_LABEL[viewing.status]}</span>}
                 <span>创建于 {fmt(viewing.createdAt)}</span>
                 {viewing.kind === 'todo' && viewing.status === 'done' && viewing.completedAt && <span>完成于 {fmt(viewing.completedAt)}</span>}
                 <span>更新于 {fmt(viewing.updatedAt)}</span>
@@ -274,7 +281,7 @@ export default function MyNotes() {
           <Form.Item noStyle shouldUpdate={(a, b) => a.kind !== b.kind}>
             {({ getFieldValue }) => getFieldValue('kind') === 'todo' && (
               <Form.Item name="status" label="状态">
-                <Radio.Group options={[{ label: '进行中', value: 'pending' }, { label: '已完成', value: 'done' }]} data-testid="note-form-status" />
+                <Radio.Group options={STATUS_OPTIONS} data-testid="note-form-status" />
               </Form.Item>
             )}
           </Form.Item>

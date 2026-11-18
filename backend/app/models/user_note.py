@@ -15,7 +15,7 @@ from app.models.user import Base
 
 MAX_TITLE = 200
 KINDS = ('todo', 'note')
-STATUSES = ('pending', 'done')   # 只有 todo 用得上；note 恒为 pending，页面不显示
+STATUSES = ('pending', 'doing', 'done')   # pending=未开始 doing=进行中 done=已完成；只有 todo 用得上，note 恒为 pending
 
 
 class UserNote(Base):

@@ -30,7 +30,7 @@ class NoteRequest(BaseSchema):
     title: str = Field(..., min_length=1, max_length=MAX_TITLE)
     content: str = ""
     kind: Literal["todo", "note"] = "note"
-    status: Literal["pending", "done"] = "pending"
+    status: Literal["pending", "doing", "done"] = "pending"
 
     @field_validator("title", mode="before")
     @classmethod
@@ -42,7 +42,7 @@ class NoteRequest(BaseSchema):
 class NotePatch(BaseSchema):
     """局部修改：列表上直接点收藏 / 勾完成用，不用把标题正文再传一遍。"""
     isFavorite: bool | None = None
-    status: Literal["pending", "done"] | None = None
+    status: Literal["pending", "doing", "done"] | None = None
 
 
 class ReorderRequest(BaseSchema):
