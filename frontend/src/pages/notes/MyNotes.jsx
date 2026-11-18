@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Card, Table, Button, Input, Modal, Form, Drawer, Space, Switch, Popconfirm, Empty, Typography, Segmented, Radio, Tag, Checkbox, Tooltip, message } from 'antd'
+import { Card, Table, Button, Input, Modal, Form, Drawer, Space, Switch, Popconfirm, Empty, Typography, Radio, Tag, Checkbox, Tooltip, message } from 'antd'
 import { PlusOutlined, EditOutlined, DeleteOutlined, StarFilled, StarOutlined, HolderOutlined } from '@ant-design/icons'
+import './MyNotes.css'
 import { api } from '../../utils/request'
 import { usePermissions } from '../../utils/PermissionContext'
 
@@ -22,7 +23,8 @@ export default function MyNotes() {
   const [loading, setLoading] = useState(false)
   const [keyword, setKeyword] = useState('')
   const [mineOnly, setMineOnly] = useState(false)
-  const [kind, setKind] = useState('all')           // all / todo / note
+  const [filters, setFilters] = useState({})        // 列头筛选（类型 / 状态），前端过滤
+  const [overId, setOverId] = useState(null)
   const [dragId, setDragId] = useState(null)
 
   const [viewing, setViewing] = useState(null)      // 抽屉里正在看的那条
@@ -36,11 +38,10 @@ export default function MyNotes() {
       const p = new URLSearchParams()
       if (keyword.trim()) p.set('keyword', keyword.trim())
       if (mineOnly) p.set('mine_only', 'true')
-      if (kind !== 'all') p.set('kind', kind)
       const res = await api.get(`/notes?${p.toString()}`)
       setList(res.data || [])
     } catch { /* request.js 已提示 */ } finally { setLoading(false) }
-  }, [keyword, mineOnly, kind])
+  }, [keyword, mineOnly])
 
   useEffect(() => { load() }, [load])
 
@@ -89,11 +90,11 @@ export default function MyNotes() {
 
   // 拖拽排序只在「看的是自己完整列表」时开：搜索/筛类型/管理员看全部时，
   // 列表只是一部分，拖出来的顺位没法落到完整列表上。
-  const canDrag = canWrite && !keyword.trim() && kind === 'all' && (!isAdmin || mineOnly)
+  const canDrag = canWrite && !keyword.trim() && !Object.values(filters).some((v) => v?.length) && (!isAdmin || mineOnly)
 
   const handleDrop = async (target) => {
     const from = list.find((n) => n.id === dragId)
-    setDragId(null)
+    setDragId(null); setOverId(null)
     if (!from || from.id === target.id) return
     // 收藏组和普通组各排各的，收藏永远在最前，不跨组
     if (from.isFavorite !== target.isFavorite) { message.info('收藏的和没收藏的不能互相拖，想置顶请点星标'); return }
@@ -116,14 +117,17 @@ export default function MyNotes() {
           ? <StarFilled style={{ color: '#f5a623', fontSize: 16 }} />
           : <StarOutlined style={{ color: '#c9cdd4', fontSize: 16 }} />
         return r.mine && canWrite
-          ? <span data-testid="note-fav" data-fav={r.isFavorite ? '1' : '0'} style={{ cursor: 'pointer' }}
+          ? <span className="note-fav" data-testid="note-fav" data-fav={r.isFavorite ? '1' : '0'} style={{ cursor: 'pointer' }}
               onClick={(e) => { e.stopPropagation(); patch(r, { isFavorite: !r.isFavorite }) }}>{star}</span>
           : (r.isFavorite ? star : null)
       },
     },
     {
-      title: '类型', dataIndex: 'kind', width: 80,
-      render: (v) => <Tag color={v === 'todo' ? 'orange' : 'blue'} data-testid="note-kind">{KIND_LABEL[v]}</Tag>,
+      title: '类型', dataIndex: 'kind', width: 100,
+      filters: [{ text: '待办', value: 'todo' }, { text: '笔记', value: 'note' }],
+      filteredValue: filters.kind || null,
+      onFilter: (v, r) => r.kind === v,
+      render: (v) => <span className={`note-pill ${v}`} data-testid="note-kind"><i className="dot" />{KIND_LABEL[v]}</span>,
     },
     {
       title: '标题', dataIndex: 'title', ellipsis: true,
@@ -134,14 +138,17 @@ export default function MyNotes() {
               onClick={(e) => e.stopPropagation()}
               onChange={(e) => patch(r, { status: e.target.checked ? 'done' : 'pending' })} />
           )}
-          <a data-testid="note-title" style={r.kind === 'todo' && r.status === 'done' ? { textDecoration: 'line-through', color: '#8c919e' } : undefined}>{v}</a>
+          <a data-testid="note-title" className={`note-title ${r.kind === 'todo' && r.status === 'done' ? 'done' : ''}`}>{v}</a>
         </Space>
       ),
     },
     {
-      title: '状态', dataIndex: 'status', width: 90,
+      title: '状态', dataIndex: 'status', width: 110,
+      filters: [{ text: '待完成', value: 'pending' }, { text: '已完成', value: 'done' }],
+      filteredValue: filters.status || null,
+      onFilter: (v, r) => r.kind === 'todo' && r.status === v,
       render: (v, r) => r.kind === 'todo'
-        ? <Tag color={v === 'done' ? 'green' : 'default'} data-testid="note-status">{v === 'done' ? '已完成' : '待完成'}</Tag>
+        ? <span className={`note-pill ${v}`} data-testid="note-status"><i className="dot" />{v === 'done' ? '已完成' : '待完成'}</span>
         : <span style={{ color: '#c9cdd4' }}>—</span>,
     },
     ...(isAdmin ? [{ title: '作者', dataIndex: 'username', width: 120 }] : []),
@@ -159,8 +166,6 @@ export default function MyNotes() {
               <Switch size="small" checked={mineOnly} onChange={setMineOnly} data-testid="notes-mine-only" />
             </Space>
           )}
-          <Segmented value={kind} onChange={setKind} data-testid="notes-kind-filter"
-            options={[{ label: '全部', value: 'all' }, { label: '待办', value: 'todo' }, { label: '笔记', value: 'note' }]} />
           <Input.Search
             allowClear placeholder="搜标题或内容" style={{ width: 220 }}
             onSearch={setKeyword} data-testid="notes-search"
@@ -176,6 +181,9 @@ export default function MyNotes() {
       <Table
         rowKey="id"
         size="middle"
+        className="notes-table"
+        onChange={(_, f) => setFilters(f)}
+        rowClassName={(r) => (dragId && overId === r.id && dragId !== r.id ? 'note-row-drag-over' : '')}
         loading={loading}
         columns={columns}
         dataSource={list}
@@ -186,7 +194,7 @@ export default function MyNotes() {
           draggable: canDrag && r.mine,
           onDragStart: () => setDragId(r.id),
           onDragEnd: () => setDragId(null),
-          onDragOver: (e) => { if (dragId) e.preventDefault() },
+          onDragOver: (e) => { if (dragId) { e.preventDefault(); setOverId(r.id) } },
           onDrop: (e) => { e.preventDefault(); handleDrop(r) },
         })}
         locale={{ emptyText: <Empty description={canWrite ? '还没有记录，点右上角「新建记录」写一条' : '还没有记录'} /> }}
