@@ -9,7 +9,7 @@ import {
   LockOutlined, LockFilled, UnlockOutlined, HolderOutlined,
   SettingOutlined, CheckOutlined, SendOutlined, LinkOutlined, StarOutlined,
   InfoCircleOutlined, QuestionCircleOutlined, AppstoreOutlined,
-  DownOutlined, RightOutlined
+  DownOutlined, RightOutlined, SearchOutlined
 } from '@ant-design/icons'
 import { api } from '../../utils/request'
 import { copyToClipboard } from '../../utils/clipboard'
@@ -144,6 +144,7 @@ export default function LlmMock() {
   // 日志默认只看「当前选中的这条路由」的请求 —— 不然所有 mock 的日志混在一起，
   // 看不出哪条是这个 mock 收到的（语义缓存那种一次要发 embeddings + chat 两条路由，混着尤其乱）
   const [logScope, setLogScope] = useState('current')
+  const [routeKeyword, setRouteKeyword] = useState('')   // 左栏按路径/名称搜
   const [serviceStatus, setServiceStatus] = useState({ running: false, port: 28100, captureEnabled: true, routesCount: 0, routesEnabled: 0, totalRequests: 0 })
   const [saving, setSaving] = useState(false)
   const [activeTab, setActiveTab] = useState('config')
@@ -219,6 +220,9 @@ export default function LlmMock() {
 
   const selectRoute = useCallback((route) => {
     setSelectedRouteId(route.id)
+    // 「全部」是粘性的：之前点过它，再点别的路由，日志还是全部 mock 的，
+    // 看着像「选了 A 却显示 B 的日志」。换路由就回到「本条」。
+    setLogScope('current')
     setRouteForm({ ...route })
     setOriginalForm({ ...route })
     setActiveTab('config')
@@ -320,21 +324,25 @@ export default function LlmMock() {
   // 拿顺序当分组依据的话，用户拖一次分组就散了。
   const routeGroups = useMemo(() => {
     const known = new Set(CATEGORY_ORDER)
+    const kw = routeKeyword.trim().toLowerCase()
+    const visible = kw
+      ? routes.filter(r => `${r.path} ${r.name || ''}`.toLowerCase().includes(kw))
+      : routes
     const builtinGroups = CATEGORY_ORDER
       .map(key => ({
         key,
         label: CATEGORY_LABELS[key],
         desc: CATEGORY_DESC[key],
         builtin: true,
-        items: routes.filter(r => r.builtin && r.category === key),
+        items: visible.filter(r => r.builtin && r.category === key),
       }))
       .filter(g => g.items.length > 0)
-    const rest = routes.filter(r => !r.builtin || !known.has(r.category))
+    const rest = visible.filter(r => !r.builtin || !known.has(r.category))
     return [
       ...builtinGroups,
       { key: 'custom', label: '自建路由', desc: '你自己加的', builtin: false, items: rest },
     ].filter(g => g.items.length > 0)
-  }, [routes])
+  }, [routes, routeKeyword])
 
   // 选中的那条在哪个组 —— 它所在的组自动展开，否则点进去之后列表里看不到自己选的是谁
   const selectedGroupKey = useMemo(() => {
@@ -344,6 +352,7 @@ export default function LlmMock() {
   }, [routes, selectedRouteId])
 
   const isGroupOpen = (g) => {
+    if (routeKeyword.trim()) return true   // 搜索时全部展开，命中的内置路由才看得见
     if (openGroups[g.key] !== undefined) return openGroups[g.key]
     return !g.builtin || g.key === selectedGroupKey
   }
@@ -389,6 +398,34 @@ export default function LlmMock() {
       if (selectedRouteId === id) { setSelectedRouteId(null); setRouteForm(null); setOriginalForm(null) }
       await fetchRoutes()
     } catch {}
+  }
+
+  // 复制一条路由：路径里的「前缀」后面补 4 位随机数，避免「方法+路径」撞车被后端拒掉。
+  // 尾巴（/v1/chat/completions 这种）是标准 API 路径，不能动，所以数字只加在尾巴前面。
+  const handleCopyRoute = async (r) => {
+    const copyPath = (p) => {
+      const m = p.match(/^(.*?)(\/v\d+\/.*)$/)
+      const digits = String(Math.floor(1000 + Math.random() * 9000))
+      if (!m) return `${p.replace(/-\d{4}$/, '')}-${digits}`
+      const head = m[1].replace(/-\d{4}$/, '') || '/copy'   // 复制的复制不会越叠越长
+      return `${head}-${digits}${m[2]}`
+    }
+    const { id, createdAt, updatedAt, hitCount, lastHitAt, builtin, locked, category, purpose, sortOrder, ...rest } = r
+    const name = `${r.name || '路由'} 副本`.slice(0, 100)
+    for (let attempt = 0; attempt < 6; attempt++) {
+      try {
+        const res = await api.post('/llm-mock/routes', { ...rest, name, path: copyPath(r.path) }, { silent: true })
+        message.success('已复制')
+        await fetchRoutes()
+        selectRoute(res.data || res)
+        return
+      } catch (e) {
+        if (e?.status === 409) continue   // 随机数撞上了，重掷
+        message.error(e?.message || '复制失败')
+        return
+      }
+    }
+    message.error('复制失败：请手动改一下路径')
   }
 
   const handleToggle = async (id, checked) => {
@@ -1467,6 +1504,11 @@ export default function LlmMock() {
               <Button type="primary" ghost icon={<PlusOutlined />} size="small" onClick={handleCreateRoute} />
             </Tooltip>
           </div>
+          <div style={{ padding: '8px 10px 0' }}>
+            <Input allowClear size="small" prefix={<SearchOutlined style={{ color: '#c9cdd4' }} />}
+              placeholder="按路径或名称搜索" value={routeKeyword}
+              onChange={e => setRouteKeyword(e.target.value)} data-testid="llm-route-search" />
+          </div>
           <div style={{ flex: 1, overflow: 'auto', padding: '6px 8px' }}>
             {routeGroups.map(g => {
               const open = isGroupOpen(g)
@@ -1550,6 +1592,16 @@ export default function LlmMock() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 }}>
                     <span style={{ fontSize: 12, color: sel ? '#1d2129' : '#86909c', fontWeight: sel ? 500 : 400 }}>{r.name}</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Tooltip title="复制这条（路径自动加随机数字）">
+                        <CopyOutlined data-testid="llm-route-copy" style={{ fontSize: 13, color: '#86909c' }}
+                          onClick={e => { e.stopPropagation(); handleCopyRoute(r) }} />
+                      </Tooltip>
+                      {!r.builtin && !isDef && (r.locked
+                        ? <Tooltip title="已锁定，先解锁才能删除"><DeleteOutlined style={{ fontSize: 13, color: '#d9dce1', cursor: 'not-allowed' }} onClick={e => e.stopPropagation()} /></Tooltip>
+                        : <Popconfirm title="确认删除这条路由？" okText="删除" cancelText="取消" okButtonProps={{ danger: true }}
+                            onConfirm={e => { e?.stopPropagation?.(); handleDeleteRoute(r.id) }} onCancel={e => e?.stopPropagation?.()}>
+                            <DeleteOutlined data-testid="llm-route-delete" style={{ fontSize: 13, color: '#f5583a' }} onClick={e => e.stopPropagation()} />
+                          </Popconfirm>)}
                       {r.smartEnabled && (
                         <Tooltip title="智能应答：行为由请求里的指令决定">
                           <Tag color="purple" style={{ margin: 0, fontSize: 11, lineHeight: '16px', padding: '0 4px', borderRadius: 8 }}>智能</Tag>
@@ -1574,6 +1626,9 @@ export default function LlmMock() {
                 </div>
               )
             })}
+            {routes.length > 0 && routeGroups.length === 0 && (
+              <Empty description="没有匹配的路由" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ marginTop: 40 }} />
+            )}
             {routes.length === 0 && (
               <Empty description="暂无路由" image={Empty.PRESENTED_IMAGE_SIMPLE} style={{ marginTop: 60 }} />
             )}
