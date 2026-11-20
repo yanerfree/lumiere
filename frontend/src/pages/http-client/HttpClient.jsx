@@ -824,6 +824,12 @@ export default function HttpClient() {
                   <span style={{ marginLeft: 8, whiteSpace: 'nowrap' }}>间隔</span>
                   <InputNumber value={sendInterval} onChange={v => setSendInterval(v || null)} min={0} max={3600} step={0.5}
                     placeholder="无" size="small" style={{ width: 90, flexShrink: 0 }} suffix="秒" />
+                  <Tooltip title="恢复默认：共发 1 次、一次 1 条、间隔无">
+                    <Button size="small" type="link" data-testid="send-settings-reset"
+                      disabled={sendCount === 1 && sendPerRound === 1 && sendInterval == null}
+                      style={{ padding: '0 4px', flexShrink: 0 }}
+                      onClick={() => { setSendCount(1); setSendPerRound(1); setSendInterval(null) }}>重置</Button>
+                  </Tooltip>
                   <span title="每一轮同时发「一次几条」，这一轮都回来了、隔「间隔」秒再发下一轮；间隔不填就不等"
                     style={{ color: '#c9cdd4', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     每一轮同时发「一次几条」，这一轮都回来了、隔「间隔」秒再发下一轮；间隔不填就不等</span>

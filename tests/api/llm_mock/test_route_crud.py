@@ -120,3 +120,21 @@ async def test_内置路由删不掉_解锁了也删不掉(client, db_session):
     assert r2.status_code == 400, r2.text
 
     assert await db_session.get(MockRoute, row.id) is not None
+
+
+async def test_数字框清空传null不会500(client, db_session):
+    """页面把「延迟」清空会传 delay_ms=null；这列不许为空，之前直接 500「保存失败」。"""
+    headers = await _admin(db_session, "crud_null_admin")
+    await _create(client, headers, "默认", "/nullc-a/v1/chat/completions")
+    rb = await _create(client, headers, "清空延迟", "/nullc-b/v1/chat/completions")
+    rid = _body(rb)["id"]
+    await client.put(f"/api/llm-mock/routes/{rid}", headers=headers, json={"delayMs": 300})
+    ru = await client.put(
+        f"/api/llm-mock/routes/{rid}", headers=headers,
+        json={"delayMs": None, "statusCode": None, "name": "改了名"},
+    )
+    assert ru.status_code == 200, ru.text
+    got = _body(ru)
+    assert got["name"] == "改了名"          # 同一次请求里的有效字段照常生效
+    assert got["delayMs"] == 300            # null = 没填，保持原值
+    assert got["statusCode"] == 200

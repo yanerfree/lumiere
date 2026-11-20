@@ -58,7 +58,12 @@ async def update_route(session: AsyncSession, route_id: uuid.UUID, data: MockRou
     route = await session.get(MockRoute, route_id)
     if not route:
         return None
+    cols = MockRoute.__table__.columns
     for k, v in data.model_dump(exclude_unset=True).items():
+        # 页面上把数字框清空会传 null（延迟、状态码…）。这些列不允许为空，
+        # 直接写进去 → 数据库报 NotNull → 500「保存失败」。null 当「没填」处理：保持原值。
+        if v is None and k in cols and not cols[k].nullable:
+            continue
         if k == "method" and v is not None:
             v = _norm_method(v)
         elif k == "path" and isinstance(v, str):
