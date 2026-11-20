@@ -136,8 +136,11 @@ async def get_log(session: AsyncSession, log_id: uuid.UUID) -> ApiMockLog | None
     return await session.get(ApiMockLog, log_id)
 
 
-async def clear_logs(session: AsyncSession) -> int:
-    result = await session.execute(delete(ApiMockLog))
+async def clear_logs(session: AsyncSession, route_id: uuid.UUID | None = None) -> int:
+    stmt = delete(ApiMockLog)
+    if route_id:
+        stmt = stmt.where(ApiMockLog.route_id == route_id)
+    result = await session.execute(stmt)
     await session.flush()
     return result.rowcount
 

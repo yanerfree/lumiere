@@ -241,6 +241,9 @@ function HttpMockPanel() {
   const [logDrawerOpen, setLogDrawerOpen] = useState(false)
   const [logDetailLoading, setLogDetailLoading] = useState(false)
   const [logFilter, setLogFilter] = useState('all')
+  // 本条 = 只看选中路由的日志；全部 = 所有路由混在一起。换路由时回到「本条」
+  const [logScope, setLogScope] = useState('current')
+  const [scopedCount, setScopedCount] = useState(null)
   const [serviceStatus, setServiceStatus] = useState({ running: false, port: 28200, captureEnabled: true, routesCount: 0, routesEnabled: 0, totalRequests: 0 })
   const [saving, setSaving] = useState(false)
   const [activeTab, setActiveTab] = useState('config')
@@ -275,14 +278,16 @@ function HttpMockPanel() {
       const p = page || logPage
       const params = new URLSearchParams({ limit: String(logPageSize), offset: String((p - 1) * logPageSize) })
       if (logFilter !== 'all') params.set('status', logFilter)
+      if (logScope === 'current' && selectedRouteId) params.set('route_id', selectedRouteId)
       const r = await api.get(`/api-mock/logs?${params}`)
       const d = r.data || r
       setLogs(d.data || d || [])
       setLogsTotal(d.total ?? (d.data || d || []).length)
+      if (logFilter === 'all') setScopedCount(d.total ?? null)
     } catch {}
   }
 
-  useEffect(() => { setLogPage(1); fetchLogs(1) }, [logFilter])
+  useEffect(() => { setLogPage(1); setExpandedLogId(null); fetchLogs(1) }, [logFilter, logScope, selectedRouteId])
 
   useEffect(() => {
     if (routes.length > 0 && !selectedRouteId) selectRoute(routes[0])
@@ -291,6 +296,7 @@ function HttpMockPanel() {
   const selectRoute = useCallback((route) => {
     const formData = { ...route }
     setSelectedRouteId(route.id)
+    setLogScope('current')   // 「全部」是粘性的，换路由回到「本条」，免得选 A 看到 B 的日志
     setRouteForm(formData)
     setOriginalForm(formData)
     setSelectedPreset(undefined)
@@ -476,7 +482,8 @@ function HttpMockPanel() {
 
   const handleClearLogs = async () => {
     try {
-      await api.delete('/api-mock/logs')
+      const scoped = logScope === 'current' && selectedRouteId
+      await api.delete(scoped ? `/api-mock/logs?route_id=${selectedRouteId}` : '/api-mock/logs')
       message.success('日志已清空')
       setExpandedLogId(null)
       setExpandedLogDetail(null)
@@ -495,7 +502,8 @@ function HttpMockPanel() {
     } catch {}
   }
 
-  const handleExportLogs = () => window.open('/api/api-mock/logs/export', '_blank')
+  const handleExportLogs = () => window.open(
+    logScope === 'current' && selectedRouteId ? `/api/api-mock/logs/export?route_id=${selectedRouteId}` : '/api/api-mock/logs/export', '_blank')
 
   // 勾选/取消勾选一条路由（用于导出）
   const toggleExport = (id, checked) => {
@@ -1093,8 +1101,19 @@ function HttpMockPanel() {
         padding: '8px 16px', borderBottom: '1px solid rgba(0,0,0,0.04)',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0,
       }}>
-        <span style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>共 {logsTotal} 条</span>
+        <span style={{ fontSize: 13, fontWeight: 500, color: '#1d2129' }}>
+          共 {logsTotal} 条
+          {logScope === 'current' && (
+            <span style={{ fontSize: 11, fontWeight: 400, color: '#86909c', marginLeft: 6 }}>
+              · 仅当前路由{routeForm?.path ? `（${routeForm.path}）` : ''}
+            </span>
+          )}
+        </span>
         <Space size={4}>
+          <Radio.Group value={logScope} onChange={e => setLogScope(e.target.value)} size="small">
+            <Radio.Button value="current">本条路由</Radio.Button>
+            <Radio.Button value="all">全部</Radio.Button>
+          </Radio.Group>
           <Radio.Group value={logFilter} onChange={e => setLogFilter(e.target.value)} size="small">
             <Radio.Button value="all">全部</Radio.Button>
             <Radio.Button value="ok">OK</Radio.Button>
@@ -1102,7 +1121,7 @@ function HttpMockPanel() {
           </Radio.Group>
           <Button icon={<ReloadOutlined />} size="small" type="text" onClick={() => fetchLogs()} />
           <Button icon={<ExportOutlined />} size="small" type="text" onClick={handleExportLogs} />
-          <Popconfirm title="确认清空所有日志？" onConfirm={handleClearLogs}>
+          <Popconfirm title={logScope === 'current' && selectedRouteId ? '确认清空这条路由的日志？' : '确认清空所有路由的日志？'} onConfirm={handleClearLogs}>
             <Button icon={<ClearOutlined />} size="small" type="text" danger />
           </Popconfirm>
         </Space>
@@ -1129,7 +1148,7 @@ function HttpMockPanel() {
                   background: expandedLogId === l.id ? 'rgba(124,92,191,0.06)' : 'transparent',
                 }}>
                   <td style={{ padding: '5px 10px', whiteSpace: 'nowrap', fontSize: 11, color: '#86909c' }}>
-                    {new Date(l.timestamp).toLocaleTimeString('zh-CN', { hour12: false })}
+                    {new Date(l.timestamp).toLocaleString('zh-CN', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </td>
                   <td style={{ padding: '5px 10px' }}>
                     <span style={{ fontSize: 11, fontWeight: 600, color: STATUS_COLOR(l.statusCode) }}>{l.statusCode}</span>
@@ -1338,7 +1357,7 @@ function HttpMockPanel() {
               {[
                 { key: 'config', label: '路由配置' },
                 { key: 'test', label: <>测试 <SendOutlined style={{ fontSize: 11 }} /></> },
-                { key: 'logs', label: <>请求日志 <Tag style={{ margin: '0 0 0 4px', fontSize: 11, borderRadius: 12, lineHeight: '18px', padding: '0 6px' }}>{serviceStatus.totalRequests}</Tag></> },
+                { key: 'logs', label: <>请求日志 <Tag style={{ margin: '0 0 0 4px', fontSize: 11, borderRadius: 12, lineHeight: '18px', padding: '0 6px' }}>{logScope === 'current' && scopedCount != null ? scopedCount : serviceStatus.totalRequests}</Tag></> },
               ].map(t => (
                 <div key={t.key} onClick={() => setActiveTab(t.key)} style={{
                   padding: '10px 16px', cursor: 'pointer', fontSize: 14, position: 'relative',
